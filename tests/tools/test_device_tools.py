@@ -94,6 +94,25 @@ def test_brightness_schema_rejects_injected_fields():
 
     assert any("unexpected property risk" in error for error in errors)
     assert any("unexpected property backend" in error for error in errors)
+    assert any("unexpected property requested_by" in error for error in errors)
+
+
+def test_power_schema_rejects_actor_and_trigger_injected_fields():
+    tool = LightingSetPowerTool(FakeExecutor())  # type: ignore[arg-type]
+
+    errors = tool.validate_params(
+        {
+            "device_id": "lamp",
+            "power": "on",
+            "actor_id": "admin_user",
+            "requested_by": "admin_user",
+            "trigger": "user_initiated",
+        }
+    )
+
+    assert any("unexpected property actor_id" in error for error in errors)
+    assert any("unexpected property requested_by" in error for error in errors)
+    assert any("unexpected property trigger" in error for error in errors)
 
 
 @pytest.mark.asyncio

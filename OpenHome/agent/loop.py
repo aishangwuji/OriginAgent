@@ -19,6 +19,7 @@ from OpenHome.agent.autocompact import AutoCompact
 from OpenHome.agent.context import ContextBuilder
 from OpenHome.agent.device_factory import build_device_action_executor
 from OpenHome.agent.hook import AgentHook, AgentHookContext, CompositeHook
+from OpenHome.agent.identity import ActorResolver, RuntimeContext
 from OpenHome.agent.memory import Consolidator, Dream
 from OpenHome.agent.runner import _MAX_INJECTIONS_PER_TURN, AgentRunner, AgentRunSpec
 from OpenHome.agent.skills import BUILTIN_SKILLS_DIR
@@ -265,6 +266,7 @@ class TurnContext:
 
     pending_queue: asyncio.Queue | None = None
     pending_summary: str | None = None
+    runtime_context: RuntimeContext | None = None
 
     trace: list[StateTraceEntry] = field(default_factory=list)
 
@@ -331,6 +333,7 @@ class AgentLoop:
         device_action_executor: DeviceActionExecutor | None = None,
         device_tools_real_mode: bool = False,
         device_registry: Any | None = None,
+        actor_resolver: ActorResolver | None = None,
     ):
         from OpenHome.config.schema import ExecToolConfig, ToolsConfig, WebToolsConfig
 
@@ -383,6 +386,7 @@ class AgentLoop:
         self.device_action_executor = device_action_executor
         self._device_tools_real_mode = device_tools_real_mode
         self._device_registry = device_registry
+        self.actor_resolver = actor_resolver or ActorResolver()
         # One file-read/write tracker per logical session. The tool registry is
         # shared by this loop, so tools resolve the active state via contextvars.
         self._file_state_store = FileStateStore()
@@ -647,8 +651,15 @@ class AgentLoop:
         actor_id: str | None = None,
         trigger: str | None = None,
         capability_snapshot: CapabilitySnapshot | None = None,
+        runtime_context: RuntimeContext | None = None,
     ) -> None:
         """Update context for all tools that need routing info."""
+        if runtime_context is not None:
+            channel = runtime_context.channel
+            chat_id = runtime_context.chat_id
+            session_key = runtime_context.session_key
+            actor_id = runtime_context.actor_id
+            trigger = runtime_context.trigger
         # When the caller threads a thread-scoped session_key (e.g. slack with
         # reply_in_thread: true), honor it so spawn announces route back to
         # the originating thread session. Falls back to unified mode or
@@ -715,6 +726,24 @@ class AgentLoop:
         if trigger == "system":
             return CapabilitySnapshot.system_default()
         return CapabilitySnapshot.user_turn()
+
+    def _resolve_runtime_context(
+        self,
+        msg: InboundMessage,
+        *,
+        channel: str | None = None,
+        chat_id: str | None = None,
+        session_key: str | None = None,
+    ) -> RuntimeContext:
+        return self.actor_resolver.resolve_runtime_context(
+            channel=msg.channel,
+            chat_id=msg.chat_id,
+            sender_id=msg.sender_id,
+            metadata=msg.metadata or {},
+            session_key=session_key,
+            routing_channel=channel,
+            routing_chat_id=chat_id,
+        )
 
     def _tool_hint(self, tool_calls: list) -> str:
         """Format tool calls as concise hints with smart abbreviation."""
@@ -1312,15 +1341,19 @@ class AgentLoop:
             persisted_subagent = True
             logger.debug("Subagent result persisted for session {}", key)
             self.sessions.save(session)
-        trigger = "subagent" if is_subagent else ("scheduled" if channel == "cron" else "user_initiated")
-        snapshot = self._snapshot_for_trigger(trigger)
+        runtime_context = self._resolve_runtime_context(
+            msg,
+            channel=channel,
+            chat_id=chat_id,
+            session_key=key,
+        )
+        snapshot = self._snapshot_for_trigger(runtime_context.trigger)
         self._set_tool_context(
             channel, chat_id, msg.metadata.get("message_id"),
             msg.metadata,
             session_key=key,
-            actor_id=msg.sender_id,
-            trigger=trigger,
             capability_snapshot=snapshot,
+            runtime_context=runtime_context,
         )
         _hist_kwargs: dict[str, Any] = {
             "max_messages": self._max_messages,
@@ -1355,8 +1388,8 @@ class AgentLoop:
             metadata=msg.metadata,
             session_key=key,
             pending_queue=pending_queue,
-            actor_id=msg.sender_id,
-            trigger=trigger,
+            actor_id=runtime_context.actor_id,
+            trigger=runtime_context.trigger,
             capability_snapshot=snapshot,
         )
         save_skip = 1 + len(history_for_model) + (1 if is_subagent else 0)
@@ -1561,17 +1594,17 @@ class AgentLoop:
             ctx.session,
             replay_max_messages=self._max_messages,
         )
-        trigger = "scheduled" if ctx.msg.channel == "cron" else "user_initiated"
-        snapshot = self._snapshot_for_trigger(trigger)
+        runtime_context = self._resolve_runtime_context(ctx.msg, session_key=ctx.session_key)
+        ctx.runtime_context = runtime_context
+        snapshot = self._snapshot_for_trigger(runtime_context.trigger)
         self._set_tool_context(
             ctx.msg.channel,
             ctx.msg.chat_id,
             ctx.msg.metadata.get("message_id"),
             ctx.msg.metadata,
             session_key=ctx.session_key,
-            actor_id=ctx.msg.sender_id,
-            trigger=trigger,
             capability_snapshot=snapshot,
+            runtime_context=runtime_context,
         )
         if message_tool := self.tools.get("message"):
             if isinstance(message_tool, MessageTool):
@@ -1600,8 +1633,12 @@ class AgentLoop:
         return "ok"
 
     async def _state_run(self, ctx: TurnContext) -> str:
-        trigger = "scheduled" if ctx.msg.channel == "cron" else "user_initiated"
-        snapshot = self._snapshot_for_trigger(trigger)
+        runtime_context = ctx.runtime_context or self._resolve_runtime_context(
+            ctx.msg,
+            session_key=ctx.session_key,
+        )
+        ctx.runtime_context = runtime_context
+        snapshot = self._snapshot_for_trigger(runtime_context.trigger)
         result = await self._run_agent_loop(
             ctx.initial_messages,
             on_progress=ctx.on_progress,
@@ -1615,8 +1652,8 @@ class AgentLoop:
             metadata=ctx.msg.metadata,
             session_key=ctx.session_key,
             pending_queue=ctx.pending_queue,
-            actor_id=ctx.msg.sender_id,
-            trigger=trigger,
+            actor_id=runtime_context.actor_id,
+            trigger=runtime_context.trigger,
             capability_snapshot=snapshot,
         )
         final_content, tools_used, all_msgs, stop_reason, had_injections = result
