@@ -17,6 +17,7 @@ from OpenHome.agent.device_actions import (
     TypedDeviceAction,
     TypedActionPlanner,
 )
+from OpenHome.agent.devices import sanitize_device_scope
 from OpenHome.agent.permissions import infer_device_domain
 
 _ACTION_DOMAINS = {
@@ -141,7 +142,7 @@ class DeviceActionExecutor:
                 action_id=action_id,
                 actor_id=action.requested_by,
                 action=action.action_type,
-                scope=None,
+                scope=_typed_action_scope_hint(action),
                 risk=None,
                 trigger=action.trigger,
                 decision=result.status,
@@ -160,3 +161,14 @@ class DeviceActionExecutor:
             )
         except Exception as audit_exc:
             logger.warning("Audit typed action schema failure write failed: {}", audit_exc)
+
+
+def _typed_action_scope_hint(action: TypedDeviceAction) -> str | None:
+    domain = str(action.domain or "").strip().lower()
+    device_id = str(action.device_id or "").strip().lower()
+    if not domain or not device_id:
+        return None
+    room = str(action.room or "").strip().lower()
+    if room:
+        return sanitize_device_scope(f"home.{room}.{domain}.{device_id}")
+    return sanitize_device_scope(f"home.{domain}.{device_id}")

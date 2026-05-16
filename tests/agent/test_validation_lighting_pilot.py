@@ -19,6 +19,7 @@ from OpenHome.agent.permissions import HouseholdActor, PermissionResolver
 from OpenHome.agent.presence import PresenceStore
 
 NOW = datetime(2026, 5, 16, 12, 0, 0, tzinfo=timezone.utc)
+PRIVATE_DEVICE_ID = "private_device_7f3a9c"
 
 
 class FakeLightingClient:
@@ -114,6 +115,7 @@ def test_real_mode_brightness_calls_fake_client_once_without_leaking_raw_respons
     result = executor.submit_typed(
         typed_action(
             action_type="set_light_brightness",
+            device_id=PRIVATE_DEVICE_ID,
             parameters={"brightness": 50},
         ),
         now=NOW,
@@ -121,12 +123,14 @@ def test_real_mode_brightness_calls_fake_client_once_without_leaking_raw_respons
 
     assert result.status == "executed"
     assert result.backend_called is True
-    assert client.calls == [("set_brightness", "ceiling_light", 50)]
+    assert client.calls == [("set_brightness", PRIVATE_DEVICE_ID, 50)]
     backend_json = json.dumps(result.backend_result, ensure_ascii=False)
     assert "raw_device_id" not in backend_json
     assert "raw_payload" not in backend_json
     assert "raw_client_response" not in backend_json
     raw = raw_audit(tmp_path)
+    assert PRIVATE_DEVICE_ID not in raw
+    assert "home.living_room.lighting.<device>" in raw
     assert "raw_device_id" not in raw
     assert "raw_payload" not in raw
     assert "raw_client_response" not in raw
@@ -208,7 +212,7 @@ def test_guest_low_risk_lighting_action_is_allowed_and_explainable(tmp_path):
 
     result = executor.submit_typed(
         typed_action(
-            device_id="lamp",
+            device_id=PRIVATE_DEVICE_ID,
             parameters={"power": "on"},
             requested_by="guest_user",
         ),
@@ -219,6 +223,7 @@ def test_guest_low_risk_lighting_action_is_allowed_and_explainable(tmp_path):
     assert result.backend_called is True
     assert result.permission_status == "allow"
     assert client.calls == []
+    assert PRIVATE_DEVICE_ID not in raw_audit(tmp_path)
     permission_row = audit_rows(tmp_path, "permission_decisions.jsonl")[0]
     assert permission_row["metadata"]["actor_role"] == "guest"
     assert {event.event_type for event in audit.explain_action(result.action_id)} == {

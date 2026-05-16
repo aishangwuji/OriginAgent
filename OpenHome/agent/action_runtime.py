@@ -22,6 +22,7 @@ from OpenHome.agent.confirmation import (
     ConfirmationRequest,
     _sanitize_text,
 )
+from OpenHome.agent.devices import sanitize_device_scope
 from OpenHome.agent.permissions import (
     PermissionDecision,
     PermissionRequest,
@@ -864,7 +865,4 @@ def _audit_permission_scope(request: PermissionRequest) -> str:
 
 
 def _redact_scope_device_id(scope: str) -> str:
-    parts = [part for part in str(scope or "").split(".") if part]
-    if not parts:
-        return "unknown"
-    return ".".join([*parts[:-1], "<device>"])
+    return sanitize_device_scope(scope) or "unknown"
