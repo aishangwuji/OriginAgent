@@ -45,10 +45,10 @@ def build_device_action_executor(
         return None
     if config.backend == "none":
         return None
-    if config.mode == "real" and config.backend != "lighting_client":
-        logger.warning("Device gateway real mode requires backend='lighting_client'")
+    if config.mode == "real":
+        logger.warning("Device gateway real mode is not enabled in this release; device tools disabled.")
         return None
-    if config.backend not in {"fake", "lighting_client"}:
+    if config.backend != "fake":
         logger.warning("Unsupported device backend '{}'; device tools disabled", config.backend)
         return None
 
@@ -56,8 +56,7 @@ def build_device_action_executor(
     presence = presence_store or PresenceStore(workspace)
     facts = fact_store or FactStore(workspace)
     permissions = permission_resolver or PermissionResolver()
-    real_mode = config.mode == "real"
-    backend = RealLightingBackend(_NoopLightingClient(), real_mode=real_mode)
+    backend = RealLightingBackend(_NoopLightingClient(), real_mode=False)
     safe_executor = SafeActionExecutor(
         gate=ActionSafetyGate(presence, facts),
         confirmation_manager=ConfirmationManager(workspace, audit_logger=audit),
@@ -70,4 +69,3 @@ def build_device_action_executor(
         safe_executor,
         audit_logger=audit,
     )
-

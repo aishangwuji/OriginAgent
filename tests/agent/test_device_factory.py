@@ -7,6 +7,15 @@ def test_default_device_config_returns_none(tmp_path):
     assert build_device_action_executor(workspace=tmp_path, config=DeviceToolsConfig()) is None
 
 
+def test_device_config_defaults_are_fail_closed():
+    config = DeviceToolsConfig()
+
+    assert config.enabled is False
+    assert config.lighting_enabled is False
+    assert config.mode == "dry_run"
+    assert config.backend == "none"
+
+
 def test_lighting_dry_run_returns_executor(tmp_path):
     executor = build_device_action_executor(
         workspace=tmp_path,
@@ -30,6 +39,31 @@ def test_real_mode_without_lighting_client_returns_none(tmp_path):
     assert executor is None
 
 
+def test_real_mode_with_lighting_client_returns_none(tmp_path):
+    executor = build_device_action_executor(
+        workspace=tmp_path,
+        config=DeviceToolsConfig(
+            enabled=True,
+            lighting_enabled=True,
+            mode="real",
+            backend="lighting_client",
+        ),
+    )
+
+    assert executor is None
+
+
+def test_invalid_backend_returns_none(tmp_path):
+    config = DeviceToolsConfig.model_construct(
+        enabled=True,
+        lighting_enabled=True,
+        mode="dry_run",
+        backend="invalid",
+    )
+
+    assert build_device_action_executor(workspace=tmp_path, config=config) is None
+
+
 def test_factory_executor_runs_lighting_dry_run(tmp_path):
     executor = build_device_action_executor(
         workspace=tmp_path,
@@ -50,4 +84,3 @@ def test_factory_executor_runs_lighting_dry_run(tmp_path):
 
     assert result.status == "dry_run"
     assert result.backend_called is True
-

@@ -2,7 +2,6 @@ from pathlib import Path
 from unittest.mock import MagicMock
 
 from OpenHome.agent.action_runtime import ActionExecutionResult
-from OpenHome.agent.devices import DeviceRecord, DeviceRegistry
 from OpenHome.agent.loop import AgentLoop
 from OpenHome.bus.queue import MessageBus
 from OpenHome.config.schema import Config, DeviceToolsConfig
@@ -73,7 +72,22 @@ def test_from_config_explicit_executor_takes_precedence(tmp_path):
     assert len(_lighting_names(loop)) == 3
 
 
-def test_real_mode_schema_uses_device_ref(tmp_path):
+def test_from_config_real_mode_lighting_client_does_not_register_tools(tmp_path):
+    cfg = _config(tmp_path)
+    cfg.tools.device = DeviceToolsConfig(
+        enabled=True,
+        lighting_enabled=True,
+        mode="real",
+        backend="lighting_client",
+    )
+
+    loop = AgentLoop.from_config(cfg, bus=MessageBus(), provider=_provider())
+
+    assert "openhome_device_lighting_set_power" not in loop.tools.tool_names
+    assert _lighting_names(loop) == []
+
+
+def test_from_config_real_mode_with_registry_still_does_not_register_tools(tmp_path):
     cfg = _config(tmp_path)
     cfg.tools.device = DeviceToolsConfig(
         enabled=True,
@@ -86,31 +100,8 @@ def test_real_mode_schema_uses_device_ref(tmp_path):
         cfg,
         bus=MessageBus(),
         provider=_provider(),
-        device_registry=DeviceRegistry([
-            DeviceRecord(
-                device_id="lamp_123",
-                domain="lighting",
-                room="living_room",
-                display_name="ceiling",
-                device_ref="ceiling",
-            )
-        ]),
-    )
-    schema = loop.tools.get("openhome_device_lighting_set_power").parameters
-
-    assert "device_ref" in schema["properties"]
-    assert "device_id" not in schema["properties"]
-
-
-def test_real_mode_without_registry_does_not_register_tools(tmp_path):
-    cfg = _config(tmp_path)
-    cfg.tools.device = DeviceToolsConfig(
-        enabled=True,
-        lighting_enabled=True,
-        mode="real",
-        backend="lighting_client",
+        device_registry=object(),
     )
 
-    loop = AgentLoop.from_config(cfg, bus=MessageBus(), provider=_provider())
-
+    assert "openhome_device_lighting_set_power" not in loop.tools.tool_names
     assert _lighting_names(loop) == []
