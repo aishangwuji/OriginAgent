@@ -79,6 +79,38 @@ def test_grant_to_snapshot_maps_capability_fields() -> None:
     )
 
 
+def test_grant_to_snapshot_source_is_cron_only_for_c5a() -> None:
+    grant = CapabilityGrant(
+        grant_id="grant-secret-1",
+        created_by="admin",
+        created_at=_now().isoformat(),
+        can_exec=True,
+    )
+
+    snapshot = grant.to_snapshot(trigger="scheduled")
+
+    assert snapshot.source == "cron"
+    assert snapshot.trigger == "scheduled"
+
+
+def test_unknown_source_does_not_control_activity_or_snapshot() -> None:
+    grant = CapabilityGrant.from_dict(
+        {
+            "grant_id": "grant-secret-1",
+            "created_by": "admin",
+            "created_at": _now().isoformat(),
+            "source": "future_source",
+            "can_exec": True,
+        }
+    )
+
+    assert grant.source == "future_source"
+    assert grant.is_active(_now()) is True
+    snapshot = grant.to_snapshot(trigger="scheduled")
+    assert snapshot.source == "cron"
+    assert snapshot.can_exec is True
+
+
 def test_grant_store_put_get_list_revoke_and_tuple_persistence(tmp_path) -> None:
     store = CapabilityGrantStore(tmp_path)
     grant = CapabilityGrant(

@@ -51,6 +51,7 @@ class CapabilityGrant:
         return not self.is_revoked() and not self.is_expired(now)
 
     def to_snapshot(self, *, trigger: CapabilityTrigger = "scheduled") -> CapabilitySnapshot:
+        # C5a grants are cron-only; subagent grants need a separate C5b conversion path.
         return CapabilitySnapshot(
             version=1,
             source="cron",
