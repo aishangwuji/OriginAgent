@@ -95,5 +95,6 @@ class SpawnTool(Tool):
             origin_chat_id=self._origin_chat_id.get(),
             session_key=self._session_key.get(),
             origin_message_id=self._origin_message_id.get(),
-            capability_snapshot=snapshot.derive_subagent(),
+            parent_capability_snapshot=snapshot,
+            grant_id=None,
         )

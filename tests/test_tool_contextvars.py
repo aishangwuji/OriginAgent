@@ -8,6 +8,7 @@ from OpenHome.agent.tools.cron import CronTool
 from OpenHome.agent.tools.message import MessageTool
 from OpenHome.agent.tools.spawn import SpawnTool
 from OpenHome.cron.service import CronService
+from OpenHome.security.capabilities import CapabilitySnapshot
 
 
 @pytest.mark.asyncio
@@ -63,11 +64,13 @@ async def test_spawn_tool_keeps_task_local_context() -> None:
             origin_chat_id: str,
             session_key: str,
             origin_message_id: str | None = None,
+            **_kwargs,
         ) -> str:
             seen.append((origin_channel, origin_chat_id, session_key))
             return f"{origin_channel}:{origin_chat_id}:{task}"
 
     tool = SpawnTool(_Manager())
+    tool.set_capability_snapshot(CapabilitySnapshot.user_turn())
 
     async def task_one() -> str:
         tool.set_context("whatsapp", "chat-a")
@@ -92,6 +95,7 @@ async def test_spawn_tool_keeps_task_local_context() -> None:
 @pytest.mark.asyncio
 async def test_cron_tool_keeps_task_local_context(tmp_path) -> None:
     tool = CronTool(CronService(tmp_path / "jobs.json"))
+    tool.set_capability_snapshot(CapabilitySnapshot.user_turn())
     entered = asyncio.Event()
     release = asyncio.Event()
 
@@ -175,12 +179,14 @@ async def test_spawn_tool_basic_set_context_and_execute() -> None:
             origin_chat_id,
             session_key,
             origin_message_id=None,
+            **_kwargs,
         ):
             seen.append((origin_channel, origin_chat_id, session_key))
             return f"ok: {task}"
 
     tool = SpawnTool(_Manager())
     tool.set_context("feishu", "chat-abc")
+    tool.set_capability_snapshot(CapabilitySnapshot.user_turn())
 
     result = await tool.execute(task="do something")
     assert result == "ok: do something"
@@ -207,11 +213,13 @@ async def test_spawn_tool_default_values_without_set_context() -> None:
             origin_chat_id,
             session_key,
             origin_message_id=None,
+            **_kwargs,
         ):
             seen.append((origin_channel, origin_chat_id, session_key))
             return "ok"
 
     tool = SpawnTool(_Manager())
+    tool.set_capability_snapshot(CapabilitySnapshot.user_turn())
 
     await tool.execute(task="test")
     assert seen == [("cli", "direct", "cli:direct")]
@@ -222,6 +230,7 @@ async def test_cron_tool_basic_set_context_and_execute(tmp_path) -> None:
     """Single task: set_context then add job should use correct target."""
     tool = CronTool(CronService(tmp_path / "jobs.json"))
     tool.set_context("wechat", "user-789")
+    tool.set_capability_snapshot(CapabilitySnapshot.user_turn())
 
     result = await tool.execute(action="add", message="standup", every_seconds=300)
     assert result.startswith("Created job")

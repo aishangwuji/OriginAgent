@@ -22,8 +22,12 @@ from OpenHome.bus.events import InboundMessage
 from OpenHome.bus.queue import MessageBus
 from OpenHome.config.schema import AgentDefaults, ExecToolConfig, WebToolsConfig
 from OpenHome.providers.base import LLMProvider
-from OpenHome.security.capabilities import CapabilitySnapshot
+from OpenHome.security.capabilities import CapabilitySnapshot, intersect_capability_snapshots
+from OpenHome.security.grants import CapabilityGrantStore
+from OpenHome.security.policy import PolicyDeniedError
 from OpenHome.utils.prompt_templates import render_template
+
+_GRANT_ERROR_MESSAGE = "Capability grant is missing, expired, or revoked."
 
 
 @dataclass(slots=True)
@@ -83,6 +87,7 @@ class SubagentManager:
         restrict_to_workspace: bool = False,
         disabled_skills: list[str] | None = None,
         max_iterations: int | None = None,
+        grant_store: CapabilityGrantStore | None = None,
     ):
         defaults = AgentDefaults()
         self.provider = provider
@@ -99,6 +104,7 @@ class SubagentManager:
             if max_iterations is not None
             else defaults.max_tool_iterations
         )
+        self.grant_store = grant_store
         self.max_concurrent_subagents = defaults.max_concurrent_subagents
         self.runner = AgentRunner(provider)
         self._running_tasks: dict[str, asyncio.Task[None]] = {}
@@ -119,11 +125,24 @@ class SubagentManager:
         session_key: str | None = None,
         origin_message_id: str | None = None,
         capability_snapshot: CapabilitySnapshot | None = None,
+        parent_capability_snapshot: CapabilitySnapshot | None = None,
+        grant_id: str | None = None,
     ) -> str:
-        """Spawn a subagent to execute a task in the background."""
+        """Spawn a subagent to execute a task in the background.
+
+        ``parent_capability_snapshot`` is the parent turn snapshot. The manager
+        derives the subagent snapshot internally so grants cannot skip the
+        least-privilege subagent boundary. ``capability_snapshot`` is retained
+        as a compatibility alias for existing internal callers and has the same
+        parent-snapshot meaning.
+        """
         task_id = str(uuid.uuid4())[:8]
         display_label = label or task[:30] + ("..." if len(task) > 30 else "")
         origin = {"channel": origin_channel, "chat_id": origin_chat_id, "session_key": session_key}
+        effective_snapshot = self._snapshot_for_spawn(
+            parent_snapshot=parent_capability_snapshot or capability_snapshot,
+            grant_id=grant_id,
+        )
 
         status = SubagentStatus(
             task_id=task_id,
@@ -141,7 +160,7 @@ class SubagentManager:
                 origin,
                 status,
                 origin_message_id,
-                capability_snapshot or CapabilitySnapshot.system_default().derive_subagent(),
+                effective_snapshot,
             )
         )
         self._running_tasks[task_id] = bg_task
@@ -160,6 +179,32 @@ class SubagentManager:
 
         logger.info("Spawned subagent [{}]: {}", task_id, display_label)
         return f"Subagent [{display_label}] started (id: {task_id}). I'll notify you when it completes."
+
+    def _snapshot_for_spawn(
+        self,
+        *,
+        parent_snapshot: CapabilitySnapshot | None,
+        grant_id: str | None = None,
+    ) -> CapabilitySnapshot:
+        parent = parent_snapshot or CapabilitySnapshot.system_default()
+        base = parent.derive_subagent()
+        if not grant_id:
+            return base
+        if self.grant_store is None:
+            _raise_grant_denied("capability_grant_missing")
+        grant = self.grant_store.get(grant_id)
+        if grant is None:
+            _raise_grant_denied("capability_grant_missing")
+        if grant.is_revoked():
+            _raise_grant_denied("capability_grant_revoked")
+        if grant.is_expired():
+            _raise_grant_denied("capability_grant_expired")
+        return intersect_capability_snapshots(
+            base,
+            grant.to_subagent_snapshot(),
+            source="subagent",
+            trigger="subagent",
+        )
 
     async def _run_subagent(
         self,
@@ -378,3 +423,12 @@ class SubagentManager:
             1 for tid in tids
             if tid in self._running_tasks and not self._running_tasks[tid].done()
         )
+
+
+def _raise_grant_denied(policy_rule: str) -> None:
+    raise PolicyDeniedError(
+        _GRANT_ERROR_MESSAGE,
+        code=policy_rule,
+        boundary="spawn",
+        policy_rule=policy_rule,
+    )

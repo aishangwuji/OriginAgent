@@ -59,6 +59,7 @@ from OpenHome.config.schema import AgentDefaults
 from OpenHome.providers.base import LLMProvider
 from OpenHome.providers.factory import ProviderSnapshot
 from OpenHome.security.capabilities import CapabilitySnapshot
+from OpenHome.security.grants import CapabilityGrantStore
 from OpenHome.session.manager import Session, SessionManager
 from OpenHome.utils.artifacts import generated_image_paths_from_messages
 from OpenHome.utils.document import extract_documents
@@ -419,6 +420,7 @@ class AgentLoop:
             restrict_to_workspace=restrict_to_workspace,
             disabled_skills=disabled_skills,
             max_iterations=self.max_iterations,
+            grant_store=CapabilityGrantStore(workspace),
         )
         self._unified_session = unified_session
         self._max_messages = max_messages if max_messages > 0 else 120

@@ -9,6 +9,7 @@ import pytest
 
 from OpenHome.config.schema import AgentDefaults
 from OpenHome.security.capabilities import CapabilitySnapshot
+from OpenHome.security.grants import CapabilityGrantStore
 from OpenHome.security.policy import PolicyDeniedError
 
 _MAX_TOOL_RESULT_CHARS = AgentDefaults().max_tool_result_chars
@@ -234,6 +235,21 @@ def test_agent_loop_passes_max_iterations_to_subagents(tmp_path):
     )
 
     assert loop.subagents.max_iterations == 42
+
+
+def test_agent_loop_passes_grant_store_to_subagents(tmp_path):
+    """AgentLoop should provide the workspace-backed grant store to subagents."""
+    from OpenHome.agent.loop import AgentLoop
+    from OpenHome.bus.queue import MessageBus
+
+    bus = MessageBus()
+    provider = MagicMock()
+    provider.get_default_model.return_value = "test-model"
+
+    loop = AgentLoop(bus=bus, provider=provider, workspace=tmp_path, model="test-model")
+
+    assert isinstance(loop.subagents.grant_store, CapabilityGrantStore)
+    assert loop.subagents.grant_store.path == tmp_path / "memory" / "security" / "capability_grants.json"
 
 
 @pytest.mark.asyncio
