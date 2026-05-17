@@ -8,7 +8,7 @@ import shutil
 import sys
 from contextlib import suppress
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from loguru import logger
 
@@ -31,6 +31,10 @@ _WORKSPACE_BOUNDARY_NOTE = (
     "resource, tell them you cannot reach it under the current "
     "restrict_to_workspace policy and ask how to proceed."
 )
+_UNSAFE_EXEC_MARKER = (
+    "[unsafe-exec profile=local_dev sandbox=none] "
+    "local_dev unsafe exec does not provide sandbox isolation."
+)
 
 
 class ExecTool(Tool):
@@ -48,6 +52,8 @@ class ExecTool(Tool):
         allowed_env_keys: list[str] | None = None,
         limits: ToolLimits | None = None,
         protected_policy: ProtectedPathPolicy | None = None,
+        security_profile: Literal["secure", "local_dev", "disabled"] = "secure",
+        allow_unsafe_exec: bool = False,
     ):
         self._limits = limits or ToolLimits()
         self.timeout = timeout
@@ -76,6 +82,8 @@ class ExecTool(Tool):
         self.restrict_to_workspace = restrict_to_workspace
         self.path_append = path_append
         self.allowed_env_keys = allowed_env_keys or []
+        self.security_profile = security_profile
+        self.allow_unsafe_exec = allow_unsafe_exec
         workspace_for_policy = Path(working_dir) if working_dir else None
         self._protected_policy = protected_policy or ProtectedPathPolicy(workspace_for_policy)
 
@@ -159,12 +167,12 @@ class ExecTool(Tool):
                 )
 
         try:
-            self._assert_sandbox_available()
+            unsafe_exec = self._assert_sandbox_available()
             guard_error = self._guard_command(command, cwd)
             if guard_error:
                 return guard_error
 
-            if self.sandbox:
+            if self.sandbox and not unsafe_exec:
                 if _IS_WINDOWS:
                     raise PolicyDeniedError(
                         f"sandbox '{self.sandbox}' is not supported on Windows; command was not executed",
@@ -216,6 +224,8 @@ class ExecTool(Tool):
             output_parts.append(f"\nExit code: {process.returncode}")
 
             result = "\n".join(output_parts) if output_parts else "(no output)"
+            if unsafe_exec:
+                result = f"{_UNSAFE_EXEC_MARKER}\n{result}"
 
             max_len = self._limits.exec_max_output_chars
             if len(result) > max_len:
@@ -399,9 +409,25 @@ class ExecTool(Tool):
 
         return None
 
-    def _assert_sandbox_available(self) -> None:
+    def _assert_sandbox_available(self) -> bool:
+        if self.security_profile == "disabled":
+            raise PolicyDeniedError(
+                "exec profile is disabled; command was not executed",
+                code="exec_profile_disabled",
+                boundary="exec",
+                policy_rule="exec_profile_disabled",
+            )
+        if self.security_profile not in {"secure", "local_dev"}:
+            raise PolicyDeniedError(
+                f"exec profile '{self.security_profile}' is not supported; command was not executed",
+                code="exec_profile_invalid",
+                boundary="exec",
+                policy_rule="exec_profile_invalid",
+            )
         sandbox = (self.sandbox or "").strip()
         if _IS_WINDOWS and sandbox and sandbox != "none":
+            if self.security_profile == "local_dev" and self.allow_unsafe_exec:
+                return True
             raise PolicyDeniedError(
                 f"sandbox '{sandbox}' is not supported on Windows; command was not executed",
                 code="sandbox_unsupported",
@@ -409,6 +435,19 @@ class ExecTool(Tool):
                 policy_rule="windows_sandbox_unsupported",
             )
         if self.working_dir and not self.restrict_to_workspace:
+            if (
+                self.security_profile == "local_dev"
+                and self.allow_unsafe_exec
+                and sandbox == "bwrap"
+                and shutil.which("bwrap") is not None
+            ):
+                return False
+            if (
+                self.security_profile == "local_dev"
+                and self.allow_unsafe_exec
+                and (not sandbox or sandbox == "none" or sandbox == "bwrap")
+            ):
+                return True
             raise PolicyDeniedError(
                 "workspace exec requires restrict_to_workspace with a supported sandbox; command was not executed",
                 code="sandbox_required",
@@ -416,8 +455,10 @@ class ExecTool(Tool):
                 policy_rule="sandbox_required",
             )
         if not self.restrict_to_workspace:
-            return
+            return False
         if not sandbox or sandbox == "none":
+            if self.security_profile == "local_dev" and self.allow_unsafe_exec:
+                return True
             raise PolicyDeniedError(
                 "restrict_to_workspace requires a supported sandbox; command was not executed",
                 code="sandbox_required",
@@ -432,12 +473,15 @@ class ExecTool(Tool):
                 policy_rule="sandbox_required",
             )
         if shutil.which("bwrap") is None:
+            if self.security_profile == "local_dev" and self.allow_unsafe_exec:
+                return True
             raise PolicyDeniedError(
                 "sandbox 'bwrap' is configured but not available; command was not executed",
                 code="sandbox_missing",
                 boundary="exec",
                 policy_rule="sandbox_backend_missing",
             )
+        return False
 
     @classmethod
     def _is_benign_device_path(cls, path: str) -> bool:

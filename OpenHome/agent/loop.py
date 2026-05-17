@@ -234,6 +234,10 @@ def _is_sensitive_tool_log(name: str) -> bool:
     )
 
 
+def _should_register_exec(config: Any) -> bool:
+    return bool(config.enable) and getattr(config, "profile", "secure") != "disabled"
+
+
 @dataclass
 class StateTraceEntry:
     state: TurnState
@@ -599,7 +603,7 @@ class AgentLoop:
         for cls in (GlobTool, GrepTool):
             self.tools.register(cls(workspace=self.workspace, allowed_dir=allowed_dir))
         self.tools.register(NotebookEditTool(workspace=self.workspace, allowed_dir=allowed_dir))
-        if self.exec_config.enable:
+        if _should_register_exec(self.exec_config):
             self.tools.register(
                 ExecTool(
                     working_dir=str(self.workspace),
@@ -610,6 +614,8 @@ class AgentLoop:
                     allowed_env_keys=self.exec_config.allowed_env_keys,
                     allow_patterns=self.exec_config.allow_patterns,
                     deny_patterns=self.exec_config.deny_patterns,
+                    security_profile=self.exec_config.profile,
+                    allow_unsafe_exec=self.exec_config.allow_unsafe_exec,
                 )
             )
         if self.web_config.enable:

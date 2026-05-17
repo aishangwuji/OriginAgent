@@ -7,6 +7,7 @@ import pytest
 from OpenHome.agent.tools.audit import InMemoryToolAuditSink, ToolAuditConfig
 from OpenHome.agent.tools.base import Tool
 from OpenHome.agent.tools.registry import ToolRegistry
+from OpenHome.agent.tools.shell import ExecTool
 from OpenHome.security.capabilities import CapabilitySnapshot
 
 
@@ -141,3 +142,44 @@ async def test_audit_mode_does_not_expand_capability_gate(mode: str) -> None:
     result = await registry.execute("echo_helper", {"text": "hello"})
 
     assert result == {"echo": "hello"}
+
+
+@pytest.mark.asyncio
+async def test_local_dev_exec_profile_still_requires_capability_snapshot(tmp_path) -> None:
+    registry = ToolRegistry(
+        audit_sink=InMemoryToolAuditSink(),
+        audit_config=ToolAuditConfig(mode="off"),
+    )
+    registry.register(
+        ExecTool(
+            working_dir=str(tmp_path),
+            restrict_to_workspace=True,
+            sandbox="",
+            security_profile="local_dev",
+            allow_unsafe_exec=True,
+        )
+    )
+
+    result = await registry.execute("exec", {"command": "echo ok"})
+
+    assert "requires an explicit capability snapshot" in result
+    assert "unsafe-exec" not in result
+
+
+@pytest.mark.asyncio
+async def test_scheduled_snapshot_denies_local_dev_exec_profile(tmp_path) -> None:
+    registry = ToolRegistry(capability_snapshot=CapabilitySnapshot.scheduled_default())
+    registry.register(
+        ExecTool(
+            working_dir=str(tmp_path),
+            restrict_to_workspace=True,
+            sandbox="",
+            security_profile="local_dev",
+            allow_unsafe_exec=True,
+        )
+    )
+
+    result = await registry.execute("exec", {"command": "echo ok"})
+
+    assert "not allowed by the current capability snapshot" in result
+    assert "unsafe-exec" not in result

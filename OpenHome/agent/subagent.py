@@ -196,7 +196,11 @@ class SubagentManager:
             if snapshot.can_write_files:
                 tools.register(WriteFileTool(workspace=self.workspace, allowed_dir=allowed_dir, file_states=file_states))
                 tools.register(EditFileTool(workspace=self.workspace, allowed_dir=allowed_dir, file_states=file_states))
-            if self.exec_config.enable and snapshot.can_exec:
+            if (
+                self.exec_config.enable
+                and self.exec_config.profile != "disabled"
+                and snapshot.can_exec
+            ):
                 tools.register(ExecTool(
                     working_dir=str(self.workspace),
                     timeout=self.exec_config.timeout,
@@ -206,6 +210,8 @@ class SubagentManager:
                     allowed_env_keys=self.exec_config.allowed_env_keys,
                     allow_patterns=self.exec_config.allow_patterns,
                     deny_patterns=self.exec_config.deny_patterns,
+                    security_profile=self.exec_config.profile,
+                    allow_unsafe_exec=self.exec_config.allow_unsafe_exec,
                 ))
             if self.web_config.enable:
                 tools.register(
