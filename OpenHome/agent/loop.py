@@ -40,6 +40,12 @@ from OpenHome.agent.tools.image_generation import ImageGenerationTool
 from OpenHome.agent.tools.message import MessageTool
 from OpenHome.agent.tools.notebook import NotebookEditTool
 from OpenHome.agent.tools.registry import ToolRegistry
+from OpenHome.agent.tools.runtime_status import (
+    ConfirmationSummaryTool,
+    CronSummaryTool,
+    RuntimeStatusTool,
+    ToolAuditSummaryTool,
+)
 from OpenHome.agent.tools.search import GlobTool, GrepTool
 from OpenHome.agent.tools.self import MyTool
 from OpenHome.agent.tools.shell import ExecTool
@@ -383,9 +389,10 @@ class AgentLoop:
 
         self.context = ContextBuilder(workspace, timezone=timezone, disabled_skills=disabled_skills)
         self.sessions = session_manager or SessionManager(workspace)
+        self._tool_audit_config = ToolAuditConfig.from_config(tool_audit_config or _tc.audit)
         self.tools = ToolRegistry(
             audit_sink=JsonlToolAuditSink(workspace),
-            audit_config=tool_audit_config or _tc.audit,
+            audit_config=self._tool_audit_config,
         )
         self.device_action_executor = device_action_executor
         self._device_tools_real_mode = device_tools_real_mode
@@ -554,6 +561,25 @@ class AgentLoop:
         )
         extra_read = [BUILTIN_SKILLS_DIR] if allowed_dir else None
         self.tools.register(AskUserTool())
+        self.tools.register(
+            RuntimeStatusTool(
+                workspace=self.workspace,
+                registry=self.tools,
+                sessions=self.sessions,
+                pending_queues=self._pending_queues,
+                cron_service=self.cron_service,
+                audit_mode=self._tool_audit_config.mode,
+                confirmation_store=None,
+            )
+        )
+        self.tools.register(
+            ToolAuditSummaryTool(
+                workspace=self.workspace,
+                audit_mode=self._tool_audit_config.mode,
+            )
+        )
+        self.tools.register(CronSummaryTool(cron_service=self.cron_service))
+        self.tools.register(ConfirmationSummaryTool(workspace=self.workspace))
         self.tools.register(
             ReadFileTool(
                 workspace=self.workspace,
