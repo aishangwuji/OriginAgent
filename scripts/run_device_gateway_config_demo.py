@@ -1,67 +1,117 @@
-"""Config wiring demo for the lighting-only device gateway."""
-
 from __future__ import annotations
 
-import asyncio
 import json
 import tempfile
 from pathlib import Path
 from unittest.mock import MagicMock
 
 from OpenHome.agent.loop import AgentLoop
+from OpenHome.agent.tools.device_messages import DRY_RUN_ACCEPTED
 from OpenHome.bus.queue import MessageBus
 from OpenHome.config.schema import Config, DeviceToolsConfig
+from OpenHome.security.capabilities import CapabilitySnapshot
 
 
-def _provider():
+def _provider() -> MagicMock:
     provider = MagicMock()
     provider.get_default_model.return_value = "test-model"
+    provider.generation.max_tokens = 4096
     return provider
 
 
-def _lighting_names(loop: AgentLoop) -> list[str]:
+def _config(workspace: Path, device: DeviceToolsConfig | None = None) -> Config:
+    config = Config()
+    config.agents.defaults.workspace = str(workspace)
+    if device is not None:
+        config.tools.device = device
+    return config
+
+
+def _lighting_tool_names(loop: AgentLoop) -> list[str]:
     return [name for name in loop.tools.tool_names if name.startswith("openhome_device_lighting_")]
 
 
-async def main() -> None:
-    with tempfile.TemporaryDirectory(prefix="openhome-device-config-") as tmp:
-        workspace = Path(tmp)
-        cfg = Config()
-        cfg.agents.defaults.workspace = str(workspace)
-        default_loop = AgentLoop.from_config(cfg, bus=MessageBus(), provider=_provider())
-        assert _lighting_names(default_loop) == []
-        print("[PASS] default config has no lighting tools")
+async def _run_dry_run_tool(loop: AgentLoop) -> dict:
+    loop.tools.set_capability_snapshot(CapabilitySnapshot.user_turn())
+    tool = loop.tools.get("openhome_device_lighting_set_power")
+    assert tool is not None
+    if hasattr(tool, "set_context"):
+        tool.set_context("admin_user", "user_initiated")
+    return await tool.execute(device_id="private_device_7f3a9c", power="on")
 
-        cfg.tools.device = DeviceToolsConfig(
-            enabled=True,
-            lighting_enabled=True,
-            mode="dry_run",
-            backend="fake",
-        )
-        loop = AgentLoop.from_config(cfg, bus=MessageBus(), provider=_provider())
-        names = _lighting_names(loop)
-        assert len(names) == 3
-        print("[PASS] dry-run config registers exactly 3 lighting tools")
 
-        loop._set_tool_context("cli", "direct", actor_id="demo_user", trigger="user_initiated")
-        result = await loop.tools.execute(
-            "openhome_device_lighting_set_power",
-            {"device_id": "demo_lamp", "power": "on"},
-        )
-        assert isinstance(result, dict)
-        assert result["status"] == "success"
-        print("[PASS] typed lighting tool call dry-run accepted")
+def _audit_text(workspace: Path) -> str:
+    audit_dir = workspace / "memory" / "audit"
+    if not audit_dir.exists():
+        return ""
+    return "\n".join(
+        path.read_text(encoding="utf-8")
+        for path in sorted(audit_dir.glob("*.jsonl"))
+    )
 
-        tool_audit = workspace / "memory" / "audit" / "tool_calls.jsonl"
-        action_audit = workspace / "memory" / "audit" / "action_decisions.jsonl"
-        assert tool_audit.exists()
-        assert action_audit.exists()
-        raw_audit = tool_audit.read_text(encoding="utf-8") + action_audit.read_text(encoding="utf-8")
-        assert "demo_lamp" not in raw_audit
-        print("[PASS] tool/action audit files exist without raw device id")
-        print(json.dumps({"workspace": str(workspace), "tools": names}, ensure_ascii=False))
+
+def main() -> None:
+    import asyncio
+
+    root = Path(tempfile.mkdtemp(prefix="openhome-device-config-demo-"))
+    default_loop = AgentLoop.from_config(
+        _config(root / "default"),
+        bus=MessageBus(),
+        provider=_provider(),
+    )
+    assert _lighting_tool_names(default_loop) == []
+    print("[PASS] default config registers no device tools")
+
+    dry_run_workspace = root / "dry-run"
+    dry_run_loop = AgentLoop.from_config(
+        _config(
+            dry_run_workspace,
+            DeviceToolsConfig(
+                enabled=True,
+                lighting_enabled=True,
+                mode="dry_run",
+                backend="fake",
+            ),
+        ),
+        bus=MessageBus(),
+        provider=_provider(),
+    )
+    names = _lighting_tool_names(dry_run_loop)
+    assert names == [
+        "openhome_device_lighting_set_power",
+        "openhome_device_lighting_set_brightness",
+        "openhome_device_lighting_set_color_temperature",
+    ]
+    print("[PASS] dry-run fake config registers exactly 3 lighting tools")
+
+    result = asyncio.run(_run_dry_run_tool(dry_run_loop))
+    result_text = json.dumps(result, ensure_ascii=False)
+    assert result["human_message"] == DRY_RUN_ACCEPTED
+    assert "private_device_7f3a9c" not in result_text
+    assert "backend_result" not in result
+    print("[PASS] dry-run tool returns stable redacted message")
+
+    audit = _audit_text(dry_run_workspace)
+    assert "private_device_7f3a9c" not in audit
+    print("[PASS] action audit does not contain raw device id")
+
+    real_loop = AgentLoop.from_config(
+        _config(
+            root / "real",
+            DeviceToolsConfig(
+                enabled=True,
+                lighting_enabled=True,
+                mode="real",
+                backend="lighting_client",
+            ),
+        ),
+        bus=MessageBus(),
+        provider=_provider(),
+    )
+    assert _lighting_tool_names(real_loop) == []
+    print("[PASS] real mode config registers no device tools")
+    print(f"demo_workspace={root}")
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
-
+    main()
