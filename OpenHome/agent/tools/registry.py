@@ -40,7 +40,10 @@ class ToolAuditContext:
     session_key_hash: str | None = None
 
 
-_CAPABILITY_TOOL_NAMES = {
+# This list is intentionally narrow. Do not add ordinary helper tools here.
+# Capability snapshots are for tools that cross filesystem, network,
+# persistence, delegation, messaging, device, or external-provider boundaries.
+_CAPABILITY_REQUIRED_TOOL_NAMES = {
     "exec",
     "read_file",
     "list_dir",
@@ -447,7 +450,7 @@ def _safe_hash(value: Any) -> str | None:
 
 def _requires_capability_snapshot(name: str) -> bool:
     return (
-        name in _CAPABILITY_TOOL_NAMES
+        name in _CAPABILITY_REQUIRED_TOOL_NAMES
         or name.startswith("openhome_device_")
         or name.startswith("mcp_")
     )
