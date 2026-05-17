@@ -101,7 +101,7 @@ def test_notify_only_creates_notified_non_executable_item(tmp_path):
     assert confirmation is not None
     assert confirmation.kind == "notify_only"
     assert confirmation.status == "notified"
-    assert manager.list_notifications()[0].confirmation_id == confirmation.confirmation_id
+    assert manager.store.read_all()[0].confirmation_id == confirmation.confirmation_id
 
     result = manager.resolve_user_reply(confirmation.confirmation_id, "yes", now=NOW)
 
@@ -122,6 +122,36 @@ def test_notify_only_logs_notified_event(tmp_path):
     events = audit.find_by_confirmation_id(confirmation.confirmation_id)
     assert events[0].decision == "notified"
     assert events[0].metadata["confirmation_status"] == "notified"
+
+
+def test_from_dict_sanitizes_action_payload_before_construction():
+    confirmation = ConfirmationRequest.from_dict(
+        {
+            "confirmation_id": "conf_payload",
+            "kind": "action_confirmation",
+            "status": "pending",
+            "prompt": "confirm",
+            "action": "set_light_power",
+            "scope": "home.living_room.lighting.private_device_7f3a9c",
+            "trigger": "user_initiated",
+            "risk": "low",
+            "requested_by": "alice",
+            "decision_reason": "ok",
+            "presence_status": "unknown",
+            "related_fact_ids": [],
+            "created_at": NOW.isoformat(),
+            "expires_at": (NOW + timedelta(minutes=2)).isoformat(),
+            "action_payload": {
+                "token": "secret-token",
+                "parameters": {"secret": "hidden", "power": "on"},
+            },
+        }
+    )
+    raw = str(confirmation.action_payload)
+
+    assert "secret-token" not in raw
+    assert "hidden" not in raw
+    assert "power" in raw
 
 
 def test_high_risk_confirmation_expires_quickly_and_persists_expired_on_resolve(tmp_path):

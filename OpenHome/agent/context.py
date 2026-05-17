@@ -198,9 +198,9 @@ class ContextBuilder:
     def _escape_reference_text(text: str) -> str:
         return (
             text
-            .replace("</reference_context>", "<\\/reference_context>")
-            .replace("</internal_event>", "<\\/internal_event>")
             .replace(ContextBuilder._RUNTIME_CONTEXT_END, "[\\/Runtime Context]")
+            .replace("<", "&lt;")
+            .replace(">", "&gt;")
         )
 
     @staticmethod

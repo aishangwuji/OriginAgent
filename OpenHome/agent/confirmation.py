@@ -141,6 +141,7 @@ class ConfirmationRequest:
 
     @classmethod
     def from_dict(cls, raw: dict[str, Any]) -> "ConfirmationRequest":
+        raw_payload = raw.get("action_payload")
         return cls(
             confirmation_id=_required_str(raw.get("confirmation_id"), "confirmation_id"),
             kind=_required_str(raw.get("kind"), "kind"),
@@ -158,10 +159,8 @@ class ConfirmationRequest:
             expires_at=_required_str(raw.get("expires_at"), "expires_at"),
             requires_presence_empty=bool(raw.get("requires_presence_empty", False)),
             uses_facts=_normalize_string_list(raw.get("uses_facts", [])),
-            action_payload=(
-                raw.get("action_payload")
-                if isinstance(raw.get("action_payload"), dict)
-                else {}
+            action_payload=_sanitize_action_payload_snapshot(
+                raw_payload if isinstance(raw_payload, dict) else {}
             ),
             idempotency_key=_optional_str(raw.get("idempotency_key")),
             consumed_at=_optional_str(raw.get("consumed_at")),

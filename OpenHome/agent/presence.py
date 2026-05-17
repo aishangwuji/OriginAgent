@@ -382,7 +382,10 @@ def _normalize_confidence(value: Any) -> float:
 
 
 def _format_timestamp(now: datetime | None = None) -> str:
-    return (now or datetime.now()).isoformat()
+    ts = now or datetime.now(timezone.utc)
+    if ts.tzinfo is None:
+        ts = ts.replace(tzinfo=timezone.utc)
+    return ts.astimezone(timezone.utc).isoformat()
 
 
 def _is_expired(expires_at: str | None, now: datetime | None = None) -> bool:
@@ -391,7 +394,12 @@ def _is_expired(expires_at: str | None, now: datetime | None = None) -> bool:
     expires_ts = _timestamp(expires_at)
     if expires_ts is None:
         return True
-    current = now.timestamp() if now is not None else datetime.now(timezone.utc).timestamp()
+    if now is None:
+        current = datetime.now(timezone.utc).timestamp()
+    elif now.tzinfo is None:
+        current = now.replace(tzinfo=timezone.utc).timestamp()
+    else:
+        current = now.astimezone(timezone.utc).timestamp()
     return expires_ts <= current
 
 
@@ -400,7 +408,7 @@ def _timestamp(value: str) -> float | None:
         normalized = value.replace("Z", "+00:00")
         parsed = datetime.fromisoformat(normalized)
         if parsed.tzinfo is None:
-            return parsed.timestamp()
+            return parsed.replace(tzinfo=timezone.utc).timestamp()
         return parsed.astimezone(timezone.utc).timestamp()
     except ValueError:
         return None

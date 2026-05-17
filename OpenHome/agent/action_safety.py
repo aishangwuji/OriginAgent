@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 from OpenHome.agent.facts import FactRecord, FactStore
 from OpenHome.agent.presence import PresenceStore
 
-VALID_TRIGGERS = {"user_initiated", "scheduled", "autonomous", "system"}
+VALID_TRIGGERS = {"user_initiated", "scheduled", "system", "subagent"}
 VALID_RISKS = {"low", "medium", "high"}
 USER_TRIGGER = "user_initiated"
 PENDING_RELEVANT_CATEGORIES = {"policy", "safety", "temporary"}

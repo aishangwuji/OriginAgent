@@ -332,7 +332,7 @@ def test_notify_only_creates_non_executable_notification_without_backend_call(tm
     assert backend.calls == 0
     assert result.status == "notified"
     assert result.confirmation_id is not None
-    notifications = executor.confirmation_manager.list_notifications()
+    notifications = executor.confirmation_manager.store.read_all()
     assert notifications[0].confirmation_id == result.confirmation_id
 
 

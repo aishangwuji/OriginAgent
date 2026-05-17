@@ -10,8 +10,10 @@ import json
 import uuid
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Protocol
 
+from filelock import FileLock
 from loguru import logger
 
 from OpenHome.agent.action_safety import ActionDecision, ActionRequest, ActionSafetyGate
@@ -30,6 +32,7 @@ from OpenHome.agent.permissions import (
     infer_device_domain,
 )
 from OpenHome.agent.presence_signals import FORBIDDEN_METADATA_KEYS
+from OpenHome.utils.helpers import ensure_dir
 
 ACTION_FORBIDDEN_PAYLOAD_KEYS = {
     *FORBIDDEN_METADATA_KEYS,
@@ -115,6 +118,50 @@ class DryRunActionBackend:
         }
 
 
+class SuccessfulActionKeyStore:
+    def __init__(self, workspace: Path, *, max_loaded: int = 10_000):
+        self.action_dir = ensure_dir(workspace / "memory" / "action")
+        self.keys_file = self.action_dir / "idempotency_keys.jsonl"
+        self._lock_file = self.action_dir / ".idempotency.lock"
+        self.max_loaded = max_loaded
+
+    def load(self) -> set[str]:
+        try:
+            lines = self.keys_file.read_text(encoding="utf-8").splitlines()
+        except FileNotFoundError:
+            return set()
+        except OSError as exc:
+            logger.warning("Failed to read action idempotency keys from {}: {}", self.keys_file, exc)
+            return set()
+
+        keys: list[str] = []
+        for line in lines[-self.max_loaded:]:
+            if not line.strip():
+                continue
+            try:
+                raw = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            key = raw.get("idempotency_key") if isinstance(raw, dict) else None
+            if isinstance(key, str) and key:
+                keys.append(key)
+        return set(keys)
+
+    def put(self, idempotency_key: str, *, now: datetime | None = None) -> None:
+        event = {
+            "idempotency_key": idempotency_key,
+            "created_at": _format_datetime(_normalize_datetime(now)),
+        }
+        line = json.dumps(event, ensure_ascii=False, sort_keys=True) + "\n"
+        try:
+            with FileLock(str(self._lock_file)):
+                with self.keys_file.open("a", encoding="utf-8") as fh:
+                    fh.write(line)
+                    fh.flush()
+        except OSError as exc:
+            logger.warning("Failed to persist action idempotency key: {}", exc)
+
+
 class SafeActionExecutor:
     def __init__(
         self,
@@ -131,7 +178,15 @@ class SafeActionExecutor:
         self.permission_resolver = permission_resolver or PermissionResolver()
         self.audit_logger = audit_logger
         self.records: list[ActionExecutionRecord] = []
-        self._successful_idempotency_keys: set[str] = set()
+        workspace = getattr(confirmation_manager, "workspace", None)
+        self._successful_key_store = (
+            SuccessfulActionKeyStore(Path(workspace)) if workspace is not None else None
+        )
+        self._successful_idempotency_keys: set[str] = (
+            self._successful_key_store.load()
+            if self._successful_key_store is not None
+            else set()
+        )
 
     def submit(
         self,
@@ -222,6 +277,8 @@ class SafeActionExecutor:
             self._record(action_id, sanitized_intent, decision, result, current_time)
             return result
 
+        # The production safety gate does not emit notify_only today; this path
+        # only preserves compatibility for explicitly injected notification decisions.
         if decision.decision == "notify_only":
             try:
                 notification = self.confirmation_manager.create_from_action_decision(
@@ -415,6 +472,7 @@ class SafeActionExecutor:
             )
             self._record(action_id, intent, decision, result, current_time)
             return result
+        # Notify-only confirmations are informational and must remain non-executable.
         if decision.decision == "notify_only":
             result = ActionExecutionResult(
                 status="notified",
@@ -613,7 +671,11 @@ class SafeActionExecutor:
         result: ActionExecutionResult,
     ) -> None:
         if intent.idempotency_key and result.status in {"executed", "dry_run"}:
+            if intent.idempotency_key in self._successful_idempotency_keys:
+                return
             self._successful_idempotency_keys.add(intent.idempotency_key)
+            if self._successful_key_store is not None:
+                self._successful_key_store.put(intent.idempotency_key)
 
     def _evaluate_permission(
         self,
@@ -850,7 +912,7 @@ def _format_datetime(value: datetime) -> str:
 def _audit_scope(intent: ActionIntent, result: ActionExecutionResult) -> str:
     if (
         result.backend_result.get("backend") == "real_lighting"
-        and result.backend_result.get("device_id_present") == "True"
+        and result.backend_result.get("device_id_present") in {"True", True}
     ):
         return _redact_scope_device_id(intent.scope)
     if intent.payload.get("domain") == "lighting" and intent.payload.get("device_id"):

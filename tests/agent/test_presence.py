@@ -1,9 +1,9 @@
 import json
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from OpenHome.agent.presence import PresenceStore
+from OpenHome.agent.presence import PresenceStore, _format_timestamp, _is_expired, _timestamp
 
 NOW = datetime(2026, 5, 15, 12, 0, 0, tzinfo=timezone.utc)
 PAST = "2026-05-15T11:00:00+00:00"
@@ -34,6 +34,23 @@ def test_upsert_creates_presence_json_and_updates_same_person(tmp_path):
     raw = json.loads(store.presence_file.read_text(encoding="utf-8"))
     assert list(raw["people"]) == ["alice"]
     assert raw["people"]["alice"]["status"] == "away"
+
+
+def test_presence_timestamps_are_utc_aware_and_expire_consistently():
+    naive = datetime(2026, 5, 15, 12, 0, 0)
+    eastern = datetime(2026, 5, 15, 8, 0, 0, tzinfo=timezone(timedelta(hours=-4)))
+
+    assert _format_timestamp(naive) == "2026-05-15T12:00:00+00:00"
+    assert _format_timestamp(eastern) == "2026-05-15T12:00:00+00:00"
+    assert _timestamp("2026-05-15T12:00:00") == _timestamp("2026-05-15T12:00:00+00:00")
+    assert _is_expired(
+        "2026-05-15T12:00:00+04:00",
+        now=datetime(2026, 5, 15, 8, 0, 1),
+    )
+    assert not _is_expired(
+        "2026-05-15T12:00:00-04:00",
+        now=datetime(2026, 5, 15, 15, 59, 59),
+    )
 
 
 def test_expired_person_presence_resolves_unknown(tmp_path):

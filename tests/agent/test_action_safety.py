@@ -43,7 +43,7 @@ def test_low_risk_user_action_without_facts_allows(stores):
     assert decision.decision == "allow"
 
 
-@pytest.mark.parametrize("trigger", ["scheduled", "autonomous", "system"])
+@pytest.mark.parametrize("trigger", ["scheduled", "system", "subagent"])
 def test_pending_fact_in_uses_facts_blocks_non_user_triggers(stores, trigger):
     _, facts = stores
     fact = facts.upsert_fact(
@@ -105,7 +105,7 @@ def test_unrelated_pending_fact_does_not_block_low_risk_user_action(stores):
     assert decision.decision == "allow"
 
 
-@pytest.mark.parametrize("trigger", ["scheduled", "autonomous", "system"])
+@pytest.mark.parametrize("trigger", ["scheduled", "system", "subagent"])
 def test_high_risk_non_user_action_denied(stores, trigger):
     decision = gate(stores).evaluate(
         request(action="unlock", scope="home.entry.lock", trigger=trigger, risk="high")
@@ -123,7 +123,7 @@ def test_high_risk_user_with_unknown_occupancy_asks_confirmation(stores):
     assert decision.presence_status == "unknown"
 
 
-@pytest.mark.parametrize("trigger", ["scheduled", "autonomous", "system"])
+@pytest.mark.parametrize("trigger", ["scheduled", "system", "subagent"])
 def test_medium_risk_non_user_with_unknown_occupancy_denied(stores, trigger):
     decision = gate(stores).evaluate(
         request(
@@ -246,6 +246,7 @@ def test_active_policy_or_safety_fact_does_not_allow_high_risk_autonomous(stores
     )
 
     assert decision.decision == "deny"
+    assert decision.reason == "invalid trigger"
     assert decision.supporting_facts == []
 
 
@@ -275,7 +276,24 @@ def test_fact_read_failure_fail_closed_except_low_risk_user_without_constraints(
 
 def test_invalid_trigger_or_risk_denied(stores):
     assert gate(stores).evaluate(request(trigger="timer")).decision == "deny"
+    assert gate(stores).evaluate(request(trigger="autonomous")).reason == "invalid trigger"
     assert gate(stores).evaluate(request(risk="extreme")).decision == "deny"
+
+
+def test_gate_decisions_do_not_include_notify_only(stores):
+    seen = {
+        gate(stores).evaluate(
+            request(action="unlock", scope="home.entry.lock", risk="high", trigger="user_initiated")
+        ).decision,
+        gate(stores).evaluate(
+            request(action="unlock", scope="home.entry.lock", risk="high", trigger="scheduled")
+        ).decision,
+        gate(stores).evaluate(request(trigger="autonomous")).decision,
+        gate(stores).evaluate(request()).decision,
+    }
+
+    assert seen <= {"allow", "deny", "ask_confirmation"}
+    assert "notify_only" not in seen
 
 
 def test_motion_signal_unknown_occupancy_makes_high_risk_user_ask_confirmation(stores):

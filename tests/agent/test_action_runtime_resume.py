@@ -446,6 +446,35 @@ def test_successful_idempotency_key_prevents_duplicate_execution(tmp_path):
     assert backend.calls == 1
 
 
+def test_successful_idempotency_key_survives_executor_recreation(tmp_path):
+    first_backend = CountingBackend()
+    first_executor = executor(
+        tmp_path,
+        SequenceGate(decision("ask_confirmation"), decision("allow")),
+        first_backend,
+    )
+    action_intent = intent(idempotency_key="idem-persisted")
+    confirmation_id = create_pending(first_executor, action_intent)
+
+    first = first_executor.resume_confirmed(confirmation_id, reply="yes", now=NOW)
+
+    second_backend = CountingBackend()
+    second_executor = executor(
+        tmp_path,
+        SequenceGate(decision("allow")),
+        second_backend,
+    )
+    second = second_executor.submit(
+        intent(action="turn_on", risk="low", idempotency_key="idem-persisted"),
+        now=NOW,
+    )
+
+    assert first.status == "dry_run"
+    assert second.status == "already_executed"
+    assert first_backend.calls == 1
+    assert second_backend.calls == 0
+
+
 def test_idempotency_replay_logs_action_decision(tmp_path):
     audit = AuditLogger(tmp_path)
     gate = SequenceGate(

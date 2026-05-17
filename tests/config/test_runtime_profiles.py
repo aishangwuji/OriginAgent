@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 
-from OpenHome.agent.tools.filesystem import ReadFileTool
+from OpenHome.agent.tools.filesystem import ReadFileTool, WriteFileTool
 from OpenHome.agent.tools.base import Tool
 from OpenHome.agent.tools.registry import ToolRegistry
 from OpenHome.config.loader import load_config
@@ -133,3 +133,15 @@ async def test_profile_does_not_bypass_protected_path_policy(tmp_path) -> None:
     assert cfg.tools.exec.allow_unsafe_exec is False
     result = await ReadFileTool(workspace=tmp_path).execute(str(protected))
     assert "protected runtime state" in result
+
+
+async def test_action_idempotency_store_is_protected_runtime_state(tmp_path) -> None:
+    protected = tmp_path / "memory" / "action" / "idempotency_keys.jsonl"
+    protected.parent.mkdir(parents=True)
+    protected.write_text("{}", encoding="utf-8")
+
+    result = await ReadFileTool(workspace=tmp_path).execute(str(protected))
+    write_result = await WriteFileTool(workspace=tmp_path).execute(str(protected), "{}")
+
+    assert "protected runtime state" in result
+    assert "protected runtime state" in write_result

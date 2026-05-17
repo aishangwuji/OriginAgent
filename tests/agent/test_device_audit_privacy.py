@@ -2,6 +2,7 @@ import json
 from datetime import datetime, timezone
 
 from OpenHome.agent.action_runtime import SafeActionExecutor
+from OpenHome.agent.action_runtime import ActionExecutionResult, ActionIntent, _audit_scope
 from OpenHome.agent.action_safety import ActionSafetyGate
 from OpenHome.agent.audit import AuditLogger
 from OpenHome.agent.confirmation import ConfirmationManager
@@ -146,3 +147,30 @@ def test_backend_receives_real_device_id_while_audit_and_explain_are_sanitized(t
     assert "home.living_room.lighting.<device>" in raw
     assert "lighting" in explanation
     assert "executed" in explanation
+
+
+def test_backend_result_device_presence_redacts_scope_without_payload_fallback():
+    intent = ActionIntent(
+        action="set_light_power",
+        scope=f"home.living_room.lighting.{PRIVATE_DEVICE_ID}",
+        trigger="user_initiated",
+        risk="low",
+        requested_by="admin_user",
+        payload={},
+    )
+
+    for value in (True, "True"):
+        result = ActionExecutionResult(
+            status="executed",
+            action_id="action_test",
+            reason="ok",
+            backend_result={
+                "backend": "real_lighting",
+                "device_id_present": value,  # type: ignore[dict-item]
+            },
+        )
+
+        scope = _audit_scope(intent, result)
+
+        assert PRIVATE_DEVICE_ID not in scope
+        assert scope == "home.living_room.lighting.<device>"
