@@ -43,6 +43,20 @@ def test_agent_loop_registers_runtime_explain_tools_by_default(tmp_path: Path) -
     assert not any(name in loop.tools._audit_config.security_tools for name in RUNTIME_TOOL_NAMES)
 
 
+@pytest.mark.asyncio
+async def test_runtime_status_reports_confirmation_store_available(tmp_path: Path) -> None:
+    loop = AgentLoop(
+        bus=MessageBus(),
+        provider=_provider(),
+        workspace=tmp_path,
+        model="test-model",
+    )
+
+    result = await loop.tools.execute("openhome_runtime_status", {})
+
+    assert result["confirmation_available"] is True
+
+
 @pytest.mark.parametrize("mode", ["off", "minimal", "security"])
 @pytest.mark.asyncio
 async def test_runtime_explain_tools_do_not_require_capability_snapshot(

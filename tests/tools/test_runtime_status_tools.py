@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import json
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 
 import pytest
 
@@ -148,6 +150,31 @@ async def test_cron_summary_does_not_expose_message_or_routing(tmp_path) -> None
     serialized = _serialized(result)
     for forbidden in (RAW_MESSAGE, "secret job", "private-channel", "private-chat"):
         assert forbidden not in serialized
+
+
+@pytest.mark.asyncio
+async def test_cron_summary_accepts_object_capability_snapshot(tmp_path) -> None:
+    @dataclass
+    class SnapshotObject:
+        source: str = "cron"
+        trigger: str = "scheduled"
+        can_exec: bool = True
+        can_read_files: bool = False
+
+    service = SimpleNamespace(
+        list_jobs=lambda include_disabled=False: [
+            SimpleNamespace(
+                enabled=True,
+                schedule=SimpleNamespace(kind="every"),
+                state=SimpleNamespace(next_run_at_ms=1),
+                payload=SimpleNamespace(capability_snapshot=SnapshotObject()),
+            )
+        ]
+    )
+
+    result = await CronSummaryTool(cron_service=service).execute()  # type: ignore[arg-type]
+
+    assert result["capability_summary_counts"] == {"cron:scheduled:enabled_flags=1": 1}
 
 
 @pytest.mark.asyncio

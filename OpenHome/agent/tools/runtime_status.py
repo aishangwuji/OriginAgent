@@ -257,9 +257,15 @@ def _session_count(sessions: Any) -> int:
     return 0
 
 
-def _capability_summary(snapshot: dict[str, Any]) -> str:
+def _capability_summary(snapshot: Any) -> str:
     if not snapshot:
         return "none"
+    if hasattr(snapshot, "model_dump"):
+        snapshot = snapshot.model_dump()
+    elif hasattr(snapshot, "__dict__"):
+        snapshot = vars(snapshot)
+    if not isinstance(snapshot, dict):
+        return "unknown"
     source = _string_value(snapshot.get("source")) or "unknown"
     trigger = _string_value(snapshot.get("trigger")) or "unknown"
     flags = [

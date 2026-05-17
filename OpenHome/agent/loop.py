@@ -17,6 +17,7 @@ from loguru import logger
 
 from OpenHome.agent.autocompact import AutoCompact
 from OpenHome.agent.context import ContextBuilder
+from OpenHome.agent.confirmation import PendingConfirmationStore
 from OpenHome.agent.device_factory import build_device_action_executor
 from OpenHome.agent.hook import AgentHook, AgentHookContext, CompositeHook
 from OpenHome.agent.identity import ActorResolver, RuntimeContext
@@ -560,6 +561,7 @@ class AgentLoop:
             self.workspace if (self.restrict_to_workspace or self.exec_config.sandbox) else None
         )
         extra_read = [BUILTIN_SKILLS_DIR] if allowed_dir else None
+        confirmation_store = PendingConfirmationStore(self.workspace)
         self.tools.register(AskUserTool())
         self.tools.register(
             RuntimeStatusTool(
@@ -569,7 +571,7 @@ class AgentLoop:
                 pending_queues=self._pending_queues,
                 cron_service=self.cron_service,
                 audit_mode=self._tool_audit_config.mode,
-                confirmation_store=None,
+                confirmation_store=confirmation_store,
             )
         )
         self.tools.register(
@@ -579,7 +581,12 @@ class AgentLoop:
             )
         )
         self.tools.register(CronSummaryTool(cron_service=self.cron_service))
-        self.tools.register(ConfirmationSummaryTool(workspace=self.workspace))
+        self.tools.register(
+            ConfirmationSummaryTool(
+                workspace=self.workspace,
+                confirmation_store=confirmation_store,
+            )
+        )
         self.tools.register(
             ReadFileTool(
                 workspace=self.workspace,
