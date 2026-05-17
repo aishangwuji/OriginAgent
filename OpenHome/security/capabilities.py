@@ -115,3 +115,30 @@ class CapabilitySnapshot:
             allowed_mcp_scopes=tuple(data.get("allowed_mcp_scopes") or ()),
         )
 
+
+def intersect_capability_snapshots(
+    left: CapabilitySnapshot,
+    right: CapabilitySnapshot,
+    *,
+    source: CapabilitySource | None = None,
+    trigger: CapabilityTrigger | None = None,
+) -> CapabilitySnapshot:
+    """Return the explicit intersection of two capability snapshots."""
+
+    return CapabilitySnapshot(
+        version=left.version,
+        source=source or left.source,
+        trigger=trigger or left.trigger,
+        can_exec=left.can_exec and right.can_exec,
+        can_read_files=left.can_read_files and right.can_read_files,
+        can_write_files=left.can_write_files and right.can_write_files,
+        can_send_cross_target=left.can_send_cross_target and right.can_send_cross_target,
+        can_create_cron=left.can_create_cron and right.can_create_cron,
+        can_spawn=left.can_spawn and right.can_spawn,
+        allowed_device_domains=tuple(
+            sorted(set(left.allowed_device_domains) & set(right.allowed_device_domains))
+        ),
+        allowed_mcp_scopes=tuple(
+            sorted(set(left.allowed_mcp_scopes) & set(right.allowed_mcp_scopes))
+        ),
+    )

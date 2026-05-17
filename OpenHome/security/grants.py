@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 from OpenHome.cron.types import CronPayload
-from OpenHome.security.capabilities import CapabilitySnapshot, CapabilityTrigger
+from OpenHome.security.capabilities import CapabilitySnapshot, CapabilitySource, CapabilityTrigger
 from OpenHome.security.policy import PolicyDeniedError
 
 GrantSource = Literal["admin_config", "user_confirmation", "test"]
@@ -52,9 +52,20 @@ class CapabilityGrant:
 
     def to_snapshot(self, *, trigger: CapabilityTrigger = "scheduled") -> CapabilitySnapshot:
         # C5a grants are cron-only; subagent grants need a separate C5b conversion path.
+        return self._to_snapshot_for(source="cron", trigger=trigger)
+
+    def to_subagent_snapshot(self) -> CapabilitySnapshot:
+        return self._to_snapshot_for(source="subagent", trigger="subagent")
+
+    def _to_snapshot_for(
+        self,
+        *,
+        source: CapabilitySource,
+        trigger: CapabilityTrigger,
+    ) -> CapabilitySnapshot:
         return CapabilitySnapshot(
             version=1,
-            source="cron",
+            source=source,
             trigger=trigger,
             can_exec=self.can_exec,
             can_read_files=self.can_read_files,

@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 
 from OpenHome.security.capabilities import CapabilitySnapshot
+from OpenHome.security.capabilities import intersect_capability_snapshots
 from OpenHome.security.grants import CapabilityGrant, CapabilityGrantStore
 
 
@@ -91,6 +92,74 @@ def test_grant_to_snapshot_source_is_cron_only_for_c5a() -> None:
 
     assert snapshot.source == "cron"
     assert snapshot.trigger == "scheduled"
+
+
+def test_grant_to_subagent_snapshot_is_separate_from_cron_snapshot() -> None:
+    grant = CapabilityGrant(
+        grant_id="grant-secret-1",
+        created_by="admin",
+        created_at=_now().isoformat(),
+        can_read_files=True,
+    )
+
+    cron_snapshot = grant.to_snapshot(trigger="scheduled")
+    subagent_snapshot = grant.to_subagent_snapshot()
+
+    assert cron_snapshot.source == "cron"
+    assert cron_snapshot.trigger == "scheduled"
+    assert subagent_snapshot.source == "subagent"
+    assert subagent_snapshot.trigger == "subagent"
+    assert subagent_snapshot.can_read_files is True
+
+
+def test_intersect_capability_snapshots_is_explicit_and_cannot_expand() -> None:
+    left = CapabilitySnapshot(
+        version=1,
+        source="subagent",
+        trigger="subagent",
+        can_exec=False,
+        can_read_files=True,
+        can_write_files=False,
+        can_send_cross_target=False,
+        can_create_cron=False,
+        can_spawn=False,
+        allowed_device_domains=("lighting",),
+        allowed_mcp_scopes=("read",),
+    )
+    right = CapabilitySnapshot(
+        version=1,
+        source="subagent",
+        trigger="subagent",
+        can_exec=True,
+        can_read_files=True,
+        can_write_files=True,
+        can_send_cross_target=True,
+        can_create_cron=True,
+        can_spawn=True,
+        allowed_device_domains=("climate", "lighting"),
+        allowed_mcp_scopes=("read", "write"),
+    )
+
+    effective = intersect_capability_snapshots(
+        left,
+        right,
+        source="subagent",
+        trigger="subagent",
+    )
+
+    assert effective == CapabilitySnapshot(
+        version=1,
+        source="subagent",
+        trigger="subagent",
+        can_exec=False,
+        can_read_files=True,
+        can_write_files=False,
+        can_send_cross_target=False,
+        can_create_cron=False,
+        can_spawn=False,
+        allowed_device_domains=("lighting",),
+        allowed_mcp_scopes=("read",),
+    )
 
 
 def test_unknown_source_does_not_control_activity_or_snapshot() -> None:
