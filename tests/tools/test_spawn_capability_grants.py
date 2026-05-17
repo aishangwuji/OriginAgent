@@ -55,6 +55,32 @@ def test_spawn_without_grant_uses_parent_derived_snapshot(tmp_path: Path) -> Non
     assert effective == parent.derive_subagent()
 
 
+@pytest.mark.asyncio
+async def test_spawn_legacy_capability_snapshot_parameter_means_parent_snapshot(
+    tmp_path: Path,
+) -> None:
+    manager = _manager(tmp_path)
+    captured: dict[str, CapabilitySnapshot] = {}
+
+    async def fake_run(spec):
+        captured["snapshot"] = spec.tools._capability_snapshot
+        return SimpleNamespace(
+            stop_reason="done",
+            final_content="done",
+            error=None,
+            tool_events=[],
+        )
+
+    manager.runner.run = fake_run
+    manager._announce_result = AsyncMock()
+    parent = CapabilitySnapshot.user_turn()
+
+    await manager.spawn(task="do work", capability_snapshot=parent)
+    await asyncio.gather(*manager._running_tasks.values(), return_exceptions=True)
+
+    assert captured["snapshot"] == parent.derive_subagent()
+
+
 def test_spawn_grant_cannot_expand_parent_derived_snapshot(tmp_path: Path) -> None:
     store = CapabilityGrantStore(tmp_path)
     store.put(_grant("grant-secret-1", can_exec=True, can_write_files=True))
@@ -140,17 +166,21 @@ def test_invalid_spawn_grant_fails_closed_without_raw_grant_id(
     assert grant_id not in str(exc.value)
 
 
-def test_spawn_grant_id_without_store_fails_as_missing(tmp_path: Path) -> None:
+def test_spawn_grant_id_without_store_fails_as_missing_without_raw_grant_id(
+    tmp_path: Path,
+) -> None:
     manager = _manager(tmp_path, grant_store=None)
+    raw_grant_id = "grant-secret-1"
 
     with pytest.raises(PolicyDeniedError) as exc:
         manager._snapshot_for_spawn(
             parent_snapshot=CapabilitySnapshot.user_turn(),
-            grant_id="grant-secret-1",
+            grant_id=raw_grant_id,
         )
 
     assert exc.value.policy_rule == "capability_grant_missing"
-    assert "grant-secret-1" not in str(exc.value)
+    assert str(exc.value) == "Capability grant is missing, expired, or revoked."
+    assert raw_grant_id not in str(exc.value)
 
 
 def test_spawn_tool_schema_excludes_grants_and_capability_flags(tmp_path: Path) -> None:
