@@ -52,6 +52,9 @@ def load_config(config_path: Path | None = None) -> Config:
             logger.warning("Failed to load config from {}: {}", path, e)
             logger.warning("Using default configuration.")
 
+    from OpenHome.config.profiles import apply_runtime_profile
+
+    config = apply_runtime_profile(config)
     _apply_ssrf_whitelist(config)
     return config
 

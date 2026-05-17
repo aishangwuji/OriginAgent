@@ -198,6 +198,15 @@ class GatewayConfig(Base):
     heartbeat: HeartbeatConfig = Field(default_factory=HeartbeatConfig)
 
 
+RuntimeProfile = Literal["default", "household_safe", "local_dev", "automation"]
+
+
+class RuntimeConfig(Base):
+    """Runtime profile configuration."""
+
+    profile: RuntimeProfile = "default"
+
+
 class WebSearchConfig(Base):
     """Web search tool configuration."""
 
@@ -316,6 +325,7 @@ class Config(BaseSettings):
     providers: ProvidersConfig = Field(default_factory=ProvidersConfig)
     api: ApiConfig = Field(default_factory=ApiConfig)
     gateway: GatewayConfig = Field(default_factory=GatewayConfig)
+    runtime: RuntimeConfig = Field(default_factory=RuntimeConfig)
     tools: ToolsConfig = Field(default_factory=ToolsConfig)
 
     @property

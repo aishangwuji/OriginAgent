@@ -485,7 +485,9 @@ class AgentLoop:
         parameters (e.g. ``cron_service``, ``session_manager``).
         """
         from OpenHome.providers.factory import make_provider
+        from OpenHome.config.profiles import apply_runtime_profile
 
+        config = apply_runtime_profile(config)
         if bus is None:
             bus = MessageBus()
         defaults = config.agents.defaults
