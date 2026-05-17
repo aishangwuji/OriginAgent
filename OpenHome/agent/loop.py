@@ -32,7 +32,7 @@ from OpenHome.agent.tools.ask import (
     pending_ask_user_id,
 )
 from OpenHome.agent.tools.cron import CronTool
-from OpenHome.agent.tools.audit import JsonlToolAuditSink
+from OpenHome.agent.tools.audit import JsonlToolAuditSink, ToolAuditConfig
 from OpenHome.agent.tools.device import lighting_tools
 from OpenHome.agent.tools.file_state import FileStateStore, bind_file_states, reset_file_states
 from OpenHome.agent.tools.filesystem import EditFileTool, ListDirTool, ReadFileTool, WriteFileTool
@@ -334,6 +334,7 @@ class AgentLoop:
         device_tools_real_mode: bool = False,
         device_registry: Any | None = None,
         actor_resolver: ActorResolver | None = None,
+        tool_audit_config: ToolAuditConfig | None = None,
     ):
         from OpenHome.config.schema import ExecToolConfig, ToolsConfig, WebToolsConfig
 
@@ -382,7 +383,10 @@ class AgentLoop:
 
         self.context = ContextBuilder(workspace, timezone=timezone, disabled_skills=disabled_skills)
         self.sessions = session_manager or SessionManager(workspace)
-        self.tools = ToolRegistry(audit_sink=JsonlToolAuditSink(workspace))
+        self.tools = ToolRegistry(
+            audit_sink=JsonlToolAuditSink(workspace),
+            audit_config=tool_audit_config or _tc.audit,
+        )
         self.device_action_executor = device_action_executor
         self._device_tools_real_mode = device_tools_real_mode
         self._device_registry = device_registry
@@ -505,6 +509,7 @@ class AgentLoop:
             tools_config=config.tools,
             device_action_executor=device_action_executor,
             device_tools_real_mode=config.tools.device.mode == "real",
+            tool_audit_config=config.tools.audit,
             **extra,
         )
 

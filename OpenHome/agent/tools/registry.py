@@ -4,11 +4,11 @@ import time
 import hashlib
 import json
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Literal
 from urllib.parse import urlparse
 
 from OpenHome.agent.tools.base import Tool
-from OpenHome.agent.tools.audit import ToolAuditSink, ToolCallAuditEvent
+from OpenHome.agent.tools.audit import ToolAuditConfig, ToolAuditSink, ToolCallAuditEvent
 from OpenHome.security.capabilities import CapabilitySnapshot
 from OpenHome.security.policy import PolicyDeniedError
 
@@ -89,11 +89,13 @@ class ToolRegistry:
     def __init__(
         self,
         audit_sink: ToolAuditSink | None = None,
+        audit_config: ToolAuditConfig | None = None,
         capability_snapshot: CapabilitySnapshot | None = None,
     ):
         self._tools: dict[str, Tool] = {}
         self._cached_definitions: list[dict[str, Any]] | None = None
         self._audit_sink = audit_sink
+        self._audit_config = ToolAuditConfig.from_config(audit_config)
         self._capability_snapshot = capability_snapshot
         self._audit_context = ToolAuditContext()
 
@@ -356,8 +358,14 @@ class ToolRegistry:
     ) -> None:
         if self._audit_sink is None:
             return
+        tier = self._audit_tier_for(name, status)
+        if tier == "off":
+            return
         try:
-            summarized_kind, summarized_hash = summarize_tool_target(name, params or {})
+            summarized_kind: str | None = None
+            summarized_hash: str | None = None
+            if tier == "security":
+                summarized_kind, summarized_hash = summarize_tool_target(name, params or {})
             self._audit_sink.record(
                 ToolCallAuditEvent(
                     tool_name=name,
@@ -366,16 +374,32 @@ class ToolRegistry:
                     read_only=bool(tool.read_only) if tool is not None else False,
                     exclusive=bool(tool.exclusive) if tool is not None else False,
                     error_kind=error_kind,
-                    actor_id_hash=self._audit_context.actor_id_hash,
-                    session_key_hash=self._audit_context.session_key_hash,
-                    policy_rule=policy_rule,
-                    target_kind=target_kind or summarized_kind,
-                    target_hash=target_hash or summarized_hash,
-                    result_size=result_size,
+                    actor_id_hash=self._audit_context.actor_id_hash if tier == "security" else None,
+                    session_key_hash=self._audit_context.session_key_hash if tier == "security" else None,
+                    policy_rule=policy_rule if tier == "security" else None,
+                    target_kind=(target_kind or summarized_kind) if tier == "security" else None,
+                    target_hash=(target_hash or summarized_hash) if tier == "security" else None,
+                    result_size=result_size if tier == "security" else None,
                 )
             )
         except Exception:
             pass
+
+    def _audit_tier_for(
+        self,
+        name: str,
+        status: str,
+    ) -> Literal["off", "minimal", "security"]:
+        config = self._audit_config
+        if config.mode == "off":
+            return "off"
+        if config.mode == "security":
+            return "security"
+        if status == "policy_denied" and config.security_on_policy_denial:
+            return "security"
+        if _matches_security_tool(name, config.security_tools):
+            return "security"
+        return "minimal"
 
     def audit_tool_result(
         self,
@@ -422,7 +446,19 @@ def _safe_hash(value: Any) -> str | None:
 
 
 def _requires_capability_snapshot(name: str) -> bool:
-    return name in _CAPABILITY_TOOL_NAMES or name.startswith("openhome_device_") or name.startswith("mcp_")
+    return (
+        name in _CAPABILITY_TOOL_NAMES
+        or name.startswith("openhome_device_")
+        or name.startswith("mcp_")
+    )
+
+
+def _matches_security_tool(name: str, patterns: tuple[str, ...]) -> bool:
+    return any(
+        name == pattern
+        or (pattern.endswith("*") and name.startswith(pattern[:-1]))
+        for pattern in patterns
+    )
 
 
 def policy_rule_from_error_text(text: str | None) -> str | None:

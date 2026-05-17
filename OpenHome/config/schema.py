@@ -277,6 +277,21 @@ class DeviceToolsConfig(Base):
     backend: Literal["none", "fake", "lighting_client"] = "none"
 
 
+class ToolAuditConfig(Base):
+    """Privacy-preserving tool call audit configuration."""
+
+    mode: Literal["off", "minimal", "security"] = "minimal"
+    security_tools: tuple[str, ...] = (
+        "exec",
+        "message",
+        "cron",
+        "spawn",
+        "openhome_device_*",
+        "mcp_*",
+    )
+    security_on_policy_denial: bool = True
+
+
 class ToolsConfig(Base):
     """Tools configuration."""
 
@@ -285,6 +300,7 @@ class ToolsConfig(Base):
     my: MyToolConfig = Field(default_factory=MyToolConfig)
     image_generation: ImageGenerationToolConfig = Field(default_factory=ImageGenerationToolConfig)
     device: DeviceToolsConfig = Field(default_factory=DeviceToolsConfig)
+    audit: ToolAuditConfig = Field(default_factory=ToolAuditConfig)
     restrict_to_workspace: bool = False  # restrict all tool access to workspace directory
     mcp_servers: dict[str, MCPServerConfig] = Field(default_factory=dict)
     ssrf_whitelist: list[str] = Field(default_factory=list)  # CIDR ranges to exempt from SSRF blocking (e.g. ["100.64.0.0/10"] for Tailscale)

@@ -22,6 +22,34 @@ ToolCallStatus = Literal[
     "error",
     "interrupted",
 ]
+ToolAuditMode = Literal["off", "minimal", "security"]
+
+
+@dataclass(frozen=True)
+class ToolAuditConfig:
+    mode: ToolAuditMode = "minimal"
+    security_tools: tuple[str, ...] = (
+        "exec",
+        "message",
+        "cron",
+        "spawn",
+        "openhome_device_*",
+        "mcp_*",
+    )
+    security_on_policy_denial: bool = True
+
+    @classmethod
+    def from_config(cls, value: object | None) -> "ToolAuditConfig":
+        if value is None:
+            return cls()
+        default = cls()
+        return cls(
+            mode=getattr(value, "mode", default.mode),
+            security_tools=tuple(getattr(value, "security_tools", default.security_tools)),
+            security_on_policy_denial=bool(
+                getattr(value, "security_on_policy_denial", default.security_on_policy_denial)
+            ),
+        )
 
 
 @dataclass(frozen=True)

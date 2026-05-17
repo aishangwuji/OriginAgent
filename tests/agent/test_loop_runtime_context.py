@@ -6,7 +6,7 @@ import pytest
 from OpenHome.agent.action_runtime import ActionExecutionResult
 from OpenHome.agent.identity import ActorResolver, RuntimeContext
 from OpenHome.agent.loop import AgentLoop
-from OpenHome.agent.tools.audit import InMemoryToolAuditSink
+from OpenHome.agent.tools.audit import InMemoryToolAuditSink, ToolAuditConfig
 from OpenHome.agent.tools.base import Tool, tool_parameters
 from OpenHome.agent.tools.registry import _safe_hash
 from OpenHome.agent.tools.schema import StringSchema, tool_parameters_schema
@@ -170,6 +170,7 @@ async def test_loop_audit_context_uses_resolved_actor_not_spoofed_metadata(tmp_p
     loop = _loop(tmp_path, resolver=resolver)
     sink = InMemoryToolAuditSink()
     loop.tools._audit_sink = sink
+    loop.tools._audit_config = ToolAuditConfig(mode="security")
     msg = InboundMessage(
         channel="chat",
         chat_id="room_1",
