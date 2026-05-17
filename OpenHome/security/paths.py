@@ -47,6 +47,7 @@ class ProtectedPathPolicy:
         if self.workspace is not None:
             workspace_roots.extend([
                 self.workspace / "memory" / "audit",
+                self.workspace / "memory" / "security",
                 self.workspace / "memory" / "history.jsonl",
                 self.workspace / "memory" / ".dream_cursor",
                 self.workspace / ".dream_cursor",
@@ -62,6 +63,7 @@ class ProtectedPathPolicy:
             for path in (
                 *workspace_roots,
                 data_dir / "memory" / "audit",
+                data_dir / "memory" / "security",
                 data_dir / "memory" / "history.jsonl",
                 data_dir / "memory" / ".dream_cursor",
                 data_dir / "pending_confirmations.json",
@@ -78,6 +80,7 @@ class ProtectedPathPolicy:
                 cron_dir,
                 data_dir / "device",
                 data_dir / "memory" / "audit",
+                data_dir / "memory" / "security",
                 data_dir / "memory" / "history.jsonl",
                 *(workspace_roots if self.workspace is not None else ()),
             )
