@@ -49,6 +49,12 @@ from rich.text import Text
 
 from OpenHome import __logo__, __version__
 from OpenHome.agent.loop import AgentLoop
+from OpenHome.bus.events import InboundMessage
+from OpenHome.security.grants import (
+    CapabilityGrantStore,
+    snapshot_for_cron_payload,
+)
+from OpenHome.security.policy import PolicyDeniedError
 
 
 def _sanitize_surrogates(text: str) -> str:
@@ -714,6 +720,8 @@ def _run_gateway(
         message_tool.set_send_callback(_deliver_to_channel)
 
     # Set cron callback (needs agent)
+    grant_store = CapabilityGrantStore(config.workspace_path)
+
     async def on_cron_job(job: CronJob) -> str | None:
         """Execute a cron job through the agent."""
         # Dream is an internal job — run directly, not through the agent loop.
@@ -726,6 +734,16 @@ def _run_gateway(
             return None
 
         from OpenHome.utils.evaluator import evaluate_response
+
+        try:
+            capability_snapshot = snapshot_for_cron_payload(job.payload, grant_store)
+        except PolicyDeniedError as exc:
+            logger.warning(
+                "Cron job '{}' denied by grant policy: {}",
+                job.name,
+                exc.policy_rule,
+            )
+            raise
 
         reminder_note = (
             "The scheduled time has arrived. Deliver this reminder to the user now, "
@@ -748,12 +766,17 @@ def _run_gateway(
             message_record_token = message_tool.set_record_channel_delivery(True)
 
         try:
-            resp = await agent.process_direct(
-                reminder_note,
+            msg = InboundMessage(
+                channel="cron",
+                sender_id="cron",
+                chat_id=job.id,
+                content=reminder_note,
+            )
+            resp = await agent._process_message(
+                msg,
                 session_key=f"cron:{job.id}",
-                channel=job.payload.channel or "cli",
-                chat_id=job.payload.to or "direct",
                 on_progress=_silent,
+                capability_snapshot=capability_snapshot,
             )
         finally:
             if isinstance(cron_tool, CronTool) and cron_token is not None:

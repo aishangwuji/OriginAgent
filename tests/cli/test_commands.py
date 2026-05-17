@@ -16,6 +16,8 @@ from OpenHome.cron.types import CronJob, CronPayload
 from OpenHome.providers.factory import ProviderSnapshot
 from OpenHome.providers.openai_codex_provider import _strip_model_prefix
 from OpenHome.providers.registry import find_by_name
+from OpenHome.security.capabilities import CapabilitySnapshot
+from OpenHome.security.grants import CapabilityGrant, CapabilityGrantStore
 
 runner = CliRunner()
 
@@ -1147,7 +1149,10 @@ def test_gateway_cron_evaluator_receives_scheduled_reminder_context(
             self.provider = kwargs.get("provider", object())
             self.tools = {}
 
-        async def process_direct(self, *_args, **_kwargs):
+        async def _process_message(self, msg, **kwargs):
+            seen["cron_msg"] = msg
+            seen["capability_snapshot"] = kwargs.get("capability_snapshot")
+            seen["on_progress"] = kwargs.get("on_progress")
             return OutboundMessage(
                 channel="telegram",
                 chat_id="user-1",
@@ -1208,6 +1213,10 @@ def test_gateway_cron_evaluator_receives_scheduled_reminder_context(
     response = asyncio.run(cron.on_job(job))
 
     assert response == "Time to stretch."
+    assert seen["cron_msg"].channel == "cron"
+    assert seen["cron_msg"].sender_id == "cron"
+    assert seen["cron_msg"].chat_id == "cron-1"
+    assert seen["capability_snapshot"] == CapabilitySnapshot.scheduled_default()
     assert seen["response"] == "Time to stretch."
     assert seen["provider"] is provider
     assert seen["model"] == "test-model"
@@ -1240,7 +1249,7 @@ def test_gateway_cron_evaluator_receives_scheduled_reminder_context(
 def test_gateway_cron_job_suppresses_intermediate_progress(
     monkeypatch, tmp_path: Path
 ) -> None:
-    """Cron jobs must pass on_progress=_silent to process_direct so that
+    """Cron jobs must pass on_progress=_silent to the scheduled turn so that
     tool hints and streaming deltas are never leaked to the user channel
     before evaluate_response decides whether to deliver."""
     config_file = tmp_path / "instance" / "config.json"
@@ -1282,8 +1291,8 @@ def test_gateway_cron_job_suppresses_intermediate_progress(
             self.provider = object()
             self.tools = {}
 
-        async def process_direct(self, *_args, on_progress=None, **_kwargs):
-            seen["on_progress"] = on_progress
+        async def _process_message(self, _msg, **kwargs):
+            seen["on_progress"] = kwargs.get("on_progress")
             return OutboundMessage(
                 channel="telegram",
                 chat_id="user-1",
@@ -1338,6 +1347,113 @@ def test_gateway_cron_job_suppresses_intermediate_progress(
     asyncio.run(seen["on_progress"]("tool_hint", "🔧 $ echo test"))
     # Nothing published to bus since evaluator rejected
     bus.publish_outbound.assert_not_awaited()
+
+
+def test_gateway_cron_job_uses_grant_snapshot_and_fails_invalid_grant_before_agent(
+    monkeypatch, tmp_path: Path
+) -> None:
+    config_file = tmp_path / "instance" / "config.json"
+    config_file.parent.mkdir(parents=True)
+    config_file.write_text("{}")
+
+    config = Config()
+    config.agents.defaults.workspace = str(tmp_path / "config-workspace")
+    seen: dict[str, object] = {}
+
+    monkeypatch.setattr("OpenHome.config.loader.set_config_path", lambda _path: None)
+    monkeypatch.setattr("OpenHome.config.loader.load_config", lambda _path=None: config)
+    monkeypatch.setattr("OpenHome.cli.commands.sync_workspace_templates", lambda _path: None)
+    monkeypatch.setattr("OpenHome.providers.factory.make_provider", lambda _config: _fake_provider())
+    monkeypatch.setattr(
+        "OpenHome.providers.factory.build_provider_snapshot",
+        lambda _config: _test_provider_snapshot(object(), _config),
+    )
+    monkeypatch.setattr(
+        "OpenHome.providers.factory.load_provider_snapshot",
+        lambda _config_path=None: _test_provider_snapshot(object(), config),
+    )
+    monkeypatch.setattr("OpenHome.session.manager.SessionManager", lambda _workspace: object())
+
+    class _FakeCron:
+        def __init__(self, _store_path: Path) -> None:
+            self.on_job = None
+            seen["cron"] = self
+
+    class _FakeAgentLoop:
+        @classmethod
+        def from_config(cls, config, bus=None, **extra):
+            return cls(**extra)
+
+        def __init__(self, *args, **kwargs) -> None:
+            self.model = "test-model"
+            self.provider = object()
+            self.tools = {}
+            self.dream = MagicMock()
+
+        async def _process_message(self, _msg, **kwargs):
+            seen["agent_called"] = True
+            seen["capability_snapshot"] = kwargs.get("capability_snapshot")
+            return OutboundMessage(channel="cli", chat_id="direct", content="Done.")
+
+        async def close_mcp(self) -> None:
+            return None
+
+        async def run(self) -> None:
+            return None
+
+        def stop(self) -> None:
+            return None
+
+    class _StopAfterCronSetup:
+        def __init__(self, *_args, **_kwargs) -> None:
+            raise _StopGatewayError("stop")
+
+    monkeypatch.setattr("OpenHome.cron.service.CronService", _FakeCron)
+    monkeypatch.setattr("OpenHome.cli.commands.AgentLoop", _FakeAgentLoop)
+    monkeypatch.setattr("OpenHome.channels.manager.ChannelManager", _StopAfterCronSetup)
+
+    grant_store = CapabilityGrantStore(config.workspace_path)
+    grant_store.put(
+        CapabilityGrant(
+            grant_id="grant-secret-1",
+            created_by="admin",
+            created_at="2030-01-01T00:00:00+00:00",
+            can_exec=True,
+        )
+    )
+
+    result = runner.invoke(app, ["gateway", "--config", str(config_file)])
+    assert isinstance(result.exception, _StopGatewayError)
+    cron = seen["cron"]
+
+    response = asyncio.run(
+        cron.on_job(
+            CronJob(
+                id="cron-granted",
+                name="granted",
+                payload=CronPayload(message="Run report.", grant_id="grant-secret-1"),
+            )
+        )
+    )
+
+    assert response == "Done."
+    assert seen["capability_snapshot"].can_exec is True
+
+    seen.pop("agent_called", None)
+    with pytest.raises(Exception) as exc:
+        asyncio.run(
+            cron.on_job(
+                CronJob(
+                    id="cron-missing",
+                    name="missing",
+                    payload=CronPayload(message="Run report.", grant_id="missing-secret"),
+                )
+            )
+        )
+
+    assert "Capability grant is missing, expired, or revoked." in str(exc.value)
+    assert "missing-secret" not in str(exc.value)
+    assert "agent_called" not in seen
 
 
 def test_gateway_workspace_override_does_not_migrate_legacy_cron(

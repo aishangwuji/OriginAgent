@@ -30,6 +30,7 @@ class CronPayload:
     channel_meta: dict = field(default_factory=dict)  # channel-specific routing (e.g. Slack thread_ts)
     session_key: str | None = None  # original session key for correct session recording
     capability_snapshot: dict = field(default_factory=dict)
+    grant_id: str | None = None
 
 
 @dataclass

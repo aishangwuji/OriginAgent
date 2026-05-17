@@ -141,6 +141,7 @@ class CronService:
                                 or j["payload"].get("capability_snapshot")
                                 or {}
                             ),
+                            grant_id=j["payload"].get("grantId") or j["payload"].get("grant_id"),
                         ),
                         state=CronJobState(
                             next_run_at_ms=j.get("state", {}).get("nextRunAtMs"),
@@ -272,6 +273,7 @@ class CronService:
                         "channelMeta": j.payload.channel_meta,
                         "sessionKey": j.payload.session_key,
                         "capabilitySnapshot": j.payload.capability_snapshot,
+                        "grantId": j.payload.grant_id,
                     },
                     "state": {
                         "nextRunAtMs": j.state.next_run_at_ms,
@@ -491,6 +493,7 @@ class CronService:
         channel_meta: dict | None = None,
         session_key: str | None = None,
         capability_snapshot: dict | None = None,
+        grant_id: str | None = None,
     ) -> CronJob:
         """Add a new job."""
         _validate_schedule_for_add(schedule)
@@ -510,6 +513,7 @@ class CronService:
                 channel_meta=channel_meta or {},
                 session_key=session_key,
                 capability_snapshot=capability_snapshot or {},
+                grant_id=grant_id,
             ),
             state=CronJobState(next_run_at_ms=_compute_next_run(schedule, now)),
             created_at_ms=now,

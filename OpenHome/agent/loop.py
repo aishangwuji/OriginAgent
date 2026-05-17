@@ -278,6 +278,7 @@ class TurnContext:
     pending_queue: asyncio.Queue | None = None
     pending_summary: str | None = None
     runtime_context: RuntimeContext | None = None
+    capability_snapshot: CapabilitySnapshot | None = None
 
     trace: list[StateTraceEntry] = field(default_factory=list)
 
@@ -1358,6 +1359,7 @@ class AgentLoop:
         on_stream: Callable[[str], Awaitable[None]] | None = None,
         on_stream_end: Callable[..., Awaitable[None]] | None = None,
         pending_queue: asyncio.Queue | None = None,
+        capability_snapshot: CapabilitySnapshot | None = None,
     ) -> OutboundMessage | None:
         """Process a system inbound message (e.g. subagent announce)."""
         channel, chat_id = (
@@ -1391,7 +1393,7 @@ class AgentLoop:
             chat_id=chat_id,
             session_key=key,
         )
-        snapshot = self._snapshot_for_trigger(runtime_context.trigger)
+        snapshot = capability_snapshot or self._snapshot_for_trigger(runtime_context.trigger)
         self._set_tool_context(
             channel, chat_id, msg.metadata.get("message_id"),
             msg.metadata,
@@ -1474,6 +1476,7 @@ class AgentLoop:
         on_stream: Callable[[str], Awaitable[None]] | None = None,
         on_stream_end: Callable[..., Awaitable[None]] | None = None,
         pending_queue: asyncio.Queue | None = None,
+        capability_snapshot: CapabilitySnapshot | None = None,
     ) -> OutboundMessage | None:
         """Process a single inbound message and return the response."""
         self._refresh_provider_snapshot()
@@ -1486,6 +1489,7 @@ class AgentLoop:
                 on_stream=on_stream,
                 on_stream_end=on_stream_end,
                 pending_queue=pending_queue,
+                capability_snapshot=capability_snapshot,
             )
 
         key = session_key or msg.session_key
@@ -1499,6 +1503,7 @@ class AgentLoop:
             on_stream=on_stream,
             on_stream_end=on_stream_end,
             pending_queue=pending_queue,
+            capability_snapshot=capability_snapshot,
         )
 
         while ctx.state is not TurnState.DONE:
@@ -1640,7 +1645,7 @@ class AgentLoop:
         )
         runtime_context = self._resolve_runtime_context(ctx.msg, session_key=ctx.session_key)
         ctx.runtime_context = runtime_context
-        snapshot = self._snapshot_for_trigger(runtime_context.trigger)
+        snapshot = ctx.capability_snapshot or self._snapshot_for_trigger(runtime_context.trigger)
         self._set_tool_context(
             ctx.msg.channel,
             ctx.msg.chat_id,
@@ -1682,7 +1687,7 @@ class AgentLoop:
             session_key=ctx.session_key,
         )
         ctx.runtime_context = runtime_context
-        snapshot = self._snapshot_for_trigger(runtime_context.trigger)
+        snapshot = ctx.capability_snapshot or self._snapshot_for_trigger(runtime_context.trigger)
         result = await self._run_agent_loop(
             ctx.initial_messages,
             on_progress=ctx.on_progress,
