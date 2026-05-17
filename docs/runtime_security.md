@@ -36,3 +36,21 @@ Protected runtime state remains unavailable to generic file tools. Use the runti
 - `openhome_confirmation_summary`: aggregate confirmation kind/status/risk counts.
 
 These tools do not return raw audit events, hash-chain values, target hashes, session data, cron prompts, confirmation reasons, action payloads, device IDs, commands, paths, URLs, or messages.
+
+## Cron and Subagent Grants
+
+Cron and subagent delegated work defaults to low privilege. High-capability
+delegated work requires an internal/admin-bound capability grant.
+
+- Cron jobs can bind `grant_id` internally; `CronTool` cannot create or select grants.
+- Subagents can bind `grant_id` internally; `SpawnTool` exposes only `task` and `label`.
+- Missing, expired, or revoked grants fail closed before the delegated turn runs.
+- Subagent grants are intersected with the parent-derived snapshot and cannot expand parent authority.
+
+Grant IDs and raw grant metadata are not returned in user-facing errors.
+
+## Runtime Profiles
+
+Runtime profiles provide conservative defaults for `default`, `household_safe`,
+`local_dev`, and `automation`. They do not bypass capability gates, protected
+paths, grant enforcement, tool audit behavior, or device real-mode freeze.
