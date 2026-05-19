@@ -184,7 +184,110 @@ describe("App layout", () => {
     vi.stubGlobal(
       "fetch",
       vi.fn(async (input: RequestInfo | URL) => {
-        if (String(input).includes("/api/settings")) {
+        const url = String(input);
+        if (url.includes("/api/skills/lighting-troubleshooting/verify")) {
+          return {
+            ok: true,
+            status: 200,
+            json: async () => ({
+              result: {
+                skill_name: "lighting-troubleshooting",
+                status: "proposed",
+                action: "verify",
+                ok: true,
+                message: "Skill verified.",
+              },
+              skill: {
+                name: "lighting-troubleshooting",
+                path: "skills/lighting-troubleshooting/SKILL.md",
+                source: "workspace",
+                description: "Lighting help.",
+                body_preview: "Use this skill.",
+                lifecycle_status: "proposed",
+                verification_status: "verified",
+                can_verify: false,
+                can_activate: true,
+                can_deprecate: true,
+                can_reject: true,
+                can_toggle_always: false,
+              },
+              stats: {
+                skills_count: 1,
+                workspace_skills_count: 1,
+                skill_lifecycle_status_counts: { proposed: 1 },
+                skill_verification_status_counts: { verified: 1 },
+                unverified_skill_count: 0,
+                deprecated_skill_count: 0,
+                rejected_skill_count: 0,
+                always_workspace_skill_count: 0,
+              },
+            }),
+          };
+        }
+        if (url.includes("/api/skills/lighting-troubleshooting")) {
+          return {
+            ok: true,
+            status: 200,
+            json: async () => ({
+              skill: {
+                name: "lighting-troubleshooting",
+                path: "skills/lighting-troubleshooting/SKILL.md",
+                source: "workspace",
+                description: "Lighting help.",
+                body_preview: "Use this skill.",
+                lifecycle_status: "proposed",
+                verification_status: "unverified",
+                version: "1",
+                domain_id: "core",
+                effective_always: false,
+                can_verify: true,
+                can_activate: false,
+                can_deprecate: true,
+                can_reject: true,
+                can_toggle_always: false,
+              },
+              stats: {
+                skills_count: 1,
+                workspace_skills_count: 1,
+                skill_lifecycle_status_counts: { proposed: 1 },
+                skill_verification_status_counts: { unverified: 1 },
+                unverified_skill_count: 1,
+                deprecated_skill_count: 0,
+                rejected_skill_count: 0,
+                always_workspace_skill_count: 0,
+              },
+            }),
+          };
+        }
+        if (url.includes("/api/skills")) {
+          return {
+            ok: true,
+            status: 200,
+            json: async () => ({
+              skills: [
+                {
+                  name: "lighting-troubleshooting",
+                  path: "skills/lighting-troubleshooting/SKILL.md",
+                  source: "workspace",
+                  description: "Lighting help.",
+                  lifecycle_status: "proposed",
+                  verification_status: "unverified",
+                },
+              ],
+              stats: {
+                skills_count: 1,
+                workspace_skills_count: 1,
+                skill_lifecycle_status_counts: { proposed: 1 },
+                skill_verification_status_counts: { unverified: 1 },
+                unverified_skill_count: 1,
+                deprecated_skill_count: 0,
+                rejected_skill_count: 0,
+                always_workspace_skill_count: 0,
+              },
+            }),
+          };
+        }
+        if (url.includes("/api/settings")) {
           return {
             ok: true,
             status: 200,
@@ -263,6 +366,7 @@ describe("App layout", () => {
       "page",
     );
     expect(within(settingsNav).getByRole("button", { name: "BYOK" })).toBeInTheDocument();
+    expect(within(settingsNav).getByRole("button", { name: "Skills" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Sign out" })).toBeInTheDocument();
     expect(screen.getByText("AI")).toBeInTheDocument();
     expect(screen.getByDisplayValue("openai/gpt-4o")).toBeInTheDocument();
@@ -295,6 +399,12 @@ describe("App layout", () => {
     fireEvent.click(screen.getByRole("menuitem", { name: "Brave Search" }));
     expect(screen.getByText("BSAo••••ew20")).toBeInTheDocument();
     expect(screen.queryByDisplayValue("unsaved-brave-key")).not.toBeInTheDocument();
+
+    fireEvent.click(within(settingsNav).getByRole("button", { name: "Skills" }));
+    expect((await screen.findAllByText("lighting-troubleshooting")).length).toBeGreaterThan(0);
+    expect(screen.getByText("Lifecycle note")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Verify" }));
+    expect(await screen.findByText("Skill verified.")).toBeInTheDocument();
 
     fireEvent.click(within(settingsNav).getByRole("button", { name: "MCP" }));
     expect(screen.getByText("Configured servers")).toBeInTheDocument();
@@ -556,7 +666,7 @@ describe("App layout", () => {
     const sidebar = screen.getByRole("navigation", { name: "Sidebar navigation" });
     fireEvent.click(within(sidebar).getByRole("button", { name: "Reviews" }));
 
-    expect(await screen.findByText("Lighting incident response")).toBeInTheDocument();
+    expect((await screen.findAllByText("Lighting incident response")).length).toBeGreaterThan(0);
     fireEvent.click(screen.getByRole("button", { name: "Apply" }));
     expect(screen.getByText(/proposed, unverified manual workflow/)).toBeInTheDocument();
     expect(screen.getByText(/lighting-incident-response/)).toBeInTheDocument();

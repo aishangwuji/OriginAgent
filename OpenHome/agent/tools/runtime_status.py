@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from OpenHome.agent.confirmation import PendingConfirmationStore
+from OpenHome.agent.skills import SkillsLoader
 from OpenHome.agent.tools.base import Tool
 from OpenHome.agent.workflow_artifacts import summarize_workflow_artifacts
 from OpenHome.cron.service import CronService
@@ -57,6 +58,7 @@ class RuntimeStatusTool(Tool):
         domain_status = _domain_pack_status(self._domain_pack_manager)
         background_review_status = _background_review_status(self._background_review_service)
         workflow_status = _workflow_artifact_status(self._workspace)
+        skill_status = _skill_lifecycle_status(self._workspace, self._domain_pack_manager)
         return {
             "workspace_present": self._workspace.exists(),
             "workspace_name": self._workspace.name,
@@ -69,6 +71,7 @@ class RuntimeStatusTool(Tool):
             "confirmation_available": self._confirmation_store is not None,
             **domain_status,
             **background_review_status,
+            **skill_status,
             **workflow_status,
         }
 
@@ -351,4 +354,21 @@ def _workflow_artifact_status(workspace: Path) -> dict[str, Any]:
             "workflow_artifacts_count": 0,
             "workflow_artifact_status_counts": {},
             "invalid_workflow_artifacts_count": 0,
+        }
+
+
+def _skill_lifecycle_status(workspace: Path, domain_pack_manager: Any | None) -> dict[str, Any]:
+    try:
+        loader = SkillsLoader(workspace, domain_pack_manager=domain_pack_manager)
+        return loader.lifecycle.stats(loader.list_skills(filter_unavailable=False))
+    except Exception:
+        return {
+            "skills_count": 0,
+            "workspace_skills_count": 0,
+            "skill_lifecycle_status_counts": {},
+            "skill_verification_status_counts": {},
+            "unverified_skill_count": 0,
+            "deprecated_skill_count": 0,
+            "rejected_skill_count": 0,
+            "always_workspace_skill_count": 0,
         }

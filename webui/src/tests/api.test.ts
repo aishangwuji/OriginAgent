@@ -6,10 +6,13 @@ import {
   deleteSession,
   fetchWebuiThread,
   fetchReviewProposal,
+  fetchSkill,
   listSessions,
   listReviewProposals,
+  listSkills,
   listSlashCommands,
   reviewProposalAction,
+  skillLifecycleAction,
   updateBackgroundReviewSettings,
   updateProviderSettings,
   updateSettings,
@@ -137,6 +140,46 @@ describe("webui API helpers", () => {
 
     expect(fetch).toHaveBeenCalledWith(
       "/api/reviews/review%3A1/apply?reason=looks+good",
+      expect.objectContaining({
+        headers: { Authorization: "Bearer tok" },
+      }),
+    );
+  });
+
+  it("serializes skill lifecycle list filters", async () => {
+    await listSkills("tok", {
+      source: "workspace",
+      status: "proposed",
+      limit: 50,
+    });
+
+    expect(fetch).toHaveBeenCalledWith(
+      "/api/skills?source=workspace&status=proposed&limit=50",
+      expect.objectContaining({
+        headers: { Authorization: "Bearer tok" },
+      }),
+    );
+  });
+
+  it("percent-encodes skill names for detail requests", async () => {
+    await fetchSkill("tok", "domain:research/source-synthesis");
+
+    expect(fetch).toHaveBeenCalledWith(
+      "/api/skills/domain%3Aresearch%2Fsource-synthesis",
+      expect.objectContaining({
+        headers: { Authorization: "Bearer tok" },
+      }),
+    );
+  });
+
+  it("serializes skill lifecycle actions", async () => {
+    await skillLifecycleAction("tok", "lighting-troubleshooting", "always", {
+      enabled: true,
+      reason: "trusted",
+    });
+
+    expect(fetch).toHaveBeenCalledWith(
+      "/api/skills/lighting-troubleshooting/always?reason=trusted&enabled=true",
       expect.objectContaining({
         headers: { Authorization: "Bearer tok" },
       }),

@@ -271,6 +271,60 @@ export interface ReviewDecisionResult {
   error?: string;
 }
 
+export type SkillLifecycleStatus = "proposed" | "active" | "deprecated" | "rejected" | string;
+export type SkillVerificationStatus = "unverified" | "verified" | "rejected" | "unknown" | string;
+
+export interface SkillRecord {
+  name: string;
+  path: string;
+  source: string;
+  description?: string;
+  body_preview?: string;
+  proposal_status?: string;
+  verification_status: SkillVerificationStatus;
+  lifecycle_status: SkillLifecycleStatus;
+  version?: string;
+  supersedes_skill?: string;
+  reviewed_by?: string;
+  reviewed_at?: string;
+  review_proposal_id?: string;
+  domain_id?: string;
+  created_by?: string;
+  last_lifecycle_event_id?: string;
+  always?: boolean;
+  effective_always?: boolean;
+  can_manage_lifecycle?: boolean;
+  disabled_reason?: string;
+  can_verify?: boolean;
+  can_activate?: boolean;
+  can_deprecate?: boolean;
+  can_reject?: boolean;
+  can_toggle_always?: boolean;
+  last_event?: Record<string, unknown> | null;
+}
+
+export interface SkillLifecycleStats {
+  skills_count: number;
+  workspace_skills_count: number;
+  skill_lifecycle_status_counts: Record<string, number>;
+  skill_verification_status_counts: Record<string, number>;
+  unverified_skill_count: number;
+  deprecated_skill_count: number;
+  rejected_skill_count: number;
+  always_workspace_skill_count: number;
+}
+
+export interface SkillLifecycleResult {
+  skill_name: string;
+  status: SkillLifecycleStatus;
+  action: string;
+  ok: boolean;
+  message: string;
+  skill?: SkillRecord | null;
+  event?: Record<string, unknown> | null;
+  error?: string;
+}
+
 export type ConnectionStatus =
   | "idle"
   | "connecting"

@@ -320,6 +320,40 @@ async def test_runtime_status_reports_background_review_counts(tmp_path) -> None
 
 
 @pytest.mark.asyncio
+async def test_runtime_status_reports_skill_lifecycle_counts(tmp_path) -> None:
+    skill = tmp_path / "skills" / "candidate"
+    skill.mkdir(parents=True)
+    (skill / "SKILL.md").write_text(
+        "---\n"
+        "name: candidate\n"
+        "description: Candidate skill.\n"
+        "always: false\n"
+        "metadata:\n"
+        "  OpenHome:\n"
+        "    proposal_status: proposed\n"
+        "    verification_status: unverified\n"
+        "    review_proposal_id: review_candidate\n"
+        "    created_by: background_review\n"
+        "---\n\n# Candidate\n",
+        encoding="utf-8",
+    )
+
+    result = await RuntimeStatusTool(
+        workspace=tmp_path,
+        registry=SimpleNamespace(tool_names=["a"]),
+        sessions=object(),
+        pending_queues={},
+    ).execute()
+
+    assert result["skills_count"] >= 1
+    assert result["workspace_skills_count"] == 1
+    assert result["skill_lifecycle_status_counts"]["proposed"] == 1
+    assert result["skill_verification_status_counts"]["unverified"] == 1
+    assert result["unverified_skill_count"] == 1
+    assert result["always_workspace_skill_count"] == 0
+
+
+@pytest.mark.asyncio
 async def test_runtime_status_reports_workflow_artifact_counts(tmp_path) -> None:
     workflow = tmp_path / "workflows" / "manual-check"
     workflow.mkdir(parents=True)

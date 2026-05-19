@@ -48,7 +48,8 @@
     "nav": {
       "general": "Général",
       "byok": "BYOK",
-      "mcp": "MCP"
+      "mcp": "MCP",
+      "skills": "Skills"
     },
     "sections": {
       "interface": "Interface",
@@ -178,6 +179,66 @@
         "nameRequired": "MCP server name is required.",
         "commandRequired": "Command is required for stdio MCP servers.",
         "urlRequired": "URL is required for HTTP MCP servers."
+      }
+    },
+    "skills": {
+      "description": "Govern workspace skills created by reviewed learning proposals. Proposed skills stay manual until they are verified and activated.",
+      "loading": "Loading skills...",
+      "empty": "No matching skills.",
+      "noSelection": "Select a skill to inspect lifecycle state.",
+      "reason": "Lifecycle note",
+      "reasonPlaceholder": "Optional reason for this lifecycle change.",
+      "stats": {
+        "total": "Total",
+        "workspace": "Workspace",
+        "unverified": "Unverified",
+        "always": "Always loaded"
+      },
+      "filters": {
+        "title": "Filters",
+        "allSources": "All sources",
+        "allStatuses": "All statuses"
+      },
+      "source": {
+        "workspace": "Workspace",
+        "builtin": "Built-in",
+        "domain": "Domain"
+      },
+      "status": {
+        "proposed": "Proposed",
+        "active": "Active",
+        "deprecated": "Deprecated",
+        "rejected": "Rejected",
+        "unknown": "Unknown"
+      },
+      "verification": {
+        "unverified": "Unverified",
+        "verified": "Verified",
+        "rejected": "Rejected",
+        "unknown": "Unknown"
+      },
+      "fields": {
+        "version": "Version",
+        "domain": "Domain",
+        "reviewed": "Reviewed",
+        "always": "Always",
+        "lastEvent": "Last event"
+      },
+      "values": {
+        "yes": "Yes",
+        "no": "No"
+      },
+      "actions": {
+        "verify": "Verify",
+        "activate": "Activate",
+        "deprecate": "Deprecate",
+        "reject": "Reject",
+        "alwaysOn": "Always on",
+        "alwaysOff": "Always off"
+      },
+      "confirm": {
+        "activate": "Activate this verified skill for normal discovery?",
+        "alwaysOn": "Always load this skill into the system prompt? Use only for highly trusted skills."
       }
     }
   },

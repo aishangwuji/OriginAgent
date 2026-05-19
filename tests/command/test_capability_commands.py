@@ -13,6 +13,7 @@ from OpenHome.bus.events import InboundMessage
 from OpenHome.bus.queue import MessageBus
 from OpenHome.command.builtin import cmd_domain, cmd_mcp, cmd_skill
 from OpenHome.command.router import CommandContext
+from OpenHome.config.schema import DomainPacksConfig
 from OpenHome.providers.base import LLMProvider, LLMResponse
 from OpenHome.utils.webui_transcript import read_transcript_lines, replay_transcript_to_ui_messages
 
@@ -104,6 +105,105 @@ async def test_skill_command_lists_workspace_and_builtin_skills(tmp_path: Path) 
     assert "`beta` [builtin]" in result.content
     assert "Total: 2" in result.content
     assert result.metadata["render_as"] == "text"
+
+
+@pytest.mark.asyncio
+async def test_skill_command_verifies_and_activates_workspace_skill(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    builtin = tmp_path / "builtin"
+    (workspace / "skills" / "alpha").mkdir(parents=True)
+    (workspace / "skills" / "alpha" / "SKILL.md").write_text(
+        "---\n"
+        "name: alpha\n"
+        "description: Workspace skill.\n"
+        "always: false\n"
+        "metadata:\n"
+        "  OpenHome:\n"
+        "    proposal_status: proposed\n"
+        "    verification_status: unverified\n"
+        "    review_proposal_id: review_alpha\n"
+        "    created_by: background_review\n"
+        "---\n\n# Alpha\n",
+        encoding="utf-8",
+    )
+
+    loop = MagicMock()
+    loop.context.skills = SkillsLoader(workspace, builtin_skills_dir=builtin)
+
+    verify_ctx = _ctx(loop, "/skill verify alpha looks good")
+    verify_ctx.args = "verify alpha looks good"
+    activate_ctx = _ctx(loop, "/skill activate alpha")
+    activate_ctx.args = "activate alpha"
+    verified = await cmd_skill(verify_ctx)
+    activated = await cmd_skill(activate_ctx)
+
+    assert verified.content is not None
+    assert "Skill `alpha`: Skill verified." in verified.content
+    assert activated.content is not None
+    assert "Skill `alpha`: Skill activated." in activated.content
+    assert "Status: active" in activated.content
+
+
+@pytest.mark.asyncio
+async def test_skill_command_rejects_builtin_lifecycle_action(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    builtin = tmp_path / "builtin"
+    (builtin / "beta").mkdir(parents=True)
+    (builtin / "beta" / "SKILL.md").write_text(
+        "---\nname: beta\ndescription: Built-in skill.\n---\n",
+        encoding="utf-8",
+    )
+
+    loop = MagicMock()
+    loop.context.skills = SkillsLoader(workspace, builtin_skills_dir=builtin)
+
+    command_ctx = _ctx(loop, "/skill verify beta")
+    command_ctx.args = "verify beta"
+    result = await cmd_skill(command_ctx)
+
+    assert result.content is not None
+    assert "Only workspace skills can be changed in P9" in result.content
+    assert "Error: read_only" in result.content
+
+
+@pytest.mark.asyncio
+async def test_skill_command_rejects_domain_lifecycle_action(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    pack = workspace / "domain_packs" / "research"
+    (pack / "skills" / "source-synthesis").mkdir(parents=True)
+    (pack / "domain_pack.yaml").write_text(
+        "id: research\n"
+        "name: Research\n"
+        "version: 0.1.0\n"
+        "skills:\n"
+        "  - source-synthesis\n",
+        encoding="utf-8",
+    )
+    (pack / "CAPABILITIES.md").write_text("# Research\n", encoding="utf-8")
+    (pack / "skills" / "source-synthesis" / "SKILL.md").write_text(
+        "---\nname: source-synthesis\ndescription: Domain skill.\n---\n",
+        encoding="utf-8",
+    )
+    manager = DomainPackManager(
+        workspace,
+        config=DomainPacksConfig(active=["research"]),
+        builtin_dir=tmp_path / "empty",
+    )
+
+    loop = MagicMock()
+    loop.context.skills = SkillsLoader(
+        workspace,
+        builtin_skills_dir=tmp_path / "builtin",
+        domain_pack_manager=manager,
+    )
+
+    command_ctx = _ctx(loop, "/skill verify domain:research/source-synthesis")
+    command_ctx.args = "verify domain:research/source-synthesis"
+    result = await cmd_skill(command_ctx)
+
+    assert result.content is not None
+    assert "Only workspace skills can be changed in P9" in result.content
+    assert "Error: read_only" in result.content
 
 
 @pytest.mark.asyncio

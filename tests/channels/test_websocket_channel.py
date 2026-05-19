@@ -1565,3 +1565,85 @@ def test_review_api_lists_details_and_applies_with_auth(
         "path": "workflows/lighting-incident-response/workflow.yaml",
         "validation": "Workflow artifact is valid.",
     }
+
+
+def test_webui_skill_lifecycle_api_requires_token_and_updates_workspace_skill(
+    tmp_path,
+    monkeypatch,
+    bus: MagicMock,
+) -> None:
+    from websockets.datastructures import Headers
+    from websockets.http11 import Request
+
+    config_path = tmp_path / "config.json"
+    workspace = tmp_path / "workspace"
+    config = Config()
+    config.agents.defaults.workspace = str(workspace)
+    save_config(config, config_path)
+    monkeypatch.setattr("OpenHome.config.loader._current_config_path", config_path)
+
+    skill_dir = workspace / "skills" / "lighting-troubleshooting"
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text(
+        "---\n"
+        "name: lighting-troubleshooting\n"
+        "description: Lighting help.\n"
+        "always: false\n"
+        "metadata:\n"
+        "  OpenHome:\n"
+        "    proposal_status: proposed\n"
+        "    verification_status: unverified\n"
+        "    review_proposal_id: review_skill\n"
+        "    created_by: background_review\n"
+        "---\n\n# Lighting\n\nUse this skill. api_key=sk-proj-secretsecretsecretsecret\n",
+        encoding="utf-8",
+    )
+
+    channel = _ch(bus)
+    channel._api_tokens["tok"] = time.monotonic() + 300
+    authed = Headers([("Authorization", "Bearer tok")])
+
+    denied = channel._handle_skills_list(Request("/api/skills", Headers([])))
+    assert denied.status_code == 401
+
+    listed = channel._handle_skills_list(
+        Request("/api/skills?source=workspace&status=proposed&limit=50", authed)
+    )
+    assert listed.status_code == 200
+    list_body = json.loads(listed.body.decode())
+    assert list_body["stats"]["workspace_skills_count"] == 1
+    assert list_body["skills"][0]["name"] == "lighting-troubleshooting"
+    assert list_body["skills"][0]["verification_status"] == "unverified"
+    assert "sk-proj" not in list_body["skills"][0]["body_preview"]
+
+    detail = channel._handle_skill_detail(
+        Request("/api/skills/lighting-troubleshooting", authed),
+        "lighting-troubleshooting",
+    )
+    assert detail.status_code == 200
+    assert json.loads(detail.body.decode())["skill"]["lifecycle_status"] == "proposed"
+
+    verified = channel._handle_skill_action(
+        Request("/api/skills/lighting-troubleshooting/verify?reason=ok", authed),
+        "lighting-troubleshooting",
+        "verify",
+    )
+    assert verified.status_code == 200
+    verify_body = json.loads(verified.body.decode())
+    assert verify_body["result"]["ok"] is True
+    assert verify_body["skill"]["verification_status"] == "verified"
+
+    activated = channel._handle_skill_action(
+        Request("/api/skills/lighting-troubleshooting/activate", authed),
+        "lighting-troubleshooting",
+        "activate",
+    )
+    assert json.loads(activated.body.decode())["skill"]["lifecycle_status"] == "active"
+
+    always = channel._handle_skill_action(
+        Request("/api/skills/lighting-troubleshooting/always?enabled=true", authed),
+        "lighting-troubleshooting",
+        "always",
+    )
+    always_body = json.loads(always.body.decode())
+    assert always_body["skill"]["effective_always"] is True

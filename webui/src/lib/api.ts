@@ -8,6 +8,9 @@ import type {
   ReviewProposalStats,
   SettingsPayload,
   SettingsUpdate,
+  SkillLifecycleResult,
+  SkillLifecycleStats,
+  SkillRecord,
   SlashCommand,
   WebSearchSettingsUpdate,
   WebuiThreadPersistedPayload,
@@ -216,6 +219,58 @@ export async function reviewProposalAction(
     stats: ReviewProposalStats;
   }>(
     `${base}/api/reviews/${encodeURIComponent(proposalId)}/${action}${suffix}`,
+    token,
+  );
+}
+
+export async function listSkills(
+  token: string,
+  filters: { source?: string; status?: string; limit?: number } = {},
+  base: string = "",
+): Promise<{ skills: SkillRecord[]; stats: SkillLifecycleStats }> {
+  const query = new URLSearchParams();
+  if (filters.source) query.set("source", filters.source);
+  if (filters.status) query.set("status", filters.status);
+  if (filters.limit !== undefined) query.set("limit", String(filters.limit));
+  const suffix = query.toString() ? `?${query}` : "";
+  return request<{ skills: SkillRecord[]; stats: SkillLifecycleStats }>(
+    `${base}/api/skills${suffix}`,
+    token,
+  );
+}
+
+export async function fetchSkill(
+  token: string,
+  skillName: string,
+  base: string = "",
+): Promise<{ skill: SkillRecord; stats: SkillLifecycleStats }> {
+  return request<{ skill: SkillRecord; stats: SkillLifecycleStats }>(
+    `${base}/api/skills/${encodeURIComponent(skillName)}`,
+    token,
+  );
+}
+
+export async function skillLifecycleAction(
+  token: string,
+  skillName: string,
+  action: "verify" | "activate" | "deprecate" | "reject" | "always",
+  options: { reason?: string; enabled?: boolean } = {},
+  base: string = "",
+): Promise<{
+  result: SkillLifecycleResult;
+  skill: SkillRecord | null;
+  stats: SkillLifecycleStats;
+}> {
+  const query = new URLSearchParams();
+  if (options.reason?.trim()) query.set("reason", options.reason.trim());
+  if (options.enabled !== undefined) query.set("enabled", options.enabled ? "true" : "false");
+  const suffix = query.toString() ? `?${query}` : "";
+  return request<{
+    result: SkillLifecycleResult;
+    skill: SkillRecord | null;
+    stats: SkillLifecycleStats;
+  }>(
+    `${base}/api/skills/${encodeURIComponent(skillName)}/${action}${suffix}`,
     token,
   );
 }

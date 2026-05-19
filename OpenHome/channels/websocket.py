@@ -749,6 +749,9 @@ class WebSocketChannel(BaseChannel):
         if got == "/api/reviews":
             return self._handle_reviews_list(request)
 
+        if got == "/api/skills":
+            return self._handle_skills_list(request)
+
         if got == "/api/settings/update":
             return self._handle_settings_update(request)
 
@@ -777,6 +780,14 @@ class WebSocketChannel(BaseChannel):
         m = re.match(r"^/api/reviews/([^/]+)/(apply|approve|reject|defer)$", got)
         if m:
             return self._handle_review_action(request, m.group(1), m.group(2))
+
+        m = re.match(r"^/api/skills/([^/]+)$", got)
+        if m:
+            return self._handle_skill_detail(request, m.group(1))
+
+        m = re.match(r"^/api/skills/([^/]+)/(verify|activate|deprecate|reject|always)$", got)
+        if m:
+            return self._handle_skill_action(request, m.group(1), m.group(2))
 
         m = re.match(r"^/api/sessions/([^/]+)/messages$", got)
         if m:
@@ -1043,6 +1054,102 @@ class WebSocketChannel(BaseChannel):
             "apply_result": result_json if action in {"apply", "approve"} else None,
             "proposal": result.proposal,
             "stats": store.stats(),
+        }, status=status)
+
+    def _skills_loader(self):
+        from OpenHome.agent.domain_packs import DomainPackManager
+        from OpenHome.agent.skills import SkillsLoader
+        from OpenHome.config.loader import load_config
+
+        config = load_config()
+        manager = DomainPackManager(
+            config.workspace_path,
+            config=config.agents.defaults.domain_packs,
+        )
+        return SkillsLoader(config.workspace_path, domain_pack_manager=manager)
+
+    def _handle_skills_list(self, request: WsRequest) -> Response:
+        if not self._check_api_token(request):
+            return _http_error(401, "Unauthorized")
+        query = _parse_query(request.path)
+        source = (_query_first(query, "source") or "").strip()
+        status = (_query_first(query, "status") or "").strip()
+        limit_raw = _query_first(query, "limit")
+        try:
+            limit = max(1, min(int(limit_raw) if limit_raw is not None else 50, 200))
+        except ValueError:
+            return _http_error(400, "limit must be an integer")
+        loader = self._skills_loader()
+        records = loader.list_skill_records(filter_unavailable=False)
+        if source:
+            records = [record for record in records if str(record.get("source") or "") == source]
+        if status:
+            records = [
+                record for record in records
+                if str(record.get("lifecycle_status") or "") == status
+            ]
+        records = sorted(records, key=lambda item: (str(item.get("source") or ""), str(item.get("name") or "")))
+        stats = loader.lifecycle.stats(loader.list_skills(filter_unavailable=False))
+        return _http_json_response({"skills": records[:limit], "stats": stats})
+
+    def _handle_skill_detail(self, request: WsRequest, skill_name: str) -> Response:
+        if not self._check_api_token(request):
+            return _http_error(401, "Unauthorized")
+        skill_name = unquote(skill_name)
+        loader = self._skills_loader()
+        record = loader.get_skill_record(skill_name)
+        if record is None:
+            return _http_error(404, "skill not found")
+        return _http_json_response({
+            "skill": record,
+            "stats": loader.lifecycle.stats(loader.list_skills(filter_unavailable=False)),
+        })
+
+    def _handle_skill_action(self, request: WsRequest, skill_name: str, action: str) -> Response:
+        if not self._check_api_token(request):
+            return _http_error(401, "Unauthorized")
+        from OpenHome.agent.skill_lifecycle import SkillLifecycleResult
+
+        skill_name = unquote(skill_name)
+        query = _parse_query(request.path)
+        reason = _query_first(query, "reason") or ""
+        loader = self._skills_loader()
+        record = loader.get_skill_record(skill_name)
+        if record is None:
+            result = SkillLifecycleResult(
+                skill_name=skill_name,
+                status="missing",
+                action=action,
+                ok=False,
+                message="Skill was not found.",
+                error="not_found",
+            )
+        elif record.get("source") != "workspace":
+            result = SkillLifecycleResult(
+                skill_name=skill_name,
+                status=str(record.get("lifecycle_status") or "unknown"),
+                action=action,
+                ok=False,
+                message=str(record.get("disabled_reason") or "Only workspace skills can be changed in P9."),
+                skill=record,
+                error="read_only",
+            )
+        elif action == "always":
+            enabled_raw = (_query_first(query, "enabled") or "").strip().lower()
+            enabled = enabled_raw in {"1", "true", "yes", "on"}
+            result = loader.lifecycle.transition(
+                skill_name,
+                action="always",
+                enabled=enabled,
+                reason=reason,
+            )
+        else:
+            result = loader.lifecycle.transition(skill_name, action=action, reason=reason)
+        status = 404 if result.error == "not_found" else 200
+        return _http_json_response({
+            "result": result.to_json(),
+            "skill": result.skill,
+            "stats": loader.lifecycle.stats(loader.list_skills(filter_unavailable=False)),
         }, status=status)
 
     def _handle_settings_update(self, request: WsRequest) -> Response:

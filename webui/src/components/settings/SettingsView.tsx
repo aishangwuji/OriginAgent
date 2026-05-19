@@ -16,6 +16,7 @@ import {
   Pencil,
   Gem,
   Grid3X3,
+  GraduationCap,
   Hexagon,
   Loader2,
   LogOut,
@@ -45,6 +46,9 @@ import { Input } from "@/components/ui/input";
 import {
   deleteMcpServerSettings,
   fetchSettings,
+  fetchSkill,
+  listSkills,
+  skillLifecycleAction,
   updateBackgroundReviewSettings,
   updateProviderSettings,
   updateSettings,
@@ -60,10 +64,12 @@ import type {
   McpServerSettingsUpdate,
   McpTransportType,
   SettingsPayload,
+  SkillLifecycleStats,
+  SkillRecord,
   WebSearchSettingsUpdate,
 } from "@/lib/types";
 
-type SettingsSectionKey = "general" | "byok" | "mcp";
+type SettingsSectionKey = "general" | "byok" | "skills" | "mcp";
 type ByokPaneKey = "llm" | "web-search";
 type McpFormState = {
   name: string;
@@ -574,6 +580,8 @@ export function SettingsView({
                   backgroundReviewSaving={backgroundReviewSaving}
                   onToggleBackgroundReview={toggleBackgroundReview}
                 />
+              ) : activeSection === "skills" ? (
+                <SkillsSettings />
               ) : activeSection === "byok" ? (
                 <ByokSettings
                   settings={settings}
@@ -652,6 +660,7 @@ export function SettingsView({
 const SETTINGS_NAV_ITEMS = [
   { key: "general", icon: Settings },
   { key: "byok", icon: KeyRound },
+  { key: "skills", icon: GraduationCap },
   { key: "mcp", icon: Server },
 ] as const;
 
@@ -914,6 +923,335 @@ function GeneralSettings({
           </SettingsGroup>
         </section>
       )}
+    </div>
+  );
+}
+
+const SKILL_STATUS_FILTERS = ["", "proposed", "active", "deprecated", "rejected"] as const;
+const SKILL_SOURCE_FILTERS = ["", "workspace", "builtin"] as const;
+
+function emptySkillStats(): SkillLifecycleStats {
+  return {
+    skills_count: 0,
+    workspace_skills_count: 0,
+    skill_lifecycle_status_counts: {},
+    skill_verification_status_counts: {},
+    unverified_skill_count: 0,
+    deprecated_skill_count: 0,
+    rejected_skill_count: 0,
+    always_workspace_skill_count: 0,
+  };
+}
+
+function SkillsSettings() {
+  const { t } = useTranslation();
+  const { token, refreshToken } = useClient();
+  const [skills, setSkills] = useState<SkillRecord[]>([]);
+  const [stats, setStats] = useState<SkillLifecycleStats>(emptySkillStats);
+  const [selectedName, setSelectedName] = useState<string>("");
+  const [selected, setSelected] = useState<SkillRecord | null>(null);
+  const [sourceFilter, setSourceFilter] = useState<(typeof SKILL_SOURCE_FILTERS)[number]>("workspace");
+  const [statusFilter, setStatusFilter] = useState<(typeof SKILL_STATUS_FILTERS)[number]>("");
+  const [reason, setReason] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [detailLoading, setDetailLoading] = useState(false);
+  const [acting, setActing] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const loadSkills = useCallback(async () => {
+    setLoading(true);
+    try {
+      const payload = await withTokenRefresh(token, refreshToken, (freshToken) =>
+        listSkills(freshToken, {
+          source: sourceFilter || undefined,
+          status: statusFilter || undefined,
+          limit: 100,
+        }),
+      );
+      setSkills(payload.skills);
+      setStats(payload.stats);
+      setError(null);
+      setSelectedName((current) => {
+        if (current && payload.skills.some((skill) => skill.name === current)) return current;
+        return payload.skills[0]?.name ?? "";
+      });
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setLoading(false);
+    }
+  }, [refreshToken, sourceFilter, statusFilter, token]);
+
+  useEffect(() => {
+    void loadSkills();
+  }, [loadSkills]);
+
+  useEffect(() => {
+    let cancelled = false;
+    if (!selectedName) {
+      setSelected(null);
+      return;
+    }
+    setDetailLoading(true);
+    withTokenRefresh(token, refreshToken, (freshToken) => fetchSkill(freshToken, selectedName))
+      .then((payload) => {
+        if (!cancelled) {
+          setSelected(payload.skill);
+          setStats(payload.stats);
+          setError(null);
+        }
+      })
+      .catch((err) => {
+        if (!cancelled) setError((err as Error).message);
+      })
+      .finally(() => {
+        if (!cancelled) setDetailLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [refreshToken, selectedName, token]);
+
+  const runAction = async (
+    action: "verify" | "activate" | "deprecate" | "reject" | "always",
+    enabled?: boolean,
+  ) => {
+    if (!selected || acting) return;
+    if (action === "activate" && !window.confirm(t("settings.skills.confirm.activate"))) return;
+    if (action === "always" && enabled && !window.confirm(t("settings.skills.confirm.alwaysOn"))) return;
+    setActing(action);
+    try {
+      const payload = await withTokenRefresh(token, refreshToken, (freshToken) =>
+        skillLifecycleAction(freshToken, selected.name, action, {
+          enabled,
+          reason,
+        }),
+      );
+      setSelected(payload.skill);
+      setStats(payload.stats);
+      setNotice(payload.result.message);
+      setReason("");
+      setError(null);
+      await loadSkills();
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setActing(null);
+    }
+  };
+
+  return (
+    <div className="space-y-6">
+      <p className="max-w-[42rem] text-[13px] leading-6 text-muted-foreground">
+        {t("settings.skills.description")}
+      </p>
+
+      <div className="grid gap-3 sm:grid-cols-4">
+        <SkillStat label={t("settings.skills.stats.total")} value={stats.skills_count} />
+        <SkillStat label={t("settings.skills.stats.workspace")} value={stats.workspace_skills_count} />
+        <SkillStat label={t("settings.skills.stats.unverified")} value={stats.unverified_skill_count} />
+        <SkillStat label={t("settings.skills.stats.always")} value={stats.always_workspace_skill_count} />
+      </div>
+
+      {error ? (
+        <div className="rounded-[18px] border border-destructive/20 bg-destructive/5 px-4 py-3 text-[13px] text-destructive">
+          {error}
+        </div>
+      ) : null}
+      {notice ? (
+        <div className="rounded-[18px] border border-emerald-500/20 bg-emerald-500/8 px-4 py-3 text-[13px] text-emerald-700 dark:text-emerald-300">
+          {notice}
+        </div>
+      ) : null}
+
+      <section className="space-y-3">
+        <SettingsSectionTitle>{t("settings.skills.filters.title")}</SettingsSectionTitle>
+        <div className="flex flex-wrap gap-2">
+          {SKILL_SOURCE_FILTERS.map((source) => (
+            <Button
+              key={source || "all"}
+              type="button"
+              size="sm"
+              variant={sourceFilter === source ? "default" : "outline"}
+              onClick={() => setSourceFilter(source)}
+              className="rounded-full"
+            >
+              {t(source ? `settings.skills.source.${source}` : "settings.skills.filters.allSources")}
+            </Button>
+          ))}
+        </div>
+        <div className="flex flex-wrap gap-2">
+          {SKILL_STATUS_FILTERS.map((status) => (
+            <Button
+              key={status || "all"}
+              type="button"
+              size="sm"
+              variant={statusFilter === status ? "default" : "outline"}
+              onClick={() => setStatusFilter(status)}
+              className="rounded-full"
+            >
+              {t(status ? `settings.skills.status.${status}` : "settings.skills.filters.allStatuses")}
+            </Button>
+          ))}
+        </div>
+      </section>
+
+      <div className="grid min-h-[420px] gap-5 lg:grid-cols-[minmax(0,0.95fr)_minmax(0,1.35fr)]">
+        <SettingsGroup>
+          {loading ? (
+            <div className="flex h-32 items-center justify-center text-sm text-muted-foreground">
+              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+              {t("settings.skills.loading")}
+            </div>
+          ) : skills.length === 0 ? (
+            <div className="px-4 py-8 text-sm text-muted-foreground">{t("settings.skills.empty")}</div>
+          ) : (
+            skills.map((skill) => {
+              const active = skill.name === selectedName;
+              return (
+                <button
+                  key={`${skill.source}:${skill.name}`}
+                  type="button"
+                  onClick={() => setSelectedName(skill.name)}
+                  className={cn(
+                    "flex min-h-[76px] w-full flex-col items-start gap-1 px-4 py-3 text-left transition-colors sm:px-5",
+                    active ? "bg-muted/70" : "hover:bg-muted/35",
+                  )}
+                >
+                  <span className="flex w-full items-center justify-between gap-3">
+                    <span className="truncate text-[14px] font-semibold text-foreground">{skill.name}</span>
+                    <span className="shrink-0 rounded-full bg-muted px-2 py-0.5 text-[11px] font-medium text-muted-foreground">
+                      {t(`settings.skills.status.${skill.lifecycle_status || "active"}`)}
+                    </span>
+                  </span>
+                  <span className="line-clamp-2 text-[12px] leading-5 text-muted-foreground">
+                    {skill.description || skill.path}
+                  </span>
+                </button>
+              );
+            })
+          )}
+        </SettingsGroup>
+
+        <SettingsGroup>
+          {detailLoading ? (
+            <div className="flex h-32 items-center justify-center text-sm text-muted-foreground">
+              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+              {t("settings.skills.loading")}
+            </div>
+          ) : selected ? (
+            <div className="divide-y divide-border/45">
+              <div className="px-4 py-4 sm:px-5">
+                <div className="flex flex-wrap items-center gap-2">
+                  <h2 className="mr-auto text-[17px] font-semibold tracking-[-0.02em] text-foreground">
+                    {selected.name}
+                  </h2>
+                  <SkillBadge>{t(`settings.skills.source.${selected.source === "workspace" ? "workspace" : selected.source === "builtin" ? "builtin" : "domain"}`)}</SkillBadge>
+                  <SkillBadge>{t(`settings.skills.status.${selected.lifecycle_status || "active"}`)}</SkillBadge>
+                  <SkillBadge>{t(`settings.skills.verification.${selected.verification_status || "unknown"}`)}</SkillBadge>
+                </div>
+                <p className="mt-3 text-[13px] leading-6 text-muted-foreground">{selected.description}</p>
+                <p className="mt-2 truncate text-[12px] text-muted-foreground">{selected.path}</p>
+              </div>
+
+              <div className="space-y-3 px-4 py-4 sm:px-5">
+                <div className="grid gap-3 text-[12px] text-muted-foreground sm:grid-cols-2">
+                  <SkillMeta label={t("settings.skills.fields.version")} value={selected.version || "1"} />
+                  <SkillMeta label={t("settings.skills.fields.domain")} value={selected.domain_id || "core"} />
+                  <SkillMeta label={t("settings.skills.fields.reviewed")} value={selected.reviewed_at || t("settings.values.notAvailable")} />
+                  <SkillMeta label={t("settings.skills.fields.always")} value={selected.effective_always ? t("settings.skills.values.yes") : t("settings.skills.values.no")} />
+                  <SkillMeta
+                    label={t("settings.skills.fields.lastEvent")}
+                    value={
+                      typeof selected.last_event?.action === "string"
+                        ? selected.last_event.action
+                        : t("settings.values.notAvailable")
+                    }
+                  />
+                </div>
+                {selected.body_preview ? (
+                  <pre className="max-h-44 overflow-auto whitespace-pre-wrap rounded-[14px] bg-muted/55 p-3 text-[12px] leading-5 text-foreground/82">
+                    {selected.body_preview}
+                  </pre>
+                ) : null}
+                {selected.disabled_reason ? (
+                  <p className="text-[12px] text-muted-foreground">{selected.disabled_reason}</p>
+                ) : null}
+              </div>
+
+              <div className="space-y-3 px-4 py-4 sm:px-5">
+                <label className="block space-y-1.5">
+                  <span className="text-[12px] font-medium text-muted-foreground">
+                    {t("settings.skills.reason")}
+                  </span>
+                  <textarea
+                    value={reason}
+                    onChange={(event) => setReason(event.target.value)}
+                    placeholder={t("settings.skills.reasonPlaceholder")}
+                    className="min-h-[74px] w-full resize-y rounded-[16px] border border-input bg-background px-3 py-2 text-[13px] text-foreground shadow-sm outline-none transition-colors placeholder:text-muted-foreground focus-visible:ring-2 focus-visible:ring-ring"
+                  />
+                </label>
+                <div className="flex flex-wrap gap-2">
+                  <Button size="sm" variant="outline" disabled={!selected.can_verify || !!acting} onClick={() => runAction("verify")} className="rounded-full">
+                    {acting === "verify" ? t("settings.actions.saving") : t("settings.skills.actions.verify")}
+                  </Button>
+                  <Button size="sm" variant="outline" disabled={!selected.can_activate || !!acting} onClick={() => runAction("activate")} className="rounded-full">
+                    {acting === "activate" ? t("settings.actions.saving") : t("settings.skills.actions.activate")}
+                  </Button>
+                  <Button size="sm" variant="outline" disabled={!selected.can_deprecate || !!acting} onClick={() => runAction("deprecate")} className="rounded-full">
+                    {acting === "deprecate" ? t("settings.actions.saving") : t("settings.skills.actions.deprecate")}
+                  </Button>
+                  <Button size="sm" variant="outline" disabled={!selected.can_reject || !!acting} onClick={() => runAction("reject")} className="rounded-full">
+                    {acting === "reject" ? t("settings.actions.saving") : t("settings.skills.actions.reject")}
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    disabled={!selected.can_toggle_always || !!acting}
+                    onClick={() => runAction("always", !selected.always)}
+                    className="rounded-full"
+                  >
+                    {acting === "always"
+                      ? t("settings.actions.saving")
+                      : selected.always
+                        ? t("settings.skills.actions.alwaysOff")
+                        : t("settings.skills.actions.alwaysOn")}
+                  </Button>
+                </div>
+              </div>
+            </div>
+          ) : (
+            <div className="px-4 py-8 text-sm text-muted-foreground">{t("settings.skills.noSelection")}</div>
+          )}
+        </SettingsGroup>
+      </div>
+    </div>
+  );
+}
+
+function SkillStat({ label, value }: { label: string; value: number }) {
+  return (
+    <div className="rounded-[18px] border border-border/45 bg-card/86 px-4 py-3 shadow-[0_12px_40px_rgba(15,23,42,0.055)]">
+      <div className="text-[12px] font-medium text-muted-foreground">{label}</div>
+      <div className="mt-1 text-[22px] font-semibold text-foreground">{value}</div>
+    </div>
+  );
+}
+
+function SkillBadge({ children }: { children: ReactNode }) {
+  return (
+    <span className="rounded-full bg-muted px-2.5 py-1 text-[11px] font-semibold text-muted-foreground">
+      {children}
+    </span>
+  );
+}
+
+function SkillMeta({ label, value }: { label: string; value: string }) {
+  return (
+    <div>
+      <div className="font-medium text-foreground/75">{label}</div>
+      <div className="mt-0.5 truncate">{value}</div>
     </div>
   );
 }

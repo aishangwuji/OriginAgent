@@ -470,7 +470,7 @@ async def cmd_mcp(ctx: CommandContext) -> OutboundMessage:
 def _format_skill_status(loop) -> str:
     loader = loop.context.skills
     all_skills = sorted(
-        loader.list_skills(filter_unavailable=False),
+        loader.list_skill_records(filter_unavailable=False),
         key=lambda item: (item.get("source", ""), item.get("name", "")),
     )
     if not all_skills:
@@ -496,7 +496,13 @@ def _format_skill_status(loop) -> str:
         desc = loader._get_skill_description(name)
         missing = loader._get_missing_requirements(meta) if not available else ""
         suffix = f" unavailable: {missing}" if missing else " unavailable" if not available else "available"
-        rows.append(f"- `{name}` [{source}] — {desc} ({suffix})")
+        lifecycle = entry.get("lifecycle_status") or "unknown"
+        verification = entry.get("verification_status") or "unknown"
+        always = "always" if entry.get("effective_always") else "manual"
+        rows.append(
+            f"- `{name}` [{source}] — {desc} "
+            f"({suffix}; lifecycle={lifecycle}; verification={verification}; {always})"
+        )
 
     always = loader.get_always_skills()
     lines.extend(
@@ -513,8 +519,122 @@ def _format_skill_status(loop) -> str:
     return "\n".join(lines)
 
 
+def _format_skill_detail(record: dict | None) -> str:
+    if record is None:
+        return "Skill was not found."
+    lines = [
+        "## Skill",
+        "",
+        f"- Name: `{record.get('name') or ''}`",
+        f"- Source: {record.get('source') or 'unknown'}",
+        f"- Lifecycle: {record.get('lifecycle_status') or 'unknown'}",
+        f"- Verification: {record.get('verification_status') or 'unknown'}",
+        f"- Always: {'yes' if record.get('effective_always') else 'no'}",
+        f"- Path: `{record.get('path') or ''}`",
+    ]
+    proposal_id = str(record.get("review_proposal_id") or "").strip()
+    if proposal_id:
+        lines.append(f"- Review proposal: `{proposal_id}`")
+    reviewed_at = str(record.get("reviewed_at") or "").strip()
+    if reviewed_at:
+        lines.append(f"- Reviewed: {reviewed_at}")
+    desc = str(record.get("description") or "").strip()
+    if desc:
+        lines.extend(["", "### Description", "", desc])
+    preview = str(record.get("body_preview") or "").strip()
+    if preview:
+        lines.extend(["", "### Preview", "", preview])
+    disabled = str(record.get("disabled_reason") or "").strip()
+    if disabled:
+        lines.extend(["", f"Action note: {disabled}"])
+    return "\n".join(lines)
+
+
+def _format_skill_lifecycle_result(result: object) -> str:
+    if hasattr(result, "to_json"):
+        data = result.to_json()
+    elif isinstance(result, dict):
+        data = result
+    else:
+        data = {"ok": False, "message": str(result)}
+    lines = [
+        f"Skill `{data.get('skill_name') or ''}`: {data.get('message') or data.get('status')}",
+        f"- Status: {data.get('status') or 'unknown'}",
+    ]
+    skill = data.get("skill")
+    if isinstance(skill, dict):
+        lines.append(f"- Verification: {skill.get('verification_status') or 'unknown'}")
+        lines.append(f"- Always: {'yes' if skill.get('effective_always') else 'no'}")
+        path = skill.get("path")
+        if path:
+            lines.append(f"- Path: `{path}`")
+    error = data.get("error")
+    if error:
+        lines.append(f"- Error: {error}")
+    return "\n".join(lines)
+
+
+def _skill_read_only_result(name: str, action: str, record: dict | None):
+    from OpenHome.agent.skill_lifecycle import SkillLifecycleResult
+
+    return SkillLifecycleResult(
+        skill_name=name,
+        status=str((record or {}).get("lifecycle_status") or "missing"),
+        action=action,
+        ok=False,
+        message=str((record or {}).get("disabled_reason") or "Only workspace skills can be changed in P9."),
+        skill=record,
+        error="read_only" if record else "not_found",
+    )
+
+
 async def cmd_skill(ctx: CommandContext) -> OutboundMessage:
-    """List available skills."""
+    """List and govern skills."""
+    raw_args = ctx.args.strip()
+    parts = raw_args.split(maxsplit=2)
+    loader = ctx.loop.context.skills
+    if parts and parts[0] in {"show", "verify", "activate", "deprecate", "reject", "always"}:
+        action = parts[0]
+        name = parts[1] if len(parts) >= 2 else ""
+        reason = parts[2] if len(parts) >= 3 else ""
+        if not name:
+            content = (
+                "Usage: /skill show <skill_name>, /skill verify <skill_name> [reason], "
+                "/skill activate <skill_name> [reason], /skill deprecate <skill_name> [reason], "
+                "/skill reject <skill_name> [reason], or /skill always <skill_name> on|off [reason]"
+            )
+        elif action == "show":
+            content = _format_skill_detail(loader.get_skill_record(name))
+        else:
+            record = loader.get_skill_record(name)
+            if record is None or record.get("source") != "workspace":
+                content = _format_skill_lifecycle_result(_skill_read_only_result(name, action, record))
+            elif action == "always":
+                always_parts = reason.split(maxsplit=1)
+                setting = always_parts[0].lower() if always_parts else ""
+                note = always_parts[1] if len(always_parts) > 1 else ""
+                if setting not in {"on", "off"}:
+                    content = "Usage: /skill always <skill_name> on|off [reason]"
+                else:
+                    content = _format_skill_lifecycle_result(
+                        loader.lifecycle.transition(
+                            name,
+                            action="always",
+                            enabled=setting == "on",
+                            reason=note,
+                        )
+                    )
+            else:
+                content = _format_skill_lifecycle_result(
+                    loader.lifecycle.transition(name, action=action, reason=reason)
+                )
+        return OutboundMessage(
+            channel=ctx.msg.channel,
+            chat_id=ctx.msg.chat_id,
+            content=content,
+            metadata={**dict(ctx.msg.metadata or {}), "render_as": "text"},
+        )
+
     return OutboundMessage(
         channel=ctx.msg.channel,
         chat_id=ctx.msg.chat_id,
@@ -1083,6 +1203,8 @@ def register_builtin_commands(router: CommandRouter) -> None:
     router.exact("/mcp", cmd_mcp)
     router.exact("/skill", cmd_skill)
     router.exact("/skills", cmd_skill)
+    router.prefix("/skill ", cmd_skill)
+    router.prefix("/skills ", cmd_skill)
     router.exact("/domain", cmd_domain)
     router.exact("/domains", cmd_domain)
     router.exact("/history", cmd_history)

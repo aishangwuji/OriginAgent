@@ -8,7 +8,7 @@ import { resources } from "@/i18n";
 
 const QUICK_ACTION_KEYS = ["plan", "analyze", "brainstorm", "code", "summarize", "more"];
 const IMAGE_QUICK_ACTION_KEYS = ["icon", "sticker", "poster", "product", "portrait", "edit"];
-const SETTINGS_NAV_KEYS = ["general", "byok", "mcp"];
+const SETTINGS_NAV_KEYS = ["general", "byok", "skills", "mcp"];
 const REVIEW_STATUS_KEYS = ["pending", "applied", "rejected", "deferred", "failed"];
 const REVIEW_TYPE_KEYS = ["memory", "fact", "skill", "workflow"];
 
@@ -87,6 +87,11 @@ describe("webui i18n", () => {
       expect(common.settings.byok.showApiKey).toBeTruthy();
       expect(common.settings.byok.hideApiKey).toBeTruthy();
       expect(common.settings.byok.configuredKeyHint).toBeTruthy();
+      expect(common.settings.skills.description).toBeTruthy();
+      expect(common.settings.skills.actions.verify).toBeTruthy();
+      expect(common.settings.skills.actions.activate).toBeTruthy();
+      expect(common.settings.skills.status.proposed).toBeTruthy();
+      expect(common.settings.skills.verification.verified).toBeTruthy();
       expect(common.settings.mcp.add).toBeTruthy();
       expect(common.settings.mcp.quickConfig).toBeTruthy();
       expect(common.settings.mcp.homeAssistant.title).toBeTruthy();

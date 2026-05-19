@@ -9,6 +9,8 @@ from typing import TYPE_CHECKING
 
 import yaml
 
+from OpenHome.agent.skill_lifecycle import SkillLifecycleStore
+
 if TYPE_CHECKING:
     from OpenHome.agent.domain_packs import DomainPackManager
 
@@ -42,6 +44,7 @@ class SkillsLoader:
         self.builtin_skills = builtin_skills_dir or BUILTIN_SKILLS_DIR
         self.disabled_skills = disabled_skills or set()
         self.domain_pack_manager = domain_pack_manager
+        self.lifecycle = SkillLifecycleStore(workspace)
 
     def _skill_entries_from_dir(self, base: Path, source: str, *, skip_names: set[str] | None = None) -> list[dict[str, str]]:
         if not base.exists():
@@ -85,6 +88,15 @@ class SkillsLoader:
             return [skill for skill in skills if self._check_requirements(self._get_skill_meta(skill["name"]))]
         return skills
 
+    def list_skill_records(self, filter_unavailable: bool = True) -> list[dict]:
+        """List skills with lifecycle, verification, and preview metadata."""
+        return self.lifecycle.list_records(self.list_skills(filter_unavailable=filter_unavailable))
+
+    def get_skill_record(self, name: str) -> dict | None:
+        """Return one enriched skill record by name."""
+        entry = self._find_skill_entry(name)
+        return self.lifecycle.get_record(entry)
+
     def load_skill(self, name: str) -> str | None:
         """
         Load a skill by name.
@@ -95,6 +107,9 @@ class SkillsLoader:
         Returns:
             Skill content or None if not found.
         """
+        return self._load_skill_content(name, include_unavailable_reason=True)
+
+    def _load_skill_content(self, name: str, *, include_unavailable_reason: bool = False) -> str | None:
         if name in self.disabled_skills:
             return None
         if name.startswith("domain:"):
@@ -102,13 +117,47 @@ class SkillsLoader:
         if not self._is_safe_skill_name(name):
             return None
 
-        roots = [self.workspace_skills]
+        entry = self._find_skill_entry(name)
+        if entry is None:
+            return None
+        if entry.get("source") == "workspace":
+            record = self.lifecycle.get_record(entry)
+            lifecycle = str((record or {}).get("lifecycle_status") or "")
+            if lifecycle == "rejected":
+                if include_unavailable_reason:
+                    return "Rejected skill: this workspace skill is marked rejected and cannot be loaded."
+                return None
+        path = Path(entry["path"])
+        if path.exists():
+            content = path.read_text(encoding="utf-8")
+            if entry.get("source") == "workspace":
+                record = self.lifecycle.get_record(entry)
+                if str((record or {}).get("lifecycle_status") or "") == "deprecated":
+                    return "Deprecated skill: this workspace skill is marked deprecated.\n\n" + content
+            return content
+        return None
+
+    def _find_skill_entry(self, name: str) -> dict[str, str] | None:
+        if name in self.disabled_skills:
+            return None
+        if name.startswith("domain:"):
+            parsed = self._parse_domain_skill_name(name)
+            if parsed is None or self.domain_pack_manager is None:
+                return None
+            pack_id, skill_id = parsed
+            path = self.domain_pack_manager.get_active_skill_path(pack_id, skill_id)
+            if path is None or not path.exists():
+                return None
+            return {"name": name, "path": str(path), "source": f"domain:{pack_id}"}
+        if not self._is_safe_skill_name(name):
+            return None
+        workspace_path = self.workspace_skills / name / "SKILL.md"
+        if workspace_path.exists():
+            return {"name": name, "path": str(workspace_path), "source": "workspace"}
         if self.builtin_skills:
-            roots.append(self.builtin_skills)
-        for root in roots:
-            path = root / name / "SKILL.md"
-            if path.exists():
-                return path.read_text(encoding="utf-8")
+            builtin_path = self.builtin_skills / name / "SKILL.md"
+            if builtin_path.exists():
+                return {"name": name, "path": str(builtin_path), "source": "builtin"}
         return None
 
     @staticmethod
@@ -157,7 +206,7 @@ class SkillsLoader:
         parts = [
             f"### Skill: {name}\n\n{self._strip_frontmatter(markdown)}"
             for name in skill_names
-            if (markdown := self.load_skill(name))
+            if (markdown := self._load_skill_content(name))
         ]
         return "\n\n---\n\n".join(parts)
 
@@ -174,25 +223,44 @@ class SkillsLoader:
         Returns:
             Markdown-formatted skills summary.
         """
-        all_skills = self.list_skills(filter_unavailable=False)
-        if not all_skills:
+        all_skills = self.list_skill_records(filter_unavailable=False)
+        summary_records = [
+            record for record in all_skills if self._include_in_skills_summary(record)
+        ]
+        if not summary_records:
             return ""
 
         lines: list[str] = []
-        for entry in all_skills:
+        for entry in summary_records:
             skill_name = entry["name"]
             if exclude and skill_name in exclude:
                 continue
             meta = self._get_skill_meta(skill_name)
             available = self._check_requirements(meta)
             desc = self._get_skill_description(skill_name)
+            lifecycle = entry.get("lifecycle_status")
+            verification = entry.get("verification_status")
+            status = ""
+            if entry.get("source") == "workspace" and lifecycle == "active" and verification == "verified":
+                status = " (active, verified)"
             if available:
-                lines.append(f"- **{skill_name}** — {desc}  `{entry['path']}`")
+                lines.append(f"- **{skill_name}** — {desc}{status}  `{entry['path']}`")
             else:
                 missing = self._get_missing_requirements(meta)
                 suffix = f" (unavailable: {missing})" if missing else " (unavailable)"
                 lines.append(f"- **{skill_name}** — {desc}{suffix}  `{entry['path']}`")
         return "\n".join(lines)
+
+    def _include_in_skills_summary(self, record: dict) -> bool:
+        if record.get("source") != "workspace":
+            return True
+        lifecycle = str(record.get("lifecycle_status") or "")
+        verification = str(record.get("verification_status") or "")
+        if lifecycle in {"proposed", "deprecated", "rejected"}:
+            return False
+        if verification == "unverified":
+            return False
+        return True
 
     def _get_missing_requirements(self, skill_meta: dict) -> str:
         """Get a description of missing requirements."""
@@ -256,13 +324,9 @@ class SkillsLoader:
     def get_always_skills(self) -> list[str]:
         """Get skills marked as always=true that meet requirements."""
         return [
-            entry["name"]
-            for entry in self.list_skills(filter_unavailable=True)
-            if (meta := self.get_skill_metadata(entry["name"]) or {})
-            and (
-                self._parse_OpenHome_metadata(meta.get("metadata")).get("always")
-                or meta.get("always")
-            )
+            record["name"]
+            for record in self.list_skill_records(filter_unavailable=True)
+            if record.get("effective_always")
         ]
 
     def get_skill_metadata(self, name: str) -> dict | None:
@@ -275,8 +339,14 @@ class SkillsLoader:
         Returns:
             Metadata dict or None.
         """
-        content = self.load_skill(name)
-        if not content or not content.startswith("---"):
+        entry = self._find_skill_entry(name)
+        if entry is None:
+            return None
+        try:
+            content = Path(entry["path"]).read_text(encoding="utf-8")
+        except OSError:
+            return None
+        if not content.startswith("---"):
             return None
         match = _STRIP_SKILL_FRONTMATTER.match(content)
         if not match:

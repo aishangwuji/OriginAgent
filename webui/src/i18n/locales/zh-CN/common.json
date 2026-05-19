@@ -55,7 +55,8 @@
     "nav": {
       "general": "通用",
       "byok": "BYOK",
-      "mcp": "MCP"
+      "mcp": "MCP",
+      "skills": "技能"
     },
     "sections": {
       "interface": "界面",
@@ -188,6 +189,66 @@
         "nameRequired": "请填写 MCP server 名称。",
         "commandRequired": "stdio MCP server 需要填写命令。",
         "urlRequired": "HTTP MCP server 需要填写 URL。"
+      }
+    },
+    "skills": {
+      "description": "治理由学习审核提案生成的 workspace skills。候选 skill 需要先验证、再启用，才会成为可靠能力。",
+      "loading": "正在加载 skills...",
+      "empty": "没有匹配的 skill。",
+      "noSelection": "选择一个 skill 查看生命周期状态。",
+      "reason": "生命周期备注",
+      "reasonPlaceholder": "可选：记录这次生命周期变更的原因。",
+      "stats": {
+        "total": "总数",
+        "workspace": "Workspace",
+        "unverified": "未验证",
+        "always": "Always 自动加载"
+      },
+      "filters": {
+        "title": "筛选",
+        "allSources": "全部来源",
+        "allStatuses": "全部状态"
+      },
+      "source": {
+        "workspace": "Workspace",
+        "builtin": "内置",
+        "domain": "领域包"
+      },
+      "status": {
+        "proposed": "候选",
+        "active": "启用",
+        "deprecated": "废弃",
+        "rejected": "拒绝",
+        "unknown": "未知"
+      },
+      "verification": {
+        "unverified": "未验证",
+        "verified": "已验证",
+        "rejected": "已拒绝",
+        "unknown": "未知"
+      },
+      "fields": {
+        "version": "版本",
+        "domain": "领域",
+        "reviewed": "审核时间",
+        "always": "Always",
+        "lastEvent": "最近事件"
+      },
+      "values": {
+        "yes": "是",
+        "no": "否"
+      },
+      "actions": {
+        "verify": "验证",
+        "activate": "启用",
+        "deprecate": "废弃",
+        "reject": "拒绝",
+        "alwaysOn": "Always on",
+        "alwaysOff": "Always off"
+      },
+      "confirm": {
+        "activate": "确认启用这个已验证 skill，让它进入正常发现范围？",
+        "alwaysOn": "确认把这个 skill always 加载到系统提示词？只应对高度可信 skill 使用。"
       }
     }
   },
