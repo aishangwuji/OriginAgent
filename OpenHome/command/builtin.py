@@ -921,6 +921,9 @@ def _format_review_detail(record: dict) -> str:
     skill_path = record.get("applied_skill_path")
     if isinstance(skill_path, str) and skill_path:
         lines.extend(["", f"Applied skill: `{skill_path}`"])
+    workflow_path = record.get("applied_workflow_path")
+    if isinstance(workflow_path, str) and workflow_path:
+        lines.extend(["", f"Applied workflow: `{workflow_path}`"])
     return "\n".join(lines)
 
 
@@ -941,11 +944,14 @@ def _format_review_result(result: object) -> str:
     artifact = data.get("artifact")
     if isinstance(artifact, dict):
         skill_name = artifact.get("skill_name")
-        skill_path = artifact.get("path")
+        artifact_path = artifact.get("path")
+        workflow_name = artifact.get("workflow_name")
         if skill_name:
             lines.append(f"- Skill: `{skill_name}`")
-        if skill_path:
-            lines.append(f"- Path: `{skill_path}`")
+        if workflow_name:
+            lines.append(f"- Workflow: `{workflow_name}`")
+        if artifact_path:
+            lines.append(f"- Path: `{artifact_path}`")
     error = data.get("error")
     if error:
         lines.append(f"- Error: {error}")

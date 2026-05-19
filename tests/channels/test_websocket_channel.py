@@ -5,8 +5,8 @@ import functools
 import json
 import time
 from typing import Any
-from urllib.parse import quote
 from unittest.mock import AsyncMock, MagicMock
+from urllib.parse import quote
 
 import httpx
 import pytest
@@ -14,8 +14,8 @@ import websockets
 from websockets.exceptions import ConnectionClosed
 from websockets.frames import Close
 
-from OpenHome.bus.events import OUTBOUND_META_AGENT_UI, OutboundMessage
 from OpenHome.agent.background_review import ReviewProposal, ReviewProposalStore
+from OpenHome.bus.events import OUTBOUND_META_AGENT_UI, OutboundMessage
 from OpenHome.channels.websocket import (
     WebSocketChannel,
     WebSocketConfig,
@@ -1525,3 +1525,43 @@ def test_review_api_lists_details_and_applies_with_auth(
     assert len(facts) == 1
     assert facts[0]["scope"] == "review.memory"
     assert "[REDACTED_SECRET]" in facts[0]["content"]
+
+    store.append_many([
+        ReviewProposal(
+            id="review_workflow",
+            created_at="2026-05-19T10:01:00+00:00",
+            session_key="websocket:chat1",
+            turn_id="turn-2",
+            proposal_type="workflow",
+            domain_id="core",
+            title="Lighting incident response",
+            content="Create a manual workflow.",
+            rationale="Repeated checklist.",
+            confidence=0.8,
+            evidence=["Use a manual checklist."],
+            payload={
+                "workflow_name": "lighting-incident-response",
+                "description": "Manual workflow.",
+                "body": "Use this as a manual checklist.",
+            },
+        )
+    ])
+    workflow_listed = channel._handle_reviews_list(
+        Request("/api/reviews?status=pending&type=workflow&limit=50", authed)
+    )
+    workflow_list_body = json.loads(workflow_listed.body.decode())
+    assert workflow_list_body["proposals"][0]["can_apply"] is True
+
+    workflow_applied = channel._handle_review_action(
+        Request("/api/reviews/review_workflow/apply?reason=ok", authed),
+        "review_workflow",
+        "apply",
+    )
+    workflow_apply_body = json.loads(workflow_applied.body.decode())
+    assert workflow_apply_body["result"]["ok"] is True
+    assert workflow_apply_body["apply_result"]["artifact"] == {
+        "artifact_type": "workflow",
+        "workflow_name": "lighting-incident-response",
+        "path": "workflows/lighting-incident-response/workflow.yaml",
+        "validation": "Workflow artifact is valid.",
+    }

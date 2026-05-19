@@ -317,3 +317,48 @@ async def test_runtime_status_reports_background_review_counts(tmp_path) -> None
     assert result["background_review_running_count"] == 1
     assert result["background_review_proposal_count"] == 3
     assert result["background_review_pending_count"] == 2
+
+
+@pytest.mark.asyncio
+async def test_runtime_status_reports_workflow_artifact_counts(tmp_path) -> None:
+    workflow = tmp_path / "workflows" / "manual-check"
+    workflow.mkdir(parents=True)
+    (workflow / "workflow.yaml").write_text(
+        "\n".join([
+            "schema_version: 1",
+            "name: manual-check",
+            "description: Manual check.",
+            "kind: manual_guide",
+            "execution:",
+            "  auto_run: false",
+            "  creates_cron: false",
+            "  calls_tools: false",
+            "body: Review state manually.",
+            "steps: []",
+            "metadata:",
+            "  OpenHome:",
+            "    proposal_status: proposed",
+            "    verification_status: unverified",
+            "    review_proposal_id: review_manual",
+            "    domain_id: core",
+            "    created_by: background_review",
+            "    source_session: websocket:chat1",
+            "    source_turn_id: turn-1",
+            "",
+        ]),
+        encoding="utf-8",
+    )
+    invalid = tmp_path / "workflows" / "broken"
+    invalid.mkdir(parents=True)
+    (invalid / "workflow.yaml").write_text("not: valid\n", encoding="utf-8")
+
+    result = await RuntimeStatusTool(
+        workspace=tmp_path,
+        registry=SimpleNamespace(tool_names=["a"]),
+        sessions=object(),
+        pending_queues={},
+    ).execute()
+
+    assert result["workflow_artifacts_count"] == 2
+    assert result["workflow_artifact_status_counts"] == {"proposed": 1}
+    assert result["invalid_workflow_artifacts_count"] == 1

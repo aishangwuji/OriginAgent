@@ -105,12 +105,15 @@ describe("webui i18n", () => {
       expect(common.reviews.empty).toBeTruthy();
       expect(common.reviews.unsupportedApply).toBeTruthy();
       expect(common.reviews.appliedSkill).toBeTruthy();
+      expect(common.reviews.appliedWorkflow).toBeTruthy();
       expect(common.reviews.actions.apply).toBeTruthy();
       expect(common.reviews.actions.reject).toBeTruthy();
       expect(common.reviews.actions.defer).toBeTruthy();
       expect(common.reviews.confirmApply.title).toBeTruthy();
       expect(common.reviews.confirmApply.skillDescription).toBeTruthy();
       expect(common.reviews.confirmApply.skillPathPending).toBeTruthy();
+      expect(common.reviews.confirmApply.workflowDescription).toBeTruthy();
+      expect(common.reviews.confirmApply.workflowPathPending).toBeTruthy();
       expect(common.reviews.confirmApply.confirm).toBeTruthy();
       for (const key of REVIEW_STATUS_KEYS) {
         expect(common.reviews.status[key as keyof typeof common.reviews.status]).toBeTruthy();

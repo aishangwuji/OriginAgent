@@ -9,6 +9,7 @@ from typing import Any
 
 from OpenHome.agent.confirmation import PendingConfirmationStore
 from OpenHome.agent.tools.base import Tool
+from OpenHome.agent.workflow_artifacts import summarize_workflow_artifacts
 from OpenHome.cron.service import CronService
 
 
@@ -55,6 +56,7 @@ class RuntimeStatusTool(Tool):
     async def execute(self) -> dict[str, Any]:
         domain_status = _domain_pack_status(self._domain_pack_manager)
         background_review_status = _background_review_status(self._background_review_service)
+        workflow_status = _workflow_artifact_status(self._workspace)
         return {
             "workspace_present": self._workspace.exists(),
             "workspace_name": self._workspace.name,
@@ -67,6 +69,7 @@ class RuntimeStatusTool(Tool):
             "confirmation_available": self._confirmation_store is not None,
             **domain_status,
             **background_review_status,
+            **workflow_status,
         }
 
 
@@ -337,4 +340,15 @@ def _background_review_status(service: Any | None) -> dict[str, Any]:
             "background_review_pending_count": 0,
             "background_review_last_created_at": None,
             "background_review_last_result": None,
+        }
+
+
+def _workflow_artifact_status(workspace: Path) -> dict[str, Any]:
+    try:
+        return summarize_workflow_artifacts(workspace)
+    except Exception:
+        return {
+            "workflow_artifacts_count": 0,
+            "workflow_artifact_status_counts": {},
+            "invalid_workflow_artifacts_count": 0,
         }

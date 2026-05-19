@@ -29,6 +29,7 @@ from OpenHome.agent.facts import (
 )
 from OpenHome.agent.memory import MemoryStore, redact_memory_text
 from OpenHome.agent.skill_artifacts import write_skill_artifact
+from OpenHome.agent.workflow_artifacts import write_workflow_artifact
 from OpenHome.providers.base import LLMProvider
 from OpenHome.utils.helpers import truncate_text
 from OpenHome.utils.prompt_templates import render_template
@@ -44,7 +45,7 @@ _EVIDENCE_MAX_CHARS = 500
 _MESSAGE_MAX_CHARS = 1600
 _REVIEW_REASON_MAX_CHARS = 1000
 _TERMINAL_REVIEW_STATUSES = {"applied", "rejected", "deferred", "failed"}
-_APPLICABLE_PROPOSAL_TYPES = {"memory", "fact", "skill"}
+_APPLICABLE_PROPOSAL_TYPES = {"memory", "fact", "skill", "workflow"}
 
 
 @dataclass(frozen=True)
@@ -82,6 +83,8 @@ class ReviewProposalEvent:
     fact_id: str | None = None
     skill_name: str | None = None
     skill_path: str | None = None
+    workflow_name: str | None = None
+    workflow_path: str | None = None
     artifact: dict[str, Any] | None = None
     error: str = ""
 
@@ -205,12 +208,23 @@ class ReviewProposalStore:
                 record["applied_fact_id"] = fact_id
             if isinstance(artifact, dict):
                 record["apply_artifact"] = dict(artifact)
+                artifact_type = artifact.get("artifact_type")
                 skill_name = artifact.get("skill_name")
-                skill_path = artifact.get("path")
+                skill_path = artifact.get("path") if artifact_type != "workflow" else None
+                workflow_name = artifact.get("workflow_name")
+                workflow_path = artifact.get("path")
                 if isinstance(skill_name, str) and skill_name:
                     record["applied_skill_name"] = skill_name
                 if isinstance(skill_path, str) and skill_path:
                     record["applied_skill_path"] = skill_path
+                if isinstance(workflow_name, str) and workflow_name:
+                    record["applied_workflow_name"] = workflow_name
+                if (
+                    artifact.get("artifact_type") == "workflow"
+                    and isinstance(workflow_path, str)
+                    and workflow_path
+                ):
+                    record["applied_workflow_path"] = workflow_path
             _decorate_review_capabilities(record)
             records.append(_redacted_record(record))
         return records
@@ -302,7 +316,7 @@ class ReviewProposalStore:
                 event = self._append_event_unlocked(
                     proposal_id,
                     status="failed",
-                    reason=reason or f"{proposal_type} proposals cannot be applied in P7.",
+                    reason=reason or f"{proposal_type} proposals cannot be applied in this phase.",
                     error="unsupported_proposal_type",
                 )
                 return ReviewDecisionResult(
@@ -310,7 +324,7 @@ class ReviewProposalStore:
                     status="failed",
                     action="apply",
                     ok=False,
-                    message="Only memory, fact, and skill proposals can be applied in this phase.",
+                    message="Only memory, fact, skill, and workflow proposals can be applied.",
                     proposal=self._find_unlocked(proposal_id),
                     event=event,
                     error="unsupported_proposal_type",
@@ -318,6 +332,8 @@ class ReviewProposalStore:
 
             if proposal_type == "skill":
                 return self._apply_to_skill_unlocked(record, reason=reason)
+            if proposal_type == "workflow":
+                return self._apply_to_workflow_unlocked(record, reason=reason)
 
             try:
                 fact = self._apply_to_memory(record)
@@ -458,7 +474,17 @@ class ReviewProposalStore:
             reason=reason,
             fact_id=fact_id,
             skill_name=artifact.get("skill_name") if isinstance(artifact, dict) else None,
-            skill_path=artifact.get("path") if isinstance(artifact, dict) else None,
+            skill_path=(
+                artifact.get("path")
+                if isinstance(artifact, dict) and artifact.get("artifact_type") != "workflow"
+                else None
+            ),
+            workflow_name=artifact.get("workflow_name") if isinstance(artifact, dict) else None,
+            workflow_path=(
+                artifact.get("path")
+                if isinstance(artifact, dict) and artifact.get("artifact_type") == "workflow"
+                else None
+            ),
             artifact=artifact,
             error=error,
         ).to_json()
@@ -505,6 +531,50 @@ class ReviewProposalStore:
             action="apply",
             ok=True,
             message="Skill review proposal applied.",
+            proposal=self._find_unlocked(proposal_id),
+            event=event,
+            artifact=artifact,
+        )
+
+    def _apply_to_workflow_unlocked(
+        self,
+        record: dict[str, Any],
+        *,
+        reason: str = "",
+    ) -> ReviewDecisionResult:
+        proposal_id = str(record.get("id") or "")
+        try:
+            artifact = write_workflow_artifact(record, self.workspace).to_json()
+        except Exception as exc:
+            logger.exception("Failed to apply background review workflow proposal {}", proposal_id)
+            event = self._append_event_unlocked(
+                proposal_id,
+                status="failed",
+                reason=reason,
+                error=str(exc),
+            )
+            return ReviewDecisionResult(
+                proposal_id=proposal_id,
+                status="failed",
+                action="apply",
+                ok=False,
+                message="Failed to apply workflow review proposal.",
+                proposal=self._find_unlocked(proposal_id),
+                event=event,
+                error=str(exc),
+            )
+        event = self._append_event_unlocked(
+            proposal_id,
+            status="applied",
+            reason=reason,
+            artifact=artifact,
+        )
+        return ReviewDecisionResult(
+            proposal_id=proposal_id,
+            status="applied",
+            action="apply",
+            ok=True,
+            message="Workflow review proposal applied.",
             proposal=self._find_unlocked(proposal_id),
             event=event,
             artifact=artifact,
@@ -823,13 +893,9 @@ def _decorate_review_capabilities(record: dict[str, Any]) -> None:
     record["can_apply"] = can_apply
     if can_apply:
         record["unsupported_reason"] = ""
-    elif proposal_type == "workflow":
-        record["unsupported_reason"] = (
-            "Workflow proposals can be rejected or deferred in P7; applying workflows is reserved for a later phase."
-        )
     elif proposal_type not in _APPLICABLE_PROPOSAL_TYPES:
         record["unsupported_reason"] = (
-            "Only memory, fact, and skill proposals can be applied in this phase."
+            "Only memory, fact, skill, and workflow proposals can be applied."
         )
     else:
         record["unsupported_reason"] = "This proposal is already in a terminal state."

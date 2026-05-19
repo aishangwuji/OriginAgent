@@ -8,12 +8,16 @@ import pytest
 import yaml
 
 from OpenHome.agent.background_review import (
-    BackgroundReviewService,
     PROPOSAL_EVENT_STORE_RELATIVE,
+    BackgroundReviewService,
     ReviewProposal,
     ReviewProposalStore,
 )
 from OpenHome.agent.skills import SkillsLoader
+from OpenHome.agent.workflow_artifacts import (
+    validate_workflow_artifact_content,
+    validate_workflow_artifact_dir,
+)
 from OpenHome.bus.events import InboundMessage
 from OpenHome.command.builtin import cmd_reviews
 from OpenHome.command.router import CommandContext
@@ -342,17 +346,215 @@ def test_skill_apply_rejects_path_traversal_text(tmp_path: Path) -> None:
     assert not (tmp_path / "skills" / "path-text-skill").exists()
 
 
-def test_workflow_apply_is_unsupported_and_does_not_write_artifact(tmp_path: Path) -> None:
+def test_apply_workflow_proposal_writes_proposed_workspace_workflow(tmp_path: Path) -> None:
     store = ReviewProposalStore(tmp_path)
-    store.append_many([_proposal("review_workflow", proposal_type="workflow")])
+    store.append_many([
+        _proposal(
+            "review_workflow",
+            proposal_type="workflow",
+            title="Lighting incident response",
+            content="Use a manual lighting incident response checklist.",
+            payload={
+                "workflow_name": "lighting-incident-response",
+                "description": "Manual lighting workflow with token=supersecretvalue.",
+                "body": "Use this workflow when lighting automation fails with api_key=supersecretvalue.",
+                "steps": [
+                    {
+                        "title": "Confirm current state",
+                        "instruction": "Ask what changed and inspect available state only if permitted.",
+                        "risk": "low",
+                        "confirmation_required": False,
+                    }
+                ],
+            },
+        )
+    ])
 
+    assert store.get("review_workflow")["can_apply"] is True
     result = store.apply("review_workflow")
+    repeated = store.apply("review_workflow")
 
-    assert result.ok is False
-    assert result.error == "unsupported_proposal_type"
+    assert result.ok is True
+    assert result.status == "applied"
+    assert result.artifact == {
+        "artifact_type": "workflow",
+        "workflow_name": "lighting-incident-response",
+        "path": "workflows/lighting-incident-response/workflow.yaml",
+        "validation": "Workflow artifact is valid.",
+    }
+    assert repeated.ok is True
+    assert repeated.artifact == result.artifact
     assert _facts(tmp_path) == []
     assert not (tmp_path / "skills").exists()
-    assert store.get("review_workflow")["status"] == "failed"
+    assert len(_events(tmp_path)) == 1
+    workflow_file = tmp_path / "workflows" / "lighting-incident-response" / "workflow.yaml"
+    assert workflow_file.exists()
+    content = workflow_file.read_text(encoding="utf-8")
+    assert "supersecretvalue" not in content
+    assert "[REDACTED_SECRET]" in content
+    data = yaml.safe_load(content)
+    assert data["schema_version"] == 1
+    assert data["name"] == "lighting-incident-response"
+    assert data["kind"] == "manual_guide"
+    assert data["execution"] == {
+        "auto_run": False,
+        "creates_cron": False,
+        "calls_tools": False,
+    }
+    assert data["steps"] == [
+        {
+            "title": "Confirm current state",
+            "instruction": "Ask what changed and inspect available state only if permitted.",
+            "risk": "low",
+            "confirmation_required": False,
+        }
+    ]
+    metadata = data["metadata"]["OpenHome"]
+    assert metadata["review_proposal_id"] == "review_workflow"
+    assert metadata["domain_id"] == "core"
+    assert metadata["created_by"] == "background_review"
+    assert metadata["proposal_status"] == "proposed"
+    assert metadata["verification_status"] == "unverified"
+    assert metadata["source_session"] == "websocket:chat1"
+    assert metadata["source_turn_id"] == "turn-1"
+    record = store.get("review_workflow")
+    assert record["applied_workflow_name"] == "lighting-incident-response"
+    assert record["applied_workflow_path"] == "workflows/lighting-incident-response/workflow.yaml"
+
+
+def test_legacy_workflow_proposal_without_payload_uses_fallback_template(tmp_path: Path) -> None:
+    store = ReviewProposalStore(tmp_path)
+    store.append_many([
+        _proposal(
+            "review_legacy_workflow",
+            proposal_type="workflow",
+            title="Reusable Restart Checklist",
+            content="Check service status before restarting.",
+            rationale="This process came up repeatedly.",
+            evidence=["Run status before restart."],
+        )
+    ])
+
+    result = store.apply("review_legacy_workflow")
+
+    assert result.ok is True
+    workflow_file = tmp_path / "workflows" / "reusable-restart-checklist" / "workflow.yaml"
+    data = yaml.safe_load(workflow_file.read_text(encoding="utf-8"))
+    assert data["body"].startswith("Check service status before restarting.")
+    assert "## Rationale" in data["body"]
+    assert "## Evidence" in data["body"]
+    assert data["steps"] == []
+
+
+@pytest.mark.parametrize(
+    ("payload", "expected_error"),
+    [
+        ({"workflow_name": "../bad", "description": "Valid.", "body": "Manual steps."}, "path traversal"),
+        (
+            {
+                "workflow_name": "bad-workflow",
+                "description": "Valid.",
+                "body": "Manual steps.",
+                "steps": [{"title": "Run", "instruction": "Do it.", "command": "echo no"}],
+            },
+            "unsupported keys",
+        ),
+        (
+            {
+                "workflow_name": "unsafe-workflow",
+                "description": "Valid.",
+                "body": "Use this workflow to bypass confirmation.",
+            },
+            "unsafe instructions",
+        ),
+    ],
+)
+def test_invalid_workflow_proposals_fail_without_writing_artifact(
+    tmp_path: Path,
+    payload: dict,
+    expected_error: str,
+) -> None:
+    store = ReviewProposalStore(tmp_path)
+    store.append_many([
+        _proposal(
+            "review_bad_workflow",
+            proposal_type="workflow",
+            payload=payload,
+        )
+    ])
+
+    result = store.apply("review_bad_workflow")
+
+    assert result.ok is False
+    assert expected_error in result.error
+    assert not (tmp_path / "workflows" / str(payload.get("workflow_name", ""))).exists()
+    assert store.get("review_bad_workflow")["status"] == "failed"
+
+
+def test_workflow_apply_collision_fails_without_overwriting(tmp_path: Path) -> None:
+    workflow_dir = tmp_path / "workflows" / "existing-workflow"
+    workflow_dir.mkdir(parents=True)
+    (workflow_dir / "workflow.yaml").write_text("existing", encoding="utf-8")
+    store = ReviewProposalStore(tmp_path)
+    store.append_many([
+        _proposal(
+            "review_workflow_collision",
+            proposal_type="workflow",
+            payload={
+                "workflow_name": "existing-workflow",
+                "description": "A valid description.",
+                "body": "Use this workflow as a manual checklist.",
+            },
+        )
+    ])
+
+    result = store.apply("review_workflow_collision")
+
+    assert result.ok is False
+    assert "already exists" in result.error
+    assert (workflow_dir / "workflow.yaml").read_text(encoding="utf-8") == "existing"
+
+
+def test_workflow_artifact_validator_rejects_executable_or_extra_content(tmp_path: Path) -> None:
+    workflow_dir = tmp_path / "workflows" / "manual-check"
+    workflow_dir.mkdir(parents=True)
+    valid_content = yaml.safe_dump(
+        {
+            "schema_version": 1,
+            "name": "manual-check",
+            "description": "Manual check.",
+            "kind": "manual_guide",
+            "execution": {
+                "auto_run": False,
+                "creates_cron": False,
+                "calls_tools": False,
+            },
+            "body": "Review the state manually.",
+            "steps": [],
+            "metadata": {
+                "OpenHome": {
+                    "proposal_status": "proposed",
+                    "verification_status": "unverified",
+                    "review_proposal_id": "review_manual",
+                    "domain_id": "core",
+                    "created_by": "background_review",
+                    "source_session": "websocket:chat1",
+                    "source_turn_id": "turn-1",
+                }
+            },
+        },
+        sort_keys=False,
+    )
+    (workflow_dir / "workflow.yaml").write_text(valid_content, encoding="utf-8")
+    (workflow_dir / "script.py").write_text("print('no')", encoding="utf-8")
+
+    valid, message = validate_workflow_artifact_dir(workflow_dir, workspace=tmp_path)
+    assert valid is False
+    assert "may only contain workflow.yaml" in message
+
+    bad = valid_content.replace("auto_run: false", "auto_run: true")
+    with pytest.raises(ValueError, match="disable auto_run"):
+        validate_workflow_artifact_content(bad, expected_name="manual-check")
 
 
 def test_failed_review_proposal_cannot_be_rejected_later(tmp_path: Path) -> None:
@@ -435,6 +637,16 @@ async def test_reviews_command_show_apply_reject_defer(tmp_path: Path) -> None:
                 "body": "Use this skill for command review tests.",
             },
         ),
+        _proposal(
+            "review_workflow_apply",
+            proposal_type="workflow",
+            title="Command Workflow",
+            payload={
+                "workflow_name": "command-workflow",
+                "description": "A command-applied review workflow.",
+                "body": "Use this workflow as a manual command review checklist.",
+            },
+        ),
         _proposal("review_reject", content="A weak proposal."),
         _proposal("review_defer", content="A proposal for later."),
     ])
@@ -461,6 +673,7 @@ async def test_reviews_command_show_apply_reject_defer(tmp_path: Path) -> None:
     show = await run("show review_apply")
     apply = await run("apply review_apply")
     skill_apply = await run("apply review_skill_apply")
+    workflow_apply = await run("approve review_workflow_apply")
     reject = await run("reject review_reject no")
     defer = await run("defer review_defer later")
 
@@ -468,5 +681,7 @@ async def test_reviews_command_show_apply_reject_defer(tmp_path: Path) -> None:
     assert "applied" in apply.content
     assert "command-skill" in skill_apply.content
     assert "skills/command-skill/SKILL.md" in skill_apply.content
+    assert "command-workflow" in workflow_apply.content
+    assert "workflows/command-workflow/workflow.yaml" in workflow_apply.content
     assert "rejected" in reject.content
     assert "deferred" in defer.content

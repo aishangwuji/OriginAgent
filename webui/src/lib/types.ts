@@ -211,12 +211,16 @@ export interface ReviewProposalEvent {
   fact_id?: string | null;
   skill_name?: string | null;
   skill_path?: string | null;
+  workflow_name?: string | null;
+  workflow_path?: string | null;
   artifact?: ReviewApplyArtifact | null;
   error?: string;
 }
 
 export interface ReviewApplyArtifact {
+  artifact_type?: "skill" | "workflow" | string;
   skill_name?: string;
+  workflow_name?: string;
   path?: string;
   validation?: string;
 }
@@ -240,6 +244,8 @@ export interface ReviewProposal {
   applied_fact_id?: string;
   applied_skill_name?: string;
   applied_skill_path?: string;
+  applied_workflow_name?: string;
+  applied_workflow_path?: string;
   apply_artifact?: ReviewApplyArtifact;
   can_apply?: boolean;
   unsupported_reason?: string;

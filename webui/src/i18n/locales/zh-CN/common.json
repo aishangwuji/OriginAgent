@@ -201,7 +201,8 @@
     "confidence": "置信度 {{value}}",
     "appliedFact": "事实 {{id}}",
     "appliedSkill": "技能 {{path}}",
-    "unsupportedApply": "本阶段只能应用 memory、fact 和 skill 提案。workflow 提案可以拒绝或延期。",
+    "appliedWorkflow": "Workflow {{path}}",
+    "unsupportedApply": "本阶段可以应用 memory、fact、skill 和 workflow 提案。",
     "reasonLabel": "审核备注",
     "reasonPlaceholder": "可选：说明为什么应用、拒绝或延期这个提案。",
     "noEvidence": "这个提案没有保存证据片段。",
@@ -250,6 +251,8 @@
       "description": "OpenHome 会把已批准的记忆或事实写入受控 facts store，并重新生成 MEMORY.md。",
       "skillDescription": "OpenHome 会把 {{name}} 写成 proposed/unverified workspace skill，位置是 {{path}}。它会被发现，但不会 always 自动加载。",
       "skillPathPending": "workspace/skills/<safe-name>/SKILL.md",
+      "workflowDescription": "OpenHome 会把 {{name}} 写成 proposed/unverified 手动 workflow，位置是 {{path}}。它不会创建自动化、运行工具或创建计划任务。",
+      "workflowPathPending": "workspace/workflows/<safe-name>/workflow.yaml",
       "cancel": "取消",
       "confirm": "应用"
     }

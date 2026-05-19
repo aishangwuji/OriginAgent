@@ -43,7 +43,7 @@ type ReviewTypeFilter = "memory" | "fact" | "skill" | "workflow" | "";
 
 const STATUS_FILTERS: ReviewStatusFilter[] = ["pending", "applied", "rejected", "deferred", "failed", ""];
 const TYPE_FILTERS: ReviewTypeFilter[] = ["", "memory", "fact", "skill", "workflow"];
-const APPLICABLE_TYPES = new Set(["memory", "fact", "skill"]);
+const APPLICABLE_TYPES = new Set(["memory", "fact", "skill", "workflow"]);
 
 interface ReviewsViewProps {
   onBackToChat: () => void;
@@ -161,6 +161,8 @@ export function ReviewsView({ onBackToChat }: ReviewsViewProps) {
   const selectedArtifact = selected?.apply_artifact ?? selected?.review_event?.artifact;
   const selectedPayloadSkillName =
     typeof selected?.payload?.skill_name === "string" ? selected.payload.skill_name : "";
+  const selectedPayloadWorkflowName =
+    typeof selected?.payload?.workflow_name === "string" ? selected.payload.workflow_name : "";
 
   const runAction = useCallback(
     async (action: "apply" | "reject" | "defer") => {
@@ -360,6 +362,11 @@ export function ReviewsView({ onBackToChat }: ReviewsViewProps) {
                       {t("reviews.appliedSkill", { path: selected.applied_skill_path })}
                     </span>
                   ) : null}
+                  {selected.applied_workflow_path ? (
+                    <span className="rounded-full bg-primary/15 px-3 py-1 text-xs font-black text-foreground">
+                      {t("reviews.appliedWorkflow", { path: selected.applied_workflow_path })}
+                    </span>
+                  ) : null}
                 </div>
                 <h2 className="mt-4 text-xl font-black leading-tight text-foreground">
                   {selected.title || t("reviews.untitled")}
@@ -479,6 +486,15 @@ export function ReviewsView({ onBackToChat }: ReviewsViewProps) {
                     name: selectedArtifact?.skill_name || selectedPayloadSkillName || selected?.title || "",
                     path: selectedArtifact?.path || t("reviews.confirmApply.skillPathPending"),
                   })
+                : normalizeType(selected) === "workflow"
+                  ? t("reviews.confirmApply.workflowDescription", {
+                      name:
+                        selectedArtifact?.workflow_name ||
+                        selectedPayloadWorkflowName ||
+                        selected?.title ||
+                        "",
+                      path: selectedArtifact?.path || t("reviews.confirmApply.workflowPathPending"),
+                    })
                 : t("reviews.confirmApply.description")}
             </AlertDialogDescription>
           </AlertDialogHeader>
