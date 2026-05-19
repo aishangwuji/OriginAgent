@@ -147,6 +147,54 @@ class DomainPacksConfig(Base):
     )
 
 
+class BackgroundReviewConfig(Base):
+    """Controlled background learning proposal generation."""
+
+    enabled: bool = False
+    max_recent_messages: int = Field(
+        default=12,
+        ge=1,
+        le=100,
+        validation_alias=AliasChoices("maxRecentMessages", "max_recent_messages"),
+        serialization_alias="maxRecentMessages",
+    )
+    max_prompt_chars: int = Field(
+        default=16000,
+        ge=1000,
+        validation_alias=AliasChoices("maxPromptChars", "max_prompt_chars"),
+        serialization_alias="maxPromptChars",
+    )
+    max_proposals_per_turn: int = Field(
+        default=8,
+        ge=1,
+        le=50,
+        validation_alias=AliasChoices("maxProposalsPerTurn", "max_proposals_per_turn"),
+        serialization_alias="maxProposalsPerTurn",
+    )
+    max_concurrent_reviews: int = Field(
+        default=1,
+        ge=1,
+        le=8,
+        validation_alias=AliasChoices("maxConcurrentReviews", "max_concurrent_reviews"),
+        serialization_alias="maxConcurrentReviews",
+    )
+    allowed_proposal_types: list[str] = Field(
+        default_factory=lambda: ["memory", "fact", "skill", "workflow"],
+        validation_alias=AliasChoices("allowedProposalTypes", "allowed_proposal_types"),
+        serialization_alias="allowedProposalTypes",
+    )
+
+
+class LearningConfig(Base):
+    """Agent self-improvement and review configuration."""
+
+    background_review: BackgroundReviewConfig = Field(
+        default_factory=BackgroundReviewConfig,
+        validation_alias=AliasChoices("backgroundReview", "background_review"),
+        serialization_alias="backgroundReview",
+    )
+
+
 class AgentDefaults(Base):
     """Default agent configuration."""
 
@@ -183,6 +231,7 @@ class AgentDefaults(Base):
         validation_alias=AliasChoices("domainPacks", "domain_packs"),
         serialization_alias="domainPacks",
     )
+    learning: LearningConfig = Field(default_factory=LearningConfig)
     timezone: str = "Asia/Shanghai"  # IANA timezone, e.g. "Asia/Shanghai", "America/New_York"
     bot_name: str = "OpenHome"  # Display name shown in CLI prompts (e.g. "{name} is thinking...")
     bot_icon: str = "Home"  # Short icon (emoji or text) shown next to the bot name in CLI; "" to omit

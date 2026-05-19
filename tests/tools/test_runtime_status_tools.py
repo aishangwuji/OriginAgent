@@ -290,3 +290,30 @@ async def test_runtime_status_reports_domain_pack_counts(tmp_path) -> None:
     assert result["active_domain_pack_ids"] == ["research"]
     assert result["registered_domain_tools_count"] == 1
     assert result["skipped_domain_tools_count"] == 1
+
+
+@pytest.mark.asyncio
+async def test_runtime_status_reports_background_review_counts(tmp_path) -> None:
+    class ReviewService:
+        def runtime_status(self):
+            return {
+                "background_review_enabled": True,
+                "background_review_running_count": 1,
+                "background_review_proposal_count": 3,
+                "background_review_pending_count": 2,
+                "background_review_last_created_at": "2026-05-19T10:00:00+00:00",
+                "background_review_last_result": {"status": "ok", "proposals_written": 1},
+            }
+
+    result = await RuntimeStatusTool(
+        workspace=tmp_path,
+        registry=SimpleNamespace(tool_names=["a"]),
+        sessions=object(),
+        pending_queues={},
+        background_review_service=ReviewService(),
+    ).execute()
+
+    assert result["background_review_enabled"] is True
+    assert result["background_review_running_count"] == 1
+    assert result["background_review_proposal_count"] == 3
+    assert result["background_review_pending_count"] == 2

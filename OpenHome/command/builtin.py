@@ -106,6 +106,13 @@ BUILTIN_COMMAND_SPECS: tuple[BuiltinCommandSpec, ...] = (
         "[n]",
     ),
     BuiltinCommandSpec(
+        "/reviews",
+        "Show learning proposals",
+        "List pending background review proposals.",
+        "list-checks",
+        "[n]",
+    ),
+    BuiltinCommandSpec(
         "/dream",
         "Run Dream",
         "Manually trigger memory consolidation.",
@@ -853,6 +860,78 @@ async def cmd_history(ctx: CommandContext) -> OutboundMessage:
     )
 
 
+_REVIEWS_DEFAULT_COUNT = 10
+_REVIEWS_MAX_COUNT = 50
+
+
+def _format_review_record(record: dict) -> str:
+    proposal_id = str(record.get("id") or "unknown")
+    proposal_type = str(record.get("proposal_type") or record.get("type") or "unknown")
+    domain_id = str(record.get("domain_id") or "core")
+    status = str(record.get("status") or "pending")
+    title = str(record.get("title") or "(untitled)")
+    content = str(record.get("content") or "").strip()
+    if len(content) > 260:
+        content = content[:260] + "..."
+    created_at = str(record.get("created_at") or "")
+    confidence = record.get("confidence")
+    confidence_text = f", confidence={confidence}" if confidence is not None else ""
+    lines = [
+        f"- `{proposal_id}` [{status}] {proposal_type}/{domain_id}: {title}",
+        f"  created={created_at}{confidence_text}",
+    ]
+    if content:
+        lines.append(f"  {content}")
+    return "\n".join(lines)
+
+
+async def cmd_reviews(ctx: CommandContext) -> OutboundMessage:
+    """Show pending background review proposals.
+
+    Usage: /reviews [count]
+    """
+    count = _REVIEWS_DEFAULT_COUNT
+    if ctx.args.strip():
+        try:
+            count = max(1, min(int(ctx.args.strip()), _REVIEWS_MAX_COUNT))
+        except ValueError:
+            return OutboundMessage(
+                channel=ctx.msg.channel,
+                chat_id=ctx.msg.chat_id,
+                content="Usage: /reviews [count] - e.g. /reviews 5 (default: 10, max: 50)",
+                metadata=dict(ctx.msg.metadata or {}),
+            )
+
+    service = getattr(ctx.loop, "background_review", None)
+    store = getattr(service, "store", None)
+    if store is None:
+        content = "Background review proposal store is not available."
+    else:
+        records = store.recent(count)
+        if not records:
+            enabled = bool(getattr(service, "enabled", False))
+            suffix = " It is currently disabled." if not enabled else ""
+            content = "No background review proposals yet." + suffix
+        else:
+            stats = store.stats()
+            lines = [
+                "## Background Review Proposals",
+                "",
+                f"- Showing: {len(records)}",
+                f"- Total stored: {stats.get('proposal_count', 0)}",
+                f"- Pending: {stats.get('pending_count', 0)}",
+                "",
+            ]
+            lines.extend(_format_review_record(record) for record in records)
+            content = "\n".join(lines)
+    return OutboundMessage(
+        channel=ctx.msg.channel,
+        chat_id=ctx.msg.chat_id,
+        content=content,
+        metadata={**dict(ctx.msg.metadata or {}), "render_as": "text"},
+    )
+
+
 async def cmd_help(ctx: CommandContext) -> OutboundMessage:
     """Return available slash commands."""
     return OutboundMessage(
@@ -894,6 +973,8 @@ def register_builtin_commands(router: CommandRouter) -> None:
     router.exact("/domains", cmd_domain)
     router.exact("/history", cmd_history)
     router.prefix("/history ", cmd_history)
+    router.exact("/reviews", cmd_reviews)
+    router.prefix("/reviews ", cmd_reviews)
     router.exact("/dream", cmd_dream)
     router.exact("/dream-log", cmd_dream_log)
     router.prefix("/dream-log ", cmd_dream_log)

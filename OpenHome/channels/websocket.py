@@ -230,6 +230,18 @@ def _query_first(query: dict[str, list[str]], key: str) -> str | None:
     return values[0] if values else None
 
 
+def _query_bool(query: dict[str, list[str]], key: str) -> bool | None:
+    raw = _query_first(query, key)
+    if raw is None:
+        return None
+    value = raw.strip().lower()
+    if value in {"1", "true", "yes", "on"}:
+        return True
+    if value in {"0", "false", "no", "off"}:
+        return False
+    return None
+
+
 def _mask_secret_hint(secret: str | None) -> str | None:
     if not secret:
         return None
@@ -743,6 +755,9 @@ class WebSocketChannel(BaseChannel):
         if got == "/api/settings/web-search/update":
             return self._handle_settings_web_search_update(request)
 
+        if got == "/api/settings/learning/background-review/update":
+            return self._handle_settings_learning_background_review_update(request)
+
         if got == "/api/settings/mcp/upsert":
             return self._handle_settings_mcp_upsert(request)
 
@@ -931,6 +946,11 @@ class WebSocketChannel(BaseChannel):
                 "base_url": search_config.base_url or None,
                 "providers": list(_WEB_SEARCH_PROVIDER_OPTIONS),
             },
+            "learning": {
+                "background_review": {
+                    "enabled": bool(defaults.learning.background_review.enabled),
+                },
+            },
             "mcp": {
                 "servers": [
                     _mcp_server_payload(name, server)
@@ -1090,6 +1110,23 @@ class WebSocketChannel(BaseChannel):
             set_value("base_url", "")
 
         if changed:
+            save_config(config)
+        return _http_json_response(self._settings_payload(requires_restart=False))
+
+    def _handle_settings_learning_background_review_update(self, request: WsRequest) -> Response:
+        if not self._check_api_token(request):
+            return _http_error(401, "Unauthorized")
+        from OpenHome.config.loader import load_config, save_config
+
+        query = _parse_query(request.path)
+        enabled = _query_bool(query, "enabled")
+        if enabled is None:
+            return _http_error(400, "enabled must be true or false")
+
+        config = load_config()
+        target = config.agents.defaults.learning.background_review
+        if target.enabled != enabled:
+            target.enabled = enabled
             save_config(config)
         return _http_json_response(self._settings_payload(requires_restart=False))
 

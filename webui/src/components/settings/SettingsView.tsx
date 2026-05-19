@@ -45,6 +45,7 @@ import { Input } from "@/components/ui/input";
 import {
   deleteMcpServerSettings,
   fetchSettings,
+  updateBackgroundReviewSettings,
   updateProviderSettings,
   updateSettings,
   updateWebSearchSettings,
@@ -130,6 +131,7 @@ export function SettingsView({
   const [saving, setSaving] = useState(false);
   const [providerSaving, setProviderSaving] = useState<string | null>(null);
   const [webSearchSaving, setWebSearchSaving] = useState(false);
+  const [backgroundReviewSaving, setBackgroundReviewSaving] = useState(false);
   const [mcpSaving, setMcpSaving] = useState<string | null>(null);
   const [mcpDeleting, setMcpDeleting] = useState<string | null>(null);
   const [homeAssistantMcpSaving, setHomeAssistantMcpSaving] = useState(false);
@@ -314,6 +316,22 @@ export function SettingsView({
       setError((err as Error).message);
     } finally {
       setWebSearchSaving(false);
+    }
+  };
+
+  const toggleBackgroundReview = async (enabled: boolean) => {
+    if (!settings || backgroundReviewSaving) return;
+    setBackgroundReviewSaving(true);
+    try {
+      const payload = await withTokenRefresh(token, refreshToken, (freshToken) =>
+        updateBackgroundReviewSettings(freshToken, enabled),
+      );
+      applyPayload(payload);
+      setError(null);
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setBackgroundReviewSaving(false);
     }
   };
 
@@ -553,6 +571,8 @@ export function SettingsView({
                   onRestart={onRestart}
                   isRestarting={isRestarting}
                   onOpenByok={() => setActiveSection("byok")}
+                  backgroundReviewSaving={backgroundReviewSaving}
+                  onToggleBackgroundReview={toggleBackgroundReview}
                 />
               ) : activeSection === "byok" ? (
                 <ByokSettings
@@ -715,6 +735,8 @@ function GeneralSettings({
   onRestart,
   isRestarting,
   onOpenByok,
+  backgroundReviewSaving,
+  onToggleBackgroundReview,
 }: {
   theme: "light" | "dark";
   onToggleTheme: () => void;
@@ -733,6 +755,8 @@ function GeneralSettings({
   onRestart?: () => void;
   isRestarting?: boolean;
   onOpenByok: () => void;
+  backgroundReviewSaving: boolean;
+  onToggleBackgroundReview: (enabled: boolean) => void;
 }) {
   const { t } = useTranslation();
   const configuredProviders = settings.providers.filter((provider) => provider.configured);
@@ -822,6 +846,37 @@ function GeneralSettings({
               </Button>
             </SettingsRow>
           ) : null}
+        </SettingsGroup>
+      </section>
+
+      <section>
+        <SettingsSectionTitle>{t("settings.sections.learning")}</SettingsSectionTitle>
+        <SettingsGroup>
+          <SettingsRow
+            title={t("settings.rows.backgroundReview")}
+            description={t("settings.help.backgroundReview")}
+          >
+            <button
+              type="button"
+              role="switch"
+              aria-label={t("settings.rows.backgroundReview")}
+              aria-checked={settings.learning.background_review.enabled}
+              disabled={backgroundReviewSaving}
+              onClick={() => onToggleBackgroundReview(!settings.learning.background_review.enabled)}
+              className={cn(
+                "inline-flex h-7 w-12 items-center rounded-full p-0.5 transition-colors",
+                settings.learning.background_review.enabled ? "bg-primary" : "bg-muted",
+                backgroundReviewSaving && "opacity-60",
+              )}
+            >
+              <span
+                className={cn(
+                  "h-6 w-6 rounded-full bg-background shadow-sm transition-transform",
+                  settings.learning.background_review.enabled && "translate-x-5",
+                )}
+              />
+            </button>
+          </SettingsRow>
         </SettingsGroup>
       </section>
 

@@ -7,6 +7,7 @@ import {
   fetchWebuiThread,
   listSessions,
   listSlashCommands,
+  updateBackgroundReviewSettings,
   updateProviderSettings,
   updateSettings,
   updateWebSearchSettings,
@@ -85,6 +86,17 @@ describe("webui API helpers", () => {
 
     expect(fetch).toHaveBeenCalledWith(
       "/api/settings/web-search/update?provider=searxng&base_url=https%3A%2F%2Fsearch.example.com",
+      expect.objectContaining({
+        headers: { Authorization: "Bearer tok" },
+      }),
+    );
+  });
+
+  it("serializes background review setting updates", async () => {
+    await updateBackgroundReviewSettings("tok", true);
+
+    expect(fetch).toHaveBeenCalledWith(
+      "/api/settings/learning/background-review/update?enabled=true",
       expect.objectContaining({
         headers: { Authorization: "Bearer tok" },
       }),

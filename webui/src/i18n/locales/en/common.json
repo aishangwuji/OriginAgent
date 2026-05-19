@@ -71,6 +71,7 @@
     "sections": {
       "interface": "Interface",
       "ai": "AI",
+      "learning": "Learning",
       "system": "System"
     },
     "rows": {
@@ -78,6 +79,7 @@
       "language": "Language",
       "provider": "Provider",
       "model": "Model",
+      "backgroundReview": "Background review",
       "restart": "Restart OpenHome",
       "configPath": "Config path"
     },
@@ -86,6 +88,7 @@
       "language": "Choose the language used by the WebUI.",
       "provider": "Select the provider that should serve new model requests.",
       "model": "Set the default model name used by OpenHome.",
+      "backgroundReview": "Generate pending learning proposals after successful turns. Off by default to avoid unexpected LLM cost.",
       "configPath": "The gateway configuration file currently in use."
     },
     "values": {

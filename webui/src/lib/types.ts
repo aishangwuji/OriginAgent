@@ -128,6 +128,11 @@ export interface SettingsPayload {
       credential: "none" | "api_key" | "base_url";
     }>;
   };
+  learning: {
+    background_review: {
+      enabled: boolean;
+    };
+  };
   mcp: {
     servers: McpServerSettings[];
   };

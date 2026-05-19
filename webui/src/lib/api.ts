@@ -207,6 +207,19 @@ export async function updateWebSearchSettings(
   );
 }
 
+export async function updateBackgroundReviewSettings(
+  token: string,
+  enabled: boolean,
+  base: string = "",
+): Promise<SettingsPayload> {
+  const query = new URLSearchParams();
+  query.set("enabled", enabled ? "true" : "false");
+  return request<SettingsPayload>(
+    `${base}/api/settings/learning/background-review/update?${query}`,
+    token,
+  );
+}
+
 export async function upsertMcpServerSettings(
   token: string,
   update: McpServerSettingsUpdate,

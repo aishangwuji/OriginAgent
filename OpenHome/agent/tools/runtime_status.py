@@ -27,6 +27,7 @@ class RuntimeStatusTool(Tool):
         audit_mode: str = "minimal",
         runtime_profile: str = "default",
         domain_pack_manager: Any | None = None,
+        background_review_service: Any | None = None,
     ) -> None:
         self._workspace = Path(workspace)
         self._registry = registry
@@ -37,6 +38,7 @@ class RuntimeStatusTool(Tool):
         self._audit_mode = audit_mode
         self._runtime_profile = runtime_profile
         self._domain_pack_manager = domain_pack_manager
+        self._background_review_service = background_review_service
 
     @property
     def description(self) -> str:
@@ -52,6 +54,7 @@ class RuntimeStatusTool(Tool):
 
     async def execute(self) -> dict[str, Any]:
         domain_status = _domain_pack_status(self._domain_pack_manager)
+        background_review_status = _background_review_status(self._background_review_service)
         return {
             "workspace_present": self._workspace.exists(),
             "workspace_name": self._workspace.name,
@@ -63,6 +66,7 @@ class RuntimeStatusTool(Tool):
             "cron_available": self._cron_service is not None,
             "confirmation_available": self._confirmation_store is not None,
             **domain_status,
+            **background_review_status,
         }
 
 
@@ -311,3 +315,26 @@ def _domain_pack_status(manager: Any | None) -> dict[str, Any]:
         "registered_domain_tools_count": int(counts.get("registered", 0) or 0),
         "skipped_domain_tools_count": int(counts.get("skipped", 0) or 0),
     }
+
+
+def _background_review_status(service: Any | None) -> dict[str, Any]:
+    if service is None or not hasattr(service, "runtime_status"):
+        return {
+            "background_review_enabled": False,
+            "background_review_running_count": 0,
+            "background_review_proposal_count": 0,
+            "background_review_pending_count": 0,
+            "background_review_last_created_at": None,
+            "background_review_last_result": None,
+        }
+    try:
+        return dict(service.runtime_status())
+    except Exception:
+        return {
+            "background_review_enabled": False,
+            "background_review_running_count": 0,
+            "background_review_proposal_count": 0,
+            "background_review_pending_count": 0,
+            "background_review_last_created_at": None,
+            "background_review_last_result": None,
+        }

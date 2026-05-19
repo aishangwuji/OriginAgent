@@ -17,6 +17,7 @@ from loguru import logger
 from OpenHome.agent import model_presets as preset_helpers
 from OpenHome.agent.autocompact import AutoCompact
 from OpenHome.agent.auxiliary_llm import AuxiliaryLLMRouter
+from OpenHome.agent.background_review import BackgroundReviewService
 from OpenHome.agent.confirmation import PendingConfirmationStore
 from OpenHome.agent.context import ContextBuilder
 from OpenHome.agent.device_factory import build_device_action_executor
@@ -87,6 +88,7 @@ if TYPE_CHECKING:
         Config,
         DomainPacksConfig,
         ExecToolConfig,
+        BackgroundReviewConfig,
         ModelPresetConfig,
         ProviderConfig,
         ToolsConfig,
@@ -247,6 +249,8 @@ class AgentLoop:
         primary_provider_name: str | None = None,
         domain_packs_config: "DomainPacksConfig | None" = None,
         domain_pack_manager: DomainPackManager | None = None,
+        learning_config: "BackgroundReviewConfig | None" = None,
+        learning_config_loader: Callable[[], "BackgroundReviewConfig"] | None = None,
     ):
         from OpenHome.config.schema import ExecToolConfig, ToolsConfig, WebToolsConfig
 
@@ -317,6 +321,15 @@ class AgentLoop:
             workspace,
             timezone=timezone,
             disabled_skills=disabled_skills,
+            domain_pack_manager=self.domain_packs,
+        )
+        self.background_review = BackgroundReviewService(
+            workspace=workspace,
+            provider=provider,
+            model=self.model,
+            router=self.auxiliary_router,
+            config=learning_config or defaults.learning.background_review,
+            config_loader=learning_config_loader,
             domain_pack_manager=self.domain_packs,
         )
         self.sessions = session_manager or SessionManager(workspace)
@@ -441,6 +454,12 @@ class AgentLoop:
                 workspace=config.workspace_path,
                 config=config.tools.device,
             )
+
+        def _background_review_config_loader():
+            from OpenHome.config.loader import load_config
+
+            return load_config().agents.defaults.learning.background_review
+
         return cls(
             bus=bus,
             provider=provider,
@@ -475,6 +494,8 @@ class AgentLoop:
             auxiliary_source_config=config,
             primary_provider_name=primary_provider_name,
             domain_packs_config=defaults.domain_packs,
+            learning_config=defaults.learning.background_review,
+            learning_config_loader=_background_review_config_loader,
             **extra,
         )
 
@@ -496,6 +517,7 @@ class AgentLoop:
         self.runner.provider = provider
         self.subagents.set_provider(provider, model)
         self.auxiliary_router.set_primary(provider, model)
+        self.background_review.set_provider(provider, model)
         self.consolidator.set_provider(provider, model, context_window_tokens)
         self.dream.set_provider(provider, model)
         self._provider_signature = snapshot.signature
@@ -562,6 +584,7 @@ class AgentLoop:
                 audit_mode=self._tool_audit_config.mode,
                 confirmation_store=confirmation_store,
                 domain_pack_manager=self.domain_packs,
+                background_review_service=self.background_review,
             )
         )
         self.tools.register(
@@ -1920,7 +1943,41 @@ class AgentLoop:
                 replay_max_messages=self._max_messages,
             )
         )
+        self._schedule_background_review(ctx)
         return "ok"
+
+    def _schedule_background_review(self, ctx: TurnContext) -> None:
+        """Schedule a controlled learning review for successful foreground turns."""
+        if ctx.session is None:
+            return
+        self.background_review.refresh_config()
+        if not self.background_review.enabled:
+            return
+        if ctx.stop_reason in {"ask_user", "error", "tool_error"}:
+            return
+        if ctx.msg.channel == "system" or ctx.msg.sender_id == "subagent":
+            return
+        if not (ctx.final_content or "").strip():
+            return
+
+        max_recent = int(
+            getattr(self.background_review.config, "max_recent_messages", 12) or 12
+        )
+        messages = [
+            dict(message)
+            for message in ctx.session.messages
+            if not message.get("_command")
+        ][-max_recent:]
+        self._schedule_background(
+            self.background_review.review_turn(
+                session_key=ctx.session_key,
+                turn_id=ctx.turn_id,
+                channel=ctx.msg.channel,
+                chat_id=ctx.msg.chat_id,
+                message_id=ctx.msg.metadata.get("message_id"),
+                messages=messages,
+            )
+        )
 
     async def _state_respond(self, ctx: TurnContext) -> str:
         ctx.outbound = self._assemble_outbound(

@@ -657,6 +657,7 @@ async def test_settings_api_returns_safe_subset_and_updates_whitelist(
         assert body["agent"]["has_api_key"] is True
         assert body["web_search"]["provider"] == "brave"
         assert body["web_search"]["api_key_hint"] == "brav••••cret"
+        assert body["learning"]["background_review"]["enabled"] is False
         assert body["mcp"]["servers"] == [
             {
                 "name": "github",
@@ -712,9 +713,19 @@ async def test_settings_api_returns_safe_subset_and_updates_whitelist(
         assert search_body["web_search"]["api_key_hint"] is None
         assert search_body["web_search"]["base_url"] == "https://search.example.com"
 
+        learning_updated = await _http_get(
+            "http://127.0.0.1:"
+            f"{port}/api/settings/learning/background-review/update?enabled=true",
+            headers={"Authorization": "Bearer tok"},
+        )
+        assert learning_updated.status_code == 200
+        assert learning_updated.json()["requires_restart"] is False
+        assert learning_updated.json()["learning"]["background_review"]["enabled"] is True
+
         saved = load_config(config_path)
         assert saved.agents.defaults.model == "openrouter/test"
         assert saved.agents.defaults.provider == "openrouter"
+        assert saved.agents.defaults.learning.background_review.enabled is True
         assert saved.providers.openrouter.api_key == "sk-or-test"
         assert saved.providers.openrouter.api_base == "https://openrouter.ai/api/v1"
         assert saved.tools.web.search.provider == "searxng"
