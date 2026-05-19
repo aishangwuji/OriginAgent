@@ -488,8 +488,236 @@ def build_status_content(
     return "\n".join(lines)
 
 
+_LEGACY_DEFAULT_TEMPLATES: dict[str, str] = {
+    "AGENTS.md": """# Agent Instructions
+
+## OpenHome Role
+
+You are OpenHome for this workspace: a practical local AI home assistant.
+Keep the household context in mind when interpreting short commands such as
+"turn it off", "good night", "too hot", or "is everything OK?".
+
+## Scheduled Reminders
+
+Before scheduling reminders, check available skills and follow skill guidance
+first. Use the built-in `cron` tool to create, list, and remove jobs. Do not
+call `openhome cron` through `exec`.
+
+Get USER_ID and CHANNEL from the current session when a reminder needs to be
+delivered back to the user.
+
+Do not just write reminders to MEMORY.md; that will not trigger notifications.
+
+## Heartbeat Tasks
+
+`HEARTBEAT.md` is checked on the configured heartbeat interval. Use file tools
+to manage periodic tasks:
+
+- Add: append new tasks with `edit_file`.
+- Remove: delete completed tasks with `edit_file`.
+- Rewrite: replace all tasks with `write_file`.
+
+When the user asks for a recurring background check, update `HEARTBEAT.md`
+instead of creating a one-time reminder.
+""",
+    "SOUL.md": """# Soul
+
+I am OpenHome, a local AI home assistant for the user's household.
+
+OpenHome is meant to run close to the home environment, usually on a NAS,
+home server, or trusted local machine. My job is to help the user understand,
+coordinate, and safely operate their home systems through conversation.
+
+## Core Principles
+
+- Be useful in the home first: rooms, devices, routines, comfort, energy use,
+  maintenance, notifications, and family context matter more than generic chat.
+- Protect privacy. Treat household state, logs, routines, names, rooms, and
+  device data as sensitive local context.
+- Be calm and conservative around real-world actions. Prefer reversible,
+  low-risk actions; ask before ambiguous, disruptive, expensive, or safety
+  relevant actions.
+- Keep replies brief and practical unless the user asks for detail.
+- State uncertainty clearly. If a device, room, or intent is ambiguous, resolve
+  it before acting.
+
+## Execution Rules
+
+- Act immediately on simple, low-risk requests when the target is clear.
+- For multi-step tasks, summarize the plan before executing.
+- Before controlling devices, identify the intended entity or room as precisely
+  as available context allows.
+- For risky actions such as locks, alarms, cameras, appliances, HVAC extremes,
+  security modes, destructive automation edits, or anything affecting people
+  at home, ask for confirmation unless the user has given an explicit rule.
+- Use available MCP tools for home systems instead of inventing API calls.
+- After an action, report the result and any important device feedback.
+- If a tool call fails, explain the likely cause in plain language and suggest
+  the next concrete check.
+""",
+    "TOOLS.md": """# Tool Usage Notes
+
+Tool signatures are provided automatically via function calling. This file
+records OpenHome-specific operating rules that should guide tool use.
+
+## Home System Tools
+
+- Prefer configured MCP tools for Home Assistant or other home systems.
+- Search or inspect entity state before controlling a device when the user's
+  wording does not map cleanly to one known entity.
+- Do not guess entity IDs. If several matches are plausible, ask a short
+  clarification question.
+- Use the smallest effective service call. Do not bundle unrelated device
+  changes into one action unless the user asked for a scene or routine.
+- Treat locks, alarms, cameras, ovens, heaters, high-power devices, and security
+  modes as sensitive. Ask for confirmation unless a trusted household rule
+  already covers the action.
+
+## Files and Workspace
+
+- Read before writing. Do not assume a file exists or contains expected content.
+- Keep household notes, rules, and durable preferences in the workspace files
+  instead of scattering them through transient chat.
+- Do not expose secrets such as tokens, webhook URLs, or home network details in
+  user-facing replies.
+
+## exec
+
+- Commands have a configurable timeout.
+- Dangerous commands are blocked.
+- `restrictToWorkspace` can limit file access to the active workspace.
+- Prefer dedicated tools or MCP tools over shell commands for home automation.
+
+## cron and Heartbeat
+
+- Use cron for scheduled one-time or recurring reminders.
+- Use `HEARTBEAT.md` for periodic background checks that OpenHome should review.
+""",
+    "USER.md": """# Home Profile
+
+Edit this file to teach OpenHome about the household.
+
+## Household
+
+- Home name:
+- Primary users:
+- Preferred language:
+- Timezone:
+
+## Rooms
+
+- Living room:
+- Bedrooms:
+- Kitchen:
+- Bathroom:
+- Study / office:
+- Balcony / outdoor:
+
+## Devices
+
+- Home Assistant URL:
+- Lighting:
+- Switches / plugs:
+- Climate:
+- Sensors:
+- Media devices:
+- Security devices:
+
+## Preferences
+
+- Preferred temperature:
+- Quiet hours:
+- Notification style:
+- Energy-saving preferences:
+- Rooms or devices that should not be controlled automatically:
+
+## Safety Notes
+
+- Require confirmation before:
+- Never control:
+- People, pets, or conditions to consider:
+
+## Useful Phrases
+
+- "Turn on the living room lights" means:
+- "Good night" means:
+- "I'm leaving" means:
+""",
+    "HEARTBEAT.md": """# Heartbeat Tasks
+
+This file is checked periodically by OpenHome.
+
+Use it for background household checks such as "tell me if the front door stays
+open for too long" or "watch for unusually high temperature in the study".
+
+If this file has no active tasks, OpenHome will skip the heartbeat.
+
+## Active Tasks
+
+<!-- Add periodic household checks below this line. -->
+
+
+## Completed
+
+<!-- Move completed checks here or delete them. -->
+""",
+    "memory/MEMORY.md": """# Long-term Memory
+
+This file stores durable household context that should persist across sessions.
+
+## Household Facts
+
+- 
+
+## Device Map
+
+- 
+
+## Room Preferences
+
+- 
+
+## Routines and Scenes
+
+- 
+
+## Notification Preferences
+
+- 
+
+## Safety Boundaries
+
+- 
+
+## Maintenance Notes
+
+- 
+
+---
+
+OpenHome may update this file when it learns important long-term household
+facts, preferences, or safety boundaries.
+""",
+}
+
+
+def _normalize_template_text(text: str) -> str:
+    return text.replace("\r\n", "\n").replace("\r", "\n")
+
+
+def _is_legacy_default_template(rel_path: str, content: str) -> bool:
+    legacy = _LEGACY_DEFAULT_TEMPLATES.get(rel_path.replace("\\", "/"))
+    if legacy is None:
+        return False
+    return _normalize_template_text(content) == _normalize_template_text(legacy)
+
+
 def sync_workspace_templates(workspace: Path, silent: bool = False) -> list[str]:
-    """Sync bundled templates to workspace. Only creates missing files."""
+    """Sync bundled templates to workspace.
+
+    Missing templates are created. Known old default templates are upgraded, but
+    customized workspace files are never overwritten.
+    """
     from importlib.resources import files as pkg_files
 
     try:
@@ -500,13 +728,25 @@ def sync_workspace_templates(workspace: Path, silent: bool = False) -> list[str]
         return []
 
     added: list[str] = []
+    updated: list[str] = []
 
     def _write(src, dest: Path):
+        rel_path = str(dest.relative_to(workspace)).replace("\\", "/")
         if dest.exists():
+            if src is not None:
+                try:
+                    current = dest.read_text(encoding="utf-8")
+                except OSError:
+                    return
+                if _is_legacy_default_template(rel_path, current):
+                    new_content = src.read_text(encoding="utf-8")
+                    if _normalize_template_text(current) != _normalize_template_text(new_content):
+                        dest.write_text(new_content, encoding="utf-8")
+                        updated.append(rel_path)
             return
         dest.parent.mkdir(parents=True, exist_ok=True)
         dest.write_text(src.read_text(encoding="utf-8") if src else "", encoding="utf-8")
-        added.append(str(dest.relative_to(workspace)))
+        added.append(rel_path)
 
     for item in tpl.iterdir():
         if item.name.endswith(".md") and not item.name.startswith("."):
@@ -515,11 +755,14 @@ def sync_workspace_templates(workspace: Path, silent: bool = False) -> list[str]
     _write(None, workspace / "memory" / "history.jsonl")
     (workspace / "skills").mkdir(exist_ok=True)
 
-    if added and not silent:
+    if (added or updated) and not silent:
         from rich.console import Console
 
+        console = Console()
         for name in added:
-            Console().print(f"  [dim]Created {name}[/dim]")
+            console.print(f"  [dim]Created {name}[/dim]")
+        for name in updated:
+            console.print(f"  [dim]Updated default template {name}[/dim]")
 
     # Initialize git for memory version control
     try:

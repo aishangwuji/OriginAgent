@@ -7,7 +7,7 @@ from OpenHome.config.schema import AgentDefaults, Config
 
 
 def test_bot_name_and_icon_defaults_preserve_current_branding() -> None:
-    """Default values keep the OpenHome smart-home identity."""
+    """Default values keep the OpenHome branding."""
     defaults = AgentDefaults()
 
     assert defaults.bot_name == "OpenHome"

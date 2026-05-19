@@ -1,49 +1,53 @@
-# Home Profile
+# User Profile
 
-Edit this file to teach OpenHome about the household.
+Edit this file to teach OpenHome about the user, workspace, and durable
+preferences.
 
-## Household
+## User
 
-- Home name:
-- Primary users:
+- Name or preferred address:
 - Preferred language:
 - Timezone:
+- Communication style:
+- Detail level:
 
-## Rooms
+## Workspace
 
-- Living room:
-- Bedrooms:
-- Kitchen:
-- Bathroom:
-- Study / office:
-- Balcony / outdoor:
+- Primary projects:
+- Common directories:
+- Common tools:
+- Preferred workflows:
 
-## Devices
+## Environment
 
-- Home Assistant URL:
-- Lighting:
-- Switches / plugs:
-- Climate:
-- Sensors:
-- Media devices:
-- Security devices:
+- Operating systems:
+- Package managers:
+- Runtime versions:
+- External services:
 
 ## Preferences
 
-- Preferred temperature:
-- Quiet hours:
 - Notification style:
-- Energy-saving preferences:
-- Rooms or devices that should not be controlled automatically:
+- Planning style:
+- Coding style:
+- Research style:
+- Quiet hours:
 
-## Safety Notes
+## Boundaries
 
 - Require confirmation before:
 - Never control:
-- People, pets, or conditions to consider:
+- Sensitive files, accounts, or systems:
+- People, teams, or conditions to consider:
+
+## Domain Notes
+
+- Active domain packs:
+- Domain-specific preferences:
+- Domain-specific safety rules:
 
 ## Useful Phrases
 
-- "Turn on the living room lights" means:
-- "Good night" means:
-- "I'm leaving" means:
+- "Use my usual workflow" means:
+- "Keep it brief" means:
+- "Handle this later" means:

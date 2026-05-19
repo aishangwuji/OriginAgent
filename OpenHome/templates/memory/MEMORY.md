@@ -1,20 +1,21 @@
 # Long-term Memory
 
-This file stores durable household context that should persist across sessions.
+This file stores durable user and workspace context that should persist across
+sessions. It is automatically updated by OpenHome from verified memory facts.
 
-## Household Facts
-
-- 
-
-## Device Map
+## User Preferences
 
 - 
 
-## Room Preferences
+## Workspace Facts
 
 - 
 
-## Routines and Scenes
+## Project Context
+
+- 
+
+## Routines and Workflows
 
 - 
 
@@ -26,11 +27,11 @@ This file stores durable household context that should persist across sessions.
 
 - 
 
-## Maintenance Notes
+## Temporary Notes
 
 - 
 
 ---
 
-OpenHome may update this file when it learns important long-term household
-facts, preferences, or safety boundaries.
+OpenHome may update this file when it learns important long-term preferences,
+project facts, workflows, environment details, or safety boundaries.

@@ -11,8 +11,8 @@ Required top-level shape:
 
 Each facts_to_upsert item must include:
 - content: one clear, human-readable fact
-- category: preference, routine, household, device, policy, safety, temporary, or note
-- scope: a dotted scope such as user, home.living_room.lighting, or household.member.name
+- category: preference, routine, policy, safety, temporary, note, household, or device
+- scope: a dotted scope such as user.communication.style, project.openhome.priority, workspace.tooling.python, or a domain-pack-defined prefix
 - owner: user, assistant, system, household, or unknown
 - source_cursors: one or more cursor numbers from the provided Conversation History
 - source_excerpt: a short supporting excerpt from those cursor(s)

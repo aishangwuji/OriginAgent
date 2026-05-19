@@ -2,14 +2,14 @@
 
 This file is checked periodically by OpenHome.
 
-Use it for background household checks such as "tell me if the front door stays
-open for too long" or "watch for unusually high temperature in the study".
+Use it for recurring background checks such as project status, external events,
+reminders, system health, inbox triage, or domain-pack tasks.
 
 If this file has no active tasks, OpenHome will skip the heartbeat.
 
 ## Active Tasks
 
-<!-- Add periodic household checks below this line. -->
+<!-- Add periodic checks below this line. -->
 
 
 ## Completed

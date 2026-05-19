@@ -24,7 +24,7 @@ from OpenHome.cli.onboard import (
     run_onboard,
 )
 from OpenHome.config.schema import Config
-from OpenHome.utils.helpers import sync_workspace_templates
+from OpenHome.utils.helpers import _LEGACY_DEFAULT_TEMPLATES, sync_workspace_templates
 
 
 class TestMergeMissingDefaults:
@@ -345,6 +345,59 @@ class TestSyncWorkspaceTemplates:
         # Existing file should not be changed
         content = (workspace / "AGENTS.md").read_text()
         assert content == "existing content"
+
+    def test_updates_known_legacy_default_templates(self, tmp_path):
+        """Known old default templates should be safely upgraded."""
+        workspace = tmp_path / "workspace"
+        workspace.mkdir(parents=True)
+        for rel_path, legacy_content in _LEGACY_DEFAULT_TEMPLATES.items():
+            target = workspace / rel_path
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(legacy_content, encoding="utf-8")
+
+        added = sync_workspace_templates(workspace, silent=True)
+
+        assert isinstance(added, list)
+        assert "local AI assistant and agent runtime" in " ".join(
+            (workspace / "AGENTS.md").read_text(encoding="utf-8").split()
+        )
+        assert "local AI assistant for the user's workspace" in (
+            workspace / "SOUL.md"
+        ).read_text(encoding="utf-8")
+        assert "Domain and Real-world Tools" in (
+            workspace / "TOOLS.md"
+        ).read_text(encoding="utf-8")
+        assert "User Profile" in (workspace / "USER.md").read_text(encoding="utf-8")
+        assert "recurring background checks" in (
+            workspace / "HEARTBEAT.md"
+        ).read_text(encoding="utf-8")
+        assert "durable user and workspace context" in (
+            workspace / "memory" / "MEMORY.md"
+        ).read_text(encoding="utf-8")
+
+    def test_does_not_update_modified_legacy_template(self, tmp_path):
+        """A customized old template should not be mistaken for a default."""
+        workspace = tmp_path / "workspace"
+        workspace.mkdir(parents=True)
+        customized = (
+            _LEGACY_DEFAULT_TEMPLATES["SOUL.md"] + "\nUser note: keep this.\n"
+        )
+        (workspace / "SOUL.md").write_text(customized, encoding="utf-8")
+
+        sync_workspace_templates(workspace, silent=True)
+
+        assert (workspace / "SOUL.md").read_text(encoding="utf-8") == customized
+
+    def test_does_not_update_legacy_template_with_extra_whitespace(self, tmp_path):
+        """Even tiny user edits should prevent automatic template upgrade."""
+        workspace = tmp_path / "workspace"
+        workspace.mkdir(parents=True)
+        customized = _LEGACY_DEFAULT_TEMPLATES["SOUL.md"] + "\n"
+        (workspace / "SOUL.md").write_text(customized, encoding="utf-8")
+
+        sync_workspace_templates(workspace, silent=True)
+
+        assert (workspace / "SOUL.md").read_text(encoding="utf-8") == customized
 
     def test_creates_memory_directory(self, tmp_path):
         """Should create memory directory structure."""

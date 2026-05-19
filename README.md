@@ -19,7 +19,7 @@
   </p>
 </div>
 
-**OpenHome** is a local AI home assistant built on the lightweight nanobot agent runtime. It is designed to run near your household data, connect to chat channels and MCP tools, and help coordinate smart-home devices, routines, reminders, and household memory without turning the core agent loop into a heavy platform.
+**OpenHome** is a local AI assistant and agent core built on the lightweight nanobot agent runtime. It is designed to run near your private data, connect to chat channels, MCP tools, skills, and domain capabilities, and help coordinate work across conversations without turning the core agent loop into a heavy platform. Smart-home automation remains an important domain capability, but it is no longer the default identity of the core assistant.
 
 ## 📢 News
 

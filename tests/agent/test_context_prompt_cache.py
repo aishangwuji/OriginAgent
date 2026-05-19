@@ -53,6 +53,41 @@ def test_bootstrap_files_are_backed_by_templates() -> None:
         assert (template_dir / filename).is_file(), f"missing bootstrap template: {filename}"
 
 
+def test_default_templates_are_not_smart_home_centered() -> None:
+    template_dir = pkg_files("OpenHome") / "templates"
+    texts = [
+        (template_dir / "AGENTS.md").read_text(encoding="utf-8"),
+        (template_dir / "SOUL.md").read_text(encoding="utf-8"),
+        (template_dir / "TOOLS.md").read_text(encoding="utf-8"),
+        (template_dir / "USER.md").read_text(encoding="utf-8"),
+        (template_dir / "HEARTBEAT.md").read_text(encoding="utf-8"),
+        (template_dir / "memory" / "MEMORY.md").read_text(encoding="utf-8"),
+    ]
+    combined = "\n".join(texts)
+    collapsed = " ".join(combined.split())
+
+    for legacy_phrase in (
+        "local AI home assistant",
+        "Be useful in the home first",
+        "Home Profile",
+        "Home System Tools",
+        "durable household context",
+        "background household checks",
+        "household context",
+        '"turn it off"',
+        '"good night"',
+        '"too hot"',
+    ):
+        assert legacy_phrase not in collapsed
+
+    assert "local AI assistant and agent runtime" in collapsed
+    assert "local AI assistant for the user's workspace" in collapsed
+    assert "Domain and Real-world Tools" in collapsed
+    assert "User Profile" in collapsed
+    assert "durable user and workspace context" in collapsed
+    assert "recurring background checks" in collapsed
+
+
 def test_system_prompt_stays_stable_when_clock_changes(tmp_path, monkeypatch) -> None:
     """System prompt should not change just because wall clock minute changes."""
     monkeypatch.setattr(datetime_module, "datetime", _FakeDatetime)
@@ -290,7 +325,8 @@ def test_execution_rules_in_system_prompt(tmp_path) -> None:
     prompt = builder.build_system_prompt()
     assert "Act immediately on simple, low-risk requests" in prompt
     assert "For multi-step tasks, summarize the plan" in prompt
-    assert "Before controlling devices" in prompt
+    assert "For real-world or externally visible actions" in prompt
+    assert "When device or smart-home tools are configured" in prompt
     assert "After an action, report the result" in prompt
 
 
@@ -322,6 +358,20 @@ def test_default_soul_template_contains_execution_rules() -> None:
     assert "## Execution Rules" in soul
     assert "Act immediately on simple, low-risk requests" in soul
     assert "For multi-step tasks, summarize the plan" in soul
+    assert "Be generally useful first" in soul
+
+
+def test_dream_phase1_prompt_uses_generic_scope_examples() -> None:
+    dream = (
+        pkg_files("OpenHome") / "templates" / "agent" / "dream_phase1.md"
+    ).read_text(encoding="utf-8")
+
+    assert "user.communication.style" in dream
+    assert "project.openhome.priority" in dream
+    assert "workspace.tooling.python" in dream
+    assert "domain-pack-defined prefix" in dream
+    assert "home.living_room.lighting" not in dream
+    assert "household.member.name" not in dream
 
 
 def test_channel_format_hint_telegram(tmp_path) -> None:
