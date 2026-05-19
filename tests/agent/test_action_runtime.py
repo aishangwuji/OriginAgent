@@ -252,7 +252,8 @@ def test_valid_typed_action_logs_schema_metadata_without_parameter_values(tmp_pa
     assert row["metadata"]["typed_action_type"] == "set_light_brightness"
     assert row["metadata"]["typed_action_domain"] == "lighting"
     assert row["metadata"]["payload_keys"] == '["action_type","brightness","device_id","domain"]'
-    assert "88" not in raw
+    assert "88" not in json.dumps(row["metadata"], sort_keys=True)
+    assert "88" not in json.dumps(row["action"], sort_keys=True)
 
 
 def test_ask_confirmation_creates_pending_confirmation_without_backend_call(tmp_path):

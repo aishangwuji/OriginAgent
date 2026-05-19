@@ -8,7 +8,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 from OpenHome.agent.memory import Dream, MemoryStore
 from OpenHome.agent.runner import AgentRunResult
-from OpenHome.agent.skills import BUILTIN_SKILLS_DIR
 from OpenHome.utils.gitstore import LineAge
 
 
@@ -106,8 +105,10 @@ class TestDreamRun:
         entries = store.read_unprocessed_history(since_cursor=0)
         assert all(e["cursor"] > 0 for e in entries)
 
-    async def test_skill_phase_uses_builtin_skill_creator_path(self, dream, mock_provider, mock_runner, store):
-        """Dream should point skill creation guidance at the builtin skill-creator template."""
+    async def test_skill_phase_defers_to_background_review_proposals(
+        self, dream, mock_provider, mock_runner, store
+    ):
+        """Dream should leave reusable skill knowledge to the controlled proposal flow."""
         store.append_history("Repeated workflow one")
         store.append_history("Repeated workflow two")
         mock_provider.chat_with_retry.return_value = MagicMock(content=EMPTY_FACT_PROPOSALS)
@@ -117,8 +118,8 @@ class TestDreamRun:
 
         spec = mock_runner.run.call_args[0][0]
         system_prompt = spec.initial_messages[0]["content"]
-        expected = str(BUILTIN_SKILLS_DIR / "skill-creator" / "SKILL.md")
-        assert expected in system_prompt
+        assert "controlled background review proposal flow" in system_prompt
+        assert "skill-creator" not in system_prompt
 
     async def test_skill_write_tool_accepts_workspace_relative_skill_path(self, dream, store):
         """Dream skill creation should allow skills/<name>/SKILL.md relative to workspace root."""

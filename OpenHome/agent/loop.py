@@ -15,10 +15,24 @@ from typing import TYPE_CHECKING, Any, Awaitable, Callable
 from loguru import logger
 
 from OpenHome.agent import model_presets as preset_helpers
+from OpenHome.agent.agent_runtime_context import (
+    build_bus_progress_callback,
+    build_retry_wait_callback,
+    runtime_chat_id,
+    set_tool_context as set_tools_runtime_context,
+    snapshot_for_trigger,
+)
+from OpenHome.agent.agent_tool_setup import (
+    build_tool_context,
+    register_default_tools,
+    register_domain_tools,
+    register_plugin_tools,
+    should_register_exec,
+)
+from OpenHome.agent.agent_turn_persist import TurnPersistManager
 from OpenHome.agent.autocompact import AutoCompact
 from OpenHome.agent.auxiliary_llm import AuxiliaryLLMRouter
 from OpenHome.agent.background_review import BackgroundReviewService
-from OpenHome.agent.confirmation import PendingConfirmationStore
 from OpenHome.agent.context import ContextBuilder
 from OpenHome.agent.device_factory import build_device_action_executor
 from OpenHome.agent.domain_packs import DomainPackManager
@@ -27,38 +41,18 @@ from OpenHome.agent.identity import ActorResolver, RuntimeContext
 from OpenHome.agent.memory import Consolidator, Dream
 from OpenHome.agent.progress_hook import AgentProgressHook
 from OpenHome.agent.runner import _MAX_INJECTIONS_PER_TURN, AgentRunner, AgentRunSpec
-from OpenHome.agent.skills import BUILTIN_SKILLS_DIR
 from OpenHome.agent.subagent import SubagentManager
 from OpenHome.agent.tools.ask import (
-    AskUserTool,
     ask_user_options_from_messages,
     ask_user_outbound,
     ask_user_tool_result_messages,
     pending_ask_user_id,
 )
 from OpenHome.agent.tools.audit import JsonlToolAuditSink, ToolAuditConfig
-from OpenHome.agent.tools.content_read import ContentReadTool
-from OpenHome.agent.tools.cron import CronTool
-from OpenHome.agent.tools.device import lighting_tools
 from OpenHome.agent.tools.file_state import FileStateStore, bind_file_states, reset_file_states
-from OpenHome.agent.tools.filesystem import EditFileTool, ListDirTool, ReadFileTool, WriteFileTool
-from OpenHome.agent.tools.image_generation import ImageGenerationTool
-from OpenHome.agent.tools.long_task import CompleteGoalTool, LongTaskTool
 from OpenHome.agent.tools.message import MessageTool
-from OpenHome.agent.tools.notebook import NotebookEditTool
 from OpenHome.agent.tools.registry import ToolRegistry
-from OpenHome.agent.tools.runtime_status import (
-    ConfirmationSummaryTool,
-    CronSummaryTool,
-    RuntimeStatusTool,
-    ToolAuditSummaryTool,
-)
-from OpenHome.agent.tools.search import GlobTool, GrepTool
 from OpenHome.agent.tools.self import MyTool
-from OpenHome.agent.tools.session_search import SessionSearchTool
-from OpenHome.agent.tools.shell import ExecTool
-from OpenHome.agent.tools.spawn import SpawnTool
-from OpenHome.agent.tools.web import WebFetchTool, WebSearchTool
 from OpenHome.bus.events import InboundMessage, OutboundMessage
 from OpenHome.bus.queue import MessageBus
 from OpenHome.command import CommandContext, CommandRouter, register_builtin_commands
@@ -71,8 +65,6 @@ from OpenHome.session.goal_state import goal_state_ws_blob, runner_wall_llm_time
 from OpenHome.session.manager import Session, SessionManager
 from OpenHome.utils.artifacts import generated_image_paths_from_messages
 from OpenHome.utils.document import extract_documents
-from OpenHome.utils.helpers import image_placeholder_text
-from OpenHome.utils.helpers import truncate_text as truncate_text_fn
 from OpenHome.utils.image_generation_intent import image_generation_prompt
 from OpenHome.utils.runtime import EMPTY_FINAL_RESPONSE_MESSAGE
 from OpenHome.utils.session_attachments import merge_turn_media_into_last_assistant
@@ -126,7 +118,7 @@ def _is_sensitive_tool_log(name: str) -> bool:
 
 
 def _should_register_exec(config: Any) -> bool:
-    return bool(config.enable) and getattr(config, "profile", "secure") != "disabled"
+    return should_register_exec(config)
 
 
 @dataclass
@@ -333,6 +325,7 @@ class AgentLoop:
             domain_pack_manager=self.domain_packs,
         )
         self.sessions = session_manager or SessionManager(workspace)
+        self._persist = TurnPersistManager(self.max_tool_result_chars, self.sessions)
         self._tool_audit_config = ToolAuditConfig.from_config(tool_audit_config or _tc.audit)
         self.tools = ToolRegistry(
             audit_sink=JsonlToolAuditSink(workspace),
@@ -568,132 +561,34 @@ class AgentLoop:
 
     def _register_default_tools(self) -> None:
         """Register the default set of tools."""
-        allowed_dir = (
-            self.workspace if (self.restrict_to_workspace or self.exec_config.sandbox) else None
+        register_default_tools(
+            self.tools,
+            workspace=self.workspace,
+            bus=self.bus,
+            config=self.tools_config,
+            web_config=self.web_config,
+            exec_config=self.exec_config,
+            restrict_to_workspace=self.restrict_to_workspace,
+            sessions=self.sessions,
+            pending_queues=self._pending_queues,
+            cron_service=self.cron_service,
+            audit_config=self._tool_audit_config,
+            domain_pack_manager=self.domain_packs,
+            background_review_service=self.background_review,
+            subagent_manager=self.subagents,
+            file_state_store=self._file_state_store,
+            provider_snapshot_loader=self._provider_snapshot_loader,
+            image_generation_provider_configs=self._image_generation_provider_configs,
+            timezone=self.context.timezone or "UTC",
+            device_action_executor=self.device_action_executor,
+            device_tools_real_mode=self._device_tools_real_mode,
+            device_registry=self._device_registry,
         )
-        extra_read = [BUILTIN_SKILLS_DIR] if allowed_dir else None
-        confirmation_store = PendingConfirmationStore(self.workspace)
-        self.tools.register(AskUserTool())
-        self.tools.register(
-            RuntimeStatusTool(
-                workspace=self.workspace,
-                registry=self.tools,
-                sessions=self.sessions,
-                pending_queues=self._pending_queues,
-                cron_service=self.cron_service,
-                audit_mode=self._tool_audit_config.mode,
-                confirmation_store=confirmation_store,
-                domain_pack_manager=self.domain_packs,
-                background_review_service=self.background_review,
-            )
-        )
-        self.tools.register(
-            ToolAuditSummaryTool(
-                workspace=self.workspace,
-                audit_mode=self._tool_audit_config.mode,
-            )
-        )
-        self.tools.register(CronSummaryTool(cron_service=self.cron_service))
-        self.tools.register(
-            ConfirmationSummaryTool(
-                workspace=self.workspace,
-                confirmation_store=confirmation_store,
-            )
-        )
-        self.tools.register(LongTaskTool(sessions=self.sessions, bus=self.bus))
-        self.tools.register(CompleteGoalTool(sessions=self.sessions, bus=self.bus))
-        self.tools.register(
-            ReadFileTool(
-                workspace=self.workspace,
-                allowed_dir=allowed_dir,
-                extra_allowed_dirs=extra_read,
-            )
-        )
-        for cls in (WriteFileTool, EditFileTool, ListDirTool):
-            self.tools.register(cls(workspace=self.workspace, allowed_dir=allowed_dir))
-        for cls in (GlobTool, GrepTool):
-            self.tools.register(cls(workspace=self.workspace, allowed_dir=allowed_dir))
-        self.tools.register(SessionSearchTool(workspace=self.workspace))
-        self.tools.register(NotebookEditTool(workspace=self.workspace, allowed_dir=allowed_dir))
-        if _should_register_exec(self.exec_config):
-            self.tools.register(
-                ExecTool(
-                    working_dir=str(self.workspace),
-                    timeout=self.exec_config.timeout,
-                    restrict_to_workspace=self.restrict_to_workspace,
-                    sandbox=self.exec_config.sandbox,
-                    path_append=self.exec_config.path_append,
-                    allowed_env_keys=self.exec_config.allowed_env_keys,
-                    allow_patterns=self.exec_config.allow_patterns,
-                    deny_patterns=self.exec_config.deny_patterns,
-                    security_profile=self.exec_config.profile,
-                    allow_unsafe_exec=self.exec_config.allow_unsafe_exec,
-                )
-            )
-        if self.web_config.enable:
-            web_search_config_loader = None
-            if self._provider_snapshot_loader is not None:
-                def web_search_config_loader():
-                    from OpenHome.config.loader import load_config, resolve_config_env_vars
-
-                    return resolve_config_env_vars(load_config()).tools.web.search
-
-            self.tools.register(
-                WebSearchTool(
-                    config=self.web_config.search,
-                    proxy=self.web_config.proxy,
-                    user_agent=self.web_config.user_agent,
-                    config_loader=web_search_config_loader,
-                )
-            )
-            self.tools.register(
-                WebFetchTool(
-                    config=self.web_config.fetch,
-                    proxy=self.web_config.proxy,
-                    user_agent=self.web_config.user_agent,
-                    content_read_config=self.tools_config.content_read,
-                )
-            )
-        if self.tools_config.content_read.enabled:
-            self.tools.register(
-                ContentReadTool(
-                    config=self.tools_config.content_read,
-                    proxy=self.web_config.proxy,
-                    user_agent=self.web_config.user_agent,
-                )
-            )
-        if self.tools_config.image_generation.enabled:
-            self.tools.register(
-                ImageGenerationTool(
-                    workspace=self.workspace,
-                    config=self.tools_config.image_generation,
-                    provider_configs=self._image_generation_provider_configs,
-                )
-            )
-        self.tools.register(MessageTool(send_callback=self.bus.publish_outbound, workspace=self.workspace))
-        self.tools.register(SpawnTool(manager=self.subagents))
-        if self.cron_service:
-            self.tools.register(
-                CronTool(self.cron_service, default_timezone=self.context.timezone or "UTC")
-            )
-        if self.device_action_executor is not None:
-            if self._device_tools_real_mode and self._device_registry is None:
-                logger.warning("Device tools real mode requires a device registry; not registering tools")
-                return
-            for tool in lighting_tools(
-                self.device_action_executor,
-                device_registry=self._device_registry,
-                real_mode=self._device_tools_real_mode,
-            ):
-                self.tools.register(tool)
-        self._register_domain_tools()
-        self._register_plugin_tools()
 
     def _build_tool_context(self):
-        from OpenHome.agent.tools.context import ToolContext
-        return ToolContext(
+        return build_tool_context(
             config=self.tools_config,
-            workspace=str(self.workspace),
+            workspace=self.workspace,
             bus=self.bus,
             subagent_manager=self.subagents,
             cron_service=self.cron_service,
@@ -709,19 +604,15 @@ class AgentLoop:
 
     def _register_domain_tools(self) -> None:
         """Load tools declared by active domain packs without replacing core tools."""
-        from OpenHome.agent.tools.domain_loader import DomainToolLoader
-
-        registered = DomainToolLoader(self.domain_packs).load(self._build_tool_context(), self.tools)
-        if registered:
-            logger.info("Registered domain tool(s): {}", ", ".join(sorted(registered)))
+        register_domain_tools(
+            self.tools,
+            domain_pack_manager=self.domain_packs,
+            context=self._build_tool_context(),
+        )
 
     def _register_plugin_tools(self) -> None:
         """Load external OpenHome tool plugins without replacing core tools."""
-        from OpenHome.agent.tools.loader import ToolLoader
-
-        registered = ToolLoader().load(self._build_tool_context(), self.tools, scope="core")
-        if registered:
-            logger.info("Registered OpenHome tool plugin(s): {}", ", ".join(sorted(registered)))
+        register_plugin_tools(self.tools, context=self._build_tool_context())
 
     async def _connect_mcp(self) -> None:
         """Connect to configured MCP servers (one-time, lazy)."""
@@ -761,82 +652,21 @@ class AgentLoop:
         runtime_context: RuntimeContext | None = None,
     ) -> None:
         """Update context for all tools that need routing info."""
-        from OpenHome.agent.tools.context import RequestContext
-
-        if runtime_context is not None:
-            channel = runtime_context.channel
-            chat_id = runtime_context.chat_id
-            session_key = runtime_context.session_key
-            actor_id = runtime_context.actor_id
-            trigger = runtime_context.trigger
-        # When the caller threads a thread-scoped session_key (e.g. slack with
-        # reply_in_thread: true), honor it so spawn announces route back to
-        # the originating thread session. Falls back to unified mode or
-        # channel:chat_id for callers that don't have a thread-scoped key.
-        if session_key is not None:
-            effective_key = session_key
-        elif self._unified_session:
-            effective_key = UNIFIED_SESSION_KEY
-        else:
-            effective_key = f"{channel}:{chat_id}"
-        raw_tools = getattr(self.tools, "_tools", None)
-        if isinstance(raw_tools, dict):
-            context_tool_names = [
-                name
-                for name, tool in raw_tools.items()
-                if hasattr(tool, "set_context") or hasattr(tool, "set_capability_snapshot")
-            ]
-        else:
-            candidates = list(getattr(self.tools, "tool_names", ()) or ())
-            if not candidates:
-                candidates = ["spawn", "cron", "long_task", "complete_goal", "message", "my"]
-            context_tool_names = []
-            for name in dict.fromkeys(candidates):
-                tool = self.tools.get(name)
-                if tool is not None and (
-                    hasattr(tool, "set_context") or hasattr(tool, "set_capability_snapshot")
-                ):
-                    context_tool_names.append(name)
         snapshot = capability_snapshot or self._capability_snapshot
-        request_ctx = RequestContext(
+        set_tools_runtime_context(
+            self.tools,
             channel=channel,
             chat_id=chat_id,
             message_id=message_id,
-            session_key=effective_key,
-            metadata=metadata or {},
+            metadata=metadata,
+            session_key=session_key,
             actor_id=actor_id,
             trigger=trigger,
             capability_snapshot=snapshot,
+            runtime_context=runtime_context,
+            unified_session=self._unified_session,
+            unified_session_key=UNIFIED_SESSION_KEY,
         )
-        if hasattr(self.tools, "set_capability_snapshot"):
-            self.tools.set_capability_snapshot(snapshot)
-        if hasattr(self.tools, "set_audit_context"):
-            self.tools.set_audit_context(actor_id=actor_id, session_key=effective_key)
-        for name in context_tool_names:
-            if tool := self.tools.get(name):
-                if hasattr(tool, "set_capability_snapshot"):
-                    tool.set_capability_snapshot(snapshot)
-                if hasattr(tool, "set_context"):
-                    if name.startswith("openhome_device_lighting_"):
-                        if actor_id is not None and trigger is not None:
-                            tool.set_context(actor_id, trigger)
-                    elif name == "spawn":
-                        tool.set_context(channel, chat_id, effective_key=effective_key)
-                        if hasattr(tool, "set_origin_message_id"):
-                            tool.set_origin_message_id(message_id)
-                    elif name == "cron":
-                        tool.set_context(channel, chat_id, metadata=metadata, session_key=session_key)
-                    elif name in {"long_task", "complete_goal"}:
-                        tool.set_context(channel, chat_id, session_key=effective_key)
-                    elif name == "message":
-                        tool.set_context(channel, chat_id, message_id, metadata=metadata)
-                    elif name == "my":
-                        tool.set_context(channel, chat_id)
-                    else:
-                        try:
-                            tool.set_context(request_ctx)
-                        except TypeError:
-                            tool.set_context(channel, chat_id)
 
     @staticmethod
     def _strip_think(text: str | None) -> str | None:
@@ -850,17 +680,11 @@ class AgentLoop:
     @staticmethod
     def _runtime_chat_id(msg: InboundMessage) -> str:
         """Return the chat id shown in runtime metadata for the model."""
-        return str(msg.metadata.get("context_chat_id") or msg.chat_id)
+        return runtime_chat_id(msg)
 
     @staticmethod
     def _snapshot_for_trigger(trigger: str | None) -> CapabilitySnapshot:
-        if trigger == "scheduled":
-            return CapabilitySnapshot.scheduled_default()
-        if trigger == "subagent":
-            return CapabilitySnapshot.system_default().derive_subagent()
-        if trigger == "system":
-            return CapabilitySnapshot.system_default()
-        return CapabilitySnapshot.user_turn()
+        return snapshot_for_trigger(trigger)
 
     def _resolve_runtime_context(
         self,
@@ -890,53 +714,25 @@ class AgentLoop:
         self, msg: InboundMessage
     ) -> Callable[..., Awaitable[None]]:
         """Build a progress callback that publishes to the message bus."""
-
-        async def _bus_progress(
-            content: str,
-            *,
-            tool_hint: bool = False,
-            tool_events: list[dict[str, Any]] | None = None,
-            reasoning: bool = False,
-            reasoning_end: bool = False,
-        ) -> None:
-            meta = dict(msg.metadata or {})
-            meta["_progress"] = True
-            meta["_tool_hint"] = tool_hint
-            if reasoning:
-                meta["_reasoning_delta"] = True
-            if reasoning_end:
-                meta["_reasoning_end"] = True
-            if tool_events:
-                meta["_tool_events"] = tool_events
-            await self.bus.publish_outbound(
-                OutboundMessage(
-                    channel=msg.channel,
-                    chat_id=msg.chat_id,
-                    content=content,
-                    metadata=meta,
-                )
-            )
-
-        return _bus_progress
+        return await build_bus_progress_callback(self.bus, msg)
 
     async def _build_retry_wait_callback(
         self, msg: InboundMessage
     ) -> Callable[[str], Awaitable[None]]:
         """Build a retry-wait callback that publishes to the message bus."""
+        return await build_retry_wait_callback(self.bus, msg)
 
-        async def _on_retry_wait(content: str) -> None:
-            meta = dict(msg.metadata or {})
-            meta["_retry_wait"] = True
-            await self.bus.publish_outbound(
-                OutboundMessage(
-                    channel=msg.channel,
-                    chat_id=msg.chat_id,
-                    content=content,
-                    metadata=meta,
-                )
-            )
-
-        return _on_retry_wait
+    def _turn_persist_manager(self) -> TurnPersistManager:
+        manager = getattr(self, "_persist", None)
+        if isinstance(manager, TurnPersistManager):
+            return manager
+        max_chars = getattr(self, "max_tool_result_chars", AgentDefaults().max_tool_result_chars)
+        manager = TurnPersistManager(max_chars, getattr(self, "sessions", None))
+        try:
+            self._persist = manager
+        except Exception:
+            pass
+        return manager
 
     def _persist_user_message_early(
         self,
@@ -949,17 +745,12 @@ class AgentLoop:
 
         Returns True if the message was persisted.
         """
-        media_paths = [p for p in (msg.media or []) if isinstance(p, str) and p]
-        has_text = isinstance(msg.content, str) and msg.content.strip()
-        if not pending_ask_id and (has_text or media_paths):
-            extra: dict[str, Any] = {"media": list(media_paths)} if media_paths else {}
-            extra.update(kwargs)
-            text = msg.content if isinstance(msg.content, str) else ""
-            session.add_message("user", text, **extra)
-            self._mark_pending_user_turn(session)
-            self.sessions.save(session)
-            return True
-        return False
+        return AgentLoop._turn_persist_manager(self).persist_user_message_early(
+            msg,
+            session,
+            pending_ask_id,
+            **kwargs,
+        )
 
     def _build_initial_messages(
         self,
@@ -1066,7 +857,8 @@ class AgentLoop:
         result = await dispatch_fn(ctx)
         if result:
             self._persist_shortcut_command_turn(msg, key, result)
-            result.metadata["_webui_transcript_recorded"] = True
+            if self._is_webui_message(msg):
+                result.metadata["_webui_transcript_recorded"] = True
             await self.bus.publish_outbound(result)
             if msg.channel == "websocket":
                 await self.bus.publish_outbound(
@@ -1830,7 +1622,8 @@ class AgentLoop:
             # turn_end/session updates.  Keep these rows out of future LLM
             # context with the _command marker.
             self._persist_shortcut_command_turn(ctx.msg, ctx.session_key, result)
-            result.metadata["_webui_transcript_recorded"] = True
+            if self._is_webui_message(ctx.msg):
+                result.metadata["_webui_transcript_recorded"] = True
             return "shortcut"
         return "dispatch"
 
@@ -1999,88 +1792,15 @@ class AgentLoop:
         drop_runtime: bool = False,
     ) -> list[dict[str, Any]]:
         """Strip volatile multimodal payloads before writing session history."""
-        filtered: list[dict[str, Any]] = []
-        for block in content:
-            if not isinstance(block, dict):
-                filtered.append(block)
-                continue
-
-            if (
-                drop_runtime
-                and block.get("type") == "text"
-            ):
-                meta_kind = (block.get("_meta") or {}).get("kind")
-                text = block.get("text")
-                if meta_kind in {
-                    ContextBuilder.RUNTIME_CONTEXT_KIND,
-                    ContextBuilder.REFERENCE_CONTEXT_KIND,
-                }:
-                    continue
-                if isinstance(text, str) and text.startswith(ContextBuilder._RUNTIME_CONTEXT_TAG):
-                    continue
-
-            if block.get("type") == "image_url" and block.get("image_url", {}).get(
-                "url", ""
-            ).startswith("data:image/"):
-                path = (block.get("_meta") or {}).get("path", "")
-                filtered.append({"type": "text", "text": image_placeholder_text(path)})
-                continue
-
-            if block.get("type") == "text" and isinstance(block.get("text"), str):
-                text = block["text"]
-                if should_truncate_text and len(text) > self.max_tool_result_chars:
-                    text = truncate_text_fn(text, self.max_tool_result_chars)
-                filtered.append({**block, "text": text})
-                continue
-
-            filtered.append(block)
-
-        return filtered
+        return AgentLoop._turn_persist_manager(self).sanitize_persisted_blocks(
+            content,
+            should_truncate_text=should_truncate_text,
+            drop_runtime=drop_runtime,
+        )
 
     def _save_turn(self, session: Session, messages: list[dict], skip: int) -> None:
         """Save new-turn messages into session, truncating large tool results."""
-        from datetime import datetime
-
-        for m in messages[skip:]:
-            entry = dict(m)
-            role, content = entry.get("role"), entry.get("content")
-            if role == "assistant" and not content and not entry.get("tool_calls"):
-                continue  # skip empty assistant messages — they poison session context
-            if role == "tool":
-                if isinstance(content, str) and len(content) > self.max_tool_result_chars:
-                    entry["content"] = truncate_text_fn(content, self.max_tool_result_chars)
-                elif isinstance(content, list):
-                    filtered = self._sanitize_persisted_blocks(content, should_truncate_text=True)
-                    if not filtered:
-                        continue
-                    entry["content"] = filtered
-            elif role == "user":
-                if isinstance(content, str) and content.startswith(ContextBuilder._RUNTIME_CONTEXT_TAG):
-                    # Strip the entire runtime-context block (including any session summary).
-                    # The block is bounded by _RUNTIME_CONTEXT_TAG and _RUNTIME_CONTEXT_END.
-                    end_marker = ContextBuilder._RUNTIME_CONTEXT_END
-                    end_pos = content.find(end_marker)
-                    if end_pos >= 0:
-                        after = content[end_pos + len(end_marker):].lstrip("\n")
-                        if after:
-                            entry["content"] = after
-                        else:
-                            continue
-                    else:
-                        # Fallback: no end marker found, strip the tag prefix
-                        after_tag = content[len(ContextBuilder._RUNTIME_CONTEXT_TAG):].lstrip("\n")
-                        if after_tag.strip():
-                            entry["content"] = after_tag
-                        else:
-                            continue
-                if isinstance(content, list):
-                    filtered = self._sanitize_persisted_blocks(content, drop_runtime=True)
-                    if not filtered:
-                        continue
-                    entry["content"] = filtered
-            entry.setdefault("timestamp", datetime.now().isoformat())
-            session.messages.append(entry)
-        session.updated_at = datetime.now()
+        AgentLoop._turn_persist_manager(self).save_turn(session, messages, skip)
 
     def _persist_subagent_followup(self, session: Session, msg: InboundMessage) -> bool:
         """Persist subagent follow-ups before prompt assembly so history stays durable.
@@ -2089,123 +1809,32 @@ class AgentLoop:
         deduped (same ``subagent_task_id`` already in session) or carries no
         content worth persisting.
         """
-        if not msg.content:
-            return False
-        task_id = msg.metadata.get("subagent_task_id") if isinstance(msg.metadata, dict) else None
-        if task_id and any(
-            m.get("injected_event") == "subagent_result" and m.get("subagent_task_id") == task_id
-            for m in session.messages
-        ):
-            return False
-        session.add_message(
-            "assistant",
-            msg.content,
-            sender_id=msg.sender_id,
-            injected_event="subagent_result",
-            subagent_task_id=task_id,
-        )
-        return True
+        return AgentLoop._turn_persist_manager(self).persist_subagent_followup(session, msg)
 
     def _set_runtime_checkpoint(self, session: Session, payload: dict[str, Any]) -> None:
         """Persist the latest in-flight turn state into session metadata."""
-        session.metadata[self._RUNTIME_CHECKPOINT_KEY] = payload
-        self.sessions.save(session)
+        AgentLoop._turn_persist_manager(self).set_checkpoint(session, payload)
 
     def _mark_pending_user_turn(self, session: Session) -> None:
-        session.metadata[self._PENDING_USER_TURN_KEY] = True
+        AgentLoop._turn_persist_manager(self).mark_pending_user_turn(session)
 
     def _clear_pending_user_turn(self, session: Session) -> None:
-        session.metadata.pop(self._PENDING_USER_TURN_KEY, None)
+        AgentLoop._turn_persist_manager(self).clear_pending_user_turn(session)
 
     def _clear_runtime_checkpoint(self, session: Session) -> None:
-        if self._RUNTIME_CHECKPOINT_KEY in session.metadata:
-            session.metadata.pop(self._RUNTIME_CHECKPOINT_KEY, None)
+        AgentLoop._turn_persist_manager(self).clear_checkpoint(session)
 
     @staticmethod
     def _checkpoint_message_key(message: dict[str, Any]) -> tuple[Any, ...]:
-        return (
-            message.get("role"),
-            message.get("content"),
-            message.get("tool_call_id"),
-            message.get("name"),
-            message.get("tool_calls"),
-            message.get("reasoning_content"),
-            message.get("thinking_blocks"),
-        )
+        return TurnPersistManager.checkpoint_message_key(message)
 
     def _restore_runtime_checkpoint(self, session: Session) -> bool:
         """Materialize an unfinished turn into session history before a new request."""
-        from datetime import datetime
-
-        checkpoint = session.metadata.get(self._RUNTIME_CHECKPOINT_KEY)
-        if not isinstance(checkpoint, dict):
-            return False
-
-        assistant_message = checkpoint.get("assistant_message")
-        completed_tool_results = checkpoint.get("completed_tool_results") or []
-        pending_tool_calls = checkpoint.get("pending_tool_calls") or []
-
-        restored_messages: list[dict[str, Any]] = []
-        if isinstance(assistant_message, dict):
-            restored = dict(assistant_message)
-            restored.setdefault("timestamp", datetime.now().isoformat())
-            restored_messages.append(restored)
-        for message in completed_tool_results:
-            if isinstance(message, dict):
-                restored = dict(message)
-                restored.setdefault("timestamp", datetime.now().isoformat())
-                restored_messages.append(restored)
-        for tool_call in pending_tool_calls:
-            if not isinstance(tool_call, dict):
-                continue
-            tool_id = tool_call.get("id")
-            name = ((tool_call.get("function") or {}).get("name")) or "tool"
-            restored_messages.append(
-                {
-                    "role": "tool",
-                    "tool_call_id": tool_id,
-                    "name": name,
-                    "content": "Error: Task interrupted before this tool finished.",
-                    "timestamp": datetime.now().isoformat(),
-                }
-            )
-
-        overlap = 0
-        max_overlap = min(len(session.messages), len(restored_messages))
-        for size in range(max_overlap, 0, -1):
-            existing = session.messages[-size:]
-            restored = restored_messages[:size]
-            if all(
-                self._checkpoint_message_key(left) == self._checkpoint_message_key(right)
-                for left, right in zip(existing, restored)
-            ):
-                overlap = size
-                break
-        session.messages.extend(restored_messages[overlap:])
-
-        self._clear_pending_user_turn(session)
-        self._clear_runtime_checkpoint(session)
-        return True
+        return AgentLoop._turn_persist_manager(self).restore_checkpoint(session)
 
     def _restore_pending_user_turn(self, session: Session) -> bool:
         """Close a turn that only persisted the user message before crashing."""
-        from datetime import datetime
-
-        if not session.metadata.get(self._PENDING_USER_TURN_KEY):
-            return False
-
-        if session.messages and session.messages[-1].get("role") == "user":
-            session.messages.append(
-                {
-                    "role": "assistant",
-                    "content": "Error: Task interrupted before a response was generated.",
-                    "timestamp": datetime.now().isoformat(),
-                }
-            )
-            session.updated_at = datetime.now()
-
-        self._clear_pending_user_turn(session)
-        return True
+        return AgentLoop._turn_persist_manager(self).restore_pending_user_turn(session)
 
     async def process_direct(
         self,

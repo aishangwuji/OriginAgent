@@ -227,7 +227,9 @@ class SubagentManager:
 
         try:
             # Build subagent tools (no message tool, no spawn tool)
-            snapshot = capability_snapshot or CapabilitySnapshot.system_default().derive_subagent()
+            # Public spawn() passes an explicit snapshot; this fallback keeps
+            # direct internal callers read-only instead of tool-less.
+            snapshot = capability_snapshot or CapabilitySnapshot.user_turn().derive_subagent()
             tools = ToolRegistry(capability_snapshot=snapshot)
             allowed_dir = self.workspace if (self.restrict_to_workspace or self.exec_config.sandbox) else None
             extra_read = [BUILTIN_SKILLS_DIR] if allowed_dir else None

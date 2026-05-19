@@ -13,6 +13,7 @@ from OpenHome.agent.tools.mcp import (
     MCPPromptWrapper,
     MCPResourceWrapper,
     MCPToolWrapper,
+    _UNTRUSTED_BANNER,
     _is_transient,
 )
 
@@ -85,6 +86,10 @@ def _make_tool_result(text):
     return SimpleNamespace(content=[mcp_types.TextContent(type="text", text=text)])
 
 
+def _assert_untrusted_output(output: str, expected: str) -> None:
+    assert output == f"{_UNTRUSTED_BANNER}\n\n{expected}"
+
+
 @pytest.mark.asyncio
 async def test_tool_retries_on_transient_error():
     """Tool should retry once when a transient error occurs, then succeed."""
@@ -98,7 +103,7 @@ async def test_tool_retries_on_transient_error():
     with patch("OpenHome.agent.tools.mcp.asyncio.sleep", new_callable=AsyncMock):
         output = await wrapper.execute(foo="bar")
 
-    assert output == "ok"
+    _assert_untrusted_output(output, "ok")
     assert session.call_tool.call_count == 2
 
 
@@ -157,7 +162,7 @@ async def test_tool_success_on_first_try_no_retry():
     wrapper = MCPToolWrapper(session, "test_server", _make_tool_def(), tool_timeout=5)
     output = await wrapper.execute()
 
-    assert output == "hello"
+    _assert_untrusted_output(output, "hello")
     assert session.call_tool.call_count == 1
 
 
@@ -199,7 +204,7 @@ async def test_tool_retry_on_connection_reset():
     with patch("OpenHome.agent.tools.mcp.asyncio.sleep", new_callable=AsyncMock):
         output = await wrapper.execute()
 
-    assert output == "recovered"
+    _assert_untrusted_output(output, "recovered")
     assert session.call_tool.call_count == 2
 
 
@@ -215,7 +220,7 @@ async def test_tool_retry_on_end_of_stream():
     with patch("OpenHome.agent.tools.mcp.asyncio.sleep", new_callable=AsyncMock):
         output = await wrapper.execute()
 
-    assert output == "back"
+    _assert_untrusted_output(output, "back")
     assert session.call_tool.call_count == 2
 
 
@@ -251,7 +256,7 @@ async def test_resource_retries_on_transient_error():
     with patch("OpenHome.agent.tools.mcp.asyncio.sleep", new_callable=AsyncMock):
         output = await wrapper.execute()
 
-    assert output == "data"
+    _assert_untrusted_output(output, "data")
     assert session.read_resource.call_count == 2
 
 
@@ -320,7 +325,7 @@ async def test_prompt_retries_on_transient_error():
     with patch("OpenHome.agent.tools.mcp.asyncio.sleep", new_callable=AsyncMock):
         output = await wrapper.execute()
 
-    assert output == "prompt text"
+    _assert_untrusted_output(output, "prompt text")
     assert session.get_prompt.call_count == 2
 
 
