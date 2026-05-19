@@ -58,6 +58,26 @@ def test_from_config_dry_run_registers_exactly_three_lighting_tools(tmp_path):
     ]
 
 
+def test_active_smart_home_pack_does_not_duplicate_lighting_tools(tmp_path):
+    cfg = _config(tmp_path)
+    cfg.agents.defaults.domain_packs.active = ["smart_home"]
+    cfg.tools.device = DeviceToolsConfig(
+        enabled=True,
+        lighting_enabled=True,
+        mode="dry_run",
+        backend="fake",
+    )
+
+    loop = AgentLoop.from_config(cfg, bus=MessageBus(), provider=_provider())
+
+    assert _lighting_names(loop) == [
+        "openhome_device_lighting_set_power",
+        "openhome_device_lighting_set_brightness",
+        "openhome_device_lighting_set_color_temperature",
+    ]
+    assert loop.domain_packs.domain_tool_runtime_counts() == {"registered": 0, "skipped": 0}
+
+
 def test_from_config_explicit_executor_takes_precedence(tmp_path):
     cfg = _config(tmp_path)
     cfg.tools.device = DeviceToolsConfig(enabled=False)

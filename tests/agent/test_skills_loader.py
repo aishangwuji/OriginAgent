@@ -532,3 +532,29 @@ def test_domain_pack_skill_requirements_and_always_apply_only_when_active(
 
     monkeypatch.setenv("OPENHOME_DOMAIN_SKILL_ENV", "1")
     assert active_loader.get_always_skills() == ["domain:research/source-synthesis"]
+
+
+def test_builtin_smart_home_domain_skills_load_with_exact_core_tool_names(
+    tmp_path: Path,
+) -> None:
+    manager = DomainPackManager(
+        tmp_path,
+        config=DomainPacksConfig(active=["smart_home"]),
+    )
+    loader = SkillsLoader(
+        tmp_path,
+        builtin_skills_dir=tmp_path / "builtin",
+        domain_pack_manager=manager,
+    )
+
+    lighting = loader.load_skill("domain:smart_home/lighting-control") or ""
+    safety = loader.load_skill("domain:smart_home/safety-confirmation") or ""
+
+    assert "openhome_device_lighting_set_power" in lighting
+    assert "openhome_device_lighting_set_brightness" in lighting
+    assert "openhome_device_lighting_set_color_temperature" in lighting
+    assert "`set_light_power`" not in lighting
+    assert "`set_brightness`" not in lighting
+    assert "does not replace OpenHome's system safety layer" in safety
+    assert "Final confirmation" in safety
+    assert loader.load_skill("lighting-control") is None

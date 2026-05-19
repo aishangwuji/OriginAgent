@@ -147,6 +147,7 @@ async def test_domain_command_lists_pack_statuses(tmp_path: Path) -> None:
     assert "`research` [workspace]" in result.content
     assert "status: available" in result.content
     assert "Skills: declared 1, available 1, skipped 0" in result.content
+    assert "`domain:research/source-synthesis`" in result.content
     assert "Tools: declared 1, registered 0, skipped 0" in result.content
     assert "`broken` [workspace]" in result.content
     assert "status: invalid" in result.content

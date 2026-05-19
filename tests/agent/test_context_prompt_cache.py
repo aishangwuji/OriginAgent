@@ -74,6 +74,10 @@ def test_default_templates_are_not_smart_home_centered() -> None:
         "durable household context",
         "background household checks",
         "household context",
+        "device or smart-home tools",
+        "smart-home tools",
+        "smart home tools",
+        "home assistant",
         '"turn it off"',
         '"good night"',
         '"too hot"',
@@ -326,7 +330,7 @@ def test_execution_rules_in_system_prompt(tmp_path) -> None:
     assert "Act immediately on simple, low-risk requests" in prompt
     assert "For multi-step tasks, summarize the plan" in prompt
     assert "For real-world or externally visible actions" in prompt
-    assert "When device or smart-home tools are configured" in prompt
+    assert "When real-world or physical tools are configured" in prompt
     assert "After an action, report the result" in prompt
 
 

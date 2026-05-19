@@ -1,0 +1,25 @@
+id: smart_home
+name: Smart Home
+version: 0.1.0
+enabled: true
+description: Smart home control, device state awareness, and automation planning.
+
+capabilities:
+  - inspect_device_state
+  - control_authorized_lighting
+  - plan_device_automations
+  - coordinate_real_world_device_safety
+
+skills:
+  - lighting-control
+  - safety-confirmation
+  - automation-design
+
+activation:
+  # Metadata only in P3. OpenHome does not auto-activate domain packs from
+  # triggers yet; activation is still controlled by agents.defaults.domainPacks.
+  triggers:
+    - smart_home
+    - device
+    - lighting
+    - automation

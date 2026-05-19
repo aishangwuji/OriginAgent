@@ -18,8 +18,8 @@ records OpenHome-specific operating rules that should guide tool use.
 
 - Use domain-specific rules from active domain packs when a task belongs to a
   specialized domain.
-- When device or smart-home tools are configured, treat physical device actions
-  as real-world actions, not generic API calls.
+- When real-world or physical tools are configured, treat physical actions as
+  real-world actions, not generic API calls.
 - Treat locks, alarms, cameras, ovens, heaters, high-power devices, security
   modes, payments, credentials, permissions, and destructive automation edits as
   sensitive. Ask for confirmation unless a trusted rule already covers the

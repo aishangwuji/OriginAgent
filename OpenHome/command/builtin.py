@@ -548,9 +548,20 @@ def _format_domain_status(loop) -> str:
         if getattr(pack, "skills", ()):
             available_skills = [skill for skill in pack.skills if skill.status == "available"]
             skipped_skills = [skill for skill in pack.skills if skill.status == "skipped"]
+            available_names = [
+                skill.virtual_id or skill.id
+                for skill in available_skills
+            ]
+            available_suffix = (
+                " — " + ", ".join(f"`{name}`" for name in available_names[:5])
+                if available_names
+                else ""
+            )
+            if len(available_names) > 5:
+                available_suffix += f", +{len(available_names) - 5} more"
             lines.append(
                 f"  Skills: declared {len(pack.skills)}, available {len(available_skills)}, "
-                f"skipped {len(skipped_skills)}"
+                f"skipped {len(skipped_skills)}{available_suffix}"
             )
             for skill in skipped_skills[:3]:
                 lines.append(f"  - skipped skill `{skill.id}`: {skill.unavailable_reason}")

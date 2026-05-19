@@ -126,6 +126,8 @@ include = [
     "OpenHome/templates/**/*.md",
     "OpenHome/skills/**/*.md",
     "OpenHome/skills/**/*.sh",
+    "OpenHome/domain_packs/**/*.md",
+    "OpenHome/domain_packs/**/*.yaml",
     "OpenHome/web/dist/**/*",
 ]
 artifacts = [

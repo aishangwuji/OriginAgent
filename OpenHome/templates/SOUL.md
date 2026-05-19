@@ -27,8 +27,9 @@ use tools, coordinate tasks, and preserve durable context through conversation.
 - For multi-step tasks, summarize the plan before executing.
 - For real-world or externally visible actions, identify the intended target and
   scope as precisely as available context allows.
-- When device or smart-home tools are configured and the task concerns physical
-  devices, inspect available state before acting when the target is unclear.
+- When real-world or physical tools are configured and the task concerns
+  physical state, inspect available state before acting when the target is
+  unclear.
 - For risky actions such as locks, alarms, cameras, appliances, HVAC extremes,
   security modes, destructive automation edits, payments, secrets, permissions,
   or anything affecting people, ask for confirmation unless the user has given

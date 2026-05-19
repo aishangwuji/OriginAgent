@@ -186,7 +186,8 @@ def test_context_prompt_injects_summary_and_active_capabilities(tmp_path: Path) 
 
 
 def test_context_prompt_omits_domain_section_when_disabled_or_empty(tmp_path: Path) -> None:
-    empty_prompt = ContextBuilder(tmp_path).build_system_prompt()
+    empty_manager = DomainPackManager(tmp_path, builtin_dir=tmp_path / "empty")
+    empty_prompt = ContextBuilder(tmp_path, domain_pack_manager=empty_manager).build_system_prompt()
     assert "# Domain Packs" not in empty_prompt
 
     _write_pack(
@@ -201,6 +202,50 @@ def test_context_prompt_omits_domain_section_when_disabled_or_empty(tmp_path: Pa
         domain_packs_config=DomainPacksConfig(enabled=False),
     ).build_system_prompt()
     assert "# Domain Packs" not in disabled_prompt
+
+
+def test_builtin_smart_home_domain_pack_is_available_and_explicitly_activated(
+    tmp_path: Path,
+) -> None:
+    manager = DomainPackManager(tmp_path)
+    pack = manager.get_pack("smart_home")
+
+    assert pack is not None
+    assert pack.source == "builtin"
+    assert pack.status == "available"
+    assert pack.active is False
+    assert pack.tools == ()
+    assert {skill.virtual_id for skill in pack.skills} == {
+        "domain:smart_home/lighting-control",
+        "domain:smart_home/safety-confirmation",
+        "domain:smart_home/automation-design",
+    }
+    assert "lighting" in pack.triggers
+    assert manager.active_skill_entries() == []
+    assert manager.build_active_context() == ""
+
+    active_manager = DomainPackManager(tmp_path, config=DomainPacksConfig(active=["smart_home"]))
+    active_pack = active_manager.get_pack("smart_home")
+
+    assert active_pack is not None
+    assert active_pack.active is True
+    assert [entry["name"] for entry in active_manager.active_skill_entries()] == [
+        "domain:smart_home/lighting-control",
+        "domain:smart_home/safety-confirmation",
+        "domain:smart_home/automation-design",
+    ]
+    assert "Core Device Gateway Tools" in active_manager.build_active_context()
+
+    disabled_manager = DomainPackManager(
+        tmp_path,
+        config=DomainPacksConfig(active=["smart_home"], disabled=["smart_home"]),
+    )
+    disabled_pack = disabled_manager.get_pack("smart_home")
+
+    assert disabled_pack is not None
+    assert disabled_pack.status == "unavailable"
+    assert disabled_pack.active is False
+    assert disabled_pack.unavailable_reason == "disabled by config"
 
 
 def test_zero_capability_limit_keeps_full_active_context(tmp_path: Path) -> None:
