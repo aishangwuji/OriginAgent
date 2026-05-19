@@ -5,8 +5,12 @@ import os
 import re
 import shutil
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import yaml
+
+if TYPE_CHECKING:
+    from OpenHome.agent.domain_packs import DomainPackManager
 
 # Default builtin skills directory (relative to this file)
 BUILTIN_SKILLS_DIR = Path(__file__).parent.parent / "skills"
@@ -26,11 +30,18 @@ class SkillsLoader:
     specific tools or perform certain tasks.
     """
 
-    def __init__(self, workspace: Path, builtin_skills_dir: Path | None = None, disabled_skills: set[str] | None = None):
+    def __init__(
+        self,
+        workspace: Path,
+        builtin_skills_dir: Path | None = None,
+        disabled_skills: set[str] | None = None,
+        domain_pack_manager: "DomainPackManager | None" = None,
+    ):
         self.workspace = workspace
         self.workspace_skills = workspace / "skills"
         self.builtin_skills = builtin_skills_dir or BUILTIN_SKILLS_DIR
         self.disabled_skills = disabled_skills or set()
+        self.domain_pack_manager = domain_pack_manager
 
     def _skill_entries_from_dir(self, base: Path, source: str, *, skip_names: set[str] | None = None) -> list[dict[str, str]]:
         if not base.exists():
@@ -64,6 +75,8 @@ class SkillsLoader:
             skills.extend(
                 self._skill_entries_from_dir(self.builtin_skills, "builtin", skip_names=workspace_names)
             )
+        if self.domain_pack_manager is not None:
+            skills.extend(self.domain_pack_manager.active_skill_entries())
 
         if self.disabled_skills:
             skills = [s for s in skills if s["name"] not in self.disabled_skills]
@@ -82,7 +95,11 @@ class SkillsLoader:
         Returns:
             Skill content or None if not found.
         """
-        if not self._is_safe_skill_name(name) or name in self.disabled_skills:
+        if name in self.disabled_skills:
+            return None
+        if name.startswith("domain:"):
+            return self._load_domain_skill(name)
+        if not self._is_safe_skill_name(name):
             return None
 
         roots = [self.workspace_skills]
@@ -99,6 +116,33 @@ class SkillsLoader:
         if not name or name in {".", ".."}:
             return False
         return not any(part in name for part in ("/", "\\", ".."))
+
+    def _load_domain_skill(self, name: str) -> str | None:
+        if self.domain_pack_manager is None:
+            return None
+        parsed = self._parse_domain_skill_name(name)
+        if parsed is None:
+            return None
+        pack_id, skill_id = parsed
+        path = self.domain_pack_manager.get_active_skill_path(pack_id, skill_id)
+        if path is None or not path.exists():
+            return None
+        return path.read_text(encoding="utf-8")
+
+    @staticmethod
+    def _parse_domain_skill_name(name: str) -> tuple[str, str] | None:
+        rest = name.removeprefix("domain:")
+        if "/" not in rest:
+            return None
+        pack_id, skill_id = rest.split("/", 1)
+        if not pack_id or not skill_id:
+            return None
+        if any(part in pack_id or part in skill_id for part in ("/", "\\", "..")):
+            return None
+        safe = re.compile(r"^[a-z0-9_-]+$")
+        if not safe.fullmatch(pack_id) or not safe.fullmatch(skill_id):
+            return None
+        return pack_id, skill_id
 
     def load_skills_for_context(self, skill_names: list[str]) -> str:
         """

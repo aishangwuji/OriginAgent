@@ -432,6 +432,7 @@ class ToolAuditConfig(Base):
     security_tools: tuple[str, ...] = (
         "exec",
         "message",
+        "web_fetch",
         "cron",
         "spawn",
         "openhome_device_*",

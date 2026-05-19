@@ -8,6 +8,7 @@ from types import SimpleNamespace
 import pytest
 
 from OpenHome.agent.confirmation import ConfirmationRequest, PendingConfirmationStore
+from OpenHome.agent.domain_packs import DomainPackManager
 from OpenHome.agent.tools.filesystem import ReadFileTool
 from OpenHome.agent.tools.runtime_status import (
     ConfirmationSummaryTool,
@@ -15,9 +16,9 @@ from OpenHome.agent.tools.runtime_status import (
     RuntimeStatusTool,
     ToolAuditSummaryTool,
 )
+from OpenHome.config.schema import DomainPacksConfig
 from OpenHome.cron.service import CronService
 from OpenHome.cron.types import CronSchedule
-
 
 RAW_COMMAND = "echo super-secret-command"
 RAW_PATH = "C:/secret/path/file.txt"
@@ -258,3 +259,34 @@ async def test_runtime_status_uses_workspace_basename_not_absolute_path(tmp_path
     assert result["registered_tools_count"] == 2
     assert result["pending_queue_count"] == 1
     assert str(tmp_path) not in _serialized(result)
+
+
+@pytest.mark.asyncio
+async def test_runtime_status_reports_domain_pack_counts(tmp_path) -> None:
+    pack = tmp_path / "domain_packs" / "research"
+    pack.mkdir(parents=True)
+    (pack / "domain_pack.yaml").write_text(
+        "id: research\nname: Research\nversion: 0.1.0\n",
+        encoding="utf-8",
+    )
+    (pack / "CAPABILITIES.md").write_text("# Research\n", encoding="utf-8")
+    manager = DomainPackManager(
+        tmp_path,
+        config=DomainPacksConfig(active=["research"]),
+        builtin_dir=tmp_path / "empty",
+    )
+    manager.record_domain_tool_runtime("research", "research_search", "registered")
+    manager.record_domain_tool_runtime("research", "research_bad", "skipped", "bad")
+
+    result = await RuntimeStatusTool(
+        workspace=tmp_path,
+        registry=SimpleNamespace(tool_names=["a"]),
+        sessions=object(),
+        pending_queues={},
+        domain_pack_manager=manager,
+    ).execute()
+
+    assert result["domain_packs_count"] == 1
+    assert result["active_domain_pack_ids"] == ["research"]
+    assert result["registered_domain_tools_count"] == 1
+    assert result["skipped_domain_tools_count"] == 1

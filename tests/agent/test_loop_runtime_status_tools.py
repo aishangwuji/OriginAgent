@@ -7,8 +7,7 @@ import pytest
 
 from OpenHome.agent.loop import AgentLoop
 from OpenHome.bus.queue import MessageBus
-from OpenHome.config.schema import Config, ToolAuditConfig
-
+from OpenHome.config.schema import Config, DomainPacksConfig, ToolAuditConfig
 
 RUNTIME_TOOL_NAMES = {
     "openhome_runtime_status",
@@ -41,6 +40,60 @@ def test_agent_loop_registers_runtime_explain_tools_by_default(tmp_path: Path) -
 
     assert RUNTIME_TOOL_NAMES.issubset(set(loop.tools.tool_names))
     assert not any(name in loop.tools._audit_config.security_tools for name in RUNTIME_TOOL_NAMES)
+
+
+@pytest.mark.asyncio
+async def test_agent_loop_registers_active_domain_tools_and_reports_runtime_status(
+    tmp_path: Path,
+) -> None:
+    pack = tmp_path / "domain_packs" / "research"
+    tools_dir = pack / "tools"
+    tools_dir.mkdir(parents=True)
+    (pack / "CAPABILITIES.md").write_text("# Research\n", encoding="utf-8")
+    (pack / "domain_pack.yaml").write_text(
+        "id: research\n"
+        "name: Research\n"
+        "version: 0.1.0\n"
+        "tools:\n"
+        "  - id: research_search\n"
+        "    module: tools.search\n"
+        "    class: ResearchSearchTool\n"
+        "    permissions: []\n",
+        encoding="utf-8",
+    )
+    (tools_dir / "search.py").write_text(
+        "from OpenHome.agent.tools.base import Tool\n\n"
+        "class ResearchSearchTool(Tool):\n"
+        "    name = 'research_search'\n"
+        "    @property\n"
+        "    def description(self):\n"
+        "        return 'search'\n"
+        "    @property\n"
+        "    def parameters(self):\n"
+        "        return {'type': 'object', 'properties': {}, 'additionalProperties': False}\n"
+        "    @property\n"
+        "    def read_only(self):\n"
+        "        return True\n"
+        "    async def execute(self, **kwargs):\n"
+        "        return 'ok'\n",
+        encoding="utf-8",
+    )
+
+    loop = AgentLoop(
+        bus=MessageBus(),
+        provider=_provider(),
+        workspace=tmp_path,
+        model="test-model",
+        domain_packs_config=DomainPacksConfig(active=["research"]),
+    )
+
+    assert loop.tools.has("research_search")
+    counts = loop.domain_packs.domain_tool_runtime_counts()
+    assert counts["registered"] == 1
+    assert counts["skipped"] == 0
+    runtime_status = await loop.tools.execute("openhome_runtime_status", {})
+    assert runtime_status["registered_domain_tools_count"] == 1
+    assert runtime_status["active_domain_pack_ids"] == ["research"]
 
 
 @pytest.mark.asyncio

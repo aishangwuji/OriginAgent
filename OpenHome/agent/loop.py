@@ -560,6 +560,7 @@ class AgentLoop:
                 cron_service=self.cron_service,
                 audit_mode=self._tool_audit_config.mode,
                 confirmation_store=confirmation_store,
+                domain_pack_manager=self.domain_packs,
             )
         )
         self.tools.register(
@@ -660,14 +661,12 @@ class AgentLoop:
                 real_mode=self._device_tools_real_mode,
             ):
                 self.tools.register(tool)
+        self._register_domain_tools()
         self._register_plugin_tools()
 
-    def _register_plugin_tools(self) -> None:
-        """Load external OpenHome tool plugins without replacing core tools."""
+    def _build_tool_context(self):
         from OpenHome.agent.tools.context import ToolContext
-        from OpenHome.agent.tools.loader import ToolLoader
-
-        ctx = ToolContext(
+        return ToolContext(
             config=self.tools_config,
             workspace=str(self.workspace),
             bus=self.bus,
@@ -682,7 +681,20 @@ class AgentLoop:
             device_action_executor=self.device_action_executor,
             device_registry=self._device_registry,
         )
-        registered = ToolLoader().load(ctx, self.tools, scope="core")
+
+    def _register_domain_tools(self) -> None:
+        """Load tools declared by active domain packs without replacing core tools."""
+        from OpenHome.agent.tools.domain_loader import DomainToolLoader
+
+        registered = DomainToolLoader(self.domain_packs).load(self._build_tool_context(), self.tools)
+        if registered:
+            logger.info("Registered domain tool(s): {}", ", ".join(sorted(registered)))
+
+    def _register_plugin_tools(self) -> None:
+        """Load external OpenHome tool plugins without replacing core tools."""
+        from OpenHome.agent.tools.loader import ToolLoader
+
+        registered = ToolLoader().load(self._build_tool_context(), self.tools, scope="core")
         if registered:
             logger.info("Registered OpenHome tool plugin(s): {}", ", ".join(sorted(registered)))
 

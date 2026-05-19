@@ -1,14 +1,14 @@
 """Tool registry for dynamic tool management."""
 
-import time
 import hashlib
 import json
+import time
 from dataclasses import dataclass
 from typing import Any, Literal
 from urllib.parse import urlparse
 
-from OpenHome.agent.tools.base import Tool
 from OpenHome.agent.tools.audit import ToolAuditConfig, ToolAuditSink, ToolCallAuditEvent
+from OpenHome.agent.tools.base import Tool
 from OpenHome.security.capabilities import CapabilitySnapshot
 from OpenHome.security.policy import PolicyDeniedError
 
@@ -56,6 +56,18 @@ _CAPABILITY_REQUIRED_TOOL_NAMES = {
     "message",
     "cron",
     "spawn",
+}
+
+_DOMAIN_PERMISSION_POLICY_RULES = {
+    "read_files": ("can_read_files", "capability_domain_read_files_denied"),
+    "write_files": ("can_write_files", "capability_domain_write_files_denied"),
+    "exec": ("can_exec", "capability_domain_exec_denied"),
+    "send_cross_target": (
+        "can_send_cross_target",
+        "capability_domain_send_cross_target_denied",
+    ),
+    "create_cron": ("can_create_cron", "capability_domain_create_cron_denied"),
+    "spawn": ("can_spawn", "capability_domain_spawn_denied"),
 }
 
 
@@ -277,7 +289,9 @@ class ToolRegistry:
         snapshot = self._capability_snapshot
         name = tool.name
         if snapshot is None:
-            if _requires_capability_snapshot(name):
+            if _requires_capability_snapshot(name) or tuple(
+                getattr(tool, "_domain_tool_permissions", ()) or ()
+            ):
                 raise PolicyDeniedError(
                     f"Tool '{name}' requires an explicit capability snapshot",
                     code="capability_snapshot_missing",
@@ -285,6 +299,7 @@ class ToolRegistry:
                     policy_rule="capability_snapshot_required",
                 )
             return
+        _assert_domain_tool_capability(tool, snapshot)
         if name == "exec" and not snapshot.can_exec:
             raise PolicyDeniedError(
                 "Tool 'exec' is not allowed by the current capability snapshot",
@@ -398,6 +413,9 @@ class ToolRegistry:
             return "off"
         if config.mode == "security":
             return "security"
+        tool = self._tools.get(name)
+        if getattr(tool, "_domain_tool_audit", None) == "security":
+            return "security"
         if status == "policy_denied" and config.security_on_policy_denial:
             return "security"
         if _matches_security_tool(name, config.security_tools):
@@ -456,6 +474,45 @@ def _requires_capability_snapshot(name: str) -> bool:
     )
 
 
+def _assert_domain_tool_capability(tool: Tool, snapshot: CapabilitySnapshot) -> None:
+    permissions = tuple(getattr(tool, "_domain_tool_permissions", ()) or ())
+    if not permissions:
+        return
+    name = tool.name
+    for permission in permissions:
+        if permission in _DOMAIN_PERMISSION_POLICY_RULES:
+            attr, policy_rule = _DOMAIN_PERMISSION_POLICY_RULES[permission]
+            if not bool(getattr(snapshot, attr, False)):
+                raise PolicyDeniedError(
+                    f"Tool '{name}' is not allowed by the current capability snapshot ({policy_rule})",
+                    code="capability_denied",
+                    boundary="capability",
+                    policy_rule=policy_rule,
+                )
+            continue
+        if permission == "device:lighting":
+            if "lighting" not in snapshot.allowed_device_domains:
+                raise PolicyDeniedError(
+                    "Tool "
+                    f"'{name}' is not allowed by the current capability snapshot "
+                    "(capability_domain_device_lighting_denied)",
+                    code="capability_denied",
+                    boundary="capability",
+                    policy_rule="capability_domain_device_lighting_denied",
+                )
+            continue
+        if permission == "mcp:read":
+            if "read" not in snapshot.allowed_mcp_scopes:
+                raise PolicyDeniedError(
+                    "Tool "
+                    f"'{name}' is not allowed by the current capability snapshot "
+                    "(capability_domain_mcp_read_denied)",
+                    code="capability_denied",
+                    boundary="capability",
+                    policy_rule="capability_domain_mcp_read_denied",
+                )
+
+
 def _matches_security_tool(name: str, patterns: tuple[str, ...]) -> bool:
     return any(
         name == pattern
@@ -482,6 +539,18 @@ def policy_rule_from_error_text(text: str | None) -> str | None:
         return "capability_cron_denied"
     if "spawning subagents is not allowed by the current capability snapshot" in lowered:
         return "capability_spawn_denied"
+    for rule in (
+        "capability_domain_read_files_denied",
+        "capability_domain_write_files_denied",
+        "capability_domain_exec_denied",
+        "capability_domain_send_cross_target_denied",
+        "capability_domain_create_cron_denied",
+        "capability_domain_spawn_denied",
+        "capability_domain_device_lighting_denied",
+        "capability_domain_mcp_read_denied",
+    ):
+        if rule in lowered:
+            return rule
     if "device tools are not allowed by the current capability snapshot" in lowered:
         return "capability_device_denied"
     if "mcp tools are not allowed by the current capability snapshot" in lowered:

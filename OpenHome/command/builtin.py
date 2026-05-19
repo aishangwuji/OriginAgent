@@ -545,6 +545,33 @@ def _format_domain_status(loop) -> str:
             f"- `{pack.id}` [{pack.source}] — {pack.name} "
             f"(status: {pack.status}, {active}{reason})"
         )
+        if getattr(pack, "skills", ()):
+            available_skills = [skill for skill in pack.skills if skill.status == "available"]
+            skipped_skills = [skill for skill in pack.skills if skill.status == "skipped"]
+            lines.append(
+                f"  Skills: declared {len(pack.skills)}, available {len(available_skills)}, "
+                f"skipped {len(skipped_skills)}"
+            )
+            for skill in skipped_skills[:3]:
+                lines.append(f"  - skipped skill `{skill.id}`: {skill.unavailable_reason}")
+        if getattr(pack, "tools", ()):
+            manifest_skipped = [tool for tool in pack.tools if tool.status == "skipped"]
+            runtime_records = (
+                manager.domain_tool_runtime_records(pack.id)
+                if hasattr(manager, "domain_tool_runtime_records")
+                else []
+            )
+            registered = [record for record in runtime_records if record.status == "registered"]
+            runtime_skipped = [record for record in runtime_records if record.status == "skipped"]
+            skipped_count = len(manifest_skipped) + len(runtime_skipped)
+            lines.append(
+                f"  Tools: declared {len(pack.tools)}, registered {len(registered)}, "
+                f"skipped {skipped_count}"
+            )
+            for tool in manifest_skipped[:3]:
+                lines.append(f"  - skipped tool `{tool.id}`: {tool.unavailable_reason}")
+            for record in runtime_skipped[:3]:
+                lines.append(f"  - skipped tool `{record.tool_id}`: {record.reason}")
     return "\n".join(lines)
 
 

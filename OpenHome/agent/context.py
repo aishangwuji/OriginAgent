@@ -52,10 +52,14 @@ class ContextBuilder:
         self.workspace = workspace
         self.timezone = timezone
         self.memory = MemoryStore(workspace)
-        self.skills = SkillsLoader(workspace, disabled_skills=set(disabled_skills) if disabled_skills else None)
         self.domain_packs = domain_pack_manager or DomainPackManager(
             workspace,
             config=domain_packs_config,
+        )
+        self.skills = SkillsLoader(
+            workspace,
+            disabled_skills=set(disabled_skills) if disabled_skills else None,
+            domain_pack_manager=self.domain_packs,
         )
 
     def build_system_prompt(

@@ -26,6 +26,7 @@ class RuntimeStatusTool(Tool):
         confirmation_store: PendingConfirmationStore | None = None,
         audit_mode: str = "minimal",
         runtime_profile: str = "default",
+        domain_pack_manager: Any | None = None,
     ) -> None:
         self._workspace = Path(workspace)
         self._registry = registry
@@ -35,6 +36,7 @@ class RuntimeStatusTool(Tool):
         self._confirmation_store = confirmation_store
         self._audit_mode = audit_mode
         self._runtime_profile = runtime_profile
+        self._domain_pack_manager = domain_pack_manager
 
     @property
     def description(self) -> str:
@@ -49,6 +51,7 @@ class RuntimeStatusTool(Tool):
         return True
 
     async def execute(self) -> dict[str, Any]:
+        domain_status = _domain_pack_status(self._domain_pack_manager)
         return {
             "workspace_present": self._workspace.exists(),
             "workspace_name": self._workspace.name,
@@ -59,6 +62,7 @@ class RuntimeStatusTool(Tool):
             "audit_mode": self._audit_mode,
             "cron_available": self._cron_service is not None,
             "confirmation_available": self._confirmation_store is not None,
+            **domain_status,
         }
 
 
@@ -281,3 +285,29 @@ def _capability_summary(snapshot: Any) -> str:
         if snapshot.get(key) is True
     ]
     return f"{source}:{trigger}:enabled_flags={len(flags)}"
+
+
+def _domain_pack_status(manager: Any | None) -> dict[str, Any]:
+    if manager is None:
+        return {
+            "domain_packs_count": 0,
+            "active_domain_pack_ids": [],
+            "registered_domain_tools_count": 0,
+            "skipped_domain_tools_count": 0,
+        }
+    try:
+        packs = manager.list_packs()
+    except Exception:
+        return {
+            "domain_packs_count": 0,
+            "active_domain_pack_ids": [],
+            "registered_domain_tools_count": 0,
+            "skipped_domain_tools_count": 0,
+        }
+    counts = manager.domain_tool_runtime_counts() if hasattr(manager, "domain_tool_runtime_counts") else {}
+    return {
+        "domain_packs_count": len(packs),
+        "active_domain_pack_ids": [pack.id for pack in packs if getattr(pack, "active", False)],
+        "registered_domain_tools_count": int(counts.get("registered", 0) or 0),
+        "skipped_domain_tools_count": int(counts.get("skipped", 0) or 0),
+    }

@@ -7,7 +7,9 @@ from pathlib import Path
 
 import pytest
 
+from OpenHome.agent.domain_packs import DomainPackManager
 from OpenHome.agent.skills import SkillsLoader
+from OpenHome.config.schema import DomainPacksConfig
 
 
 def _write_skill(
@@ -425,3 +427,108 @@ def test_get_skill_metadata_handles_yaml_types(tmp_path: Path) -> None:
     assert meta.get("always") is True
     # metadata is a parsed dict, not a JSON string
     assert isinstance(meta.get("metadata"), dict)
+
+
+def test_domain_pack_skill_uses_virtual_id_and_does_not_shadow_plain_skill(tmp_path: Path) -> None:
+    workspace = tmp_path / "ws"
+    workspace_skill = _write_skill(
+        workspace / "skills",
+        "source-synthesis",
+        body="# Workspace Plain Skill\n",
+    )
+    pack = workspace / "domain_packs" / "research"
+    (pack / "skills" / "source-synthesis").mkdir(parents=True)
+    (pack / "domain_pack.yaml").write_text(
+        "id: research\n"
+        "name: Research\n"
+        "version: 0.1.0\n"
+        "skills:\n"
+        "  - source-synthesis\n",
+        encoding="utf-8",
+    )
+    (pack / "CAPABILITIES.md").write_text("# Research\n", encoding="utf-8")
+    domain_skill_path = pack / "skills" / "source-synthesis" / "SKILL.md"
+    domain_skill_path.write_text(
+        "---\nname: source-synthesis\ndescription: Domain skill.\n---\n\n# Domain Skill\n",
+        encoding="utf-8",
+    )
+
+    manager = DomainPackManager(
+        workspace,
+        config=DomainPacksConfig(active=["research"]),
+        builtin_dir=tmp_path / "empty",
+    )
+    loader = SkillsLoader(
+        workspace,
+        builtin_skills_dir=tmp_path / "builtin",
+        domain_pack_manager=manager,
+    )
+
+    entries = sorted(loader.list_skills(filter_unavailable=False), key=lambda item: item["name"])
+
+    assert entries == [
+        {"name": "domain:research/source-synthesis", "path": str(domain_skill_path), "source": "domain:research"},
+        {"name": "source-synthesis", "path": str(workspace_skill), "source": "workspace"},
+    ]
+    assert "# Workspace Plain Skill" in (loader.load_skill("source-synthesis") or "")
+    assert "# Domain Skill" in (loader.load_skill("domain:research/source-synthesis") or "")
+    assert loader.load_skill("domain:research/../source-synthesis") is None
+
+
+def test_domain_pack_skill_requirements_and_always_apply_only_when_active(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workspace = tmp_path / "ws"
+    pack = workspace / "domain_packs" / "research"
+    skill_dir = pack / "skills" / "source-synthesis"
+    skill_dir.mkdir(parents=True)
+    (pack / "domain_pack.yaml").write_text(
+        "id: research\n"
+        "name: Research\n"
+        "version: 0.1.0\n"
+        "skills:\n"
+        "  - source-synthesis\n",
+        encoding="utf-8",
+    )
+    (pack / "CAPABILITIES.md").write_text("# Research\n", encoding="utf-8")
+    (skill_dir / "SKILL.md").write_text(
+        "---\n"
+        "description: Domain skill.\n"
+        "metadata:\n"
+        "  OpenHome:\n"
+        "    always: true\n"
+        "    requires:\n"
+        "      env:\n"
+        "        - OPENHOME_DOMAIN_SKILL_ENV\n"
+        "---\n\n# Domain Skill\n",
+        encoding="utf-8",
+    )
+    monkeypatch.delenv("OPENHOME_DOMAIN_SKILL_ENV", raising=False)
+    inactive_manager = DomainPackManager(
+        workspace,
+        config=DomainPacksConfig(active=[]),
+        builtin_dir=tmp_path / "empty",
+    )
+    inactive_loader = SkillsLoader(
+        workspace,
+        builtin_skills_dir=tmp_path / "builtin",
+        domain_pack_manager=inactive_manager,
+    )
+    active_manager = DomainPackManager(
+        workspace,
+        config=DomainPacksConfig(active=["research"]),
+        builtin_dir=tmp_path / "empty",
+    )
+    active_loader = SkillsLoader(
+        workspace,
+        builtin_skills_dir=tmp_path / "builtin",
+        domain_pack_manager=active_manager,
+    )
+
+    assert inactive_loader.list_skills(filter_unavailable=False) == []
+    assert active_loader.list_skills(filter_unavailable=True) == []
+    assert active_loader.get_always_skills() == []
+
+    monkeypatch.setenv("OPENHOME_DOMAIN_SKILL_ENV", "1")
+    assert active_loader.get_always_skills() == ["domain:research/source-synthesis"]

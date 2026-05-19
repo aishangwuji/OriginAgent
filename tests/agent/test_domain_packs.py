@@ -48,6 +48,14 @@ def _write_pack(
     return pack_dir
 
 
+def _write_domain_skill(pack_dir: Path, name: str, body: str = "# Skill\n") -> Path:
+    skill_dir = pack_dir / "skills" / name
+    skill_dir.mkdir(parents=True)
+    path = skill_dir / "SKILL.md"
+    path.write_text(body, encoding="utf-8")
+    return path
+
+
 def test_discovers_builtin_and_workspace_with_workspace_override(tmp_path: Path) -> None:
     workspace = tmp_path / "workspace"
     builtin = tmp_path / "builtin"
@@ -212,3 +220,104 @@ def test_zero_capability_limit_keeps_full_active_context(tmp_path: Path) -> None
 
     assert "Detailed capability text." in active_context
     assert "[Domain capabilities truncated]" not in active_context
+
+
+def test_manifest_parses_domain_skills_and_tools_without_raising(tmp_path: Path) -> None:
+    pack = _write_pack(
+        tmp_path / "domain_packs",
+        "research",
+        pack_id="research",
+        name="Research",
+        capabilities_text="# Research",
+    )
+    _write_domain_skill(pack, "source-synthesis")
+    tools_dir = pack / "tools"
+    tools_dir.mkdir()
+    (tools_dir / "search.py").write_text("# placeholder\n", encoding="utf-8")
+    manifest = pack / "domain_pack.yaml"
+    manifest.write_text(
+        manifest.read_text(encoding="utf-8")
+        + "\n"
+        + "\n".join(
+            [
+                "skills:",
+                "  - source-synthesis",
+                "  - Missing Skill",
+                "  - missing-file",
+                "tools:",
+                "  - id: research_search",
+                "    module: tools.search",
+                "    class: ResearchSearchTool",
+                "    permissions: []",
+                "    audit: minimal",
+                "  - id: bad-prefix",
+                "    module: tools.search",
+                "    class: ResearchSearchTool",
+                "    permissions: []",
+                "  - id: research_missing_permissions",
+                "    module: tools.search",
+                "    class: ResearchSearchTool",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    manager = DomainPackManager(
+        tmp_path,
+        config=DomainPacksConfig(active=["research"]),
+    )
+    pack_state = manager.get_pack("research")
+
+    assert pack_state is not None
+    assert [skill.id for skill in pack_state.skills] == [
+        "source-synthesis",
+        "Missing Skill",
+        "missing-file",
+    ]
+    assert pack_state.skills[0].virtual_id == "domain:research/source-synthesis"
+    assert pack_state.skills[0].status == "available"
+    assert pack_state.skills[1].status == "skipped"
+    assert "skill id must match" in pack_state.skills[1].unavailable_reason
+    assert pack_state.skills[2].status == "skipped"
+    assert "missing SKILL.md" in pack_state.skills[2].unavailable_reason
+    assert [entry["name"] for entry in manager.active_skill_entries()] == [
+        "domain:research/source-synthesis"
+    ]
+
+    tools = {tool.id: tool for tool in pack_state.tools}
+    assert tools["research_search"].status == "available"
+    assert tools["research_search"].permissions == ()
+    assert tools["bad-prefix"].status == "skipped"
+    assert "tool id must match" in tools["bad-prefix"].unavailable_reason
+    assert tools["research_missing_permissions"].status == "skipped"
+    assert "missing permissions" in tools["research_missing_permissions"].unavailable_reason
+
+
+def test_inactive_domain_pack_does_not_expose_skill_entries_or_tools(tmp_path: Path) -> None:
+    pack = _write_pack(
+        tmp_path / "domain_packs",
+        "research",
+        pack_id="research",
+        name="Research",
+        capabilities_text="# Research",
+    )
+    _write_domain_skill(pack, "source-synthesis")
+    tools_dir = pack / "tools"
+    tools_dir.mkdir()
+    (tools_dir / "search.py").write_text("# placeholder\n", encoding="utf-8")
+    (pack / "domain_pack.yaml").write_text(
+        (pack / "domain_pack.yaml").read_text(encoding="utf-8")
+        + "\nskills:\n  - source-synthesis\n"
+        + "tools:\n"
+        + "  - id: research_search\n"
+        + "    module: tools.search\n"
+        + "    class: ResearchSearchTool\n"
+        + "    permissions: []\n",
+        encoding="utf-8",
+    )
+
+    manager = DomainPackManager(tmp_path)
+
+    assert manager.active_skill_entries() == []
+    assert manager.active_tool_declarations() == []

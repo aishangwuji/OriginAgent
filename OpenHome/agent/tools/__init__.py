@@ -2,6 +2,7 @@
 
 from OpenHome.agent.tools.base import Schema, Tool, tool_parameters
 from OpenHome.agent.tools.context import ContextAware, RequestContext, ToolContext
+from OpenHome.agent.tools.domain_loader import DomainToolLoader
 from OpenHome.agent.tools.loader import ToolLoader
 from OpenHome.agent.tools.registry import (
     DuplicateToolError,
@@ -29,6 +30,7 @@ __all__ = [
     "StringSchema",
     "Tool",
     "ToolContext",
+    "DomainToolLoader",
     "ToolLoader",
     "RequestContext",
     "ContextAware",

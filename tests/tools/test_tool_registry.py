@@ -4,8 +4,8 @@ from typing import Any
 
 import pytest
 
-from OpenHome.agent.tools.base import Tool
 from OpenHome.agent.tools.audit import InMemoryToolAuditSink
+from OpenHome.agent.tools.base import Tool
 from OpenHome.agent.tools.registry import (
     DuplicateToolError,
     PolicyDeniedError,
@@ -291,6 +291,53 @@ async def test_scheduled_snapshot_denies_exec_spawn_and_device_tools() -> None:
         "openhome_device_lighting_set_power",
         {"device_id": "lamp", "power": "on"},
     )
+
+
+@pytest.mark.asyncio
+async def test_domain_tool_permissions_require_snapshot_and_matching_capability() -> None:
+    registry = ToolRegistry()
+    tool = _FakeTool("research_index_workspace", result="ok")
+    setattr(tool, "_domain_tool_permissions", ("read_files",))
+    registry.register(tool)
+
+    result = await registry.execute("research_index_workspace", {})
+
+    assert "requires an explicit capability snapshot" in result
+
+    registry = ToolRegistry(capability_snapshot=CapabilitySnapshot.scheduled_default())
+    tool = _FakeTool("research_index_workspace", result="ok")
+    setattr(tool, "_domain_tool_permissions", ("read_files",))
+    registry.register(tool)
+
+    result = await registry.execute("research_index_workspace", {})
+
+    assert "not allowed by the current capability snapshot" in result
+
+    registry = ToolRegistry(capability_snapshot=CapabilitySnapshot.user_turn())
+    tool = _FakeTool("research_index_workspace", result="ok")
+    setattr(tool, "_domain_tool_permissions", ("read_files",))
+    registry.register(tool)
+
+    assert await registry.execute("research_index_workspace", {}) == "ok"
+
+
+@pytest.mark.asyncio
+async def test_domain_tool_security_audit_uses_security_tier() -> None:
+    sink = InMemoryToolAuditSink()
+    registry = ToolRegistry(
+        audit_sink=sink,
+        capability_snapshot=CapabilitySnapshot.user_turn(),
+    )
+    tool = _FakeTool("research_index_workspace", result="ok")
+    setattr(tool, "_domain_tool_permissions", ("read_files",))
+    setattr(tool, "_domain_tool_audit", "security")
+    registry.register(tool)
+
+    assert await registry.execute("research_index_workspace", {}) == "ok"
+
+    event = sink.events[0]
+    assert event.status == "success"
+    assert event.result_size is not None
 
 
 @pytest.mark.asyncio

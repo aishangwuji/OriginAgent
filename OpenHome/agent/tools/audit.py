@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import uuid
-import hashlib
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -31,6 +31,7 @@ class ToolAuditConfig:
     security_tools: tuple[str, ...] = (
         "exec",
         "message",
+        "web_fetch",
         "cron",
         "spawn",
         "openhome_device_*",

@@ -11,17 +11,70 @@ from typing import Any, Literal
 
 import yaml
 
-
 BUILTIN_DOMAIN_PACKS_DIR = Path(__file__).parent.parent / "domain_packs"
 _DOMAIN_ID_RE = re.compile(r"^[a-z0-9_-]+$")
+_TOOL_ID_RE = re.compile(r"^[a-z0-9_]{1,64}$")
+_MODULE_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)*$")
+_CLASS_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+_ALLOWED_TOOL_PERMISSIONS = frozenset(
+    {
+        "read_files",
+        "write_files",
+        "exec",
+        "send_cross_target",
+        "create_cron",
+        "spawn",
+        "device:lighting",
+        "mcp:read",
+    }
+)
 
 DomainPackStatus = Literal["available", "unavailable", "invalid"]
+DomainDeclarationStatus = Literal["available", "skipped"]
+DomainToolRuntimeStatus = Literal["registered", "skipped"]
 
 
 @dataclass(frozen=True)
 class DomainPackRequires:
     bins: tuple[str, ...] = ()
     env: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class DomainSkillDeclaration:
+    id: str
+    virtual_id: str
+    path: Path | None = None
+    status: DomainDeclarationStatus = "available"
+    unavailable_reason: str = ""
+
+    @property
+    def available(self) -> bool:
+        return self.status == "available"
+
+
+@dataclass(frozen=True)
+class DomainToolDeclaration:
+    id: str
+    module: str
+    class_name: str
+    permissions: tuple[str, ...] = ()
+    audit: Literal["minimal", "security"] = "minimal"
+    module_path: Path | None = None
+    status: DomainDeclarationStatus = "available"
+    unavailable_reason: str = ""
+
+    @property
+    def available(self) -> bool:
+        return self.status == "available"
+
+
+@dataclass(frozen=True)
+class DomainToolRuntimeRecord:
+    pack_id: str
+    tool_id: str
+    status: DomainToolRuntimeStatus
+    reason: str = ""
 
 
 @dataclass(frozen=True)
@@ -40,6 +93,8 @@ class DomainPack:
     unavailable_reason: str = ""
     capabilities_path: Path | None = None
     capabilities_content: str = ""
+    skills: tuple[DomainSkillDeclaration, ...] = ()
+    tools: tuple[DomainToolDeclaration, ...] = ()
     manifest: dict[str, Any] = field(default_factory=dict)
 
     @property
@@ -84,6 +139,7 @@ class DomainPackManager:
         self.builtin_dir = builtin_dir or BUILTIN_DOMAIN_PACKS_DIR
         self.config = DomainPackRuntimeConfig.from_config(config)
         self._packs: dict[str, DomainPack] | None = None
+        self._domain_tool_runtime: dict[tuple[str, str], DomainToolRuntimeRecord] = {}
 
     def list_packs(self) -> list[DomainPack]:
         if not self.config.enabled:
@@ -117,6 +173,13 @@ class DomainPackManager:
             )
             if pack.capabilities:
                 lines.append(f"  Capabilities: {', '.join(pack.capabilities)}")
+            if pack.active:
+                skill_summary = _declaration_summary(pack.skills)
+                tool_summary = _declaration_summary(pack.tools)
+                if skill_summary:
+                    lines.append(f"  Skills: {skill_summary}")
+                if tool_summary:
+                    lines.append(f"  Tools: {tool_summary}")
         return "\n".join(lines)
 
     def build_active_context(self) -> str:
@@ -132,6 +195,71 @@ class DomainPackManager:
                 content = content[:limit].rstrip() + "\n\n[Domain capabilities truncated]"
             parts.append(f"## Domain Pack: {pack.id}\n\n{content}")
         return "\n\n---\n\n".join(parts)
+
+    def active_skill_entries(self) -> list[dict[str, str]]:
+        """Return SkillsLoader-compatible entries for active domain pack skills."""
+        entries: list[dict[str, str]] = []
+        for pack in self.list_packs():
+            if not pack.active:
+                continue
+            for skill in pack.skills:
+                if not skill.available or skill.path is None:
+                    continue
+                entries.append(
+                    {
+                        "name": skill.virtual_id,
+                        "path": str(skill.path),
+                        "source": f"domain:{pack.id}",
+                    }
+                )
+        return entries
+
+    def get_active_skill_path(self, pack_id: str, skill_id: str) -> Path | None:
+        pack = self.get_pack(pack_id)
+        if pack is None or not pack.active:
+            return None
+        for skill in pack.skills:
+            if skill.id == skill_id and skill.available:
+                return skill.path
+        return None
+
+    def active_tool_declarations(self) -> list[tuple[DomainPack, DomainToolDeclaration]]:
+        """Return tool declarations that active domain packs may try to register."""
+        pairs: list[tuple[DomainPack, DomainToolDeclaration]] = []
+        for pack in self.list_packs():
+            if not pack.active:
+                continue
+            pairs.extend((pack, tool) for tool in pack.tools)
+        return pairs
+
+    def clear_domain_tool_runtime(self) -> None:
+        self._domain_tool_runtime.clear()
+
+    def record_domain_tool_runtime(
+        self,
+        pack_id: str,
+        tool_id: str,
+        status: DomainToolRuntimeStatus,
+        reason: str = "",
+    ) -> None:
+        self._domain_tool_runtime[(pack_id, tool_id)] = DomainToolRuntimeRecord(
+            pack_id=pack_id,
+            tool_id=tool_id,
+            status=status,
+            reason=reason,
+        )
+
+    def domain_tool_runtime_records(self, pack_id: str | None = None) -> list[DomainToolRuntimeRecord]:
+        records = list(self._domain_tool_runtime.values())
+        if pack_id is not None:
+            records = [record for record in records if record.pack_id == pack_id]
+        return sorted(records, key=lambda record: (record.pack_id, record.tool_id))
+
+    def domain_tool_runtime_counts(self) -> dict[str, int]:
+        counts = {"registered": 0, "skipped": 0}
+        for record in self._domain_tool_runtime.values():
+            counts[record.status] = counts.get(record.status, 0) + 1
+        return counts
 
     def _discover(self) -> dict[str, DomainPack]:
         packs: dict[str, DomainPack] = {}
@@ -219,6 +347,8 @@ class DomainPackManager:
             unavailable_reason=reason,
             capabilities_path=capabilities_path,
             capabilities_content=capabilities_content,
+            skills=tuple(self._parse_skills(raw.get("skills"), pack_dir, pack_id)),
+            tools=tuple(self._parse_tools(raw.get("tools"), pack_dir, pack_id)),
             manifest=raw,
         )
 
@@ -258,6 +388,156 @@ class DomainPackManager:
             manifest=manifest or {},
         )
 
+    def _parse_skills(
+        self,
+        raw: Any,
+        pack_dir: Path,
+        pack_id: str,
+    ) -> list[DomainSkillDeclaration]:
+        declarations: list[DomainSkillDeclaration] = []
+        if raw is None:
+            return declarations
+        if not isinstance(raw, list):
+            return [
+                DomainSkillDeclaration(
+                    id="skills",
+                    virtual_id="",
+                    status="skipped",
+                    unavailable_reason="skills must be a list",
+                )
+            ]
+        for index, item in enumerate(raw):
+            skill_id = ""
+            if isinstance(item, str):
+                skill_id = item.strip()
+            elif isinstance(item, dict):
+                skill_id = str(item.get("id") or item.get("name") or "").strip()
+            label = skill_id or f"skill[{index}]"
+            virtual_id = f"domain:{pack_id}/{skill_id}" if skill_id else ""
+            if not skill_id or not _DOMAIN_ID_RE.fullmatch(skill_id):
+                declarations.append(
+                    DomainSkillDeclaration(
+                        id=label,
+                        virtual_id=virtual_id,
+                        status="skipped",
+                        unavailable_reason="skill id must match ^[a-z0-9_-]+$",
+                    )
+                )
+                continue
+            skill_path = pack_dir / "skills" / skill_id / "SKILL.md"
+            if not skill_path.exists():
+                declarations.append(
+                    DomainSkillDeclaration(
+                        id=skill_id,
+                        virtual_id=virtual_id,
+                        path=skill_path,
+                        status="skipped",
+                        unavailable_reason="missing SKILL.md",
+                    )
+                )
+                continue
+            declarations.append(
+                DomainSkillDeclaration(id=skill_id, virtual_id=virtual_id, path=skill_path)
+            )
+        return declarations
+
+    def _parse_tools(
+        self,
+        raw: Any,
+        pack_dir: Path,
+        pack_id: str,
+    ) -> list[DomainToolDeclaration]:
+        declarations: list[DomainToolDeclaration] = []
+        if raw is None:
+            return declarations
+        if not isinstance(raw, list):
+            return [
+                DomainToolDeclaration(
+                    id="tools",
+                    module="",
+                    class_name="",
+                    status="skipped",
+                    unavailable_reason="tools must be a list",
+                )
+            ]
+        for index, item in enumerate(raw):
+            if not isinstance(item, dict):
+                declarations.append(
+                    DomainToolDeclaration(
+                        id=f"tool[{index}]",
+                        module="",
+                        class_name="",
+                        status="skipped",
+                        unavailable_reason="tool declaration must be a mapping",
+                    )
+                )
+                continue
+            declarations.append(self._parse_tool(item, pack_dir, pack_id, index))
+        return declarations
+
+    def _parse_tool(
+        self,
+        raw: dict[str, Any],
+        pack_dir: Path,
+        pack_id: str,
+        index: int,
+    ) -> DomainToolDeclaration:
+        tool_id = str(raw.get("id") or "").strip()
+        module = str(raw.get("module") or "").strip()
+        class_name = str(raw.get("class") or raw.get("class_name") or "").strip()
+        label = tool_id or f"tool[{index}]"
+        permissions_present = "permissions" in raw
+        permissions = tuple(_string_list(raw.get("permissions")))
+        audit = str(raw.get("audit") or "minimal").strip()
+        module_path = _domain_tool_module_path(pack_dir, module)
+
+        reason = ""
+        normalized_prefix = pack_id.replace("-", "_") + "_"
+        if not tool_id:
+            reason = "missing required field: id"
+        elif not _TOOL_ID_RE.fullmatch(tool_id):
+            reason = "tool id must match ^[a-z0-9_]{1,64}$"
+        elif not tool_id.startswith(normalized_prefix):
+            reason = f"tool id must start with {normalized_prefix}"
+        elif not module:
+            reason = "missing required field: module"
+        elif not _valid_domain_tool_module(module):
+            reason = "module must be a dotted path under tools"
+        elif module_path is None or not module_path.exists():
+            reason = "missing tool module file"
+        elif not class_name:
+            reason = "missing required field: class"
+        elif not _CLASS_RE.fullmatch(class_name):
+            reason = "class must be a valid Python identifier"
+        elif not permissions_present:
+            reason = "missing permissions"
+        elif any(permission not in _ALLOWED_TOOL_PERMISSIONS for permission in permissions):
+            reason = "unsupported permission(s): " + ", ".join(
+                permission for permission in permissions if permission not in _ALLOWED_TOOL_PERMISSIONS
+            )
+        elif audit not in {"minimal", "security"}:
+            reason = "audit must be minimal or security"
+
+        if reason:
+            return DomainToolDeclaration(
+                id=label,
+                module=module,
+                class_name=class_name,
+                permissions=permissions,
+                audit="security" if audit == "security" else "minimal",
+                module_path=module_path,
+                status="skipped",
+                unavailable_reason=reason,
+            )
+        return DomainToolDeclaration(
+            id=tool_id,
+            module=module,
+            class_name=class_name,
+            permissions=permissions,
+            audit="security" if audit == "security" else "minimal",
+            module_path=module_path,
+        )
+
 
 def _string_list(value: Any) -> list[str]:
     if value is None:
@@ -273,3 +553,42 @@ def _activation_triggers(value: Any) -> Any:
     if not isinstance(value, dict):
         return None
     return value.get("triggers")
+
+
+def _declaration_summary(items: tuple[DomainSkillDeclaration | DomainToolDeclaration, ...]) -> str:
+    if not items:
+        return ""
+    available = [item.id for item in items if item.status == "available"]
+    skipped = [item.id for item in items if item.status == "skipped"]
+    parts: list[str] = []
+    if available:
+        parts.append(", ".join(f"`{item}`" for item in available[:8]))
+        if len(available) > 8:
+            parts.append(f"+{len(available) - 8} more")
+    if skipped:
+        parts.append(f"{len(skipped)} skipped")
+    return "; ".join(parts)
+
+
+def _valid_domain_tool_module(module: str) -> bool:
+    if not module.startswith("tools."):
+        return False
+    if any(part in module for part in ("/", "\\", "..")):
+        return False
+    return bool(_MODULE_RE.fullmatch(module))
+
+
+def _domain_tool_module_path(pack_dir: Path, module: str) -> Path | None:
+    if not _valid_domain_tool_module(module):
+        return None
+    candidate = pack_dir / Path(*module.split(".")).with_suffix(".py")
+    try:
+        resolved_candidate = candidate.resolve()
+        resolved_pack = pack_dir.resolve()
+    except OSError:
+        return None
+    try:
+        resolved_candidate.relative_to(resolved_pack)
+    except ValueError:
+        return None
+    return candidate

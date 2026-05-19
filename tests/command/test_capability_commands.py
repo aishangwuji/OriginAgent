@@ -6,8 +6,8 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from OpenHome.agent.loop import UNIFIED_SESSION_KEY, AgentLoop
 from OpenHome.agent.domain_packs import DomainPackManager
+from OpenHome.agent.loop import UNIFIED_SESSION_KEY, AgentLoop
 from OpenHome.agent.skills import SkillsLoader
 from OpenHome.bus.events import InboundMessage
 from OpenHome.bus.queue import MessageBus
@@ -112,10 +112,28 @@ async def test_domain_command_lists_pack_statuses(tmp_path: Path) -> None:
     pack = workspace / "domain_packs" / "research"
     pack.mkdir(parents=True)
     (pack / "domain_pack.yaml").write_text(
-        "id: research\nname: Research\nversion: 0.1.0\ncapabilities:\n  - search_sources\n",
+        "id: research\n"
+        "name: Research\n"
+        "version: 0.1.0\n"
+        "capabilities:\n"
+        "  - search_sources\n"
+        "skills:\n"
+        "  - source-synthesis\n"
+        "tools:\n"
+        "  - id: research_search\n"
+        "    module: tools.search\n"
+        "    class: ResearchSearchTool\n"
+        "    permissions: []\n",
         encoding="utf-8",
     )
     (pack / "CAPABILITIES.md").write_text("# Research\n", encoding="utf-8")
+    (pack / "skills" / "source-synthesis").mkdir(parents=True)
+    (pack / "skills" / "source-synthesis" / "SKILL.md").write_text(
+        "# Source Synthesis\n",
+        encoding="utf-8",
+    )
+    (pack / "tools").mkdir()
+    (pack / "tools" / "search.py").write_text("# placeholder\n", encoding="utf-8")
     invalid = workspace / "domain_packs" / "broken"
     invalid.mkdir(parents=True)
 
@@ -128,6 +146,8 @@ async def test_domain_command_lists_pack_statuses(tmp_path: Path) -> None:
     assert "## Domain Packs" in result.content
     assert "`research` [workspace]" in result.content
     assert "status: available" in result.content
+    assert "Skills: declared 1, available 1, skipped 0" in result.content
+    assert "Tools: declared 1, registered 0, skipped 0" in result.content
     assert "`broken` [workspace]" in result.content
     assert "status: invalid" in result.content
     assert "missing domain_pack.yaml" in result.content
