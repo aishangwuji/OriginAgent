@@ -1037,8 +1037,10 @@ class WebSocketChannel(BaseChannel):
         else:
             return _http_error(400, "unknown review action")
         status = 200 if result.error != "not_found" else 404
+        result_json = result.to_json()
         return _http_json_response({
-            "result": result.to_json(),
+            "result": result_json,
+            "apply_result": result_json if action in {"apply", "approve"} else None,
             "proposal": result.proposal,
             "stats": store.stats(),
         }, status=status)

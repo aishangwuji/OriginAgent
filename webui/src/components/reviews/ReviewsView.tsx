@@ -43,7 +43,7 @@ type ReviewTypeFilter = "memory" | "fact" | "skill" | "workflow" | "";
 
 const STATUS_FILTERS: ReviewStatusFilter[] = ["pending", "applied", "rejected", "deferred", "failed", ""];
 const TYPE_FILTERS: ReviewTypeFilter[] = ["", "memory", "fact", "skill", "workflow"];
-const APPLICABLE_TYPES = new Set(["memory", "fact"]);
+const APPLICABLE_TYPES = new Set(["memory", "fact", "skill"]);
 
 interface ReviewsViewProps {
   onBackToChat: () => void;
@@ -53,7 +53,7 @@ function normalizeType(proposal: ReviewProposal | null): string {
   return String(proposal?.proposal_type ?? "").toLowerCase();
 }
 
-function isApplicable(proposal: ReviewProposal | null): boolean {
+function isSupportedType(proposal: ReviewProposal | null): boolean {
   return APPLICABLE_TYPES.has(normalizeType(proposal));
 }
 
@@ -152,8 +152,15 @@ export function ReviewsView({ onBackToChat }: ReviewsViewProps) {
   }, [refreshToken, selectedId, token]);
 
   const selectedStatus = selected?.status ?? "pending";
-  const terminal = ["applied", "rejected", "deferred"].includes(String(selectedStatus));
-  const applyDisabled = !selected || terminal || !isApplicable(selected);
+  const terminal = ["applied", "rejected", "deferred", "failed"].includes(String(selectedStatus));
+  const canApplySelected =
+    selected && typeof selected.can_apply === "boolean"
+      ? selected.can_apply
+      : Boolean(selected && !terminal && isSupportedType(selected));
+  const applyDisabled = !selected || terminal || !canApplySelected;
+  const selectedArtifact = selected?.apply_artifact ?? selected?.review_event?.artifact;
+  const selectedPayloadSkillName =
+    typeof selected?.payload?.skill_name === "string" ? selected.payload.skill_name : "";
 
   const runAction = useCallback(
     async (action: "apply" | "reject" | "defer") => {
@@ -348,6 +355,11 @@ export function ReviewsView({ onBackToChat }: ReviewsViewProps) {
                       {t("reviews.appliedFact", { id: selected.applied_fact_id })}
                     </span>
                   ) : null}
+                  {selected.applied_skill_path ? (
+                    <span className="rounded-full bg-primary/15 px-3 py-1 text-xs font-black text-foreground">
+                      {t("reviews.appliedSkill", { path: selected.applied_skill_path })}
+                    </span>
+                  ) : null}
                 </div>
                 <h2 className="mt-4 text-xl font-black leading-tight text-foreground">
                   {selected.title || t("reviews.untitled")}
@@ -446,9 +458,9 @@ export function ReviewsView({ onBackToChat }: ReviewsViewProps) {
                     </Button>
                   </div>
                 </div>
-                {!isApplicable(selected) ? (
+                {!isSupportedType(selected) ? (
                   <p className="mt-3 text-xs text-muted-foreground">
-                    {t("reviews.unsupportedApply")}
+                    {selected.unsupported_reason || t("reviews.unsupportedApply")}
                   </p>
                 ) : null}
               </div>
@@ -462,7 +474,12 @@ export function ReviewsView({ onBackToChat }: ReviewsViewProps) {
           <AlertDialogHeader>
             <AlertDialogTitle>{t("reviews.confirmApply.title")}</AlertDialogTitle>
             <AlertDialogDescription>
-              {t("reviews.confirmApply.description")}
+              {normalizeType(selected) === "skill"
+                ? t("reviews.confirmApply.skillDescription", {
+                    name: selectedArtifact?.skill_name || selectedPayloadSkillName || selected?.title || "",
+                    path: selectedArtifact?.path || t("reviews.confirmApply.skillPathPending"),
+                  })
+                : t("reviews.confirmApply.description")}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>

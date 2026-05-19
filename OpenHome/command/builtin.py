@@ -918,6 +918,9 @@ def _format_review_detail(record: dict) -> str:
     fact_id = record.get("applied_fact_id")
     if isinstance(fact_id, str) and fact_id:
         lines.extend(["", f"Applied fact: `{fact_id}`"])
+    skill_path = record.get("applied_skill_path")
+    if isinstance(skill_path, str) and skill_path:
+        lines.extend(["", f"Applied skill: `{skill_path}`"])
     return "\n".join(lines)
 
 
@@ -935,6 +938,14 @@ def _format_review_result(result: object) -> str:
     fact_id = data.get("fact_id")
     if fact_id:
         lines.append(f"- Fact: `{fact_id}`")
+    artifact = data.get("artifact")
+    if isinstance(artifact, dict):
+        skill_name = artifact.get("skill_name")
+        skill_path = artifact.get("path")
+        if skill_name:
+            lines.append(f"- Skill: `{skill_name}`")
+        if skill_path:
+            lines.append(f"- Path: `{skill_path}`")
     error = data.get("error")
     if error:
         lines.append(f"- Error: {error}")

@@ -28,6 +28,7 @@ from OpenHome.agent.facts import (
     FactRecord,
 )
 from OpenHome.agent.memory import MemoryStore, redact_memory_text
+from OpenHome.agent.skill_artifacts import write_skill_artifact
 from OpenHome.providers.base import LLMProvider
 from OpenHome.utils.helpers import truncate_text
 from OpenHome.utils.prompt_templates import render_template
@@ -42,8 +43,8 @@ _EVIDENCE_MAX_ITEMS = 5
 _EVIDENCE_MAX_CHARS = 500
 _MESSAGE_MAX_CHARS = 1600
 _REVIEW_REASON_MAX_CHARS = 1000
-_TERMINAL_REVIEW_STATUSES = {"applied", "rejected", "deferred"}
-_APPLICABLE_PROPOSAL_TYPES = {"memory", "fact"}
+_TERMINAL_REVIEW_STATUSES = {"applied", "rejected", "deferred", "failed"}
+_APPLICABLE_PROPOSAL_TYPES = {"memory", "fact", "skill"}
 
 
 @dataclass(frozen=True)
@@ -79,6 +80,9 @@ class ReviewProposalEvent:
     created_at: str
     reason: str = ""
     fact_id: str | None = None
+    skill_name: str | None = None
+    skill_path: str | None = None
+    artifact: dict[str, Any] | None = None
     error: str = ""
 
     def to_json(self) -> dict[str, Any]:
@@ -97,6 +101,7 @@ class ReviewDecisionResult:
     proposal: dict[str, Any] | None = None
     event: dict[str, Any] | None = None
     fact_id: str | None = None
+    artifact: dict[str, Any] | None = None
     error: str = ""
 
     def to_json(self) -> dict[str, Any]:
@@ -187,6 +192,7 @@ class ReviewProposalStore:
             record["status"] = str(record.get("status") or "pending")
             event = latest_events.get(proposal_id)
             fact_id = None
+            artifact = None
             if event is not None:
                 record["status"] = str(event.get("status") or record["status"])
                 record["review_event"] = dict(event)
@@ -194,8 +200,18 @@ class ReviewProposalStore:
                 if reason:
                     record["review_reason"] = reason
                 fact_id = event.get("fact_id")
+                artifact = event.get("artifact")
             if isinstance(fact_id, str) and fact_id:
                 record["applied_fact_id"] = fact_id
+            if isinstance(artifact, dict):
+                record["apply_artifact"] = dict(artifact)
+                skill_name = artifact.get("skill_name")
+                skill_path = artifact.get("path")
+                if isinstance(skill_name, str) and skill_name:
+                    record["applied_skill_name"] = skill_name
+                if isinstance(skill_path, str) and skill_path:
+                    record["applied_skill_path"] = skill_path
+            _decorate_review_capabilities(record)
             records.append(_redacted_record(record))
         return records
 
@@ -280,16 +296,13 @@ class ReviewProposalStore:
             terminal = self._terminal_result(record, action="apply")
             if terminal is not None:
                 return terminal
-            failed = self._failed_apply_result(record)
-            if failed is not None:
-                return failed
 
             proposal_type = _proposal_type(record)
             if proposal_type not in _APPLICABLE_PROPOSAL_TYPES:
                 event = self._append_event_unlocked(
                     proposal_id,
                     status="failed",
-                    reason=reason or f"{proposal_type} proposals cannot be applied in P6.",
+                    reason=reason or f"{proposal_type} proposals cannot be applied in P7.",
                     error="unsupported_proposal_type",
                 )
                 return ReviewDecisionResult(
@@ -297,11 +310,14 @@ class ReviewProposalStore:
                     status="failed",
                     action="apply",
                     ok=False,
-                    message="Only memory and fact proposals can be applied in this phase.",
+                    message="Only memory, fact, and skill proposals can be applied in this phase.",
                     proposal=self._find_unlocked(proposal_id),
                     event=event,
                     error="unsupported_proposal_type",
                 )
+
+            if proposal_type == "skill":
+                return self._apply_to_skill_unlocked(record, reason=reason)
 
             try:
                 fact = self._apply_to_memory(record)
@@ -361,27 +377,21 @@ class ReviewProposalStore:
             proposal_id=str(record.get("id") or ""),
             status=status,
             action=action,
-            ok=True,
+            ok=status != "failed",
             message=f"Review proposal is already {status}.",
             proposal=record,
             event=record.get("review_event") if isinstance(record.get("review_event"), dict) else None,
             fact_id=record.get("applied_fact_id") if isinstance(record.get("applied_fact_id"), str) else None,
-        )
-
-    def _failed_apply_result(self, record: dict[str, Any]) -> ReviewDecisionResult | None:
-        status = str(record.get("status") or "pending")
-        event = record.get("review_event")
-        if status != "failed" or not isinstance(event, dict):
-            return None
-        return ReviewDecisionResult(
-            proposal_id=str(record.get("id") or ""),
-            status="failed",
-            action="apply",
-            ok=False,
-            message="Review proposal apply already failed.",
-            proposal=record,
-            event=event,
-            error=str(event.get("error") or "failed"),
+            artifact=(
+                record.get("apply_artifact")
+                if isinstance(record.get("apply_artifact"), dict)
+                else None
+            ),
+            error=(
+                str(record.get("review_event", {}).get("error") or "failed")
+                if status == "failed" and isinstance(record.get("review_event"), dict)
+                else ""
+            ),
         )
 
     def _record_terminal_decision(
@@ -434,10 +444,12 @@ class ReviewProposalStore:
         status: str,
         reason: str = "",
         fact_id: str | None = None,
+        artifact: dict[str, Any] | None = None,
         error: str = "",
     ) -> dict[str, Any]:
         reason = _clean_text(reason, _REVIEW_REASON_MAX_CHARS)
         error = _clean_text(error, _REVIEW_REASON_MAX_CHARS)
+        artifact = _redact_json_payload(artifact) if isinstance(artifact, dict) else None
         event = ReviewProposalEvent(
             event_id=f"review_event_{uuid.uuid4().hex}",
             proposal_id=proposal_id,
@@ -445,6 +457,9 @@ class ReviewProposalStore:
             created_at=datetime.now(timezone.utc).isoformat(),
             reason=reason,
             fact_id=fact_id,
+            skill_name=artifact.get("skill_name") if isinstance(artifact, dict) else None,
+            skill_path=artifact.get("path") if isinstance(artifact, dict) else None,
+            artifact=artifact,
             error=error,
         ).to_json()
         self.event_path.parent.mkdir(parents=True, exist_ok=True)
@@ -455,6 +470,45 @@ class ReviewProposalStore:
     def _apply_to_memory(self, record: dict[str, Any]) -> FactRecord:
         fact_fields = _fact_fields_from_proposal(record)
         return self._memory_store.upsert_fact_and_rebuild_memory(**fact_fields)
+
+    def _apply_to_skill_unlocked(self, record: dict[str, Any], *, reason: str = "") -> ReviewDecisionResult:
+        proposal_id = str(record.get("id") or "")
+        try:
+            artifact = write_skill_artifact(record, self.workspace).to_json()
+        except Exception as exc:
+            logger.exception("Failed to apply background review skill proposal {}", proposal_id)
+            event = self._append_event_unlocked(
+                proposal_id,
+                status="failed",
+                reason=reason,
+                error=str(exc),
+            )
+            return ReviewDecisionResult(
+                proposal_id=proposal_id,
+                status="failed",
+                action="apply",
+                ok=False,
+                message="Failed to apply skill review proposal.",
+                proposal=self._find_unlocked(proposal_id),
+                event=event,
+                error=str(exc),
+            )
+        event = self._append_event_unlocked(
+            proposal_id,
+            status="applied",
+            reason=reason,
+            artifact=artifact,
+        )
+        return ReviewDecisionResult(
+            proposal_id=proposal_id,
+            status="applied",
+            action="apply",
+            ok=True,
+            message="Skill review proposal applied.",
+            proposal=self._find_unlocked(proposal_id),
+            event=event,
+            artifact=artifact,
+        )
 
 
 class BackgroundReviewService:
@@ -760,6 +814,25 @@ def _redacted_record(record: dict[str, Any]) -> dict[str, Any]:
     if isinstance(cleaned.get("review_event"), dict):
         cleaned["review_event"] = _redact_json_payload(cleaned["review_event"])
     return cleaned
+
+
+def _decorate_review_capabilities(record: dict[str, Any]) -> None:
+    status = str(record.get("status") or "pending")
+    proposal_type = _proposal_type(record)
+    can_apply = status == "pending" and proposal_type in _APPLICABLE_PROPOSAL_TYPES
+    record["can_apply"] = can_apply
+    if can_apply:
+        record["unsupported_reason"] = ""
+    elif proposal_type == "workflow":
+        record["unsupported_reason"] = (
+            "Workflow proposals can be rejected or deferred in P7; applying workflows is reserved for a later phase."
+        )
+    elif proposal_type not in _APPLICABLE_PROPOSAL_TYPES:
+        record["unsupported_reason"] = (
+            "Only memory, fact, and skill proposals can be applied in this phase."
+        )
+    else:
+        record["unsupported_reason"] = "This proposal is already in a terminal state."
 
 
 def _safe_category(value: Any, default: str = "note") -> str:

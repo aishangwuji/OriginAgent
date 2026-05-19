@@ -190,7 +190,8 @@
     "untitled": "Untitled proposal",
     "confidence": "Confidence {{value}}",
     "appliedFact": "Fact {{id}}",
-    "unsupportedApply": "Only memory and fact proposals can be applied in this phase. Skill and workflow proposals can be rejected or deferred.",
+    "appliedSkill": "Skill {{path}}",
+    "unsupportedApply": "Only memory, fact, and skill proposals can be applied in this phase. Workflow proposals can be rejected or deferred.",
     "reasonLabel": "Review note",
     "reasonPlaceholder": "Optional reason for applying, rejecting, or deferring this proposal.",
     "noEvidence": "No evidence snippets were stored for this proposal.",
@@ -237,6 +238,8 @@
     "confirmApply": {
       "title": "Apply this proposal?",
       "description": "OpenHome will write this approved memory or fact into the controlled facts store and rebuild MEMORY.md.",
+      "skillDescription": "OpenHome will write {{name}} as a proposed, unverified workspace skill at {{path}}. It will be discoverable but not always loaded.",
+      "skillPathPending": "workspace/skills/<safe-name>/SKILL.md",
       "cancel": "Cancel",
       "confirm": "Apply"
     }

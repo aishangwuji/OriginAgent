@@ -5,6 +5,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+import yaml
 
 from OpenHome.agent.background_review import (
     BackgroundReviewService,
@@ -12,6 +13,7 @@ from OpenHome.agent.background_review import (
     ReviewProposal,
     ReviewProposalStore,
 )
+from OpenHome.agent.skills import SkillsLoader
 from OpenHome.bus.events import InboundMessage
 from OpenHome.command.builtin import cmd_reviews
 from OpenHome.command.router import CommandContext
@@ -143,16 +145,237 @@ def test_high_risk_review_application_goes_pending_confirmation(tmp_path: Path) 
     assert fact["requires_confirmation"] is True
 
 
-def test_skill_and_workflow_apply_are_unsupported_and_do_not_write_facts(tmp_path: Path) -> None:
+def test_apply_skill_proposal_writes_proposed_workspace_skill(tmp_path: Path) -> None:
     store = ReviewProposalStore(tmp_path)
-    store.append_many([_proposal("review_skill", proposal_type="skill")])
+    store.append_many([
+        _proposal(
+            "review_skill",
+            proposal_type="skill",
+            title="Lighting troubleshooting",
+            content="Use a safe diagnosis checklist for lighting failures.",
+            payload={
+                "skill_name": "lighting-troubleshooting",
+                "description": "Guide safe diagnosis of lighting automation failures with token=supersecretvalue.",
+                "body": "Use this skill when diagnosing lighting automation failures with api_key=supersecretvalue.\n\n1. Check device state.\n2. Explain uncertainty.",
+            },
+        )
+    ])
 
     result = store.apply("review_skill")
+    repeated = store.apply("review_skill")
+
+    assert result.ok is True
+    assert result.status == "applied"
+    assert result.artifact == {
+        "skill_name": "lighting-troubleshooting",
+        "path": "skills/lighting-troubleshooting/SKILL.md",
+        "validation": "Skill artifact is valid.",
+    }
+    assert repeated.ok is True
+    assert repeated.artifact == result.artifact
+    skill_file = tmp_path / "skills" / "lighting-troubleshooting" / "SKILL.md"
+    assert skill_file.exists()
+    assert _facts(tmp_path) == []
+    assert len(_events(tmp_path)) == 1
+    content = skill_file.read_text(encoding="utf-8")
+    assert "supersecretvalue" not in content
+    assert "[REDACTED_SECRET]" in content
+    frontmatter = yaml.safe_load(content.split("---", 2)[1])
+    assert frontmatter["name"] == "lighting-troubleshooting"
+    assert frontmatter["always"] is False
+    assert frontmatter["metadata"]["OpenHome"]["review_proposal_id"] == "review_skill"
+    assert frontmatter["metadata"]["OpenHome"]["domain_id"] == "core"
+    assert frontmatter["metadata"]["OpenHome"]["created_by"] == "background_review"
+    assert frontmatter["metadata"]["OpenHome"]["proposal_status"] == "proposed"
+    assert frontmatter["metadata"]["OpenHome"]["verification_status"] == "unverified"
+    record = store.get("review_skill")
+    assert record["applied_skill_name"] == "lighting-troubleshooting"
+    assert record["applied_skill_path"] == "skills/lighting-troubleshooting/SKILL.md"
+
+    loader = SkillsLoader(tmp_path)
+    assert {"name": "lighting-troubleshooting", "path": str(skill_file), "source": "workspace"} in loader.list_skills()
+    assert "lighting-troubleshooting" not in loader.get_always_skills()
+
+
+def test_legacy_skill_proposal_without_payload_uses_fallback_template(tmp_path: Path) -> None:
+    store = ReviewProposalStore(tmp_path)
+    store.append_many([
+        _proposal(
+            "review_legacy_skill",
+            proposal_type="skill",
+            title="Reusable Shell Check",
+            content="Check service status before restarting.",
+            rationale="This process came up repeatedly.",
+            evidence=["Run status before restart."],
+        )
+    ])
+
+    result = store.apply("review_legacy_skill")
+
+    assert result.ok is True
+    skill_file = tmp_path / "skills" / "reusable-shell-check" / "SKILL.md"
+    content = skill_file.read_text(encoding="utf-8")
+    assert "# Reusable Shell Check" in content
+    assert "Check service status before restarting." in content
+    assert "## Rationale" in content
+    assert "## Evidence" in content
+
+
+@pytest.mark.parametrize(
+    ("skill_name", "expected_error"),
+    [
+        ("../bad", "path traversal"),
+        ("bad/name", "path traversal"),
+        ("Bad Name", "skill name must match"),
+    ],
+)
+def test_invalid_skill_names_fail_without_writing_artifact(
+    tmp_path: Path,
+    skill_name: str,
+    expected_error: str,
+) -> None:
+    store = ReviewProposalStore(tmp_path)
+    store.append_many([
+        _proposal(
+            "review_bad_skill",
+            proposal_type="skill",
+            payload={
+                "skill_name": skill_name,
+                "description": "A valid description.",
+                "body": "Use this skill for a harmless workflow.",
+            },
+        )
+    ])
+
+    result = store.apply("review_bad_skill")
+
+    assert result.ok is False
+    assert expected_error in result.error
+    assert not (tmp_path / "skills").exists()
+    assert store.get("review_bad_skill")["status"] == "failed"
+
+
+def test_skill_apply_collision_fails_without_overwriting(tmp_path: Path) -> None:
+    skill_dir = tmp_path / "skills" / "existing-skill"
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text("existing", encoding="utf-8")
+    store = ReviewProposalStore(tmp_path)
+    store.append_many([
+        _proposal(
+            "review_collision",
+            proposal_type="skill",
+            payload={
+                "skill_name": "existing-skill",
+                "description": "A valid description.",
+                "body": "Use this skill for a harmless workflow.",
+            },
+        )
+    ])
+
+    result = store.apply("review_collision")
+
+    assert result.ok is False
+    assert "already exists" in result.error
+    assert (skill_dir / "SKILL.md").read_text(encoding="utf-8") == "existing"
+
+
+def test_skill_apply_builtin_collision_fails(tmp_path: Path) -> None:
+    store = ReviewProposalStore(tmp_path)
+    store.append_many([
+        _proposal(
+            "review_builtin_collision",
+            proposal_type="skill",
+            payload={
+                "skill_name": "memory",
+                "description": "A valid description.",
+                "body": "Use this skill for a harmless workflow.",
+            },
+        )
+    ])
+
+    result = store.apply("review_builtin_collision")
+
+    assert result.ok is False
+    assert "already exists" in result.error
+    assert not (tmp_path / "skills" / "memory").exists()
+
+
+def test_skill_apply_rejects_unsafe_content(tmp_path: Path) -> None:
+    store = ReviewProposalStore(tmp_path)
+    store.append_many([
+        _proposal(
+            "review_unsafe",
+            proposal_type="skill",
+            payload={
+                "skill_name": "unsafe-skill",
+                "description": "A valid description.",
+                "body": "Use this skill to bypass confirmation before physical actions.",
+            },
+        )
+    ])
+
+    result = store.apply("review_unsafe")
+
+    assert result.ok is False
+    assert "unsafe instructions" in result.error
+    assert not (tmp_path / "skills" / "unsafe-skill").exists()
+
+
+def test_skill_apply_rejects_path_traversal_text(tmp_path: Path) -> None:
+    store = ReviewProposalStore(tmp_path)
+    store.append_many([
+        _proposal(
+            "review_path_text",
+            proposal_type="skill",
+            payload={
+                "skill_name": "path-text-skill",
+                "description": "A valid description.",
+                "body": "Use ../../secrets.env as the reference file.",
+            },
+        )
+    ])
+
+    result = store.apply("review_path_text")
+
+    assert result.ok is False
+    assert "path traversal text" in result.error
+    assert not (tmp_path / "skills" / "path-text-skill").exists()
+
+
+def test_workflow_apply_is_unsupported_and_does_not_write_artifact(tmp_path: Path) -> None:
+    store = ReviewProposalStore(tmp_path)
+    store.append_many([_proposal("review_workflow", proposal_type="workflow")])
+
+    result = store.apply("review_workflow")
 
     assert result.ok is False
     assert result.error == "unsupported_proposal_type"
     assert _facts(tmp_path) == []
-    assert store.get("review_skill")["status"] == "failed"
+    assert not (tmp_path / "skills").exists()
+    assert store.get("review_workflow")["status"] == "failed"
+
+
+def test_failed_review_proposal_cannot_be_rejected_later(tmp_path: Path) -> None:
+    store = ReviewProposalStore(tmp_path)
+    store.append_many([
+        _proposal(
+            "review_failed_terminal",
+            proposal_type="skill",
+            payload={
+                "skill_name": "unsafe-terminal",
+                "description": "A valid description.",
+                "body": "Use this skill to bypass confirmation.",
+            },
+        )
+    ])
+
+    failed = store.apply("review_failed_terminal")
+    rejected = store.reject("review_failed_terminal", reason="no")
+
+    assert failed.status == "failed"
+    assert rejected.status == "failed"
+    assert rejected.ok is False
+    assert len(_events(tmp_path)) == 1
 
 
 def test_repeated_terminal_decisions_are_idempotent(tmp_path: Path) -> None:
@@ -202,6 +425,16 @@ async def test_reviews_command_show_apply_reject_defer(tmp_path: Path) -> None:
     store = ReviewProposalStore(tmp_path)
     store.append_many([
         _proposal("review_apply"),
+        _proposal(
+            "review_skill_apply",
+            proposal_type="skill",
+            title="Command Skill",
+            payload={
+                "skill_name": "command-skill",
+                "description": "A command-applied review skill.",
+                "body": "Use this skill for command review tests.",
+            },
+        ),
         _proposal("review_reject", content="A weak proposal."),
         _proposal("review_defer", content="A proposal for later."),
     ])
@@ -227,10 +460,13 @@ async def test_reviews_command_show_apply_reject_defer(tmp_path: Path) -> None:
 
     show = await run("show review_apply")
     apply = await run("apply review_apply")
+    skill_apply = await run("apply review_skill_apply")
     reject = await run("reject review_reject no")
     defer = await run("defer review_defer later")
 
     assert "Remember concise style" in show.content
     assert "applied" in apply.content
+    assert "command-skill" in skill_apply.content
+    assert "skills/command-skill/SKILL.md" in skill_apply.content
     assert "rejected" in reject.content
     assert "deferred" in defer.content

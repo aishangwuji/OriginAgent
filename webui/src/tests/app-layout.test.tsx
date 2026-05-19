@@ -392,6 +392,96 @@ describe("App layout", () => {
     expect(await screen.findByText("Review proposal applied.")).toBeInTheDocument();
   });
 
+  it("applies a skill proposal with proposed workspace skill confirmation", async () => {
+    await i18n.changeLanguage("en");
+    const proposal = {
+      id: "review_skill",
+      created_at: "2026-05-19T10:00:00+00:00",
+      session_key: "websocket:chat-a",
+      turn_id: "turn-1",
+      proposal_type: "skill",
+      domain_id: "core",
+      title: "Lighting troubleshooting",
+      content: "Create a reusable lighting troubleshooting skill.",
+      rationale: "The workflow came up repeatedly.",
+      confidence: 0.88,
+      evidence: ["Check device state first."],
+      payload: { skill_name: "lighting-troubleshooting" },
+      status: "pending",
+      can_apply: true,
+    };
+    const appliedProposal = {
+      ...proposal,
+      status: "applied",
+      applied_skill_name: "lighting-troubleshooting",
+      applied_skill_path: "skills/lighting-troubleshooting/SKILL.md",
+      apply_artifact: {
+        skill_name: "lighting-troubleshooting",
+        path: "skills/lighting-troubleshooting/SKILL.md",
+        validation: "Skill artifact is valid.",
+      },
+    };
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      const json = (body: unknown) => ({
+        ok: true,
+        status: 200,
+        headers: new Headers({ "content-type": "application/json" }),
+        text: async () => JSON.stringify(body),
+      });
+      if (url === "/api/reviews?status=pending&limit=50") {
+        return json({
+          proposals: [proposal],
+          stats: { proposal_count: 1, pending_count: 1 },
+        });
+      }
+      if (url === "/api/reviews/review_skill") {
+        return json({
+          proposal,
+          stats: { proposal_count: 1, pending_count: 1 },
+        });
+      }
+      if (url === "/api/reviews/review_skill/apply") {
+        return json({
+          result: {
+            proposal_id: "review_skill",
+            status: "applied",
+            action: "apply",
+            ok: true,
+            message: "Skill review proposal applied.",
+            artifact: appliedProposal.apply_artifact,
+          },
+          proposal: appliedProposal,
+          stats: { proposal_count: 1, pending_count: 0 },
+        });
+      }
+      return { ok: false, status: 404, json: async () => ({}) };
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<App />);
+
+    await waitFor(() => expect(connectSpy).toHaveBeenCalled());
+    const sidebar = screen.getByRole("navigation", { name: "Sidebar navigation" });
+    fireEvent.click(within(sidebar).getByRole("button", { name: "Reviews" }));
+
+    expect(await screen.findByText("Lighting troubleshooting")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Apply" }));
+    expect(screen.getByText(/proposed, unverified workspace skill/)).toBeInTheDocument();
+    expect(screen.getByText(/lighting-troubleshooting/)).toBeInTheDocument();
+    fireEvent.click(screen.getAllByRole("button", { name: "Apply" }).at(-1)!);
+
+    await waitFor(() =>
+      expect(fetchMock).toHaveBeenCalledWith(
+        "/api/reviews/review_skill/apply",
+        expect.objectContaining({
+          headers: { Authorization: "Bearer tok" },
+        }),
+      ),
+    );
+    expect(await screen.findByText("Skill review proposal applied.")).toBeInTheDocument();
+  });
+
   it("shows New chat in the thread header while a session has no generated title", async () => {
     await i18n.changeLanguage("zh-CN");
     mockSessions = [

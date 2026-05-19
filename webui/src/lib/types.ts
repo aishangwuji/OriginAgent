@@ -209,7 +209,16 @@ export interface ReviewProposalEvent {
   created_at?: string;
   reason?: string;
   fact_id?: string | null;
+  skill_name?: string | null;
+  skill_path?: string | null;
+  artifact?: ReviewApplyArtifact | null;
   error?: string;
+}
+
+export interface ReviewApplyArtifact {
+  skill_name?: string;
+  path?: string;
+  validation?: string;
 }
 
 export interface ReviewProposal {
@@ -229,6 +238,11 @@ export interface ReviewProposal {
   status: ReviewProposalStatus | string;
   review_reason?: string;
   applied_fact_id?: string;
+  applied_skill_name?: string;
+  applied_skill_path?: string;
+  apply_artifact?: ReviewApplyArtifact;
+  can_apply?: boolean;
+  unsupported_reason?: string;
   review_event?: ReviewProposalEvent;
 }
 
@@ -247,6 +261,7 @@ export interface ReviewDecisionResult {
   proposal?: ReviewProposal | null;
   event?: ReviewProposalEvent | null;
   fact_id?: string | null;
+  artifact?: ReviewApplyArtifact | null;
   error?: string;
 }
 

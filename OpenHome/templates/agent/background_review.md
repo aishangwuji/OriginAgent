@@ -15,6 +15,7 @@ Each proposal item must include:
 - rationale: why this is worth reviewing later
 - confidence: number from 0.0 to 1.0
 - evidence: short excerpts from the reviewed turn
+- payload: optional structured data for later application; type="skill" should include skill_name, description, and body when possible
 
 Rules:
 - Produce at most {{ max_proposals }} proposals.
@@ -26,6 +27,7 @@ Rules:
 - Use type="memory" for durable user preferences, project facts, environment facts, or stable boundaries.
 - Use type="fact" for structured facts that may later enter facts.jsonl.
 - Use type="skill" for reusable execution technique or workflow knowledge that may later become a skill.
+- For type="skill", include payload.skill_name, payload.description, and payload.body when possible. The body should be concise SKILL.md instructions without secrets, private identifiers, or raw sensitive conversation text.
 - Use type="workflow" for repeated multi-step procedures that may later become a formal workflow.
 - Use domain_id="core" unless the evidence clearly belongs to an active domain pack listed in allowed_domain_ids.
 
