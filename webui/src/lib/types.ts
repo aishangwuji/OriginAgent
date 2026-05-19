@@ -199,6 +199,57 @@ export interface SlashCommand {
   argHint?: string;
 }
 
+export type ReviewProposalStatus = "pending" | "applied" | "rejected" | "deferred" | "failed";
+export type ReviewProposalType = "memory" | "fact" | "skill" | "workflow" | string;
+
+export interface ReviewProposalEvent {
+  event_id?: string;
+  proposal_id?: string;
+  status?: ReviewProposalStatus | string;
+  created_at?: string;
+  reason?: string;
+  fact_id?: string | null;
+  error?: string;
+}
+
+export interface ReviewProposal {
+  id: string;
+  created_at?: string;
+  session_key?: string;
+  turn_id?: string;
+  proposal_type: ReviewProposalType;
+  domain_id?: string;
+  title: string;
+  content: string;
+  rationale?: string;
+  confidence?: number | null;
+  evidence?: string[];
+  payload?: Record<string, unknown>;
+  source_message_id?: string | null;
+  status: ReviewProposalStatus | string;
+  review_reason?: string;
+  applied_fact_id?: string;
+  review_event?: ReviewProposalEvent;
+}
+
+export interface ReviewProposalStats {
+  proposal_count: number;
+  pending_count: number;
+  last_created_at: string | null;
+}
+
+export interface ReviewDecisionResult {
+  proposal_id: string;
+  status: ReviewProposalStatus | string;
+  action: string;
+  ok: boolean;
+  message: string;
+  proposal?: ReviewProposal | null;
+  event?: ReviewProposalEvent | null;
+  fact_id?: string | null;
+  error?: string;
+}
+
 export type ConnectionStatus =
   | "idle"
   | "connecting"

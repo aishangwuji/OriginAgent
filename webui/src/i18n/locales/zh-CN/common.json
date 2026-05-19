@@ -39,6 +39,7 @@
     "noSearchResults": "没有匹配的会话。",
     "recent": "最近对话",
     "refreshSessions": "刷新会话",
+    "reviews": "学习审核",
     "settings": "设置",
     "language": {
       "label": "语言",
@@ -188,6 +189,66 @@
         "commandRequired": "stdio MCP server 需要填写命令。",
         "urlRequired": "HTTP MCP server 需要填写 URL。"
       }
+    }
+  },
+  "reviews": {
+    "title": "学习提案审核",
+    "backToChat": "返回对话",
+    "loading": "正在加载审核提案...",
+    "empty": "没有匹配的审核提案。",
+    "noSelection": "选择一个提案进行审核。",
+    "untitled": "未命名提案",
+    "confidence": "置信度 {{value}}",
+    "appliedFact": "事实 {{id}}",
+    "unsupportedApply": "本阶段只能应用 memory 和 fact 提案。skill 与 workflow 提案可以拒绝或延期。",
+    "reasonLabel": "审核备注",
+    "reasonPlaceholder": "可选：说明为什么应用、拒绝或延期这个提案。",
+    "noEvidence": "这个提案没有保存证据片段。",
+    "stats": {
+      "total": "共 {{count}} 条",
+      "pending": "{{count}} 条待审核"
+    },
+    "filters": {
+      "status": "按状态筛选",
+      "type": "按类型筛选",
+      "all": "全部",
+      "allTypes": "全部类型"
+    },
+    "status": {
+      "pending": "待审核",
+      "applied": "已应用",
+      "rejected": "已拒绝",
+      "deferred": "已延期",
+      "failed": "失败",
+      "saved": "已保存"
+    },
+    "types": {
+      "memory": "记忆",
+      "fact": "事实",
+      "skill": "Skill",
+      "workflow": "Workflow"
+    },
+    "sections": {
+      "context": "上下文",
+      "evidence": "证据"
+    },
+    "fields": {
+      "session": "会话",
+      "created": "创建时间",
+      "rationale": "理由",
+      "reviewReason": "审核备注"
+    },
+    "actions": {
+      "refresh": "刷新",
+      "apply": "应用",
+      "reject": "拒绝",
+      "defer": "延期"
+    },
+    "confirmApply": {
+      "title": "应用这个提案？",
+      "description": "OpenHome 会把已批准的记忆或事实写入受控 facts store，并重新生成 MEMORY.md。",
+      "cancel": "取消",
+      "confirm": "应用"
     }
   },
   "chat": {

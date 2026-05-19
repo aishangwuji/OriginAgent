@@ -3,6 +3,9 @@ import type {
   HomeAssistantMcpSettingsUpdate,
   McpServerSettingsUpdate,
   ProviderSettingsUpdate,
+  ReviewDecisionResult,
+  ReviewProposal,
+  ReviewProposalStats,
   SettingsPayload,
   SettingsUpdate,
   SlashCommand,
@@ -164,6 +167,57 @@ export async function listSlashCommands(
       argHint: command.arg_hint ?? "",
     }));
   return commands;
+}
+
+export async function listReviewProposals(
+  token: string,
+  filters: { status?: string; type?: string; limit?: number } = {},
+  base: string = "",
+): Promise<{ proposals: ReviewProposal[]; stats: ReviewProposalStats }> {
+  const query = new URLSearchParams();
+  if (filters.status) query.set("status", filters.status);
+  if (filters.type) query.set("type", filters.type);
+  if (filters.limit !== undefined) query.set("limit", String(filters.limit));
+  const suffix = query.toString() ? `?${query}` : "";
+  return request<{ proposals: ReviewProposal[]; stats: ReviewProposalStats }>(
+    `${base}/api/reviews${suffix}`,
+    token,
+  );
+}
+
+export async function fetchReviewProposal(
+  token: string,
+  proposalId: string,
+  base: string = "",
+): Promise<{ proposal: ReviewProposal; stats: ReviewProposalStats }> {
+  return request<{ proposal: ReviewProposal; stats: ReviewProposalStats }>(
+    `${base}/api/reviews/${encodeURIComponent(proposalId)}`,
+    token,
+  );
+}
+
+export async function reviewProposalAction(
+  token: string,
+  proposalId: string,
+  action: "apply" | "approve" | "reject" | "defer",
+  reason = "",
+  base: string = "",
+): Promise<{
+  result: ReviewDecisionResult;
+  proposal: ReviewProposal | null;
+  stats: ReviewProposalStats;
+}> {
+  const query = new URLSearchParams();
+  if (reason.trim()) query.set("reason", reason.trim());
+  const suffix = query.toString() ? `?${query}` : "";
+  return request<{
+    result: ReviewDecisionResult;
+    proposal: ReviewProposal | null;
+    stats: ReviewProposalStats;
+  }>(
+    `${base}/api/reviews/${encodeURIComponent(proposalId)}/${action}${suffix}`,
+    token,
+  );
 }
 
 export async function updateSettings(

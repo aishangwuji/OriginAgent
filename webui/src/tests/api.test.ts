@@ -5,8 +5,11 @@ import {
   deleteMcpServerSettings,
   deleteSession,
   fetchWebuiThread,
+  fetchReviewProposal,
   listSessions,
+  listReviewProposals,
   listSlashCommands,
+  reviewProposalAction,
   updateBackgroundReviewSettings,
   updateProviderSettings,
   updateSettings,
@@ -97,6 +100,43 @@ describe("webui API helpers", () => {
 
     expect(fetch).toHaveBeenCalledWith(
       "/api/settings/learning/background-review/update?enabled=true",
+      expect.objectContaining({
+        headers: { Authorization: "Bearer tok" },
+      }),
+    );
+  });
+
+  it("serializes review proposal list filters", async () => {
+    await listReviewProposals("tok", {
+      status: "pending",
+      type: "memory",
+      limit: 50,
+    });
+
+    expect(fetch).toHaveBeenCalledWith(
+      "/api/reviews?status=pending&type=memory&limit=50",
+      expect.objectContaining({
+        headers: { Authorization: "Bearer tok" },
+      }),
+    );
+  });
+
+  it("percent-encodes review proposal ids for detail requests", async () => {
+    await fetchReviewProposal("tok", "review:1");
+
+    expect(fetch).toHaveBeenCalledWith(
+      "/api/reviews/review%3A1",
+      expect.objectContaining({
+        headers: { Authorization: "Bearer tok" },
+      }),
+    );
+  });
+
+  it("serializes review proposal actions with an optional reason", async () => {
+    await reviewProposalAction("tok", "review:1", "apply", "looks good");
+
+    expect(fetch).toHaveBeenCalledWith(
+      "/api/reviews/review%3A1/apply?reason=looks+good",
       expect.objectContaining({
         headers: { Authorization: "Bearer tok" },
       }),

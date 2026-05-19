@@ -108,9 +108,9 @@ BUILTIN_COMMAND_SPECS: tuple[BuiltinCommandSpec, ...] = (
     BuiltinCommandSpec(
         "/reviews",
         "Show learning proposals",
-        "List pending background review proposals.",
+        "List and review background learning proposals.",
         "list-checks",
-        "[n]",
+        "[n|show|apply|reject]",
     ),
     BuiltinCommandSpec(
         "/dream",
@@ -864,6 +864,11 @@ _REVIEWS_DEFAULT_COUNT = 10
 _REVIEWS_MAX_COUNT = 50
 
 
+def _reviews_store(ctx: CommandContext):
+    service = getattr(ctx.loop, "background_review", None)
+    return getattr(service, "store", None), service
+
+
 def _format_review_record(record: dict) -> str:
     proposal_id = str(record.get("id") or "unknown")
     proposal_type = str(record.get("proposal_type") or record.get("type") or "unknown")
@@ -885,45 +890,137 @@ def _format_review_record(record: dict) -> str:
     return "\n".join(lines)
 
 
-async def cmd_reviews(ctx: CommandContext) -> OutboundMessage:
-    """Show pending background review proposals.
+def _format_review_detail(record: dict) -> str:
+    lines = [
+        "## Background Review Proposal",
+        "",
+        f"- ID: `{record.get('id') or 'unknown'}`",
+        f"- Status: {record.get('status') or 'pending'}",
+        f"- Type: {record.get('proposal_type') or record.get('type') or 'unknown'}",
+        f"- Domain: {record.get('domain_id') or 'core'}",
+        f"- Created: {record.get('created_at') or ''}",
+        f"- Session: {record.get('session_key') or ''}",
+        "",
+        f"### {record.get('title') or '(untitled)'}",
+        "",
+        str(record.get("content") or "").strip() or "(empty)",
+    ]
+    rationale = str(record.get("rationale") or "").strip()
+    if rationale:
+        lines.extend(["", "### Rationale", "", rationale])
+    evidence = record.get("evidence")
+    if isinstance(evidence, list) and evidence:
+        lines.extend(["", "### Evidence", ""])
+        lines.extend(f"- {item}" for item in evidence if str(item).strip())
+    review_reason = str(record.get("review_reason") or "").strip()
+    if review_reason:
+        lines.extend(["", "### Review Reason", "", review_reason])
+    fact_id = record.get("applied_fact_id")
+    if isinstance(fact_id, str) and fact_id:
+        lines.extend(["", f"Applied fact: `{fact_id}`"])
+    return "\n".join(lines)
 
-    Usage: /reviews [count]
+
+def _format_review_result(result: object) -> str:
+    if hasattr(result, "to_json"):
+        data = result.to_json()
+    elif isinstance(result, dict):
+        data = result
+    else:
+        data = {"ok": False, "message": str(result)}
+    lines = [
+        f"Review `{data.get('proposal_id') or ''}`: {data.get('message') or data.get('status')}",
+        f"- Status: {data.get('status') or 'unknown'}",
+    ]
+    fact_id = data.get("fact_id")
+    if fact_id:
+        lines.append(f"- Fact: `{fact_id}`")
+    error = data.get("error")
+    if error:
+        lines.append(f"- Error: {error}")
+    return "\n".join(lines)
+
+
+async def cmd_reviews(ctx: CommandContext) -> OutboundMessage:
+    """Show and manage pending background review proposals.
+
+    Usage:
+      /reviews [count]
+      /reviews show <proposal_id>
+      /reviews apply|approve <proposal_id>
+      /reviews reject|defer <proposal_id> [reason]
     """
+    raw_args = ctx.args.strip()
+    args = raw_args.split(maxsplit=2)
+    store, service = _reviews_store(ctx)
+    if store is None:
+        content = "Background review proposal store is not available."
+        return OutboundMessage(
+            channel=ctx.msg.channel,
+            chat_id=ctx.msg.chat_id,
+            content=content,
+            metadata={**dict(ctx.msg.metadata or {}), "render_as": "text"},
+        )
+
+    if args and args[0] in {"show", "apply", "approve", "reject", "defer"}:
+        action = args[0]
+        proposal_id = args[1] if len(args) >= 2 else ""
+        reason = args[2] if len(args) >= 3 else ""
+        if not proposal_id:
+            content = (
+                "Usage: /reviews show <proposal_id>, "
+                "/reviews apply <proposal_id>, "
+                "/reviews reject <proposal_id> [reason], "
+                "or /reviews defer <proposal_id> [reason]"
+            )
+        elif action == "show":
+            record = store.get(proposal_id)
+            content = _format_review_detail(record) if record else "Review proposal was not found."
+        elif action in {"apply", "approve"}:
+            content = _format_review_result(store.apply(proposal_id, reason=reason))
+        elif action == "reject":
+            content = _format_review_result(store.reject(proposal_id, reason=reason))
+        else:
+            content = _format_review_result(store.defer(proposal_id, reason=reason))
+        return OutboundMessage(
+            channel=ctx.msg.channel,
+            chat_id=ctx.msg.chat_id,
+            content=content,
+            metadata={**dict(ctx.msg.metadata or {}), "render_as": "text"},
+        )
+
     count = _REVIEWS_DEFAULT_COUNT
-    if ctx.args.strip():
+    if raw_args:
         try:
-            count = max(1, min(int(ctx.args.strip()), _REVIEWS_MAX_COUNT))
+            count = max(1, min(int(raw_args), _REVIEWS_MAX_COUNT))
         except ValueError:
             return OutboundMessage(
                 channel=ctx.msg.channel,
                 chat_id=ctx.msg.chat_id,
-                content="Usage: /reviews [count] - e.g. /reviews 5 (default: 10, max: 50)",
+                content=(
+                    "Usage: /reviews [count], /reviews show <proposal_id>, "
+                    "/reviews apply <proposal_id>, /reviews reject <proposal_id> [reason]"
+                ),
                 metadata=dict(ctx.msg.metadata or {}),
             )
 
-    service = getattr(ctx.loop, "background_review", None)
-    store = getattr(service, "store", None)
-    if store is None:
-        content = "Background review proposal store is not available."
+    records = store.recent(count)
+    if not records:
+        enabled = bool(getattr(service, "enabled", False))
+        suffix = " It is currently disabled." if not enabled else ""
+        content = "No background review proposals yet." + suffix
     else:
-        records = store.recent(count)
-        if not records:
-            enabled = bool(getattr(service, "enabled", False))
-            suffix = " It is currently disabled." if not enabled else ""
-            content = "No background review proposals yet." + suffix
-        else:
-            stats = store.stats()
-            lines = [
-                "## Background Review Proposals",
-                "",
-                f"- Showing: {len(records)}",
-                f"- Total stored: {stats.get('proposal_count', 0)}",
-                f"- Pending: {stats.get('pending_count', 0)}",
-                "",
-            ]
-            lines.extend(_format_review_record(record) for record in records)
-            content = "\n".join(lines)
+        stats = store.stats()
+        lines = [
+            "## Background Review Proposals",
+            "",
+            f"- Showing: {len(records)}",
+            f"- Total stored: {stats.get('proposal_count', 0)}",
+            f"- Pending: {stats.get('pending_count', 0)}",
+            "",
+        ]
+        lines.extend(_format_review_record(record) for record in records)
+        content = "\n".join(lines)
     return OutboundMessage(
         channel=ctx.msg.channel,
         chat_id=ctx.msg.chat_id,

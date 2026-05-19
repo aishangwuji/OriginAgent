@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Button as IslandButton, Card as IslandCard, Input as IslandInput, Typewriter } from "animal-island-ui";
 import { useTranslation } from "react-i18next";
 import { DeleteConfirm } from "@/components/DeleteConfirm";
+import { ReviewsView } from "@/components/reviews/ReviewsView";
 import { Sidebar } from "@/components/Sidebar";
 import { SettingsView } from "@/components/settings/SettingsView";
 import { ThreadShell } from "@/components/thread/ThreadShell";
@@ -36,7 +37,7 @@ type BootState =
 const SIDEBAR_STORAGE_KEY = "OpenHome-webui.sidebar";
 const RESTART_STARTED_KEY = "OpenHome-webui.restartStartedAt";
 const SIDEBAR_WIDTH = 272;
-type ShellView = "chat" | "settings";
+type ShellView = "chat" | "settings" | "reviews";
 
 function pendingSessionFromKey(key: string): ChatSummary | null {
   const separator = key.indexOf(":");
@@ -365,6 +366,11 @@ function Shell({ onModelNameChange, onLogout }: { onModelNameChange: (modelName:
     setMobileSidebarOpen(false);
   }, []);
 
+  const onOpenReviews = useCallback(() => {
+    setView("reviews");
+    setMobileSidebarOpen(false);
+  }, []);
+
   const onBackToChat = useCallback(() => {
     setView("chat");
     setMobileSidebarOpen(false);
@@ -455,6 +461,12 @@ function Shell({ onModelNameChange, onLogout }: { onModelNameChange: (modelName:
       });
       return;
     }
+    if (view === "reviews") {
+      document.title = t("app.documentTitle.chat", {
+        title: t("reviews.title"),
+      });
+      return;
+    }
     document.title = activeSession
       ? t("app.documentTitle.chat", { title: headerTitle })
       : t("app.documentTitle.base");
@@ -469,6 +481,7 @@ function Shell({ onModelNameChange, onLogout }: { onModelNameChange: (modelName:
     onRequestDelete: (key: string, label: string) =>
       setPendingDelete({ key, label }),
     onOpenSettings,
+    onOpenReviews,
   };
   const showMainSidebar = view !== "settings";
 
@@ -515,7 +528,7 @@ function Shell({ onModelNameChange, onLogout }: { onModelNameChange: (modelName:
         <div
           className={cn(
             "absolute inset-0 flex flex-col",
-            view === "settings" && "invisible pointer-events-none",
+            view !== "chat" && "invisible pointer-events-none",
           )}
         >
           <ThreadShell
@@ -541,6 +554,11 @@ function Shell({ onModelNameChange, onLogout }: { onModelNameChange: (modelName:
               onRestart={onRestart}
               isRestarting={isRestarting}
             />
+          </div>
+        )}
+        {view === "reviews" && (
+          <div className="absolute inset-0 flex flex-col">
+            <ReviewsView onBackToChat={onBackToChat} />
           </div>
         )}
       </main>

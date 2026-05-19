@@ -32,6 +32,7 @@
     "newChat": "Nouvelle discussion",
     "recent": "Récentes",
     "refreshSessions": "Actualiser les sessions",
+    "reviews": "Reviews",
     "settings": "Paramètres",
     "language": {
       "label": "Langue",
@@ -178,6 +179,66 @@
         "commandRequired": "Command is required for stdio MCP servers.",
         "urlRequired": "URL is required for HTTP MCP servers."
       }
+    }
+  },
+  "reviews": {
+    "title": "Learning Reviews",
+    "backToChat": "Back to chat",
+    "loading": "Loading reviews...",
+    "empty": "No matching review proposals.",
+    "noSelection": "Select a proposal to review.",
+    "untitled": "Untitled proposal",
+    "confidence": "Confidence {{value}}",
+    "appliedFact": "Fact {{id}}",
+    "unsupportedApply": "Only memory and fact proposals can be applied in this phase. Skill and workflow proposals can be rejected or deferred.",
+    "reasonLabel": "Review note",
+    "reasonPlaceholder": "Optional reason for applying, rejecting, or deferring this proposal.",
+    "noEvidence": "No evidence snippets were stored for this proposal.",
+    "stats": {
+      "total": "{{count}} total",
+      "pending": "{{count}} pending"
+    },
+    "filters": {
+      "status": "Filter by status",
+      "type": "Filter by type",
+      "all": "All",
+      "allTypes": "All types"
+    },
+    "status": {
+      "pending": "Pending",
+      "applied": "Applied",
+      "rejected": "Rejected",
+      "deferred": "Deferred",
+      "failed": "Failed",
+      "saved": "Saved"
+    },
+    "types": {
+      "memory": "Memory",
+      "fact": "Fact",
+      "skill": "Skill",
+      "workflow": "Workflow"
+    },
+    "sections": {
+      "context": "Context",
+      "evidence": "Evidence"
+    },
+    "fields": {
+      "session": "Session",
+      "created": "Created",
+      "rationale": "Rationale",
+      "reviewReason": "Review note"
+    },
+    "actions": {
+      "refresh": "Refresh",
+      "apply": "Apply",
+      "reject": "Reject",
+      "defer": "Defer"
+    },
+    "confirmApply": {
+      "title": "Apply this proposal?",
+      "description": "OpenHome will write this approved memory or fact into the controlled facts store and rebuild MEMORY.md.",
+      "cancel": "Cancel",
+      "confirm": "Apply"
     }
   },
   "chat": {

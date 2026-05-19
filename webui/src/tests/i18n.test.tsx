@@ -9,6 +9,8 @@ import { resources } from "@/i18n";
 const QUICK_ACTION_KEYS = ["plan", "analyze", "brainstorm", "code", "summarize", "more"];
 const IMAGE_QUICK_ACTION_KEYS = ["icon", "sticker", "poster", "product", "portrait", "edit"];
 const SETTINGS_NAV_KEYS = ["general", "byok", "mcp"];
+const REVIEW_STATUS_KEYS = ["pending", "applied", "rejected", "deferred", "failed"];
+const REVIEW_TYPE_KEYS = ["memory", "fact", "skill", "workflow"];
 
 describe("webui i18n", () => {
   it("switches UI copy and document locale through the language switcher", async () => {
@@ -90,6 +92,29 @@ describe("webui i18n", () => {
       expect(common.settings.mcp.homeAssistant.title).toBeTruthy();
       expect(common.settings.mcp.homeAssistant.validation.tokenRequired).toBeTruthy();
       expect(common.settings.mcp.validation.nameRequired).toBeTruthy();
+    }
+  });
+
+  it("keeps review navigation and actions localized for every registered locale", () => {
+    for (const resource of Object.values(resources)) {
+      const common = resource.common;
+      expect(common.sidebar.reviews).toBeTruthy();
+      expect(common.reviews.title).toBeTruthy();
+      expect(common.reviews.backToChat).toBeTruthy();
+      expect(common.reviews.loading).toBeTruthy();
+      expect(common.reviews.empty).toBeTruthy();
+      expect(common.reviews.unsupportedApply).toBeTruthy();
+      expect(common.reviews.actions.apply).toBeTruthy();
+      expect(common.reviews.actions.reject).toBeTruthy();
+      expect(common.reviews.actions.defer).toBeTruthy();
+      expect(common.reviews.confirmApply.title).toBeTruthy();
+      expect(common.reviews.confirmApply.confirm).toBeTruthy();
+      for (const key of REVIEW_STATUS_KEYS) {
+        expect(common.reviews.status[key as keyof typeof common.reviews.status]).toBeTruthy();
+      }
+      for (const key of REVIEW_TYPE_KEYS) {
+        expect(common.reviews.types[key as keyof typeof common.reviews.types]).toBeTruthy();
+      }
     }
   });
 });

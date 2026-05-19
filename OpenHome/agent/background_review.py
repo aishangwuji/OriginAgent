@@ -1,8 +1,7 @@
-"""Controlled background review proposal generation.
+"""Controlled background review proposal generation and review application.
 
-P5 deliberately stops at proposals.  This module may write
-``memory/review_proposals.jsonl`` but must not mutate MEMORY.md, facts.jsonl,
-formal skills, workflows, or domain pack files.
+Background review writes pending proposals first.  Human review is required
+before any proposal can be applied to long-term memory.
 """
 
 from __future__ import annotations
@@ -14,23 +13,37 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
 
+from filelock import FileLock
 from loguru import logger
 
 from OpenHome.agent.auxiliary_llm import AuxiliaryLLMRouter, call_llm
 from OpenHome.agent.domain_packs import DomainPackManager
-from OpenHome.agent.memory import redact_memory_text
+from OpenHome.agent.facts import (
+    HIGH_RISK_CATEGORIES,
+    HIGH_RISK_KEYWORDS,
+    TEMPORARY_LANGUAGE,
+    UNCERTAIN_LANGUAGE,
+    VALID_CATEGORIES,
+    VALID_OWNERS,
+    FactRecord,
+)
+from OpenHome.agent.memory import MemoryStore, redact_memory_text
 from OpenHome.providers.base import LLMProvider
 from OpenHome.utils.helpers import truncate_text
 from OpenHome.utils.prompt_templates import render_template
 
 DEFAULT_ALLOWED_PROPOSAL_TYPES = ("memory", "fact", "skill", "workflow")
 PROPOSAL_STORE_RELATIVE = Path("memory") / "review_proposals.jsonl"
+PROPOSAL_EVENT_STORE_RELATIVE = Path("memory") / "review_proposal_events.jsonl"
 _TITLE_MAX_CHARS = 160
 _CONTENT_MAX_CHARS = 2400
 _RATIONALE_MAX_CHARS = 1200
 _EVIDENCE_MAX_ITEMS = 5
 _EVIDENCE_MAX_CHARS = 500
 _MESSAGE_MAX_CHARS = 1600
+_REVIEW_REASON_MAX_CHARS = 1000
+_TERMINAL_REVIEW_STATUSES = {"applied", "rejected", "deferred"}
+_APPLICABLE_PROPOSAL_TYPES = {"memory", "fact"}
 
 
 @dataclass(frozen=True)
@@ -48,8 +61,43 @@ class ReviewProposal:
     rationale: str = ""
     confidence: float | None = None
     evidence: list[str] = field(default_factory=list)
+    payload: dict[str, Any] = field(default_factory=dict)
     source_message_id: str | None = None
     status: str = "pending"
+
+    def to_json(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass(frozen=True)
+class ReviewProposalEvent:
+    """One append-only human review decision event."""
+
+    event_id: str
+    proposal_id: str
+    status: str
+    created_at: str
+    reason: str = ""
+    fact_id: str | None = None
+    error: str = ""
+
+    def to_json(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass(frozen=True)
+class ReviewDecisionResult:
+    """Outcome of applying or recording a review decision."""
+
+    proposal_id: str
+    status: str
+    action: str
+    ok: bool
+    message: str
+    proposal: dict[str, Any] | None = None
+    event: dict[str, Any] | None = None
+    fact_id: str | None = None
+    error: str = ""
 
     def to_json(self) -> dict[str, Any]:
         return asdict(self)
@@ -67,23 +115,36 @@ class BackgroundReviewResult:
 class ReviewProposalStore:
     """Append-only JSONL store for pending review proposals."""
 
-    def __init__(self, workspace: Path, *, path: Path | None = None) -> None:
+    def __init__(
+        self,
+        workspace: Path,
+        *,
+        path: Path | None = None,
+        event_path: Path | None = None,
+    ) -> None:
         self.workspace = Path(workspace)
         self.path = path or (self.workspace / PROPOSAL_STORE_RELATIVE)
+        self.event_path = event_path or (self.workspace / PROPOSAL_EVENT_STORE_RELATIVE)
+        self._lock_path = self.path.parent / ".review_proposals.lock"
+        self._memory_store = MemoryStore(self.workspace)
+
+    def _locked(self) -> FileLock:
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        return FileLock(str(self._lock_path))
 
     def append_many(self, proposals: list[ReviewProposal]) -> int:
         if not proposals:
             return 0
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        with self.path.open("a", encoding="utf-8") as handle:
-            for proposal in proposals:
-                handle.write(json.dumps(proposal.to_json(), ensure_ascii=False) + "\n")
+        with self._locked():
+            with self.path.open("a", encoding="utf-8") as handle:
+                for proposal in proposals:
+                    handle.write(json.dumps(proposal.to_json(), ensure_ascii=False) + "\n")
         return len(proposals)
 
-    def iter_all(self) -> list[dict[str, Any]]:
-        records: list[dict[str, Any]] = []
+    def _read_jsonl(self, path: Path, *, label: str) -> list[dict[str, Any]]:
+        rows: list[dict[str, Any]] = []
         try:
-            with self.path.open("r", encoding="utf-8") as handle:
+            with path.open("r", encoding="utf-8") as handle:
                 for line in handle:
                     line = line.strip()
                     if not line:
@@ -93,17 +154,88 @@ class ReviewProposalStore:
                     except json.JSONDecodeError:
                         continue
                     if isinstance(raw, dict):
-                        records.append(raw)
+                        rows.append(raw)
         except FileNotFoundError:
             return []
         except OSError:
-            logger.exception("Failed to read background review proposal store")
+            logger.exception("Failed to read background review {} store", label)
             return []
+        return rows
+
+    def _iter_proposals_unlocked(self) -> list[dict[str, Any]]:
+        return self._read_jsonl(self.path, label="proposal")
+
+    def _iter_events_unlocked(self) -> list[dict[str, Any]]:
+        return self._read_jsonl(self.event_path, label="event")
+
+    def _latest_events_unlocked(self) -> dict[str, dict[str, Any]]:
+        latest: dict[str, dict[str, Any]] = {}
+        for event in self._iter_events_unlocked():
+            proposal_id = str(event.get("proposal_id") or "")
+            status = str(event.get("status") or "")
+            if not proposal_id or not status:
+                continue
+            latest[proposal_id] = event
+        return latest
+
+    def _merged_records_unlocked(self) -> list[dict[str, Any]]:
+        latest_events = self._latest_events_unlocked()
+        records: list[dict[str, Any]] = []
+        for raw in self._iter_proposals_unlocked():
+            proposal_id = str(raw.get("id") or "")
+            record = dict(raw)
+            record["status"] = str(record.get("status") or "pending")
+            event = latest_events.get(proposal_id)
+            fact_id = None
+            if event is not None:
+                record["status"] = str(event.get("status") or record["status"])
+                record["review_event"] = dict(event)
+                reason = str(event.get("reason") or "")
+                if reason:
+                    record["review_reason"] = reason
+                fact_id = event.get("fact_id")
+            if isinstance(fact_id, str) and fact_id:
+                record["applied_fact_id"] = fact_id
+            records.append(_redacted_record(record))
         return records
+
+    def iter_all(self) -> list[dict[str, Any]]:
+        with self._locked():
+            return self._merged_records_unlocked()
 
     def recent(self, limit: int = 10) -> list[dict[str, Any]]:
         limit = max(1, min(int(limit or 10), 50))
         return list(reversed(self.iter_all()))[:limit]
+
+    def list_records(
+        self,
+        *,
+        status: str | None = None,
+        proposal_type: str | None = None,
+        limit: int = 50,
+    ) -> list[dict[str, Any]]:
+        limit = max(1, min(int(limit or 50), 50))
+        status = (status or "").strip().lower()
+        proposal_type = (proposal_type or "").strip().lower()
+        records = list(reversed(self.iter_all()))
+        if status:
+            records = [r for r in records if str(r.get("status") or "pending") == status]
+        if proposal_type:
+            records = [
+                r for r in records
+                if str(r.get("proposal_type") or r.get("type") or "") == proposal_type
+            ]
+        return records[:limit]
+
+    def get(self, proposal_id: str) -> dict[str, Any] | None:
+        proposal_id = proposal_id.strip()
+        if not proposal_id:
+            return None
+        with self._locked():
+            for record in self._merged_records_unlocked():
+                if record.get("id") == proposal_id:
+                    return record
+        return None
 
     def stats(self) -> dict[str, Any]:
         records = self.iter_all()
@@ -122,6 +254,207 @@ class ReviewProposalStore:
             "pending_count": pending,
             "last_created_at": last_created_at,
         }
+
+    def apply(self, proposal_id: str, *, reason: str = "") -> ReviewDecisionResult:
+        proposal_id = proposal_id.strip()
+        if not proposal_id:
+            return ReviewDecisionResult(
+                proposal_id="",
+                status="missing",
+                action="apply",
+                ok=False,
+                message="proposal_id is required",
+                error="missing_proposal_id",
+            )
+        with self._locked():
+            record = self._find_unlocked(proposal_id)
+            if record is None:
+                return ReviewDecisionResult(
+                    proposal_id=proposal_id,
+                    status="missing",
+                    action="apply",
+                    ok=False,
+                    message="Review proposal was not found.",
+                    error="not_found",
+                )
+            terminal = self._terminal_result(record, action="apply")
+            if terminal is not None:
+                return terminal
+            failed = self._failed_apply_result(record)
+            if failed is not None:
+                return failed
+
+            proposal_type = _proposal_type(record)
+            if proposal_type not in _APPLICABLE_PROPOSAL_TYPES:
+                event = self._append_event_unlocked(
+                    proposal_id,
+                    status="failed",
+                    reason=reason or f"{proposal_type} proposals cannot be applied in P6.",
+                    error="unsupported_proposal_type",
+                )
+                return ReviewDecisionResult(
+                    proposal_id=proposal_id,
+                    status="failed",
+                    action="apply",
+                    ok=False,
+                    message="Only memory and fact proposals can be applied in this phase.",
+                    proposal=self._find_unlocked(proposal_id),
+                    event=event,
+                    error="unsupported_proposal_type",
+                )
+
+            try:
+                fact = self._apply_to_memory(record)
+            except Exception as exc:
+                logger.exception("Failed to apply background review proposal {}", proposal_id)
+                event = self._append_event_unlocked(
+                    proposal_id,
+                    status="failed",
+                    reason=reason,
+                    error=str(exc),
+                )
+                return ReviewDecisionResult(
+                    proposal_id=proposal_id,
+                    status="failed",
+                    action="apply",
+                    ok=False,
+                    message="Failed to apply review proposal.",
+                    proposal=self._find_unlocked(proposal_id),
+                    event=event,
+                    error=str(exc),
+                )
+
+            event = self._append_event_unlocked(
+                proposal_id,
+                status="applied",
+                reason=reason,
+                fact_id=fact.fact_id,
+            )
+            return ReviewDecisionResult(
+                proposal_id=proposal_id,
+                status="applied",
+                action="apply",
+                ok=True,
+                message="Review proposal applied.",
+                proposal=self._find_unlocked(proposal_id),
+                event=event,
+                fact_id=fact.fact_id,
+            )
+
+    def reject(self, proposal_id: str, *, reason: str = "") -> ReviewDecisionResult:
+        return self._record_terminal_decision(proposal_id, status="rejected", reason=reason)
+
+    def defer(self, proposal_id: str, *, reason: str = "") -> ReviewDecisionResult:
+        return self._record_terminal_decision(proposal_id, status="deferred", reason=reason)
+
+    def _find_unlocked(self, proposal_id: str) -> dict[str, Any] | None:
+        for record in self._merged_records_unlocked():
+            if record.get("id") == proposal_id:
+                return record
+        return None
+
+    def _terminal_result(self, record: dict[str, Any], *, action: str) -> ReviewDecisionResult | None:
+        status = str(record.get("status") or "pending")
+        if status not in _TERMINAL_REVIEW_STATUSES:
+            return None
+        return ReviewDecisionResult(
+            proposal_id=str(record.get("id") or ""),
+            status=status,
+            action=action,
+            ok=True,
+            message=f"Review proposal is already {status}.",
+            proposal=record,
+            event=record.get("review_event") if isinstance(record.get("review_event"), dict) else None,
+            fact_id=record.get("applied_fact_id") if isinstance(record.get("applied_fact_id"), str) else None,
+        )
+
+    def _failed_apply_result(self, record: dict[str, Any]) -> ReviewDecisionResult | None:
+        status = str(record.get("status") or "pending")
+        event = record.get("review_event")
+        if status != "failed" or not isinstance(event, dict):
+            return None
+        return ReviewDecisionResult(
+            proposal_id=str(record.get("id") or ""),
+            status="failed",
+            action="apply",
+            ok=False,
+            message="Review proposal apply already failed.",
+            proposal=record,
+            event=event,
+            error=str(event.get("error") or "failed"),
+        )
+
+    def _record_terminal_decision(
+        self,
+        proposal_id: str,
+        *,
+        status: str,
+        reason: str = "",
+    ) -> ReviewDecisionResult:
+        proposal_id = proposal_id.strip()
+        action = status
+        if not proposal_id:
+            return ReviewDecisionResult(
+                proposal_id="",
+                status="missing",
+                action=action,
+                ok=False,
+                message="proposal_id is required",
+                error="missing_proposal_id",
+            )
+        with self._locked():
+            record = self._find_unlocked(proposal_id)
+            if record is None:
+                return ReviewDecisionResult(
+                    proposal_id=proposal_id,
+                    status="missing",
+                    action=action,
+                    ok=False,
+                    message="Review proposal was not found.",
+                    error="not_found",
+                )
+            terminal = self._terminal_result(record, action=action)
+            if terminal is not None:
+                return terminal
+            event = self._append_event_unlocked(proposal_id, status=status, reason=reason)
+            return ReviewDecisionResult(
+                proposal_id=proposal_id,
+                status=status,
+                action=action,
+                ok=True,
+                message=f"Review proposal {status}.",
+                proposal=self._find_unlocked(proposal_id),
+                event=event,
+            )
+
+    def _append_event_unlocked(
+        self,
+        proposal_id: str,
+        *,
+        status: str,
+        reason: str = "",
+        fact_id: str | None = None,
+        error: str = "",
+    ) -> dict[str, Any]:
+        reason = _clean_text(reason, _REVIEW_REASON_MAX_CHARS)
+        error = _clean_text(error, _REVIEW_REASON_MAX_CHARS)
+        event = ReviewProposalEvent(
+            event_id=f"review_event_{uuid.uuid4().hex}",
+            proposal_id=proposal_id,
+            status=status,
+            created_at=datetime.now(timezone.utc).isoformat(),
+            reason=reason,
+            fact_id=fact_id,
+            error=error,
+        ).to_json()
+        self.event_path.parent.mkdir(parents=True, exist_ok=True)
+        with self.event_path.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(event, ensure_ascii=False) + "\n")
+        return event
+
+    def _apply_to_memory(self, record: dict[str, Any]) -> FactRecord:
+        fact_fields = _fact_fields_from_proposal(record)
+        return self._memory_store.upsert_fact_and_rebuild_memory(**fact_fields)
 
 
 class BackgroundReviewService:
@@ -362,6 +695,10 @@ class BackgroundReviewService:
             confidence = _confidence(raw.get("confidence"))
             rationale = _clean_text(raw.get("rationale") or raw.get("reason"), _RATIONALE_MAX_CHARS)
             evidence = _evidence(raw.get("evidence"))
+            payload = raw.get("payload")
+            if not isinstance(payload, dict):
+                payload = raw.get("fact") if isinstance(raw.get("fact"), dict) else {}
+            payload = _redact_json_payload(payload) if isinstance(payload, dict) else {}
             proposals.append(
                 ReviewProposal(
                     id=f"review_{uuid.uuid4().hex}",
@@ -376,9 +713,132 @@ class BackgroundReviewService:
                     rationale=rationale,
                     confidence=confidence,
                     evidence=evidence,
+                    payload=payload,
                 )
             )
         return proposals
+
+
+def _proposal_type(record: dict[str, Any]) -> str:
+    return str(record.get("proposal_type") or record.get("type") or "").strip().lower()
+
+
+def _proposal_payload(record: dict[str, Any]) -> dict[str, Any]:
+    payload = record.get("payload")
+    if isinstance(payload, dict):
+        nested = payload.get("fact")
+        if isinstance(nested, dict):
+            merged = dict(payload)
+            merged.update(nested)
+            return merged
+        return payload
+    return {}
+
+
+def _redact_json_payload(value: Any) -> Any:
+    if isinstance(value, str):
+        return redact_memory_text(value)
+    if isinstance(value, list):
+        return [_redact_json_payload(item) for item in value]
+    if isinstance(value, dict):
+        return {str(key): _redact_json_payload(item) for key, item in value.items()}
+    return value
+
+
+def _redacted_record(record: dict[str, Any]) -> dict[str, Any]:
+    cleaned = dict(record)
+    for key in ("title", "content", "rationale", "review_reason"):
+        if isinstance(cleaned.get(key), str):
+            cleaned[key] = redact_memory_text(cleaned[key])
+    evidence = cleaned.get("evidence")
+    if isinstance(evidence, list):
+        cleaned["evidence"] = [
+            redact_memory_text(str(item)) for item in evidence if str(item).strip()
+        ]
+    if isinstance(cleaned.get("payload"), dict):
+        cleaned["payload"] = _redact_json_payload(cleaned["payload"])
+    if isinstance(cleaned.get("review_event"), dict):
+        cleaned["review_event"] = _redact_json_payload(cleaned["review_event"])
+    return cleaned
+
+
+def _safe_category(value: Any, default: str = "note") -> str:
+    candidate = str(value or "").strip().lower()
+    return candidate if candidate in VALID_CATEGORIES else default
+
+
+def _safe_owner(value: Any, default: str = "user") -> str:
+    candidate = str(value or "").strip().lower()
+    return candidate if candidate in VALID_OWNERS else default
+
+
+def _contains_any(text: str, needles: tuple[str, ...]) -> bool:
+    haystack = text.casefold()
+    return any(needle.casefold() in haystack for needle in needles)
+
+
+def _pending_confirmation_required(*, category: str, scope: str, content: str, evidence: str) -> bool:
+    combined = " ".join([category, scope, content, evidence])
+    return (
+        category in HIGH_RISK_CATEGORIES
+        or _contains_any(combined, HIGH_RISK_KEYWORDS)
+        or _contains_any(combined, TEMPORARY_LANGUAGE)
+        or _contains_any(combined, UNCERTAIN_LANGUAGE)
+    )
+
+
+def _review_confidence(record: dict[str, Any], payload: dict[str, Any]) -> float:
+    raw = payload.get("confidence")
+    if raw is None:
+        raw = record.get("confidence")
+    confidence = _confidence(raw)
+    return 0.7 if confidence is None else confidence
+
+
+def _fact_fields_from_proposal(record: dict[str, Any]) -> dict[str, Any]:
+    proposal_type = _proposal_type(record)
+    payload = _proposal_payload(record)
+    content = _clean_text(payload.get("content") or record.get("content"), _CONTENT_MAX_CHARS)
+    if not content:
+        raise ValueError("proposal content cannot be empty")
+
+    if proposal_type == "memory":
+        category = "note"
+        scope = "review.memory"
+        owner = "user"
+    else:
+        category = _safe_category(payload.get("category"), "note")
+        scope = str(payload.get("scope") or "review.fact").strip() or "review.fact"
+        owner = _safe_owner(payload.get("owner"), "user")
+
+    evidence_items = record.get("evidence") if isinstance(record.get("evidence"), list) else []
+    evidence = next((str(item).strip() for item in evidence_items if str(item).strip()), "")
+    if not evidence:
+        evidence = str(record.get("rationale") or record.get("title") or "").strip()
+    evidence = _clean_text(evidence, _EVIDENCE_MAX_CHARS)
+    requires_confirmation = _pending_confirmation_required(
+        category=category,
+        scope=scope,
+        content=content,
+        evidence=evidence,
+    )
+    return {
+        "content": content,
+        "category": category,
+        "scope": scope,
+        "owner": owner,
+        "source_cursors": [],
+        "source_excerpt": evidence,
+        "confidence": _review_confidence(record, payload),
+        "expires_at": payload.get("expires_at") if isinstance(payload.get("expires_at"), str) else None,
+        "requires_confirmation": True if requires_confirmation else False,
+        "status": "pending_confirmation" if requires_confirmation else "active",
+        "supersedes_fact_id": (
+            payload.get("supersedes_fact_id")
+            if isinstance(payload.get("supersedes_fact_id"), str)
+            else None
+        ),
+    }
 
 
 def _message_text(message: dict[str, Any]) -> str:

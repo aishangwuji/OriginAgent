@@ -32,6 +32,7 @@
     "newChat": "新增對話",
     "recent": "最近對話",
     "refreshSessions": "重新整理會話",
+    "reviews": "學習審核",
     "settings": "設定",
     "language": {
       "label": "語言",
@@ -178,6 +179,66 @@
         "commandRequired": "stdio MCP server 需要填寫命令。",
         "urlRequired": "HTTP MCP server 需要填寫 URL。"
       }
+    }
+  },
+  "reviews": {
+    "title": "學習提案審核",
+    "backToChat": "返回對話",
+    "loading": "正在載入審核提案...",
+    "empty": "沒有符合條件的審核提案。",
+    "noSelection": "選擇一個提案進行審核。",
+    "untitled": "未命名提案",
+    "confidence": "信心度 {{value}}",
+    "appliedFact": "事實 {{id}}",
+    "unsupportedApply": "本階段只能套用 memory 和 fact 提案。skill 與 workflow 提案可以拒絕或延期。",
+    "reasonLabel": "審核備註",
+    "reasonPlaceholder": "選填：說明為什麼套用、拒絕或延期這個提案。",
+    "noEvidence": "這個提案沒有保存證據片段。",
+    "stats": {
+      "total": "共 {{count}} 筆",
+      "pending": "{{count}} 筆待審核"
+    },
+    "filters": {
+      "status": "依狀態篩選",
+      "type": "依類型篩選",
+      "all": "全部",
+      "allTypes": "全部類型"
+    },
+    "status": {
+      "pending": "待審核",
+      "applied": "已套用",
+      "rejected": "已拒絕",
+      "deferred": "已延期",
+      "failed": "失敗",
+      "saved": "已保存"
+    },
+    "types": {
+      "memory": "記憶",
+      "fact": "事實",
+      "skill": "Skill",
+      "workflow": "Workflow"
+    },
+    "sections": {
+      "context": "上下文",
+      "evidence": "證據"
+    },
+    "fields": {
+      "session": "會話",
+      "created": "建立時間",
+      "rationale": "理由",
+      "reviewReason": "審核備註"
+    },
+    "actions": {
+      "refresh": "重新整理",
+      "apply": "套用",
+      "reject": "拒絕",
+      "defer": "延期"
+    },
+    "confirmApply": {
+      "title": "套用這個提案？",
+      "description": "OpenHome 會把已批准的記憶或事實寫入受控 facts store，並重新生成 MEMORY.md。",
+      "cancel": "取消",
+      "confirm": "套用"
     }
   },
   "chat": {

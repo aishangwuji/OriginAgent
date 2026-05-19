@@ -237,6 +237,9 @@ describe("App layout", () => {
               runtime: {
                 config_path: "/tmp/config.json",
               },
+              learning: {
+                background_review: { enabled: false },
+              },
               requires_restart: false,
             }),
           };
@@ -302,6 +305,93 @@ describe("App layout", () => {
     expect(screen.getByText("New MCP server")).toBeInTheDocument();
   });
 
+  it("opens reviews from the sidebar and applies a memory proposal", async () => {
+    await i18n.changeLanguage("en");
+    const proposal = {
+      id: "review_memory",
+      created_at: "2026-05-19T10:00:00+00:00",
+      session_key: "websocket:chat-a",
+      turn_id: "turn-1",
+      proposal_type: "memory",
+      domain_id: "core",
+      title: "Remember concise answers",
+      content: "User prefers concise answers.",
+      rationale: "The user asked for concise responses.",
+      confidence: 0.9,
+      evidence: ["Please be concise."],
+      status: "pending",
+    };
+    const appliedProposal = {
+      ...proposal,
+      status: "applied",
+      applied_fact_id: "fact_123",
+    };
+    let applied = false;
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      const json = (body: unknown) => ({
+        ok: true,
+        status: 200,
+        headers: new Headers({ "content-type": "application/json" }),
+        text: async () => JSON.stringify(body),
+      });
+      if (url === "/api/reviews?status=pending&limit=50") {
+        return json({
+          proposals: applied ? [] : [proposal],
+          stats: { proposal_count: 1, pending_count: applied ? 0 : 1 },
+        });
+      }
+      if (url === "/api/reviews/review_memory") {
+        return json({
+          proposal: applied ? appliedProposal : proposal,
+          stats: { proposal_count: 1, pending_count: applied ? 0 : 1 },
+        });
+      }
+      if (url === "/api/reviews/review_memory/apply") {
+        applied = true;
+        return json({
+          result: {
+            proposal_id: "review_memory",
+            status: "applied",
+            action: "apply",
+            ok: true,
+            message: "Review proposal applied.",
+            fact_id: "fact_123",
+          },
+          proposal: appliedProposal,
+          stats: { proposal_count: 1, pending_count: 0 },
+        });
+      }
+      return { ok: false, status: 404, json: async () => ({}) };
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<App />);
+
+    await waitFor(() => expect(connectSpy).toHaveBeenCalled());
+    const sidebar = screen.getByRole("navigation", { name: "Sidebar navigation" });
+    fireEvent.click(within(sidebar).getByRole("button", { name: "Reviews" }));
+
+    expect(await screen.findByRole("heading", { name: "Learning Reviews" })).toBeInTheDocument();
+    expect(await screen.findByText("Remember concise answers")).toBeInTheDocument();
+    expect(screen.getAllByText("User prefers concise answers.").length).toBeGreaterThan(0);
+    expect(document.title).toBe("Learning Reviews · OpenHome");
+
+    fireEvent.click(screen.getByRole("button", { name: "Apply" }));
+    expect(screen.getByText("Apply this proposal?")).toBeInTheDocument();
+    fireEvent.click(screen.getAllByRole("button", { name: "Apply" }).at(-1)!);
+
+    await waitFor(() =>
+      expect(fetchMock).toHaveBeenCalledWith(
+        "/api/reviews/review_memory/apply",
+        expect.objectContaining({
+          headers: { Authorization: "Bearer tok" },
+        }),
+      ),
+    );
+    expect(await screen.findByText("Review proposal applied.")).toBeInTheDocument();
+  });
+
   it("shows New chat in the thread header while a session has no generated title", async () => {
     await i18n.changeLanguage("zh-CN");
     mockSessions = [
@@ -362,6 +452,9 @@ describe("App layout", () => {
               mcp: { servers: [] },
               runtime: {
                 config_path: "/tmp/config.json",
+              },
+              learning: {
+                background_review: { enabled: false },
               },
               requires_restart: false,
             }),
@@ -433,6 +526,9 @@ describe("App layout", () => {
               mcp: { servers: [] },
               runtime: {
                 config_path: "/tmp/config.json",
+              },
+              learning: {
+                background_review: { enabled: false },
               },
               requires_restart: false,
             }),
@@ -559,6 +655,9 @@ describe("App layout", () => {
               mcp: { servers: [] },
               runtime: {
                 config_path: "/tmp/config.json",
+              },
+              learning: {
+                background_review: { enabled: false },
               },
               requires_restart: false,
             }),

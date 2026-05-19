@@ -746,6 +746,9 @@ class WebSocketChannel(BaseChannel):
         if got == "/api/commands":
             return self._handle_commands(request)
 
+        if got == "/api/reviews":
+            return self._handle_reviews_list(request)
+
         if got == "/api/settings/update":
             return self._handle_settings_update(request)
 
@@ -766,6 +769,14 @@ class WebSocketChannel(BaseChannel):
 
         if got == "/api/settings/mcp/delete":
             return self._handle_settings_mcp_delete(request)
+
+        m = re.match(r"^/api/reviews/([^/]+)$", got)
+        if m:
+            return self._handle_review_detail(request, m.group(1))
+
+        m = re.match(r"^/api/reviews/([^/]+)/(apply|approve|reject|defer)$", got)
+        if m:
+            return self._handle_review_action(request, m.group(1), m.group(2))
 
         m = re.match(r"^/api/sessions/([^/]+)/messages$", got)
         if m:
@@ -972,6 +983,65 @@ class WebSocketChannel(BaseChannel):
         if not self._check_api_token(request):
             return _http_error(401, "Unauthorized")
         return _http_json_response({"commands": builtin_command_palette()})
+
+    def _review_store(self):
+        from OpenHome.agent.background_review import ReviewProposalStore
+        from OpenHome.config.loader import load_config
+
+        return ReviewProposalStore(load_config().workspace_path)
+
+    def _handle_reviews_list(self, request: WsRequest) -> Response:
+        if not self._check_api_token(request):
+            return _http_error(401, "Unauthorized")
+        query = _parse_query(request.path)
+        status = _query_first(query, "status")
+        proposal_type = _query_first(query, "type")
+        limit_raw = _query_first(query, "limit")
+        try:
+            limit = int(limit_raw) if limit_raw is not None else 50
+        except ValueError:
+            return _http_error(400, "limit must be an integer")
+        store = self._review_store()
+        return _http_json_response({
+            "proposals": store.list_records(
+                status=status,
+                proposal_type=proposal_type,
+                limit=limit,
+            ),
+            "stats": store.stats(),
+        })
+
+    def _handle_review_detail(self, request: WsRequest, proposal_id: str) -> Response:
+        if not self._check_api_token(request):
+            return _http_error(401, "Unauthorized")
+        proposal_id = unquote(proposal_id)
+        store = self._review_store()
+        proposal = store.get(proposal_id)
+        if proposal is None:
+            return _http_error(404, "review proposal not found")
+        return _http_json_response({"proposal": proposal, "stats": store.stats()})
+
+    def _handle_review_action(self, request: WsRequest, proposal_id: str, action: str) -> Response:
+        if not self._check_api_token(request):
+            return _http_error(401, "Unauthorized")
+        proposal_id = unquote(proposal_id)
+        query = _parse_query(request.path)
+        reason = _query_first(query, "reason") or ""
+        store = self._review_store()
+        if action in {"apply", "approve"}:
+            result = store.apply(proposal_id, reason=reason)
+        elif action == "reject":
+            result = store.reject(proposal_id, reason=reason)
+        elif action == "defer":
+            result = store.defer(proposal_id, reason=reason)
+        else:
+            return _http_error(400, "unknown review action")
+        status = 200 if result.error != "not_found" else 404
+        return _http_json_response({
+            "result": result.to_json(),
+            "proposal": result.proposal,
+            "stats": store.stats(),
+        }, status=status)
 
     def _handle_settings_update(self, request: WsRequest) -> Response:
         if not self._check_api_token(request):

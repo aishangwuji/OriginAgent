@@ -15,6 +15,7 @@ from websockets.exceptions import ConnectionClosed
 from websockets.frames import Close
 
 from OpenHome.bus.events import OUTBOUND_META_AGENT_UI, OutboundMessage
+from OpenHome.agent.background_review import ReviewProposal, ReviewProposalStore
 from OpenHome.channels.websocket import (
     WebSocketChannel,
     WebSocketConfig,
@@ -1444,3 +1445,83 @@ def test_handle_webui_thread_get_returns_json(tmp_path, monkeypatch) -> None:
     assert len(body["messages"]) == 1
     assert body["messages"][0]["role"] == "user"
     assert body["messages"][0]["content"] == "hi"
+
+
+def test_review_api_lists_details_and_applies_with_auth(
+    tmp_path,
+    monkeypatch,
+    bus: MagicMock,
+) -> None:
+    from websockets.datastructures import Headers
+    from websockets.http11 import Request
+
+    config_path = tmp_path / "config.json"
+    workspace = tmp_path / "workspace"
+    config = Config()
+    config.agents.defaults.workspace = str(workspace)
+    save_config(config, config_path)
+    monkeypatch.setattr("OpenHome.config.loader._current_config_path", config_path)
+
+    store = ReviewProposalStore(workspace)
+    store.append_many([
+        ReviewProposal(
+            id="review_memory",
+            created_at="2026-05-19T10:00:00+00:00",
+            session_key="websocket:chat1",
+            turn_id="turn-1",
+            proposal_type="memory",
+            domain_id="core",
+            title="Remember a safe preference",
+            content="User prefers concise answers. api_key=sk-proj-secretsecretsecretsecret",
+            rationale="User asked for it.",
+            confidence=0.9,
+            evidence=["Please be concise."],
+        )
+    ])
+
+    channel = _ch(bus)
+    channel._api_tokens["tok"] = time.monotonic() + 300
+    authed = Headers([("Authorization", "Bearer tok")])
+
+    denied = channel._handle_reviews_list(Request("/api/reviews", Headers([])))
+    assert denied.status_code == 401
+
+    listed = channel._handle_reviews_list(
+        Request("/api/reviews?status=pending&type=memory&limit=50", authed)
+    )
+    assert listed.status_code == 200
+    list_body = json.loads(listed.body.decode())
+    assert list_body["stats"]["pending_count"] == 1
+    assert list_body["proposals"][0]["id"] == "review_memory"
+    assert "[REDACTED_SECRET]" in list_body["proposals"][0]["content"]
+    assert "sk-proj" not in list_body["proposals"][0]["content"]
+
+    detail = channel._handle_review_detail(
+        Request("/api/reviews/review_memory", authed),
+        "review_memory",
+    )
+    assert detail.status_code == 200
+    detail_body = json.loads(detail.body.decode())
+    assert detail_body["proposal"]["status"] == "pending"
+
+    applied = channel._handle_review_action(
+        Request("/api/reviews/review_memory/apply?reason=ok", authed),
+        "review_memory",
+        "apply",
+    )
+    assert applied.status_code == 200
+    apply_body = json.loads(applied.body.decode())
+    assert apply_body["result"]["ok"] is True
+    assert apply_body["proposal"]["status"] == "applied"
+    assert apply_body["stats"]["pending_count"] == 0
+
+    facts_path = workspace / "memory" / "facts.jsonl"
+    assert facts_path.exists()
+    facts = [
+        json.loads(line)
+        for line in facts_path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    assert len(facts) == 1
+    assert facts[0]["scope"] == "review.memory"
+    assert "[REDACTED_SECRET]" in facts[0]["content"]
