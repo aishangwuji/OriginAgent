@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Button as IslandButton, Card as IslandCard, Input as IslandInput, Typewriter } from "animal-island-ui";
 import { useTranslation } from "react-i18next";
 import { DeleteConfirm } from "@/components/DeleteConfirm";
 import { Sidebar } from "@/components/Sidebar";
 import { SettingsView } from "@/components/settings/SettingsView";
 import { ThreadShell } from "@/components/thread/ThreadShell";
 import { Sheet, SheetContent } from "@/components/ui/sheet";
-import { preloadMarkdownText } from "@/components/MarkdownText";
+
 import { useSessions } from "@/hooks/useSessions";
 import { useTheme } from "@/hooks/useTheme";
 import { cn } from "@/lib/utils";
@@ -19,8 +20,6 @@ import {
 import { OpenHomeClient } from "@/lib/OpenHome-client";
 import { ClientProvider, useClient } from "@/providers/ClientProvider";
 import type { ChatSummary } from "@/lib/types";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 
 type BootState =
   | { status: "loading" }
@@ -31,12 +30,29 @@ type BootState =
       client: OpenHomeClient;
       token: string;
       modelName: string | null;
+      refreshToken: () => Promise<string | null>;
     };
 
 const SIDEBAR_STORAGE_KEY = "OpenHome-webui.sidebar";
 const RESTART_STARTED_KEY = "OpenHome-webui.restartStartedAt";
 const SIDEBAR_WIDTH = 272;
 type ShellView = "chat" | "settings";
+
+function pendingSessionFromKey(key: string): ChatSummary | null {
+  const separator = key.indexOf(":");
+  if (separator <= 0 || separator === key.length - 1) return null;
+  const channel = key.slice(0, separator);
+  const chatId = key.slice(separator + 1);
+  return {
+    key,
+    channel,
+    chatId,
+    createdAt: null,
+    updatedAt: null,
+    title: "",
+    preview: "",
+  };
+}
 
 function AuthForm({
   failed,
@@ -58,13 +74,18 @@ function AuthForm({
   };
 
   return (
-    <div className="flex h-full w-full items-center justify-center px-6">
+    <div className="island-shell-bg flex h-full w-full items-center justify-center px-6">
       <form
         onSubmit={handleSubmit}
-        className="flex w-full max-w-sm flex-col gap-4"
+        className="island-auth-card flex w-full max-w-sm flex-col gap-4"
       >
         <div className="flex flex-col items-center gap-1 text-center">
-          <p className="text-lg font-semibold">{t("app.auth.title")}</p>
+          <div className="island-brand-orb mb-2">
+            <picture>
+              <img src="/brand/OpenHome_mark_v2.svg" alt="OpenHome" draggable={false} />
+            </picture>
+          </div>
+          <p className="text-lg font-black text-[#725d42]">{t("app.auth.title")}</p>
           <p className="text-sm text-muted-foreground">{t("app.auth.hint")}</p>
         </div>
         {failed && (
@@ -72,21 +93,27 @@ function AuthForm({
             {t("app.auth.invalid")}
           </p>
         )}
-        <Input
+        <IslandInput
+          name="openhome-secret"
           type="password"
           placeholder={t("app.auth.placeholder")}
           value={value}
           onChange={(e) => setValue(e.target.value)}
           disabled={submitting}
           autoFocus
+          size="large"
+          allowClear
         />
-        <Button
-          type="submit"
-          className="w-full"
+        <IslandButton
+          htmlType="submit"
+          type="primary"
+          size="large"
+          block
+          loading={submitting}
           disabled={!value.trim() || submitting}
         >
           {t("app.auth.submit")}
-        </Button>
+        </IslandButton>
       </form>
     </div>
   );
@@ -117,16 +144,48 @@ export default function App() {
           if (cancelled) return;
           if (secret) saveSecret(secret);
           const url = deriveWsUrl(boot.ws_path, boot.token);
-          const client = new OpenHomeClient({
+          let client: OpenHomeClient;
+          const refreshToken = async (): Promise<string | null> => {
+            try {
+              const refreshed = await fetchBootstrap("", secret);
+              const refreshedUrl = deriveWsUrl(refreshed.ws_path, refreshed.token);
+              client.updateUrl(refreshedUrl);
+              setState((current) =>
+                current.status === "ready"
+                  ? {
+                      ...current,
+                      token: refreshed.token,
+                      modelName: refreshed.model_name ?? current.modelName,
+                    }
+                  : current,
+              );
+              return refreshed.token;
+            } catch {
+              return null;
+            }
+          };
+          const refreshWsUrl = async (): Promise<string | null> => {
+            try {
+              const refreshed = await fetchBootstrap("", secret);
+              const refreshedUrl = deriveWsUrl(refreshed.ws_path, refreshed.token);
+              client.updateUrl(refreshedUrl);
+              setState((current) =>
+                current.status === "ready"
+                  ? {
+                      ...current,
+                      token: refreshed.token,
+                      modelName: refreshed.model_name ?? current.modelName,
+                    }
+                  : current,
+              );
+              return refreshedUrl;
+            } catch {
+              return null;
+            }
+          };
+          client = new OpenHomeClient({
             url,
-            onReauth: async () => {
-              try {
-                const refreshed = await fetchBootstrap("", secret);
-                return deriveWsUrl(refreshed.ws_path, refreshed.token);
-              } catch {
-                return null;
-              }
-            },
+            onReauth: refreshWsUrl,
           });
           client.connect();
           setState({
@@ -134,6 +193,7 @@ export default function App() {
             client,
             token: boot.token,
             modelName: boot.model_name ?? null,
+            refreshToken,
           });
         } catch (e) {
           if (cancelled) return;
@@ -157,35 +217,13 @@ export default function App() {
     return bootstrapWithSecret(saved);
   }, [bootstrapWithSecret]);
 
-  useEffect(() => {
-    const warm = () => preloadMarkdownText();
-    const win = globalThis as typeof globalThis & {
-      requestIdleCallback?: (
-        callback: IdleRequestCallback,
-        options?: IdleRequestOptions,
-      ) => number;
-      cancelIdleCallback?: (handle: number) => void;
-    };
-    if (typeof win.requestIdleCallback === "function") {
-      const id = win.requestIdleCallback(warm, { timeout: 1500 });
-      return () => win.cancelIdleCallback?.(id);
-    }
-    const id = globalThis.setTimeout(warm, 250);
-    return () => globalThis.clearTimeout(id);
-  }, []);
-
   if (state.status === "loading") {
     return (
-      <div className="flex h-full w-full items-center justify-center">
-        <div className="flex flex-col items-center gap-3 animate-in fade-in-0 duration-300">
-          <div className="flex items-center gap-2 text-sm text-muted-foreground">
-            <span className="relative flex h-2 w-2">
-              <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-foreground/40" />
-              <span className="relative inline-flex h-2 w-2 rounded-full bg-foreground/60" />
-            </span>
-            {t("app.loading.connecting")}
-          </div>
-        </div>
+      <div className="island-shell-bg flex h-full w-full items-center justify-center px-6">
+        <IslandCard className="island-status-card animate-in fade-in-0 duration-300">
+          <div className="island-loader-leaf" aria-hidden />
+          <Typewriter speed={36}>{t("app.loading.connecting")}</Typewriter>
+        </IslandCard>
       </div>
     );
   }
@@ -199,14 +237,14 @@ export default function App() {
   }
   if (state.status === "error") {
     return (
-      <div className="flex h-full w-full items-center justify-center px-4 text-center">
-        <div className="flex max-w-md flex-col items-center gap-3">
-          <p className="text-lg font-semibold">{t("app.error.title")}</p>
+      <div className="island-shell-bg flex h-full w-full items-center justify-center px-4 text-center">
+        <IslandCard className="island-status-card flex max-w-md flex-col items-center gap-3">
+          <p className="text-lg font-black text-[#725d42]">{t("app.error.title")}</p>
           <p className="text-sm text-muted-foreground">{state.message}</p>
           <p className="text-xs text-muted-foreground">
             {t("app.error.gatewayHint")}
           </p>
-        </div>
+        </IslandCard>
       </div>
     );
   }
@@ -230,6 +268,7 @@ export default function App() {
       client={state.client}
       token={state.token}
       modelName={state.modelName}
+      refreshToken={state.refreshToken}
     >
       <Shell onModelNameChange={handleModelNameChange} onLogout={handleLogout} />
     </ClientProvider>
@@ -250,7 +289,6 @@ function Shell({ onModelNameChange, onLogout }: { onModelNameChange: (modelName:
     key: string;
     label: string;
   } | null>(null);
-  const lastSessionsLen = useRef(0);
   const restartSawDisconnectRef = useRef(false);
   const [restartToast, setRestartToast] = useState<string | null>(null);
   const [isRestarting, setIsRestarting] = useState(false);
@@ -266,18 +304,14 @@ function Shell({ onModelNameChange, onLogout }: { onModelNameChange: (modelName:
     }
   }, [desktopSidebarOpen]);
 
-  useEffect(() => {
-    if (activeKey) return;
-    if (sessions.length > 0 && lastSessionsLen.current === 0) {
-      setActiveKey(sessions[0].key);
-    }
-    lastSessionsLen.current = sessions.length;
-  }, [sessions, activeKey]);
+
 
   const activeSession = useMemo<ChatSummary | null>(() => {
     if (!activeKey) return null;
-    return sessions.find((s) => s.key === activeKey) ?? null;
-  }, [sessions, activeKey]);
+    const session = sessions.find((s) => s.key === activeKey);
+    if (session) return session;
+    return loading ? pendingSessionFromKey(activeKey) : null;
+  }, [sessions, activeKey, loading]);
 
   const closeDesktopSidebar = useCallback(() => {
     setDesktopSidebarOpen(false);
@@ -335,9 +369,8 @@ function Shell({ onModelNameChange, onLogout }: { onModelNameChange: (modelName:
     setView("chat");
     setMobileSidebarOpen(false);
     setActiveKey((current) => {
-      if (current && sessions.some((session) => session.key === current)) {
-        return current;
-      }
+      if (!current) return null;
+      if (sessions.some((session) => session.key === current)) return current;
       return sessions[0]?.key ?? null;
     });
   }, [sessions]);
@@ -354,6 +387,12 @@ function Shell({ onModelNameChange, onLogout }: { onModelNameChange: (modelName:
     }
     client.sendMessage(chatId, "/restart");
   }, [activeSession?.chatId, client]);
+
+  useEffect(() => {
+    return client.onRuntimeModelUpdate((modelName) => {
+      onModelNameChange(modelName);
+    });
+  }, [client, onModelNameChange]);
 
   useEffect(() => {
     return client.onStatus((status) => {
@@ -406,7 +445,7 @@ function Shell({ onModelNameChange, onLogout }: { onModelNameChange: (modelName:
   const headerTitle = activeSession
     ? activeSession.title ||
       activeSession.preview ||
-      t("chat.fallbackTitle", { id: activeSession.chatId.slice(0, 6) })
+      t("chat.pendingTitle", { defaultValue: t("chat.newChat") })
     : t("app.brand");
 
   useEffect(() => {
@@ -434,7 +473,7 @@ function Shell({ onModelNameChange, onLogout }: { onModelNameChange: (modelName:
   const showMainSidebar = view !== "settings";
 
   return (
-    <div className="relative flex h-full w-full overflow-hidden">
+    <div className="island-app-shell relative flex h-full w-full overflow-hidden">
       {/* Desktop sidebar: in normal flow, so the thread area width stays honest. */}
       {showMainSidebar ? (
         <aside
@@ -446,11 +485,10 @@ function Shell({ onModelNameChange, onLogout }: { onModelNameChange: (modelName:
         >
           <div
             className={cn(
-              "absolute inset-y-0 left-0 h-full overflow-hidden bg-sidebar shadow-inner-right",
+              "island-sidebar absolute inset-y-0 left-0 right-2.5 h-full overflow-hidden bg-sidebar shadow-inner-right",
               "transition-transform duration-300 ease-out",
               desktopSidebarOpen ? "translate-x-0" : "-translate-x-full",
             )}
-            style={{ width: SIDEBAR_WIDTH }}
           >
             <Sidebar {...sidebarProps} onCollapse={closeDesktopSidebar} />
           </div>
@@ -473,18 +511,13 @@ function Shell({ onModelNameChange, onLogout }: { onModelNameChange: (modelName:
         </Sheet>
       ) : null}
 
-      <main className="flex h-full min-w-0 flex-1 flex-col">
-        {view === "settings" ? (
-          <SettingsView
-            theme={theme}
-            onToggleTheme={toggle}
-            onBackToChat={onBackToChat}
-            onModelNameChange={onModelNameChange}
-            onLogout={onLogout}
-            onRestart={onRestart}
-            isRestarting={isRestarting}
-          />
-        ) : (
+      <main className="island-main-panel relative flex h-full min-w-0 flex-1 flex-col">
+        <div
+          className={cn(
+            "absolute inset-0 flex flex-col",
+            view === "settings" && "invisible pointer-events-none",
+          )}
+        >
           <ThreadShell
             session={activeSession}
             title={headerTitle}
@@ -496,6 +529,19 @@ function Shell({ onModelNameChange, onLogout }: { onModelNameChange: (modelName:
             onToggleTheme={toggle}
             hideSidebarToggleOnDesktop={desktopSidebarOpen}
           />
+        </div>
+        {view === "settings" && (
+          <div className="absolute inset-0 flex flex-col">
+            <SettingsView
+              theme={theme}
+              onToggleTheme={toggle}
+              onBackToChat={onBackToChat}
+              onModelNameChange={onModelNameChange}
+              onLogout={onLogout}
+              onRestart={onRestart}
+              isRestarting={isRestarting}
+            />
+          </div>
         )}
       </main>
 
@@ -508,7 +554,7 @@ function Shell({ onModelNameChange, onLogout }: { onModelNameChange: (modelName:
       {restartToast ? (
         <div
           role="status"
-          className="fixed left-1/2 top-4 z-50 -translate-x-1/2 rounded-full border border-border/70 bg-popover px-4 py-2 text-sm font-medium text-popover-foreground shadow-lg"
+          className="fixed left-1/2 top-4 z-50 -translate-x-1/2 rounded-full border border-[#c4b89e]/70 bg-[#f7f3df] px-4 py-2 text-sm font-black text-[#725d42] shadow-lg"
         >
           {restartToast}
         </div>

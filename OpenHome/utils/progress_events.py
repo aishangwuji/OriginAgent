@@ -9,14 +9,18 @@ from typing import Any
 from OpenHome.agent.hook import AgentHookContext
 
 
-def on_progress_accepts_tool_events(cb: Callable[..., Any]) -> bool:
+def on_progress_accepts(cb: Callable[..., Any], name: str) -> bool:
     try:
         sig = inspect.signature(cb)
     except (TypeError, ValueError):
         return False
     if any(p.kind == inspect.Parameter.VAR_KEYWORD for p in sig.parameters.values()):
         return True
-    return "tool_events" in sig.parameters
+    return name in sig.parameters
+
+
+def on_progress_accepts_tool_events(cb: Callable[..., Any]) -> bool:
+    return on_progress_accepts(cb, "tool_events")
 
 
 async def invoke_on_progress(

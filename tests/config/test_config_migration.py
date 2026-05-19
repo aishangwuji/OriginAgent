@@ -223,3 +223,33 @@ def test_load_config_resets_ssrf_whitelist_when_next_config_is_empty(tmp_path) -
     with patch("OpenHome.security.network.socket.getaddrinfo", _fake_resolve("ts.local", ["100.100.1.1"])):
         ok, _ = validate_url_target("http://ts.local/api")
         assert not ok
+
+
+def test_domain_packs_config_accepts_camel_case(tmp_path) -> None:
+    config_path = tmp_path / "config.json"
+    config_path.write_text(
+        json.dumps(
+            {
+                "agents": {
+                    "defaults": {
+                        "domainPacks": {
+                            "enabled": False,
+                            "active": ["research"],
+                            "disabled": ["smart_home"],
+                            "maxCapabilityChars": 1234,
+                        }
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    config = load_config(config_path)
+
+    assert config.agents.defaults.domain_packs.enabled is False
+    assert config.agents.defaults.domain_packs.active == ["research"]
+    assert config.agents.defaults.domain_packs.disabled == ["smart_home"]
+    assert config.agents.defaults.domain_packs.max_capability_chars == 1234
+    dumped = config.model_dump(mode="json", by_alias=True)
+    assert dumped["agents"]["defaults"]["domainPacks"]["maxCapabilityChars"] == 1234

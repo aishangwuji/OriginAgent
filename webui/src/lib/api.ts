@@ -1,10 +1,13 @@
 import type {
   ChatSummary,
+  HomeAssistantMcpSettingsUpdate,
+  McpServerSettingsUpdate,
   ProviderSettingsUpdate,
   SettingsPayload,
   SettingsUpdate,
   SlashCommand,
   WebSearchSettingsUpdate,
+  WebuiThreadPersistedPayload,
 } from "./types";
 
 export class ApiError extends Error {
@@ -13,6 +16,45 @@ export class ApiError extends Error {
     super(message);
     this.status = status;
     this.name = "ApiError";
+  }
+}
+
+export async function withTokenRefresh<T>(
+  token: string,
+  refreshToken: () => Promise<string | null>,
+  action: (token: string) => Promise<T>,
+): Promise<T> {
+  try {
+    return await action(token);
+  } catch (err) {
+    if (err instanceof ApiError && err.status === 401) {
+      const refreshed = await refreshToken();
+      if (refreshed) return action(refreshed);
+    }
+    throw err;
+  }
+}
+
+async function parseJsonResponse<T>(res: Response): Promise<T> {
+  if (typeof res.text !== "function") {
+    return (await res.json()) as T;
+  }
+  const text = await res.text();
+  try {
+    return JSON.parse(text) as T;
+  } catch {
+    const contentType = res.headers.get("content-type") ?? "";
+    const looksLikeHtml = text.trimStart().startsWith("<");
+    if (looksLikeHtml) {
+      throw new ApiError(
+        res.status || 500,
+        "API returned HTML instead of JSON. Refresh the page or restart OpenHome so the latest backend routes are active.",
+      );
+    }
+    throw new ApiError(
+      res.status || 500,
+      contentType ? `Invalid JSON response (${contentType})` : "Invalid JSON response",
+    );
   }
 }
 
@@ -32,7 +74,7 @@ async function request<T>(
   if (!res.ok) {
     throw new ApiError(res.status, `HTTP ${res.status}`);
   }
-  return (await res.json()) as T;
+  return parseJsonResponse<T>(res);
 }
 
 function splitKey(key: string): { channel: string; chatId: string } {
@@ -66,40 +108,20 @@ export async function listSessions(
   }));
 }
 
-/** Signed image URL attached to a historical user message. The server
- * emits these in place of raw on-disk paths so the client can render
- * previews without learning where media lives on disk. Each URL is a
- * self-authenticating ``/api/media/...`` route (see backend
- * ``_sign_media_path``) safe to drop into an ``<img src>`` attribute. */
-export interface SessionMediaUrl {
-  url: string;
-  name?: string;
-}
-
-export async function fetchSessionMessages(
+/** Disk-backed WebUI display thread snapshot (separate from agent session). */
+export async function fetchWebuiThread(
   token: string,
   key: string,
   base: string = "",
-): Promise<{
-  key: string;
-  created_at: string | null;
-  updated_at: string | null;
-  messages: Array<{
-    role: string;
-    content: string;
-    timestamp?: string;
-    tool_calls?: unknown;
-    tool_call_id?: string;
-    name?: string;
-    /** Present on ``user`` turns that attached images. Paths have already
-     * been stripped server-side; only the signed fetch URLs survive. */
-    media_urls?: SessionMediaUrl[];
-  }>;
-}> {
-  return request(
-    `${base}/api/sessions/${encodeURIComponent(key)}/messages`,
-    token,
-  );
+): Promise<WebuiThreadPersistedPayload | null> {
+  const url = `${base}/api/sessions/${encodeURIComponent(key)}/webui-thread`;
+  const res = await fetch(url, {
+    headers: { Authorization: `Bearer ${token}` },
+    credentials: "same-origin",
+  });
+  if (res.status === 404) return null;
+  if (!res.ok) throw new ApiError(res.status, `HTTP ${res.status}`);
+  return parseJsonResponse<WebuiThreadPersistedPayload>(res);
 }
 
 export async function deleteSession(
@@ -133,8 +155,7 @@ export async function listSlashCommands(
     arg_hint?: string;
   };
   const body = await request<{ commands: Row[] }>(`${base}/api/commands`, token);
-  return body.commands
-    .filter((command) => !["/stop", "/restart"].includes(command.command))
+  const commands: SlashCommand[] = body.commands
     .map((command) => ({
       command: command.command,
       title: command.title,
@@ -142,6 +163,7 @@ export async function listSlashCommands(
       icon: command.icon,
       argHint: command.arg_hint ?? "",
     }));
+  return commands;
 }
 
 export async function updateSettings(
@@ -181,6 +203,47 @@ export async function updateWebSearchSettings(
   if (update.baseUrl !== undefined) query.set("base_url", update.baseUrl);
   return request<SettingsPayload>(
     `${base}/api/settings/web-search/update?${query}`,
+    token,
+  );
+}
+
+export async function upsertMcpServerSettings(
+  token: string,
+  update: McpServerSettingsUpdate,
+  base: string = "",
+): Promise<SettingsPayload> {
+  const query = new URLSearchParams();
+  query.set("config", JSON.stringify(update));
+  return request<SettingsPayload>(
+    `${base}/api/settings/mcp/upsert?${query}`,
+    token,
+  );
+}
+
+export async function upsertHomeAssistantMcpSettings(
+  token: string,
+  update: HomeAssistantMcpSettingsUpdate,
+  base: string = "",
+): Promise<SettingsPayload> {
+  const query = new URLSearchParams();
+  query.set("name", update.name);
+  query.set("address", update.address);
+  if (update.token !== undefined) query.set("token", update.token);
+  return request<SettingsPayload>(
+    `${base}/api/settings/mcp/home-assistant/upsert?${query}`,
+    token,
+  );
+}
+
+export async function deleteMcpServerSettings(
+  token: string,
+  name: string,
+  base: string = "",
+): Promise<SettingsPayload> {
+  const query = new URLSearchParams();
+  query.set("name", name);
+  return request<SettingsPayload>(
+    `${base}/api/settings/mcp/delete?${query}`,
     token,
   );
 }

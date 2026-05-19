@@ -521,7 +521,7 @@ def summarize_tool_target(name: str, params: dict[str, Any]) -> tuple[str | None
     elif name in {"list_dir", "glob", "grep"}:
         kind = "file"
         target = params.get("path") or params.get("directory") or params.get("root")
-    elif name == "web_fetch":
+    elif name in {"web_fetch", "content_read"}:
         kind = "url"
         url = str(params.get("url") or "")
         parsed = urlparse(url)

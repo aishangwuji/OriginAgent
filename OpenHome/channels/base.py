@@ -10,6 +10,8 @@ from loguru import logger
 
 from OpenHome.bus.events import InboundMessage, OutboundMessage
 from OpenHome.bus.queue import MessageBus
+from OpenHome.config.schema import PairingConfig
+from OpenHome.pairing import PAIRING_CODE_META_KEY, format_pairing_reply, generate_code, is_approved
 
 
 class BaseChannel(ABC):
@@ -28,6 +30,7 @@ class BaseChannel(ABC):
     transcription_language: str | None = None
     send_progress: bool = True
     send_tool_hints: bool = False
+    show_reasoning: bool = True
 
     def __init__(self, config: Any, bus: MessageBus):
         """
@@ -41,6 +44,7 @@ class BaseChannel(ABC):
         self.logger = logger.bind(channel=self.name)
         self.bus = bus
         self._running = False
+        self.pairing_config = PairingConfig()
 
     async def transcribe_audio(self, file_path: str | Path) -> str:
         """Transcribe an audio file via Whisper (OpenAI or Groq). Returns empty string on failure."""
@@ -120,6 +124,34 @@ class BaseChannel(ABC):
         """
         pass
 
+    async def send_reasoning_delta(
+        self, chat_id: str, delta: str, metadata: dict[str, Any] | None = None
+    ) -> None:
+        """Stream a chunk of model reasoning/thinking content.
+
+        Default is no-op. Channels with a native low-emphasis primitive
+        override this to render reasoning as a subordinate trace.
+        """
+        return
+
+    async def send_reasoning_end(
+        self, chat_id: str, metadata: dict[str, Any] | None = None
+    ) -> None:
+        """Mark the end of a reasoning stream segment."""
+        return
+
+    async def send_reasoning(self, msg: OutboundMessage) -> None:
+        """Deliver a complete reasoning block via the delta/end primitives."""
+        if not msg.content:
+            return
+        meta = dict(msg.metadata or {})
+        meta.setdefault("_reasoning_delta", True)
+        await self.send_reasoning_delta(msg.chat_id, msg.content, meta)
+        end_meta = dict(meta)
+        end_meta.pop("_reasoning_delta", None)
+        end_meta["_reasoning_end"] = True
+        await self.send_reasoning_end(msg.chat_id, end_meta)
+
     @property
     def supports_streaming(self) -> bool:
         """True when config enables streaming AND this subclass implements send_delta."""
@@ -128,7 +160,7 @@ class BaseChannel(ABC):
         return bool(streaming) and type(self).send_delta is not BaseChannel.send_delta
 
     def is_allowed(self, sender_id: str) -> bool:
-        """Check if *sender_id* is permitted.  Empty list → deny all; ``"*"`` → allow all."""
+        """Check sender permission: star > allowlist > opt-in pairing store > deny."""
         if isinstance(self.config, dict):
             if "allow_from" in self.config:
                 allow_list = self.config.get("allow_from")
@@ -136,12 +168,15 @@ class BaseChannel(ABC):
                 allow_list = self.config.get("allowFrom", [])
         else:
             allow_list = getattr(self.config, "allow_from", [])
-        if not allow_list:
-            self.logger.warning("allow_from is empty — all access denied")
-            return False
         if "*" in allow_list:
             return True
-        return str(sender_id) in allow_list
+        if str(sender_id) in allow_list:
+            return True
+        if getattr(self.pairing_config, "enabled", False) and is_approved(self.name, str(sender_id)):
+            return True
+        if not allow_list:
+            self.logger.warning("allow_from is empty — all access denied")
+        return False
 
     async def _handle_message(
         self,
@@ -151,6 +186,7 @@ class BaseChannel(ABC):
         media: list[str] | None = None,
         metadata: dict[str, Any] | None = None,
         session_key: str | None = None,
+        is_dm: bool = False,
     ) -> None:
         """
         Handle an incoming message from the chat platform.
@@ -166,6 +202,22 @@ class BaseChannel(ABC):
             session_key: Optional session key override (e.g. thread-scoped sessions).
         """
         if not self.is_allowed(sender_id):
+            if is_dm and getattr(self.pairing_config, "enabled", False):
+                code = generate_code(
+                    self.name,
+                    str(sender_id),
+                    ttl=getattr(self.pairing_config, "ttl_seconds", 600),
+                )
+                await self.send(
+                    OutboundMessage(
+                        channel=self.name,
+                        chat_id=str(chat_id),
+                        content=format_pairing_reply(code),
+                        metadata={PAIRING_CODE_META_KEY: code},
+                    )
+                )
+                self.logger.info("Sent pairing code <redacted> to sender {} in chat {}", sender_id, chat_id)
+                return
             self.logger.warning(
                 "Access denied for sender {}. "
                 "Add them to allowFrom list in config to grant access.",

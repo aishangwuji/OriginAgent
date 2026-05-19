@@ -46,7 +46,8 @@
     },
     "nav": {
       "general": "General",
-      "byok": "BYOK"
+      "byok": "BYOK",
+      "mcp": "MCP"
     },
     "sections": {
       "interface": "Interfaz",
@@ -125,6 +126,57 @@
         "baseUrlRequired": "SearXNG requiere una Base URL.",
         "missingCredential": "Añade la credencial requerida antes de guardar.",
         "saveHint": "Los cambios se aplican a nuevas solicitudes de web search."
+      }
+    },
+    "mcp": {
+      "description": "Configure MCP servers without editing config.json by hand. Changes are saved to the current OpenHome config.",
+      "quickConfig": "Quick config",
+      "add": "Add MCP",
+      "newServer": "New MCP server",
+      "editServer": "Edit MCP server",
+      "configuredServers": "Configured servers",
+      "empty": "No MCP servers configured.",
+      "restartRequired": "Saved. Restart OpenHome to connect the updated MCP servers.",
+      "editorHelp": "Leave masked or empty env/header values unchanged when editing.",
+      "name": "Server name",
+      "command": "Command",
+      "commandHelp": "Executable used to start a stdio MCP server.",
+      "args": "Arguments",
+      "argsHelp": "One argument per line.",
+      "env": "Environment",
+      "envHelp": "One KEY=value per line. Existing masked values are preserved.",
+      "url": "URL",
+      "headers": "Headers",
+      "headersHelp": "One KEY=value per line. Existing masked values are preserved.",
+      "enabledTools": "Enabled tools",
+      "enabledToolsHelp": "One tool name per line. Use * to allow all tools.",
+      "timeout": "Timeout seconds",
+      "delete": "Delete MCP server",
+      "transport": {
+        "stdio": "stdio",
+        "sse": "SSE",
+        "streamableHttp": "HTTP"
+      },
+      "homeAssistant": {
+        "title": "Home Assistant",
+        "description": "Enter the HA address and long-lived access token. OpenHome will configure the MCP URL, auth header, and local access whitelist.",
+        "address": "HA address",
+        "addressHelp": "You can paste http://localhost:8123 or the /home/0 URL from your browser.",
+        "token": "Long-lived access token",
+        "tokenHelp": "Create one from your Home Assistant profile security page.",
+        "tokenHelpExisting": "A token is already saved. Leave blank to keep using it.",
+        "tokenPlaceholder": "Paste Home Assistant long-lived access token",
+        "saveHint": "Saved as an HTTP MCP server and applied after restarting OpenHome.",
+        "save": "Save HA MCP",
+        "validation": {
+          "addressRequired": "Home Assistant address is required.",
+          "tokenRequired": "Home Assistant long-lived access token is required."
+        }
+      },
+      "validation": {
+        "nameRequired": "MCP server name is required.",
+        "commandRequired": "Command is required for stdio MCP servers.",
+        "urlRequired": "URL is required for HTTP MCP servers."
       }
     }
   },
@@ -218,6 +270,11 @@
       "placeholderStreaming": "El modelo está respondiendo…",
       "inputAria": "Entrada de mensaje",
       "sendHint": "Enter para enviar · Shift+Enter para nueva línea",
+      "runRuntimeTitle": "En ejecución · {{elapsed}}",
+      "goalStateStrip": "Objetivo · {{label}}",
+      "goalStateFallback": "Objetivo",
+      "goalStateExpandAria": "Ver objetivo completo",
+      "goalStateSheetTitle": "Objetivo",
       "send": "Enviar mensaje",
       "stop": "Detener respuesta",
       "attachImage": "Adjuntar imagen",
@@ -251,7 +308,7 @@
         "ariaLabel": "Comandos slash",
         "label": "comandos",
         "navigateHint": "↑↓ Navegar",
-        "selectHint": "Enter/Tab Insertar",
+        "selectHint": "Enter Ejecutar · Tab Insertar",
         "closeHint": "Esc Cerrar",
         "commands": {
           "new": {
@@ -286,12 +343,17 @@
             "title": "Restaurar memoria",
             "description": "Revierte la memoria a una instantánea Dream anterior."
           },
+          "goal": {
+            "title": "Objetivo a largo plazo",
+            "description": "Indica al agente que trate esto como un objetivo sostenido en varios pasos."
+          },
           "help": {
             "title": "Mostrar ayuda",
             "description": "Lista los comandos slash disponibles."
           }
         }
-      }
+      },
+      "goalStateCloseAria": "Cerrar objetivo"
     },
     "scrollToBottom": "Desplazarse al final"
   },
@@ -300,7 +362,19 @@
     "assistantTyping": "El asistente está escribiendo",
     "toolSingle": "Usando una herramienta",
     "toolMany": "Se usaron {{count}} herramientas",
-    "imageAttachment": "Imagen adjunta"
+    "toolSummary": "{{count}} herramienta",
+    "toolSummaryMany": "{{count}} herramientas",
+    "reasoningTools": "Razonamiento · {{count}} herramientas",
+    "reasoningToolsSingular": "Razonamiento · 1 herramienta",
+    "reasoning": "Razonamiento",
+    "reasoningStreaming": "Pensando…",
+    "reasoningSummary": "Razonamiento",
+    "agentActivitySummary": "{{reasoning}} pasos · {{tools}} llamadas a herramientas",
+    "agentActivityToolsOnly": "{{tools}} llamadas a herramientas",
+    "agentActivityLiveSummary": "En curso… · {{reasoning}} pasos · {{tools}} llamadas a herramientas",
+    "agentActivityLiveToolsOnly": "En curso… · {{tools}} llamadas a herramientas",
+    "imageAttachment": "Imagen adjunta",
+    "turnLatencyTitle": "Tiempo de respuesta (extremo a extremo)"
   },
   "lightbox": {
     "title": "Vista previa de imagen",
@@ -325,4 +399,3 @@
     }
   }
 }
-

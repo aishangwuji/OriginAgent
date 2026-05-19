@@ -46,7 +46,8 @@
     },
     "nav": {
       "general": "Général",
-      "byok": "BYOK"
+      "byok": "BYOK",
+      "mcp": "MCP"
     },
     "sections": {
       "interface": "Interface",
@@ -125,6 +126,57 @@
         "baseUrlRequired": "SearXNG nécessite une Base URL.",
         "missingCredential": "Ajoutez l'identifiant requis avant d'enregistrer.",
         "saveHint": "Les changements s'appliquent aux nouvelles requêtes web search."
+      }
+    },
+    "mcp": {
+      "description": "Configure MCP servers without editing config.json by hand. Changes are saved to the current OpenHome config.",
+      "quickConfig": "Quick config",
+      "add": "Add MCP",
+      "newServer": "New MCP server",
+      "editServer": "Edit MCP server",
+      "configuredServers": "Configured servers",
+      "empty": "No MCP servers configured.",
+      "restartRequired": "Saved. Restart OpenHome to connect the updated MCP servers.",
+      "editorHelp": "Leave masked or empty env/header values unchanged when editing.",
+      "name": "Server name",
+      "command": "Command",
+      "commandHelp": "Executable used to start a stdio MCP server.",
+      "args": "Arguments",
+      "argsHelp": "One argument per line.",
+      "env": "Environment",
+      "envHelp": "One KEY=value per line. Existing masked values are preserved.",
+      "url": "URL",
+      "headers": "Headers",
+      "headersHelp": "One KEY=value per line. Existing masked values are preserved.",
+      "enabledTools": "Enabled tools",
+      "enabledToolsHelp": "One tool name per line. Use * to allow all tools.",
+      "timeout": "Timeout seconds",
+      "delete": "Delete MCP server",
+      "transport": {
+        "stdio": "stdio",
+        "sse": "SSE",
+        "streamableHttp": "HTTP"
+      },
+      "homeAssistant": {
+        "title": "Home Assistant",
+        "description": "Enter the HA address and long-lived access token. OpenHome will configure the MCP URL, auth header, and local access whitelist.",
+        "address": "HA address",
+        "addressHelp": "You can paste http://localhost:8123 or the /home/0 URL from your browser.",
+        "token": "Long-lived access token",
+        "tokenHelp": "Create one from your Home Assistant profile security page.",
+        "tokenHelpExisting": "A token is already saved. Leave blank to keep using it.",
+        "tokenPlaceholder": "Paste Home Assistant long-lived access token",
+        "saveHint": "Saved as an HTTP MCP server and applied after restarting OpenHome.",
+        "save": "Save HA MCP",
+        "validation": {
+          "addressRequired": "Home Assistant address is required.",
+          "tokenRequired": "Home Assistant long-lived access token is required."
+        }
+      },
+      "validation": {
+        "nameRequired": "MCP server name is required.",
+        "commandRequired": "Command is required for stdio MCP servers.",
+        "urlRequired": "URL is required for HTTP MCP servers."
       }
     }
   },
@@ -218,6 +270,11 @@
       "placeholderStreaming": "Le modèle est en train de répondre…",
       "inputAria": "Champ de message",
       "sendHint": "Entrée pour envoyer · Maj+Entrée pour un retour à la ligne",
+      "runRuntimeTitle": "Exécution · {{elapsed}}",
+      "goalStateStrip": "Objectif · {{label}}",
+      "goalStateFallback": "Objectif",
+      "goalStateExpandAria": "Afficher l’objectif complet",
+      "goalStateSheetTitle": "Objectif",
       "send": "Envoyer le message",
       "stop": "Arrêter la réponse",
       "attachImage": "Joindre une image",
@@ -251,7 +308,7 @@
         "ariaLabel": "Commandes slash",
         "label": "commandes",
         "navigateHint": "↑↓ Naviguer",
-        "selectHint": "Entrée/Tab Insérer",
+        "selectHint": "Entrée Exécuter · Tab Insérer",
         "closeHint": "Échap Fermer",
         "commands": {
           "new": {
@@ -286,12 +343,17 @@
             "title": "Restaurer la mémoire",
             "description": "Revenir à un instantané Dream précédent."
           },
+          "goal": {
+            "title": "Objectif long terme",
+            "description": "Demandez à l’agent de traiter ceci comme un objectif multi‑étapes durable."
+          },
           "help": {
             "title": "Afficher l’aide",
             "description": "Lister les commandes slash disponibles."
           }
         }
-      }
+      },
+      "goalStateCloseAria": "Fermer l’objectif"
     },
     "scrollToBottom": "Faire défiler vers le bas"
   },
@@ -300,7 +362,19 @@
     "assistantTyping": "L’assistant est en train d’écrire",
     "toolSingle": "Utilisation d’un outil",
     "toolMany": "{{count}} outils utilisés",
-    "imageAttachment": "Pièce jointe image"
+    "toolSummary": "{{count}} outil",
+    "toolSummaryMany": "{{count}} outils",
+    "reasoningTools": "Raisonnement · {{count}} outils",
+    "reasoningToolsSingular": "Raisonnement · 1 outil",
+    "reasoning": "Raisonnement",
+    "reasoningStreaming": "En réflexion…",
+    "reasoningSummary": "Raisonnement",
+    "agentActivitySummary": "{{reasoning}} étapes · {{tools}} appels d’outils",
+    "agentActivityToolsOnly": "{{tools}} appels d’outils",
+    "agentActivityLiveSummary": "En cours… · {{reasoning}} étapes · {{tools}} appels d’outils",
+    "agentActivityLiveToolsOnly": "En cours… · {{tools}} appels d’outils",
+    "imageAttachment": "Pièce jointe image",
+    "turnLatencyTitle": "Temps de réponse (de bout en bout)"
   },
   "lightbox": {
     "title": "Aperçu de l’image",
@@ -325,4 +399,3 @@
     }
   }
 }
-

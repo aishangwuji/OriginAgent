@@ -46,7 +46,8 @@
     },
     "nav": {
       "general": "Chung",
-      "byok": "BYOK"
+      "byok": "BYOK",
+      "mcp": "MCP"
     },
     "sections": {
       "interface": "Giao diện",
@@ -125,6 +126,57 @@
         "baseUrlRequired": "SearXNG cần Base URL.",
         "missingCredential": "Thêm thông tin bắt buộc trước khi lưu.",
         "saveHint": "Thay đổi áp dụng cho các yêu cầu web search mới."
+      }
+    },
+    "mcp": {
+      "description": "Configure MCP servers without editing config.json by hand. Changes are saved to the current OpenHome config.",
+      "quickConfig": "Quick config",
+      "add": "Add MCP",
+      "newServer": "New MCP server",
+      "editServer": "Edit MCP server",
+      "configuredServers": "Configured servers",
+      "empty": "No MCP servers configured.",
+      "restartRequired": "Saved. Restart OpenHome to connect the updated MCP servers.",
+      "editorHelp": "Leave masked or empty env/header values unchanged when editing.",
+      "name": "Server name",
+      "command": "Command",
+      "commandHelp": "Executable used to start a stdio MCP server.",
+      "args": "Arguments",
+      "argsHelp": "One argument per line.",
+      "env": "Environment",
+      "envHelp": "One KEY=value per line. Existing masked values are preserved.",
+      "url": "URL",
+      "headers": "Headers",
+      "headersHelp": "One KEY=value per line. Existing masked values are preserved.",
+      "enabledTools": "Enabled tools",
+      "enabledToolsHelp": "One tool name per line. Use * to allow all tools.",
+      "timeout": "Timeout seconds",
+      "delete": "Delete MCP server",
+      "transport": {
+        "stdio": "stdio",
+        "sse": "SSE",
+        "streamableHttp": "HTTP"
+      },
+      "homeAssistant": {
+        "title": "Home Assistant",
+        "description": "Enter the HA address and long-lived access token. OpenHome will configure the MCP URL, auth header, and local access whitelist.",
+        "address": "HA address",
+        "addressHelp": "You can paste http://localhost:8123 or the /home/0 URL from your browser.",
+        "token": "Long-lived access token",
+        "tokenHelp": "Create one from your Home Assistant profile security page.",
+        "tokenHelpExisting": "A token is already saved. Leave blank to keep using it.",
+        "tokenPlaceholder": "Paste Home Assistant long-lived access token",
+        "saveHint": "Saved as an HTTP MCP server and applied after restarting OpenHome.",
+        "save": "Save HA MCP",
+        "validation": {
+          "addressRequired": "Home Assistant address is required.",
+          "tokenRequired": "Home Assistant long-lived access token is required."
+        }
+      },
+      "validation": {
+        "nameRequired": "MCP server name is required.",
+        "commandRequired": "Command is required for stdio MCP servers.",
+        "urlRequired": "URL is required for HTTP MCP servers."
       }
     }
   },
@@ -218,6 +270,11 @@
       "placeholderStreaming": "Mô hình đang trả lời…",
       "inputAria": "Ô nhập tin nhắn",
       "sendHint": "Enter để gửi · Shift+Enter để xuống dòng",
+      "runRuntimeTitle": "Đang chạy · {{elapsed}}",
+      "goalStateStrip": "Mục tiêu · {{label}}",
+      "goalStateFallback": "Mục tiêu",
+      "goalStateExpandAria": "Xem đầy đủ mục tiêu",
+      "goalStateSheetTitle": "Mục tiêu",
       "send": "Gửi tin nhắn",
       "stop": "Dừng phản hồi",
       "attachImage": "Đính kèm ảnh",
@@ -251,7 +308,7 @@
         "ariaLabel": "Lệnh slash",
         "label": "lệnh",
         "navigateHint": "↑↓ Chọn",
-        "selectHint": "Enter/Tab Chèn",
+        "selectHint": "Enter Chạy · Tab Chèn",
         "closeHint": "Esc Đóng",
         "commands": {
           "new": {
@@ -286,12 +343,17 @@
             "title": "Khôi phục bộ nhớ",
             "description": "Đưa bộ nhớ về một snapshot Dream trước đó."
           },
+          "goal": {
+            "title": "Mục tiêu dài hạn",
+            "description": "Yêu cầu agent xử lý đây là mục tiêu nhiều bước kéo dài."
+          },
           "help": {
             "title": "Hiển thị trợ giúp",
             "description": "Liệt kê các lệnh slash có sẵn."
           }
         }
-      }
+      },
+      "goalStateCloseAria": "Đóng mục tiêu"
     },
     "scrollToBottom": "Cuộn xuống cuối"
   },
@@ -300,7 +362,19 @@
     "assistantTyping": "Trợ lý đang nhập",
     "toolSingle": "Đang dùng một công cụ",
     "toolMany": "Đã dùng {{count}} công cụ",
-    "imageAttachment": "Tệp hình ảnh đính kèm"
+    "toolSummary": "{{count}} công cụ",
+    "toolSummaryMany": "{{count}} công cụ",
+    "reasoningTools": "Suy luận · {{count}} công cụ",
+    "reasoningToolsSingular": "Suy luận · 1 công cụ",
+    "reasoning": "Suy luận",
+    "reasoningStreaming": "Đang suy nghĩ…",
+    "reasoningSummary": "Suy luận",
+    "agentActivitySummary": "{{reasoning}} bước · {{tools}} lần gọi công cụ",
+    "agentActivityToolsOnly": "{{tools}} lần gọi công cụ",
+    "agentActivityLiveSummary": "Đang chạy… · {{reasoning}} bước · {{tools}} lần gọi công cụ",
+    "agentActivityLiveToolsOnly": "Đang chạy… · {{tools}} lần gọi công cụ",
+    "imageAttachment": "Tệp hình ảnh đính kèm",
+    "turnLatencyTitle": "Thời gian phản hồi (end-to-end)"
   },
   "lightbox": {
     "title": "Xem trước ảnh",
@@ -325,4 +399,3 @@
     }
   }
 }
-

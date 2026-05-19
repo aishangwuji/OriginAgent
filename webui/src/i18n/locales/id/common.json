@@ -46,7 +46,8 @@
     },
     "nav": {
       "general": "Umum",
-      "byok": "BYOK"
+      "byok": "BYOK",
+      "mcp": "MCP"
     },
     "sections": {
       "interface": "Antarmuka",
@@ -125,6 +126,57 @@
         "baseUrlRequired": "SearXNG memerlukan Base URL.",
         "missingCredential": "Tambahkan kredensial yang diperlukan sebelum menyimpan.",
         "saveHint": "Perubahan berlaku untuk permintaan web search baru."
+      }
+    },
+    "mcp": {
+      "description": "Configure MCP servers without editing config.json by hand. Changes are saved to the current OpenHome config.",
+      "quickConfig": "Quick config",
+      "add": "Add MCP",
+      "newServer": "New MCP server",
+      "editServer": "Edit MCP server",
+      "configuredServers": "Configured servers",
+      "empty": "No MCP servers configured.",
+      "restartRequired": "Saved. Restart OpenHome to connect the updated MCP servers.",
+      "editorHelp": "Leave masked or empty env/header values unchanged when editing.",
+      "name": "Server name",
+      "command": "Command",
+      "commandHelp": "Executable used to start a stdio MCP server.",
+      "args": "Arguments",
+      "argsHelp": "One argument per line.",
+      "env": "Environment",
+      "envHelp": "One KEY=value per line. Existing masked values are preserved.",
+      "url": "URL",
+      "headers": "Headers",
+      "headersHelp": "One KEY=value per line. Existing masked values are preserved.",
+      "enabledTools": "Enabled tools",
+      "enabledToolsHelp": "One tool name per line. Use * to allow all tools.",
+      "timeout": "Timeout seconds",
+      "delete": "Delete MCP server",
+      "transport": {
+        "stdio": "stdio",
+        "sse": "SSE",
+        "streamableHttp": "HTTP"
+      },
+      "homeAssistant": {
+        "title": "Home Assistant",
+        "description": "Enter the HA address and long-lived access token. OpenHome will configure the MCP URL, auth header, and local access whitelist.",
+        "address": "HA address",
+        "addressHelp": "You can paste http://localhost:8123 or the /home/0 URL from your browser.",
+        "token": "Long-lived access token",
+        "tokenHelp": "Create one from your Home Assistant profile security page.",
+        "tokenHelpExisting": "A token is already saved. Leave blank to keep using it.",
+        "tokenPlaceholder": "Paste Home Assistant long-lived access token",
+        "saveHint": "Saved as an HTTP MCP server and applied after restarting OpenHome.",
+        "save": "Save HA MCP",
+        "validation": {
+          "addressRequired": "Home Assistant address is required.",
+          "tokenRequired": "Home Assistant long-lived access token is required."
+        }
+      },
+      "validation": {
+        "nameRequired": "MCP server name is required.",
+        "commandRequired": "Command is required for stdio MCP servers.",
+        "urlRequired": "URL is required for HTTP MCP servers."
       }
     }
   },
@@ -218,6 +270,11 @@
       "placeholderStreaming": "Model sedang merespons…",
       "inputAria": "Input pesan",
       "sendHint": "Enter untuk kirim · Shift+Enter untuk baris baru",
+      "runRuntimeTitle": "Berjalan · {{elapsed}}",
+      "goalStateStrip": "Tujuan · {{label}}",
+      "goalStateFallback": "Tujuan",
+      "goalStateExpandAria": "Lihat tujuan lengkap",
+      "goalStateSheetTitle": "Tujuan",
       "send": "Kirim pesan",
       "stop": "Hentikan respons",
       "attachImage": "Lampirkan gambar",
@@ -251,7 +308,7 @@
         "ariaLabel": "Perintah slash",
         "label": "perintah",
         "navigateHint": "↑↓ Pilih",
-        "selectHint": "Enter/Tab Sisipkan",
+        "selectHint": "Enter Run · Tab Sisipkan",
         "closeHint": "Esc Tutup",
         "commands": {
           "new": {
@@ -286,12 +343,17 @@
             "title": "Pulihkan memori",
             "description": "Kembalikan memori ke snapshot Dream sebelumnya."
           },
+          "goal": {
+            "title": "Tujuan jangka panjang",
+            "description": "Instruksikan agen memperlakukan ini sebagai tujuan multi-langkah yang berkelanjutan."
+          },
           "help": {
             "title": "Tampilkan bantuan",
             "description": "Daftar perintah slash yang tersedia."
           }
         }
-      }
+      },
+      "goalStateCloseAria": "Tutup tujuan"
     },
     "scrollToBottom": "Gulir ke bawah"
   },
@@ -300,7 +362,19 @@
     "assistantTyping": "Asisten sedang mengetik",
     "toolSingle": "Menggunakan sebuah alat",
     "toolMany": "Menggunakan {{count}} alat",
-    "imageAttachment": "Lampiran gambar"
+    "toolSummary": "{{count}} alat",
+    "toolSummaryMany": "{{count}} alat",
+    "reasoningTools": "Penalaran · {{count}} alat",
+    "reasoningToolsSingular": "Penalaran · 1 alat",
+    "reasoning": "Penalaran",
+    "reasoningStreaming": "Berpikir…",
+    "reasoningSummary": "Penalaran",
+    "agentActivitySummary": "{{reasoning}} langkah · {{tools}} panggilan alat",
+    "agentActivityToolsOnly": "{{tools}} panggilan alat",
+    "agentActivityLiveSummary": "Berjalan… · {{reasoning}} langkah · {{tools}} panggilan alat",
+    "agentActivityLiveToolsOnly": "Berjalan… · {{tools}} panggilan alat",
+    "imageAttachment": "Lampiran gambar",
+    "turnLatencyTitle": "Waktu respons (ujung ke ujung)"
   },
   "lightbox": {
     "title": "Pratinjau gambar",
@@ -325,4 +399,3 @@
     }
   }
 }
-

@@ -53,7 +53,8 @@
     },
     "nav": {
       "general": "通用",
-      "byok": "BYOK"
+      "byok": "BYOK",
+      "mcp": "MCP"
     },
     "sections": {
       "interface": "界面",
@@ -133,10 +134,62 @@
         "missingCredential": "填写所需凭证后才能保存。",
         "saveHint": "改动会应用到新的 web search 请求。"
       }
+    },
+    "mcp": {
+      "description": "不用手改 config.json，在这里配置 MCP server。改动会保存到当前 OpenHome 配置文件。",
+      "quickConfig": "快速配置",
+      "add": "添加 MCP",
+      "newServer": "新建 MCP server",
+      "editServer": "编辑 MCP server",
+      "configuredServers": "已配置 server",
+      "empty": "还没有配置 MCP server。",
+      "restartRequired": "已保存。重启 OpenHome 后会连接更新后的 MCP server。",
+      "editorHelp": "编辑时，env/header 中保留掩码或留空会沿用旧值。",
+      "name": "Server 名称",
+      "command": "命令",
+      "commandHelp": "用于启动 stdio MCP server 的可执行命令。",
+      "args": "参数",
+      "argsHelp": "每行一个参数。",
+      "env": "环境变量",
+      "envHelp": "每行一个 KEY=value。已有掩码值会被保留。",
+      "url": "URL",
+      "headers": "Headers",
+      "headersHelp": "每行一个 KEY=value。已有掩码值会被保留。",
+      "enabledTools": "启用工具",
+      "enabledToolsHelp": "每行一个工具名。使用 * 表示全部允许。",
+      "timeout": "超时时间（秒）",
+      "delete": "删除 MCP server",
+      "transport": {
+        "stdio": "stdio",
+        "sse": "SSE",
+        "streamableHttp": "HTTP"
+      },
+      "homeAssistant": {
+        "title": "Home Assistant",
+        "description": "只填 HA 地址和长期访问令牌，OpenHome 会自动配置 MCP 地址、认证 Header 和本地访问白名单。",
+        "address": "HA 地址",
+        "addressHelp": "可以粘贴 http://localhost:8123 或浏览器里的 /home/0 地址。",
+        "token": "长期访问令牌",
+        "tokenHelp": "在 Home Assistant 个人资料的安全页面创建。",
+        "tokenHelpExisting": "已保存令牌。留空会继续使用旧令牌。",
+        "tokenPlaceholder": "粘贴 Home Assistant 长期访问令牌",
+        "saveHint": "保存后会注册为 HTTP MCP，并在重启 OpenHome 后生效。",
+        "save": "保存 HA MCP",
+        "validation": {
+          "addressRequired": "请填写 Home Assistant 地址。",
+          "tokenRequired": "请填写 Home Assistant 长期访问令牌。"
+        }
+      },
+      "validation": {
+        "nameRequired": "请填写 MCP server 名称。",
+        "commandRequired": "stdio MCP server 需要填写命令。",
+        "urlRequired": "HTTP MCP server 需要填写 URL。"
+      }
     }
   },
   "chat": {
     "fallbackTitle": "对话 {{id}}",
+    "pendingTitle": "新对话",
     "loading": "加载中…",
     "noSessions": "还没有会话。",
     "actions": "“{{title}}” 的会话操作",
@@ -232,6 +285,11 @@
       "placeholderStreaming": "模型正在回复…",
       "inputAria": "消息输入框",
       "sendHint": "Enter 发送 · Shift+Enter 换行",
+      "runRuntimeTitle": "运行中 · {{elapsed}}",
+      "goalStateStrip": "目标 · {{label}}",
+      "goalStateFallback": "目标",
+      "goalStateExpandAria": "查看完整目标",
+      "goalStateSheetTitle": "目标",
       "send": "发送消息",
       "stop": "停止响应",
       "attachImage": "添加图片",
@@ -260,7 +318,7 @@
         "ariaLabel": "斜杠命令",
         "label": "命令",
         "navigateHint": "↑↓ 选择",
-        "selectHint": "Enter/Tab 填入",
+        "selectHint": "Enter 执行 · Tab 填入",
         "closeHint": "Esc 关闭",
         "commands": {
           "new": {
@@ -295,6 +353,22 @@
             "title": "恢复记忆",
             "description": "将记忆恢复到之前的 Dream 快照。"
           },
+          "goal": {
+            "title": "长期目标",
+            "description": "让助手把当前请求当作需要多步骤持续推进的目标。"
+          },
+          "model": {
+            "title": "切换模型",
+            "description": "查看或切换当前运行时模型预设。"
+          },
+          "mcp": {
+            "title": "查看 MCP",
+            "description": "列出当前配置的 MCP 服务器和已注册能力。"
+          },
+          "skill": {
+            "title": "查看 Skills",
+            "description": "列出当前 agent 可用的 skills 及来源。"
+          },
           "help": {
             "title": "查看帮助",
             "description": "列出可用的斜杠命令。"
@@ -311,7 +385,8 @@
         "decode_failed": "无法解码这张图片",
         "too_large": "图片太大，请换一张小一点的",
         "io": "无法读取该文件"
-      }
+      },
+      "goalStateCloseAria": "关闭目标"
     },
     "scrollToBottom": "滚动到底部"
   },
@@ -320,9 +395,21 @@
     "assistantTyping": "助手正在输入",
     "toolSingle": "正在使用工具",
     "toolMany": "已使用 {{count}} 个工具",
+    "toolSummary": "{{count}} 个工具",
+    "toolSummaryMany": "{{count}} 个工具",
+    "reasoningTools": "推理 · {{count}} 个工具",
+    "reasoningToolsSingular": "推理 · 1 个工具",
+    "reasoning": "思考过程",
+    "reasoningStreaming": "正在思考…",
+    "reasoningSummary": "推理",
+    "agentActivitySummary": "{{reasoning}} 步 · {{tools}} 次工具调用",
+    "agentActivityToolsOnly": "{{tools}} 次工具调用",
+    "agentActivityLiveSummary": "进行中… · {{reasoning}} 步 · {{tools}} 次工具调用",
+    "agentActivityLiveToolsOnly": "进行中… · {{tools}} 次工具调用",
     "imageAttachment": "图片附件",
     "copyReply": "复制回复",
-    "copiedReply": "已复制回复"
+    "copiedReply": "已复制回复",
+    "turnLatencyTitle": "本轮耗时（端到端）"
   },
   "lightbox": {
     "title": "图片预览",
@@ -347,4 +434,3 @@
     }
   }
 }
-

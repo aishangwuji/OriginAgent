@@ -32,6 +32,7 @@ from OpenHome.agent.facts import (
     validate_deprecation_proposal,
     validate_fact_proposal,
 )
+from OpenHome.agent.auxiliary_llm import call_llm
 from OpenHome.agent.presence import PresenceStore
 from OpenHome.agent.runner import AgentRunner, AgentRunSpec
 from OpenHome.agent.tools.registry import ToolRegistry
@@ -48,6 +49,7 @@ from OpenHome.utils.helpers import (
 from OpenHome.utils.prompt_templates import render_template
 
 if TYPE_CHECKING:
+    from OpenHome.agent.auxiliary_llm import AuxiliaryLLMRouter
     from OpenHome.providers.base import LLMProvider
     from OpenHome.session.manager import SessionManager
 
@@ -883,10 +885,12 @@ class Consolidator:
         get_tool_definitions: Callable[[], list[dict[str, Any]]],
         max_completion_tokens: int = 4096,
         consolidation_ratio: float = 0.5,
+        auxiliary_router: AuxiliaryLLMRouter | None = None,
     ):
         self.store = store
         self.provider = provider
         self.model = model
+        self.auxiliary_router = auxiliary_router
         self.sessions = sessions
         self.context_window_tokens = context_window_tokens
         self.max_completion_tokens = max_completion_tokens
@@ -907,6 +911,8 @@ class Consolidator:
         self.model = model
         self.context_window_tokens = context_window_tokens
         self.max_completion_tokens = provider.generation.max_tokens
+        if self.auxiliary_router is not None:
+            self.auxiliary_router.set_primary(provider, model)
 
     def get_lock(self, session_key: str) -> asyncio.Lock:
         """Return the shared consolidation lock for one session."""
@@ -1060,7 +1066,10 @@ class Consolidator:
         try:
             formatted = MemoryStore._format_messages(messages)
             formatted = self._truncate_to_token_budget(formatted)
-            response = await self.provider.chat_with_retry(
+            response = await call_llm(
+                task="consolidation",
+                router=self.auxiliary_router,
+                provider=self.provider,
                 model=self.model,
                 messages=[
                     {
@@ -1325,10 +1334,12 @@ class Dream:
         max_iterations: int = 10,
         max_tool_result_chars: int = 16_000,
         annotate_line_ages: bool = True,
+        auxiliary_router: AuxiliaryLLMRouter | None = None,
     ):
         self.store = store
         self.provider = provider
         self.model = model
+        self.auxiliary_router = auxiliary_router
         self.max_batch_size = max_batch_size
         self.max_iterations = max_iterations
         self.max_tool_result_chars = max_tool_result_chars
@@ -1336,13 +1347,22 @@ class Dream:
         # Default True keeps the #3212 behavior; set False to feed MEMORY.md raw
         # (e.g. if a specific LLM reacts poorly to the `← Nd` suffix).
         self.annotate_line_ages = annotate_line_ages
-        self._runner = AgentRunner(provider)
+        runner_provider = (
+            auxiliary_router.task_provider("dream_phase2")
+            if auxiliary_router is not None
+            else provider
+        )
+        self._runner = AgentRunner(runner_provider)
         self._tools = self._build_tools()
 
     def set_provider(self, provider: LLMProvider, model: str) -> None:
         self.provider = provider
         self.model = model
-        self._runner.provider = provider
+        if self.auxiliary_router is not None:
+            self.auxiliary_router.set_primary(provider, model)
+            self._runner.provider = self.auxiliary_router.task_provider("dream_phase2")
+        else:
+            self._runner.provider = provider
 
     # -- tool registry -------------------------------------------------------
 
@@ -1552,7 +1572,10 @@ class Dream:
         )
 
         try:
-            phase1_response = await self.provider.chat_with_retry(
+            phase1_response = await call_llm(
+                task="dream_phase1",
+                router=self.auxiliary_router,
+                provider=self.provider,
                 model=self.model,
                 messages=[
                     {

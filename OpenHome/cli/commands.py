@@ -242,6 +242,14 @@ def _print_cli_progress_line(text: str, thinking: ThinkingSpinner | None) -> Non
         console.print(f"  [dim]↳ {text}[/dim]")
 
 
+def _print_cli_reasoning(text: str, thinking: ThinkingSpinner | None) -> None:
+    """Print reasoning/thinking content in a distinct style."""
+    if not text.strip():
+        return
+    with thinking.pause() if thinking else nullcontext():
+        console.print(f"[dim italic]✻ {text}[/dim italic]")
+
+
 async def _print_interactive_progress_line(text: str, renderer: StreamRenderer | None) -> None:
     """Print an interactive progress line, pausing the renderer's spinner if needed."""
     if not text.strip():
@@ -264,6 +272,12 @@ async def _maybe_print_interactive_progress(
         return False
 
     is_tool_hint = metadata.get("_tool_hint", False)
+    is_reasoning = metadata.get("_reasoning", False) or metadata.get("_reasoning_delta", False)
+    if is_reasoning:
+        if channels_config and not channels_config.show_reasoning:
+            return True
+        _print_cli_reasoning(msg.content, None)
+        return True
     if channels_config and is_tool_hint and not channels_config.send_tool_hints:
         return True
     if channels_config and not is_tool_hint and not channels_config.send_progress:
@@ -658,6 +672,8 @@ def _run_gateway(
     cron = CronService(cron_store_path)
 
     # Create agent with cron service
+    from OpenHome.channels.websocket import publish_runtime_model_update
+
     agent = AgentLoop.from_config(
         config, bus,
         provider=provider_snapshot.provider,
@@ -671,6 +687,7 @@ def _run_gateway(
         },
         provider_snapshot_loader=load_provider_snapshot,
         provider_signature=provider_snapshot.signature,
+        runtime_model_publisher=lambda model, preset: publish_runtime_model_update(bus, model, preset),
     )
 
     from OpenHome.agent.loop import UNIFIED_SESSION_KEY
@@ -808,9 +825,20 @@ def _run_gateway(
 
     cron.on_job = on_cron_job
 
+    def _webui_runtime_model_name() -> str | None:
+        try:
+            return str(agent.model).strip() or None
+        except Exception:
+            return None
+
     # Create channel manager (forwards SessionManager so the WebSocket channel
     # can serve the embedded webui's REST surface).
-    channels = ChannelManager(config, bus, session_manager=session_manager)
+    channels = ChannelManager(
+        config,
+        bus,
+        session_manager=session_manager,
+        webui_runtime_model_name=_webui_runtime_model_name,
+    )
 
     def _pick_heartbeat_target() -> tuple[str, str]:
         """Pick a routable channel/chat target for heartbeat-triggered messages."""
@@ -1073,8 +1101,19 @@ def agent(
     # Shared reference for progress callbacks
     _thinking: ThinkingSpinner | None = None
 
-    async def _cli_progress(content: str, *, tool_hint: bool = False, **_kwargs: Any) -> None:
+    async def _cli_progress(
+        content: str,
+        *,
+        tool_hint: bool = False,
+        reasoning: bool = False,
+        **_kwargs: Any,
+    ) -> None:
         ch = agent_loop.channels_config
+        if reasoning:
+            if ch and not ch.show_reasoning:
+                return
+            _print_cli_reasoning(content, _thinking)
+            return
         if ch and tool_hint and not ch.send_tool_hints:
             return
         if ch and not tool_hint and not ch.send_progress:

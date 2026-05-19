@@ -8,6 +8,9 @@ import {
   Cloud,
   Cpu,
   Database,
+  Plus,
+  Server,
+  Trash2,
   Eye,
   EyeOff,
   Pencil,
@@ -40,17 +43,66 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
 import {
+  deleteMcpServerSettings,
   fetchSettings,
   updateProviderSettings,
   updateSettings,
   updateWebSearchSettings,
+  upsertHomeAssistantMcpSettings,
+  upsertMcpServerSettings,
+  withTokenRefresh,
 } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { useClient } from "@/providers/ClientProvider";
-import type { SettingsPayload, WebSearchSettingsUpdate } from "@/lib/types";
+import type {
+  McpServerSettings,
+  McpServerSettingsUpdate,
+  McpTransportType,
+  SettingsPayload,
+  WebSearchSettingsUpdate,
+} from "@/lib/types";
 
-type SettingsSectionKey = "general" | "byok";
+type SettingsSectionKey = "general" | "byok" | "mcp";
 type ByokPaneKey = "llm" | "web-search";
+type McpFormState = {
+  name: string;
+  type: McpTransportType;
+  command: string;
+  args: string;
+  env: string;
+  url: string;
+  headers: string;
+  toolTimeout: string;
+  enabledTools: string;
+};
+type HomeAssistantMcpFormState = {
+  name: string;
+  address: string;
+  token: string;
+};
+const SETTINGS_LOAD_RETRY_DELAYS_MS = [350, 900, 1600] as const;
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => window.setTimeout(resolve, ms));
+}
+
+async function fetchSettingsWithRetry(
+  token: string,
+  refreshToken: () => Promise<string | null>,
+): Promise<SettingsPayload> {
+  let lastError: unknown;
+  for (let attempt = 0; attempt <= SETTINGS_LOAD_RETRY_DELAYS_MS.length; attempt += 1) {
+    try {
+      return await withTokenRefresh(token, refreshToken, fetchSettings);
+    } catch (err) {
+      lastError = err;
+      const delay = SETTINGS_LOAD_RETRY_DELAYS_MS[attempt];
+      if (delay === undefined) break;
+      await sleep(delay);
+    }
+  }
+  throw lastError instanceof Error ? lastError : new Error(String(lastError));
+}
 
 interface SettingsViewProps {
   theme: "light" | "dark";
@@ -72,12 +124,15 @@ export function SettingsView({
   isRestarting = false,
 }: SettingsViewProps) {
   const { t } = useTranslation();
-  const { token } = useClient();
+  const { token, refreshToken } = useClient();
   const [settings, setSettings] = useState<SettingsPayload | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [providerSaving, setProviderSaving] = useState<string | null>(null);
   const [webSearchSaving, setWebSearchSaving] = useState(false);
+  const [mcpSaving, setMcpSaving] = useState<string | null>(null);
+  const [mcpDeleting, setMcpDeleting] = useState<string | null>(null);
+  const [homeAssistantMcpSaving, setHomeAssistantMcpSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [activeSection, setActiveSection] = useState<SettingsSectionKey>("general");
   const [expandedProvider, setExpandedProvider] = useState<string | null>(null);
@@ -94,6 +149,13 @@ export function SettingsView({
   const [form, setForm] = useState({
     model: "",
     provider: "",
+  });
+  const [mcpEditing, setMcpEditing] = useState<string | null>(null);
+  const [mcpForms, setMcpForms] = useState<Record<string, McpFormState>>({});
+  const [homeAssistantMcpForm, setHomeAssistantMcpForm] = useState<HomeAssistantMcpFormState>({
+    name: "home_assistant",
+    address: "http://localhost:8123",
+    token: "",
   });
 
   const applyPayload = useCallback((payload: SettingsPayload) => {
@@ -112,7 +174,7 @@ export function SettingsView({
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
-    fetchSettings(token)
+    fetchSettingsWithRetry(token, refreshToken)
       .then((payload) => {
         if (!cancelled) {
           applyPayload(payload);
@@ -128,7 +190,7 @@ export function SettingsView({
     return () => {
       cancelled = true;
     };
-  }, [applyPayload, token]);
+  }, [applyPayload, refreshToken, token]);
 
   useEffect(() => {
     if (!settings) return;
@@ -156,10 +218,13 @@ export function SettingsView({
     if (!dirty || saving) return;
     setSaving(true);
     try {
-      const payload = await updateSettings(token, {
+      const update = {
         model: form.model,
         ...(form.provider ? { provider: form.provider } : {}),
-      });
+      };
+      const payload = await withTokenRefresh(token, refreshToken, (freshToken) =>
+        updateSettings(freshToken, update),
+      );
       applyPayload(payload);
       onModelNameChange(payload.agent.model || null);
       setError(null);
@@ -182,11 +247,14 @@ export function SettingsView({
     }
     setProviderSaving(providerName);
     try {
-      const payload = await updateProviderSettings(token, {
+      const update = {
         provider: providerName,
         apiKey: apiKey || undefined,
         apiBase: providerForm.apiBase.trim(),
-      });
+      };
+      const payload = await withTokenRefresh(token, refreshToken, (freshToken) =>
+        updateProviderSettings(freshToken, update),
+      );
       applyPayload(payload);
       setProviderForms((prev) => ({
         ...prev,
@@ -230,7 +298,9 @@ export function SettingsView({
       const update: WebSearchSettingsUpdate = { provider: webSearchForm.provider };
       if (provider.credential === "api_key" && apiKey) update.apiKey = apiKey;
       if (provider.credential === "base_url") update.baseUrl = baseUrl;
-      const payload = await updateWebSearchSettings(token, update);
+      const payload = await withTokenRefresh(token, refreshToken, (freshToken) =>
+        updateWebSearchSettings(freshToken, update),
+      );
       applyPayload(payload);
       setWebSearchForm((prev) => ({
         provider: payload.web_search.provider,
@@ -310,6 +380,128 @@ export function SettingsView({
     });
   };
 
+  const startMcpAdd = () => {
+    setMcpEditing("__new__");
+    setMcpForms((prev) => ({
+      ...prev,
+      __new__: createEmptyMcpForm(),
+    }));
+  };
+
+  const startMcpEdit = (server: McpServerSettings) => {
+    setMcpEditing(server.name);
+    setMcpForms((prev) => ({
+      ...prev,
+      [server.name]: formFromMcpServer(server),
+    }));
+  };
+
+  const cancelMcpEdit = (key: string) => {
+    setMcpEditing(null);
+    setMcpForms((prev) => {
+      const next = { ...prev };
+      delete next[key];
+      return next;
+    });
+  };
+
+  const saveMcpServer = async (key: string) => {
+    if (!settings || mcpSaving) return;
+    const formState = mcpForms[key];
+    if (!formState) return;
+    const update = mcpUpdateFromForm(formState);
+    if (!update.name) {
+      setError(t("settings.mcp.validation.nameRequired"));
+      return;
+    }
+    if (update.type === "stdio" && !update.command?.trim()) {
+      setError(t("settings.mcp.validation.commandRequired"));
+      return;
+    }
+    if (update.type !== "stdio" && !update.url?.trim()) {
+      setError(t("settings.mcp.validation.urlRequired"));
+      return;
+    }
+    setMcpSaving(key);
+    try {
+      const payload = await withTokenRefresh(token, refreshToken, (freshToken) =>
+        upsertMcpServerSettings(freshToken, update),
+      );
+      applyPayload(payload);
+      setMcpEditing(null);
+      setMcpForms((prev) => {
+        const next = { ...prev };
+        delete next[key];
+        return next;
+      });
+      setError(null);
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setMcpSaving(null);
+    }
+  };
+
+  const saveHomeAssistantMcp = async () => {
+    if (!settings || homeAssistantMcpSaving) return;
+    const name = homeAssistantMcpForm.name.trim();
+    const address = homeAssistantMcpForm.address.trim();
+    const tokenValue = homeAssistantMcpForm.token.trim();
+    const existing = settings.mcp?.servers.find((server) => server.name === name);
+    const hasExistingToken = !!existing?.headers?.Authorization;
+    if (!name) {
+      setError(t("settings.mcp.validation.nameRequired"));
+      return;
+    }
+    if (!address) {
+      setError(t("settings.mcp.homeAssistant.validation.addressRequired"));
+      return;
+    }
+    if (!tokenValue && !hasExistingToken) {
+      setError(t("settings.mcp.homeAssistant.validation.tokenRequired"));
+      return;
+    }
+    setHomeAssistantMcpSaving(true);
+    try {
+      const payload = await withTokenRefresh(token, refreshToken, (freshToken) =>
+        upsertHomeAssistantMcpSettings(freshToken, {
+          name,
+          address,
+          token: tokenValue || undefined,
+        }),
+      );
+      applyPayload(payload);
+      setHomeAssistantMcpForm((prev) => ({
+        ...prev,
+        name,
+        address,
+        token: "",
+      }));
+      setError(null);
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setHomeAssistantMcpSaving(false);
+    }
+  };
+
+  const deleteMcpServer = async (name: string) => {
+    if (!settings || mcpDeleting) return;
+    setMcpDeleting(name);
+    try {
+      const payload = await withTokenRefresh(token, refreshToken, (freshToken) =>
+        deleteMcpServerSettings(freshToken, name),
+      );
+      applyPayload(payload);
+      if (mcpEditing === name) setMcpEditing(null);
+      setError(null);
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setMcpDeleting(null);
+    }
+  };
+
   return (
     <div className="flex min-h-0 flex-1 overflow-hidden bg-[radial-gradient(circle_at_50%_0%,hsl(var(--muted))_0%,hsl(var(--background))_42%)]">
       <SettingsSidebar
@@ -362,7 +554,7 @@ export function SettingsView({
                   isRestarting={isRestarting}
                   onOpenByok={() => setActiveSection("byok")}
                 />
-              ) : (
+              ) : activeSection === "byok" ? (
                 <ByokSettings
                   settings={settings}
                   expandedProvider={expandedProvider}
@@ -400,6 +592,34 @@ export function SettingsView({
                   onResetWebSearchDraft={resetWebSearchDraft}
                   onSaveWebSearch={saveWebSearch}
                 />
+              ) : (
+                <McpSettings
+                  settings={settings}
+                  editingKey={mcpEditing}
+                  forms={mcpForms}
+                  savingKey={mcpSaving}
+                  deletingKey={mcpDeleting}
+                  homeAssistantForm={homeAssistantMcpForm}
+                  homeAssistantSaving={homeAssistantMcpSaving}
+                  onChangeHomeAssistantForm={(value) =>
+                    setHomeAssistantMcpForm((prev) => ({ ...prev, ...value }))
+                  }
+                  onSaveHomeAssistant={saveHomeAssistantMcp}
+                  onAdd={startMcpAdd}
+                  onEdit={startMcpEdit}
+                  onCancel={cancelMcpEdit}
+                  onSave={saveMcpServer}
+                  onDelete={deleteMcpServer}
+                  onChangeForm={(key, value) =>
+                    setMcpForms((prev) => ({
+                      ...prev,
+                      [key]: {
+                        ...(prev[key] ?? createEmptyMcpForm()),
+                        ...value,
+                      },
+                    }))
+                  }
+                />
               )}
             </div>
           ) : null}
@@ -412,6 +632,7 @@ export function SettingsView({
 const SETTINGS_NAV_ITEMS = [
   { key: "general", icon: Settings },
   { key: "byok", icon: KeyRound },
+  { key: "mcp", icon: Server },
 ] as const;
 
 function SettingsSidebar({
@@ -863,6 +1084,480 @@ function WebSearchByokSettings({
         </div>
       </SettingsGroup>
     </section>
+  );
+}
+
+function createEmptyMcpForm(): McpFormState {
+  return {
+    name: "",
+    type: "stdio",
+    command: "",
+    args: "",
+    env: "",
+    url: "",
+    headers: "",
+    toolTimeout: "30",
+    enabledTools: "*",
+  };
+}
+
+function linesFromList(values: string[]): string {
+  return values.join("\n");
+}
+
+function linesFromMapping(values: Record<string, string>): string {
+  return Object.entries(values)
+    .map(([key, value]) => `${key}=${value}`)
+    .join("\n");
+}
+
+function formFromMcpServer(server: McpServerSettings): McpFormState {
+  return {
+    name: server.name,
+    type: server.type ?? (server.command ? "stdio" : "streamableHttp"),
+    command: server.command ?? "",
+    args: linesFromList(server.args ?? []),
+    env: linesFromMapping(server.env ?? {}),
+    url: server.url ?? "",
+    headers: linesFromMapping(server.headers ?? {}),
+    toolTimeout: String(server.tool_timeout ?? 30),
+    enabledTools: linesFromList(server.enabled_tools?.length ? server.enabled_tools : ["*"]),
+  };
+}
+
+function listFromLines(value: string): string[] {
+  return value
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+}
+
+function mappingFromLines(value: string): Record<string, string> {
+  const result: Record<string, string> = {};
+  for (const rawLine of value.split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (!line) continue;
+    const idx = line.indexOf("=");
+    if (idx <= 0) continue;
+    const key = line.slice(0, idx).trim();
+    if (!key) continue;
+    result[key] = line.slice(idx + 1);
+  }
+  return result;
+}
+
+function mcpUpdateFromForm(form: McpFormState): McpServerSettingsUpdate {
+  const type = form.type;
+  return {
+    name: form.name.trim(),
+    type,
+    command: type === "stdio" ? form.command.trim() : "",
+    args: type === "stdio" ? listFromLines(form.args) : [],
+    env: type === "stdio" ? mappingFromLines(form.env) : {},
+    url: type === "stdio" ? "" : form.url.trim(),
+    headers: type === "stdio" ? {} : mappingFromLines(form.headers),
+    tool_timeout: Number.parseInt(form.toolTimeout, 10) || 30,
+    enabled_tools: listFromLines(form.enabledTools).length ? listFromLines(form.enabledTools) : ["*"],
+  };
+}
+
+function McpSettings({
+  settings,
+  editingKey,
+  forms,
+  savingKey,
+  deletingKey,
+  homeAssistantForm,
+  homeAssistantSaving,
+  onChangeHomeAssistantForm,
+  onSaveHomeAssistant,
+  onAdd,
+  onEdit,
+  onCancel,
+  onSave,
+  onDelete,
+  onChangeForm,
+}: {
+  settings: SettingsPayload;
+  editingKey: string | null;
+  forms: Record<string, McpFormState>;
+  savingKey: string | null;
+  deletingKey: string | null;
+  homeAssistantForm: HomeAssistantMcpFormState;
+  homeAssistantSaving: boolean;
+  onChangeHomeAssistantForm: (value: Partial<HomeAssistantMcpFormState>) => void;
+  onSaveHomeAssistant: () => void;
+  onAdd: () => void;
+  onEdit: (server: McpServerSettings) => void;
+  onCancel: (key: string) => void;
+  onSave: (key: string) => void;
+  onDelete: (name: string) => void;
+  onChangeForm: (key: string, value: Partial<McpFormState>) => void;
+}) {
+  const { t } = useTranslation();
+  const servers = settings.mcp?.servers ?? [];
+  const newForm = forms.__new__;
+  return (
+    <div className="space-y-6">
+      <div className="flex items-center justify-between gap-4">
+        <p className="max-w-[42rem] text-[13px] leading-6 text-muted-foreground">
+          {t("settings.mcp.description")}
+        </p>
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          onClick={onAdd}
+          disabled={editingKey === "__new__"}
+          className="shrink-0 rounded-full"
+        >
+          <Plus className="mr-1.5 h-3.5 w-3.5" aria-hidden />
+          {t("settings.mcp.add")}
+        </Button>
+      </div>
+
+      {settings.requires_restart ? (
+        <div className="rounded-[18px] border border-amber-500/20 bg-amber-500/8 px-4 py-3 text-[13px] text-amber-700 dark:text-amber-300">
+          {t("settings.mcp.restartRequired")}
+        </div>
+      ) : null}
+
+      <HomeAssistantMcpQuickConfig
+        form={homeAssistantForm}
+        saving={homeAssistantSaving}
+        hasExistingToken={!!servers.find((server) => server.name === homeAssistantForm.name)?.headers?.Authorization}
+        onChange={onChangeHomeAssistantForm}
+        onSave={onSaveHomeAssistant}
+      />
+
+      {editingKey === "__new__" && newForm ? (
+        <McpServerEditor
+          form={newForm}
+          title={t("settings.mcp.newServer")}
+          saving={savingKey === "__new__"}
+          onChange={(value) => onChangeForm("__new__", value)}
+          onSave={() => onSave("__new__")}
+          onCancel={() => onCancel("__new__")}
+        />
+      ) : null}
+
+      <section className="space-y-3">
+        <ByokSectionHeader title={t("settings.mcp.configuredServers")} count={servers.length} />
+        <div className="overflow-hidden rounded-[22px] border border-border/45 bg-card/86 shadow-[0_18px_65px_rgba(15,23,42,0.07)] backdrop-blur-xl dark:border-white/10 dark:shadow-[0_18px_65px_rgba(0,0,0,0.22)]">
+          {servers.length > 0 ? (
+            <div className="divide-y divide-border/45">
+              {servers.map((server) => {
+                const editing = editingKey === server.name;
+                const form = forms[server.name] ?? formFromMcpServer(server);
+                return (
+                  <div key={server.name}>
+                    <div className="flex min-h-[72px] items-center justify-between gap-4 px-4 py-3 sm:px-5">
+                      <div className="min-w-0">
+                        <div className="flex items-center gap-2">
+                          <span className="truncate text-[15px] font-semibold text-foreground">
+                            {server.name}
+                          </span>
+                          <span className="rounded-full bg-muted px-2 py-0.5 text-[11.5px] font-medium text-muted-foreground">
+                            {server.type ?? (server.command ? "stdio" : "streamableHttp")}
+                          </span>
+                        </div>
+                        <div className="mt-1 truncate text-[12px] text-muted-foreground">
+                          {server.command || server.url || t("settings.values.notAvailable")}
+                        </div>
+                      </div>
+                      <div className="flex shrink-0 items-center gap-1.5">
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="icon"
+                          onClick={() => onEdit(server)}
+                          aria-label={t("settings.actions.edit")}
+                          className="h-8 w-8 rounded-full text-muted-foreground hover:bg-muted hover:text-foreground"
+                        >
+                          <Pencil className="h-3.5 w-3.5" aria-hidden />
+                        </Button>
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="icon"
+                          onClick={() => onDelete(server.name)}
+                          disabled={deletingKey === server.name}
+                          aria-label={t("settings.mcp.delete")}
+                          className="h-8 w-8 rounded-full text-muted-foreground hover:bg-destructive/8 hover:text-destructive"
+                        >
+                          {deletingKey === server.name ? (
+                            <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden />
+                          ) : (
+                            <Trash2 className="h-3.5 w-3.5" aria-hidden />
+                          )}
+                        </Button>
+                      </div>
+                    </div>
+                    {editing ? (
+                      <div className="border-t border-border/45 bg-muted/18 px-4 py-4 sm:px-5">
+                        <McpServerEditor
+                          form={form}
+                          title={t("settings.mcp.editServer")}
+                          saving={savingKey === server.name}
+                          lockName
+                          onChange={(value) => onChangeForm(server.name, value)}
+                          onSave={() => onSave(server.name)}
+                          onCancel={() => onCancel(server.name)}
+                        />
+                      </div>
+                    ) : null}
+                  </div>
+                );
+              })}
+            </div>
+          ) : (
+            <ByokEmptyState>{t("settings.mcp.empty")}</ByokEmptyState>
+          )}
+        </div>
+      </section>
+    </div>
+  );
+}
+
+function HomeAssistantMcpQuickConfig({
+  form,
+  saving,
+  hasExistingToken,
+  onChange,
+  onSave,
+}: {
+  form: HomeAssistantMcpFormState;
+  saving: boolean;
+  hasExistingToken: boolean;
+  onChange: (value: Partial<HomeAssistantMcpFormState>) => void;
+  onSave: () => void;
+}) {
+  const { t } = useTranslation();
+  return (
+    <section>
+      <SettingsSectionTitle>{t("settings.mcp.quickConfig")}</SettingsSectionTitle>
+      <SettingsGroup>
+        <SettingsRow
+          title={t("settings.mcp.homeAssistant.title")}
+          description={t("settings.mcp.homeAssistant.description")}
+        >
+          <Server className="h-5 w-5 text-muted-foreground" aria-hidden />
+        </SettingsRow>
+        <SettingsRow title={t("settings.mcp.name")}>
+          <Input
+            value={form.name}
+            onChange={(event) => onChange({ name: event.target.value })}
+            placeholder="home_assistant"
+            className="h-9 w-[280px] rounded-full text-[13px]"
+          />
+        </SettingsRow>
+        <SettingsRow
+          title={t("settings.mcp.homeAssistant.address")}
+          description={t("settings.mcp.homeAssistant.addressHelp")}
+        >
+          <Input
+            value={form.address}
+            onChange={(event) => onChange({ address: event.target.value })}
+            placeholder="http://localhost:8123"
+            className="h-9 w-[280px] rounded-full text-[13px]"
+          />
+        </SettingsRow>
+        <SettingsRow
+          title={t("settings.mcp.homeAssistant.token")}
+          description={
+            hasExistingToken
+              ? t("settings.mcp.homeAssistant.tokenHelpExisting")
+              : t("settings.mcp.homeAssistant.tokenHelp")
+          }
+        >
+          <Input
+            type="password"
+            value={form.token}
+            onChange={(event) => onChange({ token: event.target.value })}
+            placeholder={hasExistingToken ? "••••" : t("settings.mcp.homeAssistant.tokenPlaceholder")}
+            className="h-9 w-[280px] rounded-full text-[13px]"
+          />
+        </SettingsRow>
+        <div className="flex min-h-[58px] items-center justify-between gap-4 px-4 py-3 sm:px-5">
+          <div className="max-w-[28rem] text-[13px] leading-5 text-muted-foreground">
+            {t("settings.mcp.homeAssistant.saveHint")}
+          </div>
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            onClick={onSave}
+            disabled={saving}
+            className="shrink-0 rounded-full"
+          >
+            {saving ? (
+              <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" aria-hidden />
+            ) : (
+              <Check className="mr-1.5 h-3.5 w-3.5" aria-hidden />
+            )}
+            {saving ? t("settings.actions.saving") : t("settings.mcp.homeAssistant.save")}
+          </Button>
+        </div>
+      </SettingsGroup>
+    </section>
+  );
+}
+
+function McpServerEditor({
+  form,
+  title,
+  saving,
+  lockName = false,
+  onChange,
+  onSave,
+  onCancel,
+}: {
+  form: McpFormState;
+  title: string;
+  saving: boolean;
+  lockName?: boolean;
+  onChange: (value: Partial<McpFormState>) => void;
+  onSave: () => void;
+  onCancel: () => void;
+}) {
+  const { t } = useTranslation();
+  const isStdio = form.type === "stdio";
+  return (
+    <SettingsGroup>
+      <SettingsRow title={title} description={t("settings.mcp.editorHelp")}>
+        <McpTransportPicker value={form.type} onChange={(type) => onChange({ type })} />
+      </SettingsRow>
+      <SettingsRow title={t("settings.mcp.name")}>
+        <Input
+          value={form.name}
+          disabled={lockName}
+          onChange={(event) => onChange({ name: event.target.value })}
+          placeholder="github"
+          className="h-9 w-[280px] rounded-full text-[13px]"
+        />
+      </SettingsRow>
+      {isStdio ? (
+        <>
+          <SettingsRow title={t("settings.mcp.command")} description={t("settings.mcp.commandHelp")}>
+            <Input
+              value={form.command}
+              onChange={(event) => onChange({ command: event.target.value })}
+              placeholder="npx"
+              className="h-9 w-[280px] rounded-full text-[13px]"
+            />
+          </SettingsRow>
+          <TextareaRow
+            title={t("settings.mcp.args")}
+            description={t("settings.mcp.argsHelp")}
+            value={form.args}
+            placeholder={"-y\n@modelcontextprotocol/server-github"}
+            onChange={(args) => onChange({ args })}
+          />
+          <TextareaRow
+            title={t("settings.mcp.env")}
+            description={t("settings.mcp.envHelp")}
+            value={form.env}
+            placeholder="GITHUB_PERSONAL_ACCESS_TOKEN=..."
+            onChange={(env) => onChange({ env })}
+          />
+        </>
+      ) : (
+        <>
+          <SettingsRow title={t("settings.mcp.url")}>
+            <Input
+              value={form.url}
+              onChange={(event) => onChange({ url: event.target.value })}
+              placeholder="https://example.com/mcp"
+              className="h-9 w-[280px] rounded-full text-[13px]"
+            />
+          </SettingsRow>
+          <TextareaRow
+            title={t("settings.mcp.headers")}
+            description={t("settings.mcp.headersHelp")}
+            value={form.headers}
+            placeholder="Authorization=Bearer ..."
+            onChange={(headers) => onChange({ headers })}
+          />
+        </>
+      )}
+      <TextareaRow
+        title={t("settings.mcp.enabledTools")}
+        description={t("settings.mcp.enabledToolsHelp")}
+        value={form.enabledTools}
+        placeholder="*"
+        onChange={(enabledTools) => onChange({ enabledTools })}
+      />
+      <SettingsRow title={t("settings.mcp.timeout")}>
+        <Input
+          type="number"
+          min={1}
+          value={form.toolTimeout}
+          onChange={(event) => onChange({ toolTimeout: event.target.value })}
+          className="h-9 w-[120px] rounded-full text-[13px]"
+        />
+      </SettingsRow>
+      <div className="flex min-h-[58px] items-center justify-end gap-2 px-4 py-3 sm:px-5">
+        <Button type="button" variant="ghost" size="sm" onClick={onCancel} className="rounded-full">
+          {t("settings.actions.cancel")}
+        </Button>
+        <Button type="button" variant="outline" size="sm" onClick={onSave} disabled={saving} className="rounded-full">
+          {saving ? t("settings.actions.saving") : t("settings.actions.save")}
+        </Button>
+      </div>
+    </SettingsGroup>
+  );
+}
+
+function McpTransportPicker({
+  value,
+  onChange,
+}: {
+  value: McpTransportType;
+  onChange: (value: McpTransportType) => void;
+}) {
+  const { t } = useTranslation();
+  const options: McpTransportType[] = ["stdio", "sse", "streamableHttp"];
+  return (
+    <div className="inline-flex rounded-full bg-muted p-0.5 text-[12px] font-medium text-muted-foreground">
+      {options.map((option) => (
+        <button
+          key={option}
+          type="button"
+          onClick={() => onChange(option)}
+          className={cn(
+            "rounded-full px-3 py-1 transition-colors",
+            value === option && "bg-background text-foreground shadow-sm",
+          )}
+        >
+          {t(`settings.mcp.transport.${option}`)}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function TextareaRow({
+  title,
+  description,
+  value,
+  placeholder,
+  onChange,
+}: {
+  title: string;
+  description?: string;
+  value: string;
+  placeholder?: string;
+  onChange: (value: string) => void;
+}) {
+  return (
+    <SettingsRow title={title} description={description}>
+      <textarea
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+        placeholder={placeholder}
+        className="min-h-[88px] w-[280px] max-w-full resize-y rounded-[16px] border border-input bg-background px-3 py-2 text-[13px] text-foreground shadow-sm outline-none transition-colors placeholder:text-muted-foreground focus-visible:ring-2 focus-visible:ring-ring"
+      />
+    </SettingsRow>
   );
 }
 

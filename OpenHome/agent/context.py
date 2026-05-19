@@ -7,12 +7,14 @@ import platform
 from contextlib import suppress
 from importlib.resources import files as pkg_files
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping
 
 from loguru import logger
 
+from OpenHome.agent.domain_packs import DomainPackManager
 from OpenHome.agent.memory import MemoryStore
 from OpenHome.agent.skills import SkillsLoader
+from OpenHome.session.goal_state import goal_state_runtime_lines
 from OpenHome.utils.helpers import (
     build_assistant_message,
     current_time_str,
@@ -39,11 +41,22 @@ class ContextBuilder:
     REFERENCE_CONTEXT_KIND = "reference_context"
     INTERNAL_EVENT_KIND = "internal_event"
 
-    def __init__(self, workspace: Path, timezone: str | None = None, disabled_skills: list[str] | None = None):
+    def __init__(
+        self,
+        workspace: Path,
+        timezone: str | None = None,
+        disabled_skills: list[str] | None = None,
+        domain_pack_manager: DomainPackManager | None = None,
+        domain_packs_config: Any | None = None,
+    ):
         self.workspace = workspace
         self.timezone = timezone
         self.memory = MemoryStore(workspace)
         self.skills = SkillsLoader(workspace, disabled_skills=set(disabled_skills) if disabled_skills else None)
+        self.domain_packs = domain_pack_manager or DomainPackManager(
+            workspace,
+            config=domain_packs_config,
+        )
 
     def build_system_prompt(
         self,
@@ -62,6 +75,14 @@ class ContextBuilder:
         bootstrap = self._load_bootstrap_files(self.TRUSTED_BOOTSTRAP_FILES)
         if bootstrap:
             parts.append(bootstrap)
+
+        domain_summary = self.domain_packs.build_summary()
+        if domain_summary:
+            parts.append(domain_summary)
+
+        active_domain_context = self.domain_packs.build_active_context()
+        if active_domain_context:
+            parts.append(f"# Active Domain Packs\n\n{active_domain_context}")
 
         always_skills = self.skills.get_always_skills()
         if always_skills:
@@ -151,6 +172,7 @@ class ContextBuilder:
     def build_runtime_context_text(
         channel: str | None, chat_id: str | None, timezone: str | None = None,
         sender_id: str | None = None,
+        extra_lines: list[str] | None = None,
     ) -> str:
         """Build untrusted runtime metadata text."""
         payload = {
@@ -160,6 +182,10 @@ class ContextBuilder:
             "sender_id": ContextBuilder._escape_runtime_metadata(sender_id),
         }
         body = json.dumps(payload, ensure_ascii=False)
+        if extra_lines:
+            body = body + "\n" + "\n".join(
+                ContextBuilder._escape_reference_text(str(line)) for line in extra_lines
+            )
         return (
             ContextBuilder._RUNTIME_CONTEXT_TAG
             + "\n"
@@ -178,6 +204,7 @@ class ContextBuilder:
     def build_runtime_context_block(
         channel: str | None, chat_id: str | None, timezone: str | None = None,
         sender_id: str | None = None,
+        session_metadata: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Build a runtime metadata block for user-side model context."""
         return {
@@ -187,6 +214,7 @@ class ContextBuilder:
                 chat_id,
                 timezone,
                 sender_id=sender_id,
+                extra_lines=goal_state_runtime_lines(session_metadata),
             ),
             "_meta": {
                 "kind": ContextBuilder.RUNTIME_CONTEXT_KIND,
@@ -285,6 +313,7 @@ class ContextBuilder:
         current_role: str = "user",
         sender_id: str | None = None,
         session_summary: str | None = None,
+        session_metadata: Mapping[str, Any] | None = None,
         internal_event: tuple[str, str] | None = None,
     ) -> list[dict[str, Any]]:
         """Build the complete message list for an LLM call."""
@@ -301,6 +330,7 @@ class ContextBuilder:
                     chat_id,
                     self.timezone,
                     sender_id=sender_id,
+                    session_metadata=session_metadata,
                 ),
                 *self.build_reference_context_blocks(session_summary=session_summary),
             ]

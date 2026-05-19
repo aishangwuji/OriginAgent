@@ -2,6 +2,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
+from OpenHome.agent.auxiliary_llm import AuxiliaryTaskProvider
 from OpenHome.agent.loop import AgentLoop
 from OpenHome.bus.queue import MessageBus
 from OpenHome.providers.factory import ProviderSnapshot
@@ -46,4 +47,6 @@ def test_provider_refresh_updates_all_model_dependents(tmp_path: Path) -> None:
     assert loop.consolidator.max_completion_tokens == 456
     assert loop.dream.provider is new_provider
     assert loop.dream.model == "new-model"
-    assert loop.dream._runner.provider is new_provider
+    assert isinstance(loop.dream._runner.provider, AuxiliaryTaskProvider)
+    assert loop.dream._runner.provider.router.primary_provider is new_provider
+    assert loop.dream._runner.provider.router.primary_model == "new-model"

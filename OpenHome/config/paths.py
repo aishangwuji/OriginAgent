@@ -34,6 +34,11 @@ def get_logs_dir() -> Path:
     return get_runtime_subdir("logs")
 
 
+def get_webui_dir() -> Path:
+    """Return the directory for WebUI-only persisted display transcripts."""
+    return get_runtime_subdir("webui")
+
+
 def get_workspace_path(workspace: str | None = None) -> Path:
     """Resolve and ensure the agent workspace path."""
     path = Path(workspace).expanduser() if workspace else Path.home() / ".openhome" / "workspace"

@@ -65,7 +65,8 @@
     },
     "nav": {
       "general": "General",
-      "byok": "BYOK"
+      "byok": "BYOK",
+      "mcp": "MCP"
     },
     "sections": {
       "interface": "Interface",
@@ -145,10 +146,62 @@
         "missingCredential": "Add the required credential before saving.",
         "saveHint": "Changes apply to new web search requests."
       }
+    },
+    "mcp": {
+      "description": "Configure MCP servers without editing config.json by hand. Changes are saved to the current OpenHome config.",
+      "quickConfig": "Quick config",
+      "add": "Add MCP",
+      "newServer": "New MCP server",
+      "editServer": "Edit MCP server",
+      "configuredServers": "Configured servers",
+      "empty": "No MCP servers configured.",
+      "restartRequired": "Saved. Restart OpenHome to connect the updated MCP servers.",
+      "editorHelp": "Leave masked or empty env/header values unchanged when editing.",
+      "name": "Server name",
+      "command": "Command",
+      "commandHelp": "Executable used to start a stdio MCP server.",
+      "args": "Arguments",
+      "argsHelp": "One argument per line.",
+      "env": "Environment",
+      "envHelp": "One KEY=value per line. Existing masked values are preserved.",
+      "url": "URL",
+      "headers": "Headers",
+      "headersHelp": "One KEY=value per line. Existing masked values are preserved.",
+      "enabledTools": "Enabled tools",
+      "enabledToolsHelp": "One tool name per line. Use * to allow all tools.",
+      "timeout": "Timeout seconds",
+      "delete": "Delete MCP server",
+      "transport": {
+        "stdio": "stdio",
+        "sse": "SSE",
+        "streamableHttp": "HTTP"
+      },
+      "homeAssistant": {
+        "title": "Home Assistant",
+        "description": "Enter the HA address and long-lived access token. OpenHome will configure the MCP URL, auth header, and local access whitelist.",
+        "address": "HA address",
+        "addressHelp": "You can paste http://localhost:8123 or the /home/0 URL from your browser.",
+        "token": "Long-lived access token",
+        "tokenHelp": "Create one from your Home Assistant profile security page.",
+        "tokenHelpExisting": "A token is already saved. Leave blank to keep using it.",
+        "tokenPlaceholder": "Paste Home Assistant long-lived access token",
+        "saveHint": "Saved as an HTTP MCP server and applied after restarting OpenHome.",
+        "save": "Save HA MCP",
+        "validation": {
+          "addressRequired": "Home Assistant address is required.",
+          "tokenRequired": "Home Assistant long-lived access token is required."
+        }
+      },
+      "validation": {
+        "nameRequired": "MCP server name is required.",
+        "commandRequired": "Command is required for stdio MCP servers.",
+        "urlRequired": "URL is required for HTTP MCP servers."
+      }
     }
   },
   "chat": {
     "fallbackTitle": "Chat {{id}}",
+    "pendingTitle": "New chat",
     "loading": "Loading…",
     "noSessions": "No sessions yet.",
     "actions": "Chat actions for {{title}}",
@@ -244,6 +297,12 @@
       "placeholderStreaming": "Model is responding…",
       "inputAria": "Message input",
       "sendHint": "Enter to send · Shift+Enter for newline",
+      "runRuntimeTitle": "Running · {{elapsed}}",
+      "goalStateStrip": "Goal · {{label}}",
+      "goalStateFallback": "Goal",
+      "goalStateExpandAria": "Show full goal",
+      "goalStateSheetTitle": "Goal",
+      "goalStateCloseAria": "Close goal",
       "send": "Send message",
       "stop": "Stop response",
       "attachImage": "Attach image",
@@ -272,7 +331,7 @@
         "ariaLabel": "Slash commands",
         "label": "commands",
         "navigateHint": "↑↓ Navigate",
-        "selectHint": "Enter/Tab Select",
+        "selectHint": "Enter Run · Tab Insert",
         "closeHint": "Esc Close",
         "commands": {
           "new": {
@@ -307,6 +366,22 @@
             "title": "Restore memory",
             "description": "Revert memory to a previous Dream snapshot."
           },
+          "goal": {
+            "title": "Long-running goal",
+            "description": "Tell the agent to treat this as a sustained multi-step goal."
+          },
+          "model": {
+            "title": "Switch model",
+            "description": "Show or switch the active runtime model preset."
+          },
+          "mcp": {
+            "title": "Show MCP",
+            "description": "List configured MCP servers and registered capabilities."
+          },
+          "skill": {
+            "title": "Show skills",
+            "description": "List available agent skills and where they come from."
+          },
           "help": {
             "title": "Show help",
             "description": "List available slash commands."
@@ -332,9 +407,21 @@
     "assistantTyping": "Assistant is typing",
     "toolSingle": "Using a tool",
     "toolMany": "Used {{count}} tools",
+    "toolSummary": "{{count}} tool",
+    "toolSummaryMany": "{{count}} tools",
+    "reasoningTools": "Reasoning · {{count}} tools",
+    "reasoningToolsSingular": "Reasoning · 1 tool",
+    "reasoning": "Thinking",
+    "reasoningStreaming": "Thinking…",
+    "reasoningSummary": "Reasoning",
+    "agentActivitySummary": "{{reasoning}} steps · {{tools}} tool calls",
+    "agentActivityToolsOnly": "{{tools}} tool calls",
+    "agentActivityLiveSummary": "Working… · {{reasoning}} steps · {{tools}} tool calls",
+    "agentActivityLiveToolsOnly": "Working… · {{tools}} tool calls",
     "imageAttachment": "Image attachment",
     "copyReply": "Copy reply",
-    "copiedReply": "Copied reply"
+    "copiedReply": "Copied reply",
+    "turnLatencyTitle": "Response time (end-to-end)"
   },
   "lightbox": {
     "title": "Image preview",
@@ -359,4 +446,3 @@
     }
   }
 }
-

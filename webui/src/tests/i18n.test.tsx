@@ -8,7 +8,7 @@ import { resources } from "@/i18n";
 
 const QUICK_ACTION_KEYS = ["plan", "analyze", "brainstorm", "code", "summarize", "more"];
 const IMAGE_QUICK_ACTION_KEYS = ["icon", "sticker", "poster", "product", "portrait", "edit"];
-const SETTINGS_NAV_KEYS = ["general", "byok"];
+const SETTINGS_NAV_KEYS = ["general", "byok", "mcp"];
 
 describe("webui i18n", () => {
   it("switches UI copy and document locale through the language switcher", async () => {
@@ -85,6 +85,11 @@ describe("webui i18n", () => {
       expect(common.settings.byok.showApiKey).toBeTruthy();
       expect(common.settings.byok.hideApiKey).toBeTruthy();
       expect(common.settings.byok.configuredKeyHint).toBeTruthy();
+      expect(common.settings.mcp.add).toBeTruthy();
+      expect(common.settings.mcp.quickConfig).toBeTruthy();
+      expect(common.settings.mcp.homeAssistant.title).toBeTruthy();
+      expect(common.settings.mcp.homeAssistant.validation.tokenRequired).toBeTruthy();
+      expect(common.settings.mcp.validation.nameRequired).toBeTruthy();
     }
   });
 });

@@ -1667,8 +1667,21 @@ class FeishuChannel(BaseChannel):
             chat_id = message.chat_id
             chat_type = message.chat_type
             msg_type = message.message_type
+            is_dm = chat_type == "p2p"
 
             if not self.is_allowed(sender_id):
+                if is_dm:
+                    await self._handle_message(
+                        sender_id=sender_id,
+                        chat_id=sender_id,
+                        content="",
+                        metadata={
+                            "message_id": message_id,
+                            "chat_type": chat_type,
+                            "msg_type": msg_type,
+                        },
+                        is_dm=True,
+                    )
                 return
 
             if chat_type == "group" and not self._is_group_message_for_bot(message):
@@ -1795,6 +1808,7 @@ class FeishuChannel(BaseChannel):
                     "thread_id": thread_id,
                 },
                 session_key=session_key,
+                is_dm=is_dm,
             )
 
         except Exception:

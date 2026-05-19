@@ -29,9 +29,11 @@ async def test_connect_mcp_retries_when_no_servers_connect(tmp_path, monkeypatch
     loop = _make_loop(tmp_path)
     attempts = 0
 
-    async def _fake_connect(_servers, _registry):
+    async def _fake_connect(_servers, _registry, snapshot_out=None):
         nonlocal attempts
         attempts += 1
+        if snapshot_out is not None:
+            snapshot_out.clear()
         return {}
 
     monkeypatch.setattr("OpenHome.agent.tools.mcp.connect_mcp_servers", _fake_connect)

@@ -83,6 +83,7 @@ class SubagentManager:
         max_tool_result_chars: int,
         model: str | None = None,
         web_config: "WebToolsConfig | None" = None,
+        content_read_config: Any | None = None,
         exec_config: "ExecToolConfig | None" = None,
         restrict_to_workspace: bool = False,
         disabled_skills: list[str] | None = None,
@@ -95,6 +96,7 @@ class SubagentManager:
         self.bus = bus
         self.model = model or provider.get_default_model()
         self.web_config = web_config or WebToolsConfig()
+        self.content_read_config = content_read_config
         self.max_tool_result_chars = max_tool_result_chars
         self.exec_config = exec_config or ExecToolConfig()
         self.restrict_to_workspace = restrict_to_workspace
@@ -271,6 +273,7 @@ class SubagentManager:
                         config=self.web_config.fetch,
                         proxy=self.web_config.proxy,
                         user_agent=self.web_config.user_agent,
+                        content_read_config=self.content_read_config,
                     )
                 )
             system_prompt = self._build_subagent_prompt()

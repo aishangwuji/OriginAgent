@@ -3,7 +3,7 @@
 from pathlib import Path
 from typing import Any, Literal
 
-from pydantic import AliasChoices, BaseModel, ConfigDict, Field
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, model_validator
 from pydantic.alias_generators import to_camel
 from pydantic_settings import BaseSettings
 
@@ -27,6 +27,7 @@ class ChannelsConfig(Base):
 
     send_progress: bool = True  # stream agent's text progress to the channel
     send_tool_hints: bool = False  # stream tool-call hints (e.g. read_file("…"))
+    show_reasoning: bool = True  # surface model reasoning when channel implements it
     send_max_retries: int = Field(default=3, ge=0, le=10)  # Max delivery attempts (initial send included)
     transcription_provider: str = "groq"  # Voice transcription backend: "groq" or "openai"
     transcription_language: str | None = Field(default=None, pattern=r"^[a-z]{2,3}$")  # Optional ISO-639-1 hint for audio transcription
@@ -65,11 +66,97 @@ class DreamConfig(Base):
         return f"every {hours}h"
 
 
+class InlineFallbackConfig(Base):
+    """Inline fallback model candidate."""
+
+    model: str
+    provider: str = "auto"
+    max_tokens: int | None = None
+    context_window_tokens: int | None = None
+    temperature: float | None = None
+    reasoning_effort: str | None = None
+
+
+class ModelPresetConfig(Base):
+    """Named runtime model + provider configuration."""
+
+    model: str
+    provider: str = "auto"
+    max_tokens: int | None = None
+    context_window_tokens: int | None = None
+    temperature: float | None = None
+    reasoning_effort: str | None = None
+    fallback_models: list[str | InlineFallbackConfig] = Field(default_factory=list)
+
+    def to_generation_settings(self):
+        from OpenHome.providers.base import GenerationSettings
+
+        return GenerationSettings(
+            temperature=self.temperature,
+            max_tokens=self.max_tokens,
+            reasoning_effort=self.reasoning_effort,
+        )
+
+
+FallbackCandidate = str | InlineFallbackConfig
+
+
+class AuxiliaryTaskConfig(Base):
+    """Per-background-task auxiliary LLM routing settings."""
+
+    model_override: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("modelOverride", "model", "model_override"),
+    )
+    timeout_s: float | None = Field(
+        default=None,
+        ge=0,
+        validation_alias=AliasChoices("timeoutS", "timeout", "timeout_s"),
+    )
+    fallback_models: list[FallbackCandidate] = Field(default_factory=list)
+
+
+class AuxiliaryConfig(Base):
+    """Background LLM routing and fallback configuration."""
+
+    enabled: bool = True
+    payment_cooldown_s: int = Field(
+        default=1800,
+        ge=0,
+        validation_alias=AliasChoices("paymentCooldownS", "payment_cooldown_s"),
+    )
+    transient_cooldown_s: int = Field(
+        default=60,
+        ge=0,
+        validation_alias=AliasChoices("transientCooldownS", "transient_cooldown_s"),
+    )
+    tasks: dict[str, AuxiliaryTaskConfig] = Field(default_factory=dict)
+
+
+class DomainPacksConfig(Base):
+    """Domain pack discovery and prompt injection configuration."""
+
+    enabled: bool = True
+    disabled: list[str] = Field(default_factory=list)
+    active: list[str] = Field(default_factory=list)
+    max_capability_chars: int = Field(
+        default=4000,
+        ge=0,
+        validation_alias=AliasChoices("maxCapabilityChars", "max_capability_chars"),
+        serialization_alias="maxCapabilityChars",
+    )
+
+
 class AgentDefaults(Base):
     """Default agent configuration."""
 
     workspace: str = "~/.openhome/workspace"
     model: str = "deepseek-chat"
+    model_preset: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("modelPreset", "model_preset"),
+        serialization_alias="modelPreset",
+    )
     provider: str = (
         "deepseek"  # Provider name (e.g. "deepseek", "openrouter") or "auto" for auto-detection
     )
@@ -89,6 +176,13 @@ class AgentDefaults(Base):
         serialization_alias="toolHintMaxLength",
     )  # Max characters for tool hint display (e.g. "$ cd …/project && npm test")
     reasoning_effort: str | None = None  # low / medium / high / adaptive / none — LLM thinking effort; None preserves the provider default
+    fallback_models: list[FallbackCandidate] = Field(default_factory=list)
+    auxiliary: AuxiliaryConfig = Field(default_factory=AuxiliaryConfig)
+    domain_packs: DomainPacksConfig = Field(
+        default_factory=DomainPacksConfig,
+        validation_alias=AliasChoices("domainPacks", "domain_packs"),
+        serialization_alias="domainPacks",
+    )
     timezone: str = "Asia/Shanghai"  # IANA timezone, e.g. "Asia/Shanghai", "America/New_York"
     bot_name: str = "OpenHome"  # Display name shown in CLI prompts (e.g. "{name} is thinking...")
     bot_icon: str = "Home"  # Short icon (emoji or text) shown next to the bot name in CLI; "" to omit
@@ -172,6 +266,7 @@ class ProvidersConfig(Base):
     github_copilot: ProviderConfig = Field(default_factory=ProviderConfig, exclude=True)  # Github Copilot (OAuth)
     qianfan: ProviderConfig = Field(default_factory=ProviderConfig)  # Qianfan (百度千帆)
     nvidia: ProviderConfig = Field(default_factory=ProviderConfig)  # NVIDIA NIM (nvapi- keys)
+    atomic_chat: ProviderConfig = Field(default_factory=ProviderConfig)  # Atomic Chat local models
 
 
 class HeartbeatConfig(Base):
@@ -207,6 +302,35 @@ class RuntimeConfig(Base):
     profile: RuntimeProfile = "default"
 
 
+class PairingConfig(Base):
+    """Opt-in DM pairing for approving channel senders."""
+
+    enabled: bool = False
+    ttl_seconds: int = Field(
+        default=600,
+        ge=60,
+        le=86_400,
+        validation_alias=AliasChoices("ttlSeconds", "ttl_seconds"),
+        serialization_alias="ttlSeconds",
+    )
+    allow_self_approve: bool = Field(
+        default=False,
+        validation_alias=AliasChoices("allowSelfApprove", "allow_self_approve"),
+        serialization_alias="allowSelfApprove",
+    )
+    approval_channels: list[str] = Field(
+        default_factory=lambda: ["cli", "websocket"],
+        validation_alias=AliasChoices("approvalChannels", "approval_channels"),
+        serialization_alias="approvalChannels",
+    )
+
+
+class SecurityConfig(Base):
+    """Security-related runtime controls."""
+
+    pairing: PairingConfig = Field(default_factory=PairingConfig)
+
+
 class WebSearchConfig(Base):
     """Web search tool configuration."""
 
@@ -233,6 +357,19 @@ class WebToolsConfig(Base):
     user_agent: str | None = None
     search: WebSearchConfig = Field(default_factory=WebSearchConfig)
     fetch: WebFetchConfig = Field(default_factory=WebFetchConfig)
+
+
+class ContentReadToolConfig(Base):
+    """Platform-aware content_read tool configuration."""
+
+    enabled: bool = True
+    providers: list[str] = Field(
+        default_factory=lambda: ["generic", "rss", "github", "hackernews"]
+    )
+    max_chars: int = Field(default=50_000, ge=100)
+    use_jina_reader: bool = True
+    rss_entry_limit: int = Field(default=10, ge=1, le=50)
+    hackernews_comment_limit: int = Field(default=20, ge=0, le=100)
 
 
 class ExecToolConfig(Base):
@@ -307,6 +444,7 @@ class ToolsConfig(Base):
     """Tools configuration."""
 
     web: WebToolsConfig = Field(default_factory=WebToolsConfig)
+    content_read: ContentReadToolConfig = Field(default_factory=ContentReadToolConfig)
     exec: ExecToolConfig = Field(default_factory=ExecToolConfig)
     my: MyToolConfig = Field(default_factory=MyToolConfig)
     image_generation: ImageGenerationToolConfig = Field(default_factory=ImageGenerationToolConfig)
@@ -326,7 +464,57 @@ class Config(BaseSettings):
     api: ApiConfig = Field(default_factory=ApiConfig)
     gateway: GatewayConfig = Field(default_factory=GatewayConfig)
     runtime: RuntimeConfig = Field(default_factory=RuntimeConfig)
+    security: SecurityConfig = Field(default_factory=SecurityConfig)
     tools: ToolsConfig = Field(default_factory=ToolsConfig)
+    model_presets: dict[str, ModelPresetConfig] = Field(
+        default_factory=dict,
+        validation_alias=AliasChoices("modelPresets", "model_presets"),
+        serialization_alias="modelPresets",
+    )
+
+    @model_validator(mode="after")
+    def _validate_model_presets(self) -> "Config":
+        if "default" in self.model_presets:
+            raise ValueError("model_presets must not define reserved preset 'default'")
+        name = self.agents.defaults.model_preset
+        if name and name != "default" and name not in self.model_presets:
+            raise ValueError(f"model_preset {name!r} not found in model_presets")
+        for fallback in self.agents.defaults.fallback_models:
+            if isinstance(fallback, str) and fallback != "default" and fallback not in self.model_presets:
+                raise ValueError(f"fallback_models entry {fallback!r} not found in model_presets")
+        for preset_name, preset in self.model_presets.items():
+            for fallback in preset.fallback_models:
+                if isinstance(fallback, str) and fallback != "default" and fallback not in self.model_presets:
+                    raise ValueError(
+                        f"model_presets.{preset_name}.fallback_models entry {fallback!r} not found in model_presets"
+                    )
+        for task_name, task in self.agents.defaults.auxiliary.tasks.items():
+            for fallback in task.fallback_models:
+                if isinstance(fallback, str) and fallback != "default" and fallback not in self.model_presets:
+                    raise ValueError(
+                        f"auxiliary.tasks.{task_name}.fallback_models entry {fallback!r} not found in model_presets"
+                    )
+        return self
+
+    def resolve_default_preset(self) -> ModelPresetConfig:
+        defaults = self.agents.defaults
+        return ModelPresetConfig(
+            model=defaults.model,
+            provider=defaults.provider,
+            max_tokens=defaults.max_tokens,
+            context_window_tokens=defaults.context_window_tokens,
+            temperature=defaults.temperature,
+            reasoning_effort=defaults.reasoning_effort,
+            fallback_models=defaults.fallback_models,
+        )
+
+    def resolve_preset(self, name: str | None = None) -> ModelPresetConfig:
+        name = name or self.agents.defaults.model_preset or "default"
+        if name == "default":
+            return self.resolve_default_preset()
+        if name not in self.model_presets:
+            raise KeyError(f"model_preset {name!r} not found in model_presets")
+        return self.model_presets[name]
 
     @property
     def workspace_path(self) -> Path:
@@ -344,8 +532,10 @@ class Config(BaseSettings):
             spec = find_by_name(forced)
             if spec:
                 p = getattr(self.providers, spec.name, None)
-                return (p, spec.name) if p else (None, None)
-            return None, None
+                if p and (spec.is_oauth or spec.is_local or spec.is_direct or p.api_key):
+                    return p, spec.name
+            else:
+                return None, None
 
         model_lower = (model or self.agents.defaults.model).lower()
         model_normalized = model_lower.replace("-", "_")

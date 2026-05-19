@@ -71,6 +71,61 @@ def strip_think(text: str) -> str:
     return text.strip()
 
 
+def extract_think(text: str) -> tuple[str | None, str]:
+    """Extract closed inline thinking blocks and return cleaned text."""
+    parts: list[str] = []
+    for match in re.finditer(r"<think>([\s\S]*?)</think>", text):
+        parts.append(match.group(1).strip())
+    for match in re.finditer(r"<thought>([\s\S]*?)</thought>", text):
+        parts.append(match.group(1).strip())
+    thinking = "\n\n".join(parts) if parts else None
+    return thinking, strip_think(text)
+
+
+class IncrementalThinkExtractor:
+    """Stateful inline ``<think>`` extractor for streaming buffers."""
+
+    __slots__ = ("_emitted",)
+
+    def __init__(self) -> None:
+        self._emitted = ""
+
+    def reset(self) -> None:
+        self._emitted = ""
+
+    async def feed(self, buf: str, emit: Any) -> bool:
+        thinking, _ = extract_think(buf)
+        if not thinking or thinking == self._emitted:
+            return False
+        new = thinking[len(self._emitted):].strip()
+        self._emitted = thinking
+        if not new:
+            return False
+        await emit(new)
+        return True
+
+
+def extract_reasoning(
+    reasoning_content: str | None,
+    thinking_blocks: list[dict[str, Any]] | None,
+    content: str | None,
+) -> tuple[str | None, str | None]:
+    """Return ``(reasoning_text, cleaned_content)`` from one model response."""
+    if isinstance(reasoning_content, str) and reasoning_content:
+        return reasoning_content, strip_think(content) if content else content
+    if isinstance(thinking_blocks, list) and thinking_blocks:
+        parts = [
+            block.get("thinking", "")
+            for block in thinking_blocks
+            if isinstance(block, dict) and block.get("type") == "thinking"
+        ]
+        joined = "\n\n".join(part for part in parts if part)
+        return (joined or None), strip_think(content) if content else content
+    if isinstance(content, str) and content:
+        return extract_think(content)
+    return None, content
+
+
 def detect_image_mime(data: bytes) -> str | None:
     """Detect image MIME type from magic bytes, ignoring file extension."""
     if data[:8] == b"\x89PNG\r\n\x1a\n":

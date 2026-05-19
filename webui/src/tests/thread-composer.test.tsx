@@ -1,5 +1,5 @@
-import { fireEvent, render, screen } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { ThreadComposer } from "@/components/thread/ThreadComposer";
 import type { SlashCommand } from "@/lib/types";
@@ -19,6 +19,33 @@ const COMMANDS: SlashCommand[] = [
     argHint: "[n]",
   },
 ];
+const ORIGINAL_INNER_HEIGHT = window.innerHeight;
+
+afterEach(() => {
+  vi.restoreAllMocks();
+  Object.defineProperty(window, "innerHeight", {
+    value: ORIGINAL_INNER_HEIGHT,
+    configurable: true,
+  });
+});
+
+function rect(init: Partial<DOMRect>): DOMRect {
+  const top = init.top ?? 0;
+  const left = init.left ?? 0;
+  const width = init.width ?? 0;
+  const height = init.height ?? 0;
+  return {
+    x: init.x ?? left,
+    y: init.y ?? top,
+    top,
+    left,
+    width,
+    height,
+    right: init.right ?? left + width,
+    bottom: init.bottom ?? top + height,
+    toJSON: () => ({}),
+  };
+}
 
 describe("ThreadComposer", () => {
   it("renders a readonly hero model composer when provided", () => {
@@ -61,7 +88,49 @@ describe("ThreadComposer", () => {
     expect(screen.getByRole("button", { name: "Send message" }).className).toContain("bg-foreground");
   });
 
-  it("opens a slash command palette and inserts the selected command", () => {
+  it("shows turn run timer when runStartedAt is set", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date((1_000 + 125) * 1000));
+
+    render(
+      <ThreadComposer
+        onSend={vi.fn()}
+        placeholder="Type your message..."
+        runStartedAt={1000}
+      />,
+    );
+
+    const status = screen.getByRole("status");
+    expect(status).toHaveTextContent(/Running/);
+    expect(status).toHaveTextContent(/2:05/);
+
+    vi.useRealTimers();
+  });
+
+  it("opens an upward anchored goal panel with markdown content when expand is clicked", async () => {
+    const longObjective =
+      "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789abcdefghijklmnopqrstuvwxyz0123456789GoalTail";
+    render(
+      <ThreadComposer
+        onSend={vi.fn()}
+        placeholder="Type your message..."
+        goalState={{
+          active: true,
+          objective: longObjective,
+          ui_summary: "Short summary for strip",
+        }}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Show full goal" }));
+
+    const dialog = await screen.findByRole("dialog", { name: "Goal" });
+    expect(dialog).toBeInTheDocument();
+    expect(dialog).toHaveTextContent("Short summary for strip");
+    expect(dialog).toHaveTextContent(longObjective);
+  });
+
+  it("runs parameterless slash commands with Enter and inserts argument commands with Tab", () => {
     const onSend = vi.fn();
     render(
       <ThreadComposer
@@ -74,7 +143,9 @@ describe("ThreadComposer", () => {
     const input = screen.getByLabelText("Message input");
     fireEvent.change(input, { target: { value: "/" } });
 
-    expect(screen.getByRole("listbox", { name: "Slash commands" })).toBeInTheDocument();
+    const palette = screen.getByRole("listbox", { name: "Slash commands" });
+    expect(palette).toBeInTheDocument();
+    expect(palette).toHaveStyle({ maxHeight: "288px" });
     expect(screen.getByRole("option", { name: /\/stop/i })).toHaveAttribute(
       "aria-selected",
       "true",
@@ -85,10 +156,162 @@ describe("ThreadComposer", () => {
       "aria-selected",
       "true",
     );
-    fireEvent.keyDown(input, { key: "Enter" });
+    fireEvent.keyDown(input, { key: "Tab" });
 
     expect(input).toHaveValue("/history ");
     expect(onSend).not.toHaveBeenCalled();
+    expect(screen.queryByRole("listbox", { name: "Slash commands" })).not.toBeInTheDocument();
+
+    fireEvent.change(input, { target: { value: "/" } });
+    expect(screen.getByRole("option", { name: /\/stop/i })).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
+    fireEvent.keyDown(input, { key: "Enter" });
+
+    expect(onSend).toHaveBeenCalledWith("/stop");
+    expect(input).toHaveValue("");
+    expect(screen.queryByRole("listbox", { name: "Slash commands" })).not.toBeInTheDocument();
+  });
+
+  it("runs /mcp and /skill as real slash commands from the palette", () => {
+    const onSend = vi.fn();
+    const commands: SlashCommand[] = [
+      {
+        command: "/mcp",
+        title: "Show MCP servers",
+        description: "List configured MCP servers.",
+        icon: "server",
+      },
+      {
+        command: "/skill",
+        title: "Show skills",
+        description: "List available skills.",
+        icon: "graduation-cap",
+      },
+    ];
+    render(
+      <ThreadComposer
+        onSend={onSend}
+        placeholder="Type your message..."
+        slashCommands={commands}
+      />,
+    );
+
+    const input = screen.getByLabelText("Message input");
+    fireEvent.change(input, { target: { value: "/mcp" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(onSend).toHaveBeenLastCalledWith("/mcp");
+
+    fireEvent.change(input, { target: { value: "/skill" } });
+    fireEvent.mouseDown(screen.getByRole("option", { name: /\/skill/i }));
+    expect(onSend).toHaveBeenLastCalledWith("/skill");
+  });
+
+  it("shows every matching slash command instead of truncating the palette", () => {
+    const manyCommands: SlashCommand[] = Array.from({ length: 10 }, (_, index) => ({
+      command: `/cmd-${index + 1}`,
+      title: `Command ${index + 1}`,
+      description: `Command ${index + 1} description`,
+      icon: "circle-help",
+    }));
+
+    render(
+      <ThreadComposer
+        onSend={vi.fn()}
+        placeholder="Type your message..."
+        slashCommands={manyCommands}
+      />,
+    );
+
+    fireEvent.change(screen.getByLabelText("Message input"), {
+      target: { value: "/" },
+    });
+
+    expect(screen.getAllByRole("option")).toHaveLength(10);
+    expect(screen.getByRole("option", { name: /\/cmd-10/i })).toBeInTheDocument();
+  });
+
+  it("prioritizes command-name matches over description matches", () => {
+    const commands: SlashCommand[] = [
+      {
+        command: "/new",
+        title: "New chat",
+        description: "Stop the current task and start a fresh conversation.",
+        icon: "square-pen",
+      },
+      {
+        command: "/stop",
+        title: "Stop current task",
+        description: "Cancel the active agent turn.",
+        icon: "square",
+      },
+    ];
+
+    render(
+      <ThreadComposer
+        onSend={vi.fn()}
+        placeholder="Type your message..."
+        slashCommands={commands}
+      />,
+    );
+
+    fireEvent.change(screen.getByLabelText("Message input"), {
+      target: { value: "/stop" },
+    });
+
+    expect(screen.getByRole("option", { name: /\/stop/i })).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
+  });
+
+  it("opens the slash command palette downward when there is more room below", async () => {
+    vi.spyOn(HTMLFormElement.prototype, "getBoundingClientRect").mockReturnValue(
+      rect({ top: 40, bottom: 160, width: 800, height: 120 }),
+    );
+    Object.defineProperty(window, "innerHeight", {
+      value: 330,
+      configurable: true,
+    });
+    render(
+      <ThreadComposer
+        onSend={vi.fn()}
+        placeholder="Ask anything..."
+        slashCommands={COMMANDS}
+        variant="hero"
+      />,
+    );
+    const input = screen.getByLabelText("Message input");
+
+    fireEvent.change(input, { target: { value: "/" } });
+
+    await waitFor(() => {
+      const palette = screen.getByRole("listbox", { name: "Slash commands" });
+      expect(palette.className).toContain("top-full");
+      expect(palette).toHaveStyle({ maxHeight: "162px" });
+    });
+  });
+
+  it("dismisses the slash command palette on outside click", () => {
+    render(
+      <div>
+        <button type="button">outside</button>
+        <ThreadComposer
+          onSend={vi.fn()}
+          placeholder="Type your message..."
+          slashCommands={COMMANDS}
+        />
+      </div>,
+    );
+
+    fireEvent.change(screen.getByLabelText("Message input"), {
+      target: { value: "/" },
+    });
+    expect(screen.getByRole("listbox", { name: "Slash commands" })).toBeInTheDocument();
+
+    fireEvent.pointerDown(screen.getByRole("button", { name: "outside" }));
+
     expect(screen.queryByRole("listbox", { name: "Slash commands" })).not.toBeInTheDocument();
   });
 

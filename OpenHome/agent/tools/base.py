@@ -1,11 +1,17 @@
 """Base class for agent tools."""
 
+import typing
 from abc import ABC, abstractmethod
 from collections.abc import Callable
 from copy import deepcopy
 from typing import Any, TypeVar
 
 _ToolT = TypeVar("_ToolT", bound="Tool")
+
+if typing.TYPE_CHECKING:
+    from pydantic import BaseModel
+
+    from OpenHome.agent.tools.context import ToolContext
 
 # Matches :meth:`Tool._cast_value` / :meth:`Schema.validate_json_schema_value` behavior
 _JSON_TYPE_MAP: dict[str, type | tuple[type, ...]] = {
@@ -172,6 +178,24 @@ class Tool(ABC):
     def exclusive(self) -> bool:
         """Whether this tool should run alone even if concurrency is enabled."""
         return False
+
+    # --- Plugin metadata ---
+
+    config_key: str = ""
+    _plugin_discoverable: bool = True
+    _scopes: set[str] = {"core"}
+
+    @classmethod
+    def config_cls(cls) -> "type[BaseModel] | None":
+        return None
+
+    @classmethod
+    def enabled(cls, ctx: "ToolContext") -> bool:
+        return True
+
+    @classmethod
+    def create(cls, ctx: "ToolContext") -> "Tool":
+        return cls()
 
     @abstractmethod
     async def execute(self, **kwargs: Any) -> Any:

@@ -5,6 +5,7 @@ import functools
 import json
 import time
 from typing import Any
+from urllib.parse import quote
 from unittest.mock import AsyncMock, MagicMock
 
 import httpx
@@ -13,7 +14,7 @@ import websockets
 from websockets.exceptions import ConnectionClosed
 from websockets.frames import Close
 
-from OpenHome.bus.events import OutboundMessage
+from OpenHome.bus.events import OUTBOUND_META_AGENT_UI, OutboundMessage
 from OpenHome.channels.websocket import (
     WebSocketChannel,
     WebSocketConfig,
@@ -27,7 +28,7 @@ from OpenHome.channels.websocket import (
     _parse_request_path,
 )
 from OpenHome.config.loader import load_config, save_config
-from OpenHome.config.schema import Config
+from OpenHome.config.schema import Config, MCPServerConfig
 
 # -- Shared helpers (aligned with test_websocket_integration.py) ---------------
 
@@ -322,6 +323,103 @@ async def test_send_delta_emits_delta_and_stream_end() -> None:
 
 
 @pytest.mark.asyncio
+async def test_send_progress_includes_agent_ui_blob() -> None:
+    bus = MagicMock()
+    channel = WebSocketChannel({"enabled": True, "allowFrom": ["*"]}, bus)
+    mock_ws = AsyncMock()
+    channel._attach(mock_ws, "chat-1")
+
+    blob = {"kind": "panel", "data": {"version": 1, "event": "tick", "id": "r1"}}
+    await channel.send(OutboundMessage(
+        channel="websocket",
+        chat_id="chat-1",
+        content="progress panel",
+        metadata={"_progress": True, OUTBOUND_META_AGENT_UI: blob},
+    ))
+
+    payload = json.loads(mock_ws.send.await_args.args[0])
+    assert payload["event"] == "message"
+    assert payload["kind"] == "progress"
+    assert payload["agent_ui"] == blob
+
+
+@pytest.mark.asyncio
+async def test_send_reasoning_delta_emits_streaming_frame() -> None:
+    bus = MagicMock()
+    channel = WebSocketChannel({"enabled": True, "allowFrom": ["*"]}, bus)
+    mock_ws = AsyncMock()
+    channel._attach(mock_ws, "chat-1")
+
+    await channel.send_reasoning_delta(
+        "chat-1",
+        "step-by-step thinking",
+        {"_reasoning_delta": True, "_stream_id": "r1"},
+    )
+
+    payload = json.loads(mock_ws.send.await_args.args[0])
+    assert payload["event"] == "reasoning_delta"
+    assert payload["chat_id"] == "chat-1"
+    assert payload["text"] == "step-by-step thinking"
+    assert payload["stream_id"] == "r1"
+
+
+@pytest.mark.asyncio
+async def test_send_reasoning_end_emits_close_frame() -> None:
+    bus = MagicMock()
+    channel = WebSocketChannel({"enabled": True, "allowFrom": ["*"]}, bus)
+    mock_ws = AsyncMock()
+    channel._attach(mock_ws, "chat-1")
+
+    await channel.send_reasoning_end("chat-1", {"_reasoning_end": True, "_stream_id": "r1"})
+
+    payload = json.loads(mock_ws.send.await_args.args[0])
+    assert payload == {"event": "reasoning_end", "chat_id": "chat-1", "stream_id": "r1"}
+
+
+@pytest.mark.asyncio
+async def test_send_reasoning_one_shot_expands_to_delta_plus_end() -> None:
+    bus = MagicMock()
+    channel = WebSocketChannel({"enabled": True, "allowFrom": ["*"]}, bus)
+    mock_ws = AsyncMock()
+    channel._attach(mock_ws, "chat-1")
+
+    await channel.send_reasoning(OutboundMessage(
+        channel="websocket",
+        chat_id="chat-1",
+        content="thinking",
+        metadata={"_reasoning": True},
+    ))
+
+    assert mock_ws.send.await_count == 2
+    first = json.loads(mock_ws.send.call_args_list[0][0][0])
+    second = json.loads(mock_ws.send.call_args_list[1][0][0])
+    assert first["event"] == "reasoning_delta"
+    assert first["text"] == "thinking"
+    assert second["event"] == "reasoning_end"
+
+
+@pytest.mark.asyncio
+async def test_send_reasoning_delta_drops_empty_chunks() -> None:
+    bus = MagicMock()
+    channel = WebSocketChannel({"enabled": True, "allowFrom": ["*"]}, bus)
+    mock_ws = AsyncMock()
+    channel._attach(mock_ws, "chat-1")
+
+    await channel.send_reasoning_delta("chat-1", "", {"_reasoning_delta": True})
+
+    mock_ws.send.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_send_reasoning_without_subscribers_is_noop() -> None:
+    bus = MagicMock()
+    channel = WebSocketChannel({"enabled": True, "allowFrom": ["*"]}, bus)
+
+    await channel.send_reasoning_delta("unattached", "thinking", None)
+    await channel.send_reasoning_end("unattached", None)
+
+
+@pytest.mark.asyncio
 async def test_send_turn_end_emits_turn_end_event() -> None:
     bus = MagicMock()
     channel = WebSocketChannel({"enabled": True, "allowFrom": ["*"]}, bus)
@@ -526,6 +624,14 @@ async def test_settings_api_returns_safe_subset_and_updates_whitelist(
     config.providers.openai.api_key = "secret-key"
     config.tools.web.search.provider = "brave"
     config.tools.web.search.api_key = "brave-secret"
+    config.tools.mcp_servers["github"] = MCPServerConfig(
+        type="stdio",
+        command="npx",
+        args=["-y", "@modelcontextprotocol/server-github"],
+        env={"GITHUB_TOKEN": "ghp_secret"},
+        tool_timeout=45,
+        enabled_tools=["search"],
+    )
     save_config(config, config_path)
     monkeypatch.setattr("OpenHome.config.loader._current_config_path", config_path)
 
@@ -551,11 +657,25 @@ async def test_settings_api_returns_safe_subset_and_updates_whitelist(
         assert body["agent"]["has_api_key"] is True
         assert body["web_search"]["provider"] == "brave"
         assert body["web_search"]["api_key_hint"] == "brav••••cret"
+        assert body["mcp"]["servers"] == [
+            {
+                "name": "github",
+                "type": "stdio",
+                "command": "npx",
+                "args": ["-y", "@modelcontextprotocol/server-github"],
+                "env": {"GITHUB_TOKEN": "••••"},
+                "url": "",
+                "headers": {},
+                "tool_timeout": 45,
+                "enabled_tools": ["search"],
+            }
+        ]
         search_providers = {provider["name"]: provider for provider in body["web_search"]["providers"]}
         assert search_providers["duckduckgo"]["credential"] == "none"
         assert search_providers["searxng"]["credential"] == "base_url"
         assert "secret-key" not in settings.text
         assert "brave-secret" not in settings.text
+        assert "ghp_secret" not in settings.text
 
         provider_updated = await _http_get(
             "http://127.0.0.1:"
@@ -600,6 +720,215 @@ async def test_settings_api_returns_safe_subset_and_updates_whitelist(
         assert saved.tools.web.search.provider == "searxng"
         assert saved.tools.web.search.api_key == ""
         assert saved.tools.web.search.base_url == "https://search.example.com"
+    finally:
+        await channel.stop()
+        await server_task
+
+
+@pytest.mark.asyncio
+async def test_settings_mcp_routes_manage_servers(
+    bus: MagicMock,
+    monkeypatch,
+    tmp_path,
+) -> None:
+    port = 29893
+    config_path = tmp_path / "config.json"
+    config = Config()
+    save_config(config, config_path)
+    monkeypatch.setattr("OpenHome.config.loader._current_config_path", config_path)
+
+    channel = _ch(bus, port=port)
+    channel._api_tokens["tok"] = time.monotonic() + 300
+
+    server_task = asyncio.create_task(channel.start())
+    await asyncio.sleep(0.3)
+
+    try:
+        auth = {"Authorization": "Bearer tok"}
+        stdio_config = {
+            "name": "github",
+            "type": "stdio",
+            "command": "npx",
+            "args": ["-y", "@modelcontextprotocol/server-github"],
+            "env": {"GITHUB_TOKEN": "ghp_secret"},
+            "tool_timeout": 45,
+            "enabled_tools": ["search"],
+        }
+        created = await _http_get(
+            "http://127.0.0.1:"
+            f"{port}/api/settings/mcp/upsert?config="
+            + quote(json.dumps(stdio_config)),
+            headers=auth,
+        )
+        assert created.status_code == 200
+        assert created.json()["requires_restart"] is True
+        assert "ghp_secret" not in created.text
+        saved = load_config(config_path)
+        assert saved.tools.mcp_servers["github"].command == "npx"
+        assert saved.tools.mcp_servers["github"].env["GITHUB_TOKEN"] == "ghp_secret"
+
+        update_config = {
+            "name": "github",
+            "type": "stdio",
+            "command": "npx",
+            "args": ["-y", "@modelcontextprotocol/server-github"],
+            "env": {"GITHUB_TOKEN": ""},
+            "tool_timeout": 30,
+            "enabled_tools": ["*"],
+        }
+        updated = await _http_get(
+            "http://127.0.0.1:"
+            f"{port}/api/settings/mcp/upsert?config="
+            + quote(json.dumps(update_config)),
+            headers=auth,
+        )
+        assert updated.status_code == 200
+        saved = load_config(config_path)
+        assert saved.tools.mcp_servers["github"].env["GITHUB_TOKEN"] == "ghp_secret"
+        assert saved.tools.mcp_servers["github"].enabled_tools == ["*"]
+
+        http_config = {
+            "name": "remote",
+            "type": "streamableHttp",
+            "url": "https://mcp.example.com/mcp",
+            "headers": {"Authorization": "Bearer secret"},
+            "tool_timeout": 20,
+            "enabled_tools": ["*"],
+        }
+        http_created = await _http_get(
+            "http://127.0.0.1:"
+            f"{port}/api/settings/mcp/upsert?config="
+            + quote(json.dumps(http_config)),
+            headers=auth,
+        )
+        assert http_created.status_code == 200
+        assert "Bearer secret" not in http_created.text
+        saved = load_config(config_path)
+        assert saved.tools.mcp_servers["remote"].url == "https://mcp.example.com/mcp"
+        assert saved.tools.mcp_servers["remote"].headers["Authorization"] == "Bearer secret"
+
+        ha_created = await _http_get(
+            "http://127.0.0.1:"
+            f"{port}/api/settings/mcp/home-assistant/upsert?"
+            "name=home_assistant&address=http%3A%2F%2Flocalhost%3A8123%2Fhome%2F0"
+            "&token=ha_token",
+            headers=auth,
+        )
+        assert ha_created.status_code == 200
+        assert ha_created.json()["requires_restart"] is True
+        assert "ha_token" not in ha_created.text
+        saved = load_config(config_path)
+        ha = saved.tools.mcp_servers["home_assistant"]
+        assert ha.type == "streamableHttp"
+        assert ha.url == "http://localhost:8123/api/mcp"
+        assert ha.headers["Authorization"] == "Bearer ha_token"
+        assert ha.enabled_tools == ["*"]
+        assert "127.0.0.1/32" in saved.tools.ssrf_whitelist
+        assert "::1/128" in saved.tools.ssrf_whitelist
+
+        ha_updated = await _http_get(
+            "http://127.0.0.1:"
+            f"{port}/api/settings/mcp/home-assistant/upsert?"
+            "name=home_assistant&address=localhost%3A8123",
+            headers=auth,
+        )
+        assert ha_updated.status_code == 200
+        saved = load_config(config_path)
+        assert saved.tools.mcp_servers["home_assistant"].url == "http://localhost:8123/api/mcp"
+        assert saved.tools.mcp_servers["home_assistant"].headers["Authorization"] == "Bearer ha_token"
+
+        deleted = await _http_get(
+            f"http://127.0.0.1:{port}/api/settings/mcp/delete?name=github",
+            headers=auth,
+        )
+        assert deleted.status_code == 200
+        assert deleted.json()["deleted"] is True
+        assert "github" not in load_config(config_path).tools.mcp_servers
+    finally:
+        await channel.stop()
+        await server_task
+
+
+@pytest.mark.asyncio
+async def test_settings_mcp_routes_validate_input(
+    bus: MagicMock,
+    monkeypatch,
+    tmp_path,
+) -> None:
+    port = 29894
+    config_path = tmp_path / "config.json"
+    save_config(Config(), config_path)
+    monkeypatch.setattr("OpenHome.config.loader._current_config_path", config_path)
+
+    channel = _ch(bus, port=port)
+    channel._api_tokens["tok"] = time.monotonic() + 300
+
+    server_task = asyncio.create_task(channel.start())
+    await asyncio.sleep(0.3)
+
+    try:
+        auth = {"Authorization": "Bearer tok"}
+        cases = [
+            {"name": "bad name", "type": "stdio", "command": "npx"},
+            {"name": "missing_command", "type": "stdio", "command": ""},
+            {"name": "missing_url", "type": "sse", "url": ""},
+            {"name": "bad_type", "type": "websocket", "url": "https://example.com"},
+        ]
+        for payload in cases:
+            resp = await _http_get(
+                "http://127.0.0.1:"
+                f"{port}/api/settings/mcp/upsert?config="
+                + quote(json.dumps(payload)),
+                headers=auth,
+            )
+            assert resp.status_code == 400
+
+        bad_ha_name = await _http_get(
+            f"http://127.0.0.1:{port}/api/settings/mcp/home-assistant/upsert?"
+            "name=bad%20name&address=http%3A%2F%2Flocalhost%3A8123&token=ha",
+            headers=auth,
+        )
+        assert bad_ha_name.status_code == 400
+
+        bad_ha_url = await _http_get(
+            f"http://127.0.0.1:{port}/api/settings/mcp/home-assistant/upsert?"
+            "name=home_assistant&address=ftp%3A%2F%2Flocalhost%3A8123&token=ha",
+            headers=auth,
+        )
+        assert bad_ha_url.status_code == 400
+
+        missing_ha_token = await _http_get(
+            f"http://127.0.0.1:{port}/api/settings/mcp/home-assistant/upsert?"
+            "name=home_assistant&address=http%3A%2F%2Flocalhost%3A8123",
+            headers=auth,
+        )
+        assert missing_ha_token.status_code == 400
+    finally:
+        await channel.stop()
+        await server_task
+
+
+@pytest.mark.asyncio
+async def test_unknown_api_routes_return_json_404_not_spa(
+    bus: MagicMock,
+    tmp_path,
+) -> None:
+    port = 29895
+    channel = _ch(bus, port=port, static_dist_path=tmp_path)
+    (tmp_path / "index.html").write_text("<!doctype html><html></html>", encoding="utf-8")
+    channel._api_tokens["tok"] = time.monotonic() + 300
+
+    server_task = asyncio.create_task(channel.start())
+    await asyncio.sleep(0.3)
+
+    try:
+        response = await _http_get(
+            f"http://127.0.0.1:{port}/api/settings/mcp/missing",
+            headers={"Authorization": "Bearer tok"},
+        )
+        assert response.status_code == 404
+        assert response.text == "not found"
+        assert "<html" not in response.text
     finally:
         await channel.stop()
         await server_task
@@ -1079,3 +1408,28 @@ def test_parse_envelope_rejects_legacy_and_garbage() -> None:
 )
 def test_is_valid_chat_id(value: Any, expected: bool) -> None:
     assert _is_valid_chat_id(value) is expected
+
+
+def test_handle_webui_thread_get_returns_json(tmp_path, monkeypatch) -> None:
+    from urllib.parse import quote
+
+    from websockets.datastructures import Headers
+    from websockets.http11 import Request
+
+    from OpenHome.utils.webui_transcript import append_transcript_object
+
+    monkeypatch.setattr("OpenHome.config.paths.get_data_dir", lambda: tmp_path)
+    key = "websocket:c1"
+    append_transcript_object(key, {"event": "user", "chat_id": "c1", "text": "hi"})
+    bus = MagicMock()
+    channel = _ch(bus)
+    channel._api_tokens["tok"] = time.monotonic() + 300.0
+    enc = quote(key, safe="")
+    req = Request(f"/api/sessions/{enc}/webui-thread", Headers([("Authorization", "Bearer tok")]))
+    resp = channel._handle_webui_thread_get(req, enc)
+    assert resp.status_code == 200
+    body = json.loads(resp.body.decode())
+    assert body["sessionKey"] == key
+    assert len(body["messages"]) == 1
+    assert body["messages"][0]["role"] == "user"
+    assert body["messages"][0]["content"] == "hi"

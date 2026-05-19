@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import dataclasses
-import json
 import os
 import time
 from contextlib import AsyncExitStack, nullcontext, suppress
@@ -15,13 +14,17 @@ from typing import TYPE_CHECKING, Any, Awaitable, Callable
 
 from loguru import logger
 
+from OpenHome.agent import model_presets as preset_helpers
 from OpenHome.agent.autocompact import AutoCompact
-from OpenHome.agent.context import ContextBuilder
+from OpenHome.agent.auxiliary_llm import AuxiliaryLLMRouter
 from OpenHome.agent.confirmation import PendingConfirmationStore
+from OpenHome.agent.context import ContextBuilder
 from OpenHome.agent.device_factory import build_device_action_executor
-from OpenHome.agent.hook import AgentHook, AgentHookContext, CompositeHook
+from OpenHome.agent.domain_packs import DomainPackManager
+from OpenHome.agent.hook import AgentHook, CompositeHook
 from OpenHome.agent.identity import ActorResolver, RuntimeContext
 from OpenHome.agent.memory import Consolidator, Dream
+from OpenHome.agent.progress_hook import AgentProgressHook
 from OpenHome.agent.runner import _MAX_INJECTIONS_PER_TURN, AgentRunner, AgentRunSpec
 from OpenHome.agent.skills import BUILTIN_SKILLS_DIR
 from OpenHome.agent.subagent import SubagentManager
@@ -32,12 +35,14 @@ from OpenHome.agent.tools.ask import (
     ask_user_tool_result_messages,
     pending_ask_user_id,
 )
-from OpenHome.agent.tools.cron import CronTool
 from OpenHome.agent.tools.audit import JsonlToolAuditSink, ToolAuditConfig
+from OpenHome.agent.tools.content_read import ContentReadTool
+from OpenHome.agent.tools.cron import CronTool
 from OpenHome.agent.tools.device import lighting_tools
 from OpenHome.agent.tools.file_state import FileStateStore, bind_file_states, reset_file_states
 from OpenHome.agent.tools.filesystem import EditFileTool, ListDirTool, ReadFileTool, WriteFileTool
 from OpenHome.agent.tools.image_generation import ImageGenerationTool
+from OpenHome.agent.tools.long_task import CompleteGoalTool, LongTaskTool
 from OpenHome.agent.tools.message import MessageTool
 from OpenHome.agent.tools.notebook import NotebookEditTool
 from OpenHome.agent.tools.registry import ToolRegistry
@@ -60,26 +65,28 @@ from OpenHome.providers.base import LLMProvider
 from OpenHome.providers.factory import ProviderSnapshot
 from OpenHome.security.capabilities import CapabilitySnapshot
 from OpenHome.security.grants import CapabilityGrantStore
+from OpenHome.session.goal_state import goal_state_ws_blob, runner_wall_llm_timeout_s
 from OpenHome.session.manager import Session, SessionManager
 from OpenHome.utils.artifacts import generated_image_paths_from_messages
 from OpenHome.utils.document import extract_documents
 from OpenHome.utils.helpers import image_placeholder_text
 from OpenHome.utils.helpers import truncate_text as truncate_text_fn
 from OpenHome.utils.image_generation_intent import image_generation_prompt
-from OpenHome.utils.progress_events import (
-    build_tool_event_finish_payloads,
-    build_tool_event_start_payload,
-    invoke_on_progress,
-    on_progress_accepts_tool_events,
-)
 from OpenHome.utils.runtime import EMPTY_FINAL_RESPONSE_MESSAGE
+from OpenHome.utils.session_attachments import merge_turn_media_into_last_assistant
 from OpenHome.utils.webui_titles import mark_webui_session, maybe_generate_webui_title_after_turn
+from OpenHome.utils.webui_transcript import append_transcript_object, delete_webui_transcript
+from OpenHome.utils.webui_turn_helpers import publish_turn_run_status, websocket_turn_latency_ms
 
 if TYPE_CHECKING:
     from OpenHome.agent.device_backends import DeviceActionExecutor
     from OpenHome.config.schema import (
+        AuxiliaryConfig,
         ChannelsConfig,
+        Config,
+        DomainPacksConfig,
         ExecToolConfig,
+        ModelPresetConfig,
         ProviderConfig,
         ToolsConfig,
         WebToolsConfig,
@@ -96,126 +103,6 @@ _SENSITIVE_TOOL_LOG_NAMES = {
     "message",
     "web_fetch",
 }
-
-
-class _LoopHook(AgentHook):
-    """Core hook for the main loop."""
-
-    def __init__(
-        self,
-        agent_loop: AgentLoop,
-        on_progress: Callable[..., Awaitable[None]] | None = None,
-        on_stream: Callable[[str], Awaitable[None]] | None = None,
-        on_stream_end: Callable[..., Awaitable[None]] | None = None,
-        *,
-        channel: str = "cli",
-        chat_id: str = "direct",
-        message_id: str | None = None,
-        metadata: dict[str, Any] | None = None,
-        session_key: str | None = None,
-        actor_id: str | None = None,
-        trigger: str | None = None,
-        capability_snapshot: CapabilitySnapshot | None = None,
-    ) -> None:
-        super().__init__(reraise=True)
-        self._loop = agent_loop
-        self._on_progress = on_progress
-        self._on_stream = on_stream
-        self._on_stream_end = on_stream_end
-        self._channel = channel
-        self._chat_id = chat_id
-        self._message_id = message_id
-        self._metadata = metadata or {}
-        self._session_key = session_key
-        self._actor_id = actor_id
-        self._trigger = trigger
-        self._capability_snapshot = capability_snapshot
-        self._stream_buf = ""
-
-    def wants_streaming(self) -> bool:
-        return self._on_stream is not None
-
-    async def on_stream(self, context: AgentHookContext, delta: str) -> None:
-        from OpenHome.utils.helpers import strip_think
-
-        prev_clean = strip_think(self._stream_buf)
-        self._stream_buf += delta
-        new_clean = strip_think(self._stream_buf)
-        incremental = new_clean[len(prev_clean) :]
-        if incremental and self._on_stream:
-            await self._on_stream(incremental)
-
-    async def on_stream_end(self, context: AgentHookContext, *, resuming: bool) -> None:
-        if self._on_stream_end:
-            await self._on_stream_end(resuming=resuming)
-        self._stream_buf = ""
-
-    async def before_iteration(self, context: AgentHookContext) -> None:
-        self._loop._current_iteration = context.iteration
-        logger.debug(
-            "Starting agent loop iteration {} for session {}",
-            context.iteration,
-            self._session_key,
-        )
-
-    async def before_execute_tools(self, context: AgentHookContext) -> None:
-        if self._on_progress:
-            if not self._on_stream and not context.streamed_content:
-                thought = self._loop._strip_think(
-                    context.response.content if context.response else None
-                )
-                if thought:
-                    await self._on_progress(thought)
-            tool_hint = self._loop._strip_think(self._loop._tool_hint(context.tool_calls))
-            tool_events = [build_tool_event_start_payload(tc) for tc in context.tool_calls]
-            await invoke_on_progress(
-                self._on_progress,
-                tool_hint,
-                tool_hint=True,
-                tool_events=tool_events,
-            )
-        for tc in context.tool_calls:
-            if _is_sensitive_tool_log(tc.name):
-                logger.info("Tool call: {}(<redacted>)", tc.name)
-            else:
-                args_str = json.dumps(tc.arguments, ensure_ascii=False)
-                logger.info("Tool call: {}({})", tc.name, args_str[:200])
-        self._loop._set_tool_context(
-            self._channel,
-            self._chat_id,
-            self._message_id,
-            self._metadata,
-            session_key=self._session_key,
-            actor_id=self._actor_id,
-            trigger=self._trigger,
-            capability_snapshot=self._capability_snapshot,
-        )
-
-    async def after_iteration(self, context: AgentHookContext) -> None:
-        if (
-            self._on_progress
-            and context.tool_calls
-            and context.tool_events
-            and on_progress_accepts_tool_events(self._on_progress)
-        ):
-            tool_events = build_tool_event_finish_payloads(context)
-            if tool_events:
-                await invoke_on_progress(
-                    self._on_progress,
-                    "",
-                    tool_hint=False,
-                    tool_events=tool_events,
-                )
-        u = context.usage or {}
-        logger.debug(
-            "LLM usage: prompt={} completion={} cached={}",
-            u.get("prompt_tokens", 0),
-            u.get("completion_tokens", 0),
-            u.get("cached_tokens", 0),
-        )
-
-    def finalize_content(self, context: AgentHookContext, content: str | None) -> str | None:
-        return self._loop._strip_think(content)
 
 
 class TurnState(Enum):
@@ -341,13 +228,24 @@ class AgentLoop:
         tools_config: ToolsConfig | None = None,
         image_generation_provider_config: ProviderConfig | None = None,
         image_generation_provider_configs: dict[str, ProviderConfig] | None = None,
-        provider_snapshot_loader: Callable[[], ProviderSnapshot] | None = None,
+        provider_snapshot_loader: Callable[..., ProviderSnapshot] | None = None,
         provider_signature: tuple[object, ...] | None = None,
+        model_presets: dict[str, ModelPresetConfig] | None = None,
+        model_preset: str | None = None,
+        preset_snapshot_loader: preset_helpers.PresetSnapshotLoader | None = None,
+        runtime_model_publisher: Callable[[str, str | None], None] | None = None,
         device_action_executor: DeviceActionExecutor | None = None,
         device_tools_real_mode: bool = False,
         device_registry: Any | None = None,
         actor_resolver: ActorResolver | None = None,
         tool_audit_config: ToolAuditConfig | None = None,
+        pairing_config: Any | None = None,
+        auxiliary_config: "AuxiliaryConfig | None" = None,
+        auxiliary_source_config: "Config | None" = None,
+        auxiliary_provider_factory: Callable[["ModelPresetConfig"], LLMProvider] | None = None,
+        primary_provider_name: str | None = None,
+        domain_packs_config: "DomainPacksConfig | None" = None,
+        domain_pack_manager: DomainPackManager | None = None,
     ):
         from OpenHome.config.schema import ExecToolConfig, ToolsConfig, WebToolsConfig
 
@@ -357,9 +255,24 @@ class AgentLoop:
         self.channels_config = channels_config
         self.provider = provider
         self._provider_snapshot_loader = provider_snapshot_loader
+        self._preset_snapshot_loader = preset_snapshot_loader
+        self._runtime_model_publisher = runtime_model_publisher
         self._provider_signature = provider_signature
+        self._default_selection_signature = preset_helpers.default_selection_signature(
+            provider_signature
+        )
         self.workspace = workspace
         self.model = model or provider.get_default_model()
+        self.auxiliary_router = AuxiliaryLLMRouter(
+            primary_provider=provider,
+            primary_model=self.model,
+            auxiliary_config=auxiliary_config or defaults.auxiliary,
+            config=auxiliary_source_config,
+            provider_factory=auxiliary_provider_factory,
+            primary_provider_name=primary_provider_name,
+        )
+        self.model_presets: dict[str, ModelPresetConfig] = model_presets or {}
+        self.model_preset = model_preset or ("default" if self.model_presets else None)
         self.max_iterations = (
             max_iterations if max_iterations is not None else defaults.max_tool_iterations
         )
@@ -382,6 +295,7 @@ class AgentLoop:
         self.web_config = web_config or WebToolsConfig()
         self.exec_config = exec_config or ExecToolConfig()
         self.tools_config = _tc
+        self.pairing_config = pairing_config
         self._image_generation_provider_configs = dict(image_generation_provider_configs or {})
         if (
             image_generation_provider_config is not None
@@ -394,7 +308,16 @@ class AgentLoop:
         self._last_usage: dict[str, int] = {}
         self._extra_hooks: list[AgentHook] = hooks or []
 
-        self.context = ContextBuilder(workspace, timezone=timezone, disabled_skills=disabled_skills)
+        self.domain_packs = domain_pack_manager or DomainPackManager(
+            workspace,
+            config=domain_packs_config or defaults.domain_packs,
+        )
+        self.context = ContextBuilder(
+            workspace,
+            timezone=timezone,
+            disabled_skills=disabled_skills,
+            domain_pack_manager=self.domain_packs,
+        )
         self.sessions = session_manager or SessionManager(workspace)
         self._tool_audit_config = ToolAuditConfig.from_config(tool_audit_config or _tc.audit)
         self.tools = ToolRegistry(
@@ -415,6 +338,7 @@ class AgentLoop:
             bus=bus,
             model=self.model,
             web_config=self.web_config,
+            content_read_config=_tc.content_read,
             max_tool_result_chars=self.max_tool_result_chars,
             exec_config=self.exec_config,
             restrict_to_workspace=restrict_to_workspace,
@@ -427,6 +351,7 @@ class AgentLoop:
         self._running = False
         self._mcp_servers = mcp_servers or {}
         self._mcp_stacks: dict[str, AsyncExitStack] = {}
+        self._mcp_snapshot: dict[str, Any] = {}
         self._mcp_connected = False
         self._mcp_connecting = False
         self._active_tasks: dict[str, list[asyncio.Task]] = {}  # session_key -> tasks
@@ -445,6 +370,7 @@ class AgentLoop:
             store=self.context.memory,
             provider=provider,
             model=self.model,
+            auxiliary_router=self.auxiliary_router,
             sessions=self.sessions,
             context_window_tokens=self.context_window_tokens,
             build_messages=self.context.build_messages,
@@ -461,6 +387,7 @@ class AgentLoop:
             store=self.context.memory,
             provider=provider,
             model=self.model,
+            auxiliary_router=self.auxiliary_router,
         )
         self._register_default_tools()
         if _tc.my.enable:
@@ -484,16 +411,28 @@ class AgentLoop:
         allowing callers to override or extend the standard config-derived
         parameters (e.g. ``cron_service``, ``session_manager``).
         """
-        from OpenHome.providers.factory import make_provider
         from OpenHome.config.profiles import apply_runtime_profile
+        from OpenHome.providers.factory import make_provider
 
         config = apply_runtime_profile(config)
         if bus is None:
             bus = MessageBus()
         defaults = config.agents.defaults
-        provider = extra.pop("provider", None) or make_provider(config)
-        model = extra.pop("model", None) or defaults.model
-        context_window_tokens = extra.pop("context_window_tokens", None) or defaults.context_window_tokens
+        resolved = config.resolve_preset()
+        provider = extra.pop("provider", None) or make_provider(config, resolved)
+        model = extra.pop("model", None) or resolved.model
+        primary_provider_name = config.get_provider_name(model) or resolved.provider
+        context_window_tokens = (
+            extra.pop("context_window_tokens", None)
+            or resolved.context_window_tokens
+            or defaults.context_window_tokens
+        )
+        model_presets = preset_helpers.configured_model_presets(config)
+        provider_snapshot_loader = extra.get("provider_snapshot_loader")
+        preset_snapshot_loader = extra.pop(
+            "preset_snapshot_loader",
+            preset_helpers.make_preset_snapshot_loader(config, provider_snapshot_loader),
+        )
         explicit_device_executor = extra.pop("device_action_executor", None)
         device_action_executor = explicit_device_executor
         if device_action_executor is None:
@@ -524,9 +463,17 @@ class AgentLoop:
             consolidation_ratio=defaults.consolidation_ratio,
             max_messages=defaults.max_messages,
             tools_config=config.tools,
+            model_presets=model_presets,
+            model_preset=defaults.model_preset or "default",
+            preset_snapshot_loader=preset_snapshot_loader,
             device_action_executor=device_action_executor,
             device_tools_real_mode=config.tools.device.mode == "real",
             tool_audit_config=config.tools.audit,
+            pairing_config=config.security.pairing,
+            auxiliary_config=defaults.auxiliary,
+            auxiliary_source_config=config,
+            primary_provider_name=primary_provider_name,
+            domain_packs_config=defaults.domain_packs,
             **extra,
         )
 
@@ -547,12 +494,31 @@ class AgentLoop:
         self.context_window_tokens = context_window_tokens
         self.runner.provider = provider
         self.subagents.set_provider(provider, model)
+        self.auxiliary_router.set_primary(provider, model)
         self.consolidator.set_provider(provider, model, context_window_tokens)
         self.dream.set_provider(provider, model)
         self._provider_signature = snapshot.signature
+        self._default_selection_signature = preset_helpers.default_selection_signature(
+            snapshot.signature
+        )
         logger.info("Runtime model switched for next turn: {} -> {}", old_model, model)
+        if self._runtime_model_publisher:
+            self._runtime_model_publisher(model, self.model_preset)
 
     def _refresh_provider_snapshot(self) -> None:
+        if self.model_preset and self.model_preset != "default":
+            if self._preset_snapshot_loader is None:
+                return
+            try:
+                snapshot = self._preset_snapshot_loader(self.model_preset)
+            except Exception:
+                logger.exception("Failed to refresh model preset config")
+                return
+            if snapshot.signature == self._provider_signature:
+                return
+            self._apply_provider_snapshot(snapshot)
+            return
+
         if self._provider_snapshot_loader is None:
             return
         try:
@@ -562,6 +528,19 @@ class AgentLoop:
             return
         if snapshot.signature == self._provider_signature:
             return
+        self.model_preset = "default"
+        self._apply_provider_snapshot(snapshot)
+
+    def set_model_preset(self, name: str) -> None:
+        """Switch the active runtime model preset for subsequent turns."""
+        preset_name = preset_helpers.normalize_preset_name(name, self.model_presets)
+        snapshot = preset_helpers.build_runtime_preset_snapshot(
+            name=preset_name,
+            presets=self.model_presets,
+            provider=self.provider,
+            loader=self._preset_snapshot_loader,
+        )
+        self.model_preset = preset_name
         self._apply_provider_snapshot(snapshot)
 
     def _register_default_tools(self) -> None:
@@ -596,6 +575,8 @@ class AgentLoop:
                 confirmation_store=confirmation_store,
             )
         )
+        self.tools.register(LongTaskTool(sessions=self.sessions, bus=self.bus))
+        self.tools.register(CompleteGoalTool(sessions=self.sessions, bus=self.bus))
         self.tools.register(
             ReadFileTool(
                 workspace=self.workspace,
@@ -644,6 +625,15 @@ class AgentLoop:
                     config=self.web_config.fetch,
                     proxy=self.web_config.proxy,
                     user_agent=self.web_config.user_agent,
+                    content_read_config=self.tools_config.content_read,
+                )
+            )
+        if self.tools_config.content_read.enabled:
+            self.tools.register(
+                ContentReadTool(
+                    config=self.tools_config.content_read,
+                    proxy=self.web_config.proxy,
+                    user_agent=self.web_config.user_agent,
                 )
             )
         if self.tools_config.image_generation.enabled:
@@ -670,6 +660,31 @@ class AgentLoop:
                 real_mode=self._device_tools_real_mode,
             ):
                 self.tools.register(tool)
+        self._register_plugin_tools()
+
+    def _register_plugin_tools(self) -> None:
+        """Load external OpenHome tool plugins without replacing core tools."""
+        from OpenHome.agent.tools.context import ToolContext
+        from OpenHome.agent.tools.loader import ToolLoader
+
+        ctx = ToolContext(
+            config=self.tools_config,
+            workspace=str(self.workspace),
+            bus=self.bus,
+            subagent_manager=self.subagents,
+            cron_service=self.cron_service,
+            sessions=self.sessions,
+            file_state_store=self._file_state_store,
+            provider_snapshot_loader=self._provider_snapshot_loader,
+            image_generation_provider_configs=self._image_generation_provider_configs,
+            timezone=self.context.timezone or "UTC",
+            audit_config=self._tool_audit_config,
+            device_action_executor=self.device_action_executor,
+            device_registry=self._device_registry,
+        )
+        registered = ToolLoader().load(ctx, self.tools, scope="core")
+        if registered:
+            logger.info("Registered OpenHome tool plugin(s): {}", ", ".join(sorted(registered)))
 
     async def _connect_mcp(self) -> None:
         """Connect to configured MCP servers (one-time, lazy)."""
@@ -679,7 +694,11 @@ class AgentLoop:
         from OpenHome.agent.tools.mcp import connect_mcp_servers
 
         try:
-            self._mcp_stacks = await connect_mcp_servers(self._mcp_servers, self.tools)
+            self._mcp_stacks = await connect_mcp_servers(
+                self._mcp_servers,
+                self.tools,
+                snapshot_out=self._mcp_snapshot,
+            )
             if self._mcp_stacks:
                 self._mcp_connected = True
             else:
@@ -687,9 +706,11 @@ class AgentLoop:
         except asyncio.CancelledError:
             logger.warning("MCP connection cancelled (will retry next message)")
             self._mcp_stacks.clear()
+            self._mcp_snapshot.clear()
         except BaseException as e:
             logger.warning("Failed to connect MCP servers (will retry next message): {}", e)
             self._mcp_stacks.clear()
+            self._mcp_snapshot.clear()
         finally:
             self._mcp_connecting = False
 
@@ -703,6 +724,8 @@ class AgentLoop:
         runtime_context: RuntimeContext | None = None,
     ) -> None:
         """Update context for all tools that need routing info."""
+        from OpenHome.agent.tools.context import RequestContext
+
         if runtime_context is not None:
             channel = runtime_context.channel
             chat_id = runtime_context.chat_id
@@ -719,16 +742,35 @@ class AgentLoop:
             effective_key = UNIFIED_SESSION_KEY
         else:
             effective_key = f"{channel}:{chat_id}"
-        context_tool_names = [
-            "message",
-            "spawn",
-            "cron",
-            "my",
-            "openhome_device_lighting_set_power",
-            "openhome_device_lighting_set_brightness",
-            "openhome_device_lighting_set_color_temperature",
-        ]
+        raw_tools = getattr(self.tools, "_tools", None)
+        if isinstance(raw_tools, dict):
+            context_tool_names = [
+                name
+                for name, tool in raw_tools.items()
+                if hasattr(tool, "set_context") or hasattr(tool, "set_capability_snapshot")
+            ]
+        else:
+            candidates = list(getattr(self.tools, "tool_names", ()) or ())
+            if not candidates:
+                candidates = ["spawn", "cron", "long_task", "complete_goal", "message", "my"]
+            context_tool_names = []
+            for name in dict.fromkeys(candidates):
+                tool = self.tools.get(name)
+                if tool is not None and (
+                    hasattr(tool, "set_context") or hasattr(tool, "set_capability_snapshot")
+                ):
+                    context_tool_names.append(name)
         snapshot = capability_snapshot or self._capability_snapshot
+        request_ctx = RequestContext(
+            channel=channel,
+            chat_id=chat_id,
+            message_id=message_id,
+            session_key=effective_key,
+            metadata=metadata or {},
+            actor_id=actor_id,
+            trigger=trigger,
+            capability_snapshot=snapshot,
+        )
         if hasattr(self.tools, "set_capability_snapshot"):
             self.tools.set_capability_snapshot(snapshot)
         if hasattr(self.tools, "set_audit_context"):
@@ -747,10 +789,17 @@ class AgentLoop:
                             tool.set_origin_message_id(message_id)
                     elif name == "cron":
                         tool.set_context(channel, chat_id, metadata=metadata, session_key=session_key)
+                    elif name in {"long_task", "complete_goal"}:
+                        tool.set_context(channel, chat_id, session_key=effective_key)
                     elif name == "message":
                         tool.set_context(channel, chat_id, message_id, metadata=metadata)
-                    else:
+                    elif name == "my":
                         tool.set_context(channel, chat_id)
+                    else:
+                        try:
+                            tool.set_context(request_ctx)
+                        except TypeError:
+                            tool.set_context(channel, chat_id)
 
     @staticmethod
     def _strip_think(text: str | None) -> str | None:
@@ -810,10 +859,16 @@ class AgentLoop:
             *,
             tool_hint: bool = False,
             tool_events: list[dict[str, Any]] | None = None,
+            reasoning: bool = False,
+            reasoning_end: bool = False,
         ) -> None:
             meta = dict(msg.metadata or {})
             meta["_progress"] = True
             meta["_tool_hint"] = tool_hint
+            if reasoning:
+                meta["_reasoning_delta"] = True
+            if reasoning_end:
+                meta["_reasoning_end"] = True
             if tool_events:
                 meta["_tool_events"] = tool_events
             await self.bus.publish_outbound(
@@ -851,6 +906,7 @@ class AgentLoop:
         msg: InboundMessage,
         session: Session,
         pending_ask_id: str | None,
+        **kwargs: Any,
     ) -> bool:
         """Persist the triggering user message before the turn starts.
 
@@ -860,6 +916,7 @@ class AgentLoop:
         has_text = isinstance(msg.content, str) and msg.content.strip()
         if not pending_ask_id and (has_text or media_paths):
             extra: dict[str, Any] = {"media": list(media_paths)} if media_paths else {}
+            extra.update(kwargs)
             text = msg.content if isinstance(msg.content, str) else ""
             session.add_message("user", text, **extra)
             self._mark_pending_user_turn(session)
@@ -895,6 +952,7 @@ class AgentLoop:
                         self._runtime_chat_id(msg),
                         self.context.timezone,
                         sender_id=msg.sender_id,
+                        session_metadata=session.metadata,
                     ),
                     *self.context.build_reference_context_blocks(
                         session_summary=pending_summary,
@@ -910,7 +968,53 @@ class AgentLoop:
             chat_id=self._runtime_chat_id(msg),
             sender_id=msg.sender_id,
             session_summary=pending_summary,
+            session_metadata=session.metadata,
         )
+
+    def _is_webui_message(self, msg: InboundMessage) -> bool:
+        return msg.channel == "websocket" and msg.metadata.get("webui") is True
+
+    def _append_webui_command_transcript(
+        self,
+        msg: InboundMessage,
+        content: str,
+    ) -> None:
+        """Persist a command response to the WebUI transcript."""
+        if not self._is_webui_message(msg):
+            return
+        try:
+            append_transcript_object(
+                f"websocket:{msg.chat_id}",
+                {"event": "message", "chat_id": msg.chat_id, "text": content},
+            )
+        except (TypeError, ValueError, OSError) as e:
+            logger.warning("webui command transcript append failed: {}", e)
+
+    def _persist_shortcut_command_turn(
+        self,
+        msg: InboundMessage,
+        session_key: str,
+        result: OutboundMessage,
+    ) -> None:
+        """Persist slash-command turns that bypass the normal RUN/SAVE states."""
+        raw = msg.content.strip()
+        if raw.lower() == "/new":
+            if self._is_webui_message(msg):
+                delete_webui_transcript(session_key)
+            return
+        session = self.sessions.get_or_create(session_key)
+        mark_webui_session(session, msg.metadata)
+        self._persist_user_message_early(
+            msg,
+            session,
+            pending_ask_id=None,
+            _command=True,
+        )
+        if result.content.strip():
+            session.add_message("assistant", result.content, _command=True)
+        self._clear_pending_user_turn(session)
+        self.sessions.save(session)
+        self._append_webui_command_transcript(msg, result.content)
 
     async def _dispatch_command_inline(
         self,
@@ -920,10 +1024,28 @@ class AgentLoop:
         dispatch_fn: Callable[[CommandContext], Awaitable[OutboundMessage | None]],
     ) -> None:
         """Dispatch a command directly from the run() loop and publish the result."""
-        ctx = CommandContext(msg=msg, session=None, key=key, raw=raw, loop=self)
+        session = self.sessions.get_or_create(key)
+        ctx = CommandContext(msg=msg, session=session, key=key, raw=raw, loop=self)
         result = await dispatch_fn(ctx)
         if result:
+            self._persist_shortcut_command_turn(msg, key, result)
+            result.metadata["_webui_transcript_recorded"] = True
             await self.bus.publish_outbound(result)
+            if msg.channel == "websocket":
+                await self.bus.publish_outbound(
+                    OutboundMessage(
+                        channel=msg.channel,
+                        chat_id=msg.chat_id,
+                        content="",
+                        metadata={
+                            **dict(msg.metadata or {}),
+                            "_turn_end": True,
+                            "goal_state": goal_state_ws_blob(
+                                self.sessions.get_or_create(key).metadata
+                            ),
+                        },
+                    )
+                )
         else:
             logger.warning("Command '{}' matched but dispatch returned None", raw)
 
@@ -991,8 +1113,7 @@ class AgentLoop:
         if hasattr(self.tools, "set_capability_snapshot"):
             self.tools.set_capability_snapshot(self._capability_snapshot)
 
-        loop_hook = _LoopHook(
-            self,
+        loop_hook = AgentProgressHook(
             on_progress=on_progress,
             on_stream=on_stream,
             on_stream_end=on_stream_end,
@@ -1001,9 +1122,14 @@ class AgentLoop:
             message_id=message_id,
             metadata=metadata,
             session_key=session_key,
+            tool_hint_max_length=self.tool_hint_max_length,
+            set_tool_context=self._set_tool_context,
+            on_iteration=lambda iteration: setattr(self, "_current_iteration", iteration),
             actor_id=actor_id,
             trigger=trigger,
             capability_snapshot=self._capability_snapshot,
+            sensitive_tool_log_names=_SENSITIVE_TOOL_LOG_NAMES,
+            sensitive_tool_log_prefixes=_SENSITIVE_TOOL_LOG_PREFIXES,
         )
         hook: AgentHook = (
             CompositeHook([loop_hook] + self._extra_hooks) if self._extra_hooks else loop_hook
@@ -1104,6 +1230,11 @@ class AgentLoop:
                 retry_wait_callback=on_retry_wait,
                 checkpoint_callback=_checkpoint,
                 injection_callback=_drain_pending,
+                llm_timeout_s=runner_wall_llm_timeout_s(
+                    self.sessions,
+                    session_key,
+                    metadata=session.metadata if session is not None else None,
+                ),
             ))
         finally:
             reset_file_states(file_state_token)
@@ -1145,13 +1276,13 @@ class AgentLoop:
                 continue
 
             raw = msg.content.strip()
+            effective_key = self._effective_session_key(msg)
             if self.commands.is_priority(raw):
                 await self._dispatch_command_inline(
-                    msg, msg.session_key, raw,
+                    msg, effective_key, raw,
                     self.commands.dispatch_priority,
                 )
                 continue
-            effective_key = self._effective_session_key(msg)
             # If this session already has an active pending queue (i.e. a task
             # is processing this session), route the message there for mid-turn
             # injection instead of creating a competing task.
@@ -1259,7 +1390,15 @@ class AgentLoop:
                         # definitively stop the loading indicator.
                         await self.bus.publish_outbound(OutboundMessage(
                             channel=msg.channel, chat_id=msg.chat_id,
-                            content="", metadata={**msg.metadata, "_turn_end": True},
+                            content="",
+                            metadata={
+                                **msg.metadata,
+                                "_turn_end": True,
+                                "latency_ms": msg.metadata.get("webui_turn_latency_ms"),
+                                "goal_state": goal_state_ws_blob(
+                                    self.sessions.get_or_create(session_key).metadata
+                                ),
+                            },
                         ))
                         if msg.metadata.get("webui") is True:
                             async def _generate_title_and_notify() -> None:
@@ -1343,6 +1482,8 @@ class AgentLoop:
             except (RuntimeError, BaseExceptionGroup):
                 logger.debug("MCP server '{}' cleanup error (can be ignored)", name)
         self._mcp_stacks.clear()
+        self._mcp_snapshot.clear()
+        self._mcp_connected = False
 
     def _schedule_background(self, coro) -> None:
         """Schedule a coroutine as a tracked background task (drained on shutdown)."""
@@ -1430,6 +1571,7 @@ class AgentLoop:
             current_role="user",
             sender_id=msg.sender_id,
             session_summary=pending,
+            session_metadata=session.metadata,
             internal_event=("subagent_result", msg.content) if is_subagent else None,
         )
         final_content, _, all_msgs, stop_reason, _ = await self._run_agent_loop(
@@ -1464,6 +1606,8 @@ class AgentLoop:
             outbound_metadata["slack"] = {"thread_ts": key.split(":", 2)[2]}
         if origin_message_id := msg.metadata.get("origin_message_id"):
             outbound_metadata["origin_message_id"] = origin_message_id
+        if channel == "websocket":
+            outbound_metadata["goal_state"] = goal_state_ws_blob(session.metadata)
         return OutboundMessage(
             channel=channel,
             chat_id=chat_id,
@@ -1591,6 +1735,10 @@ class AgentLoop:
         )
         if on_stream is not None and stop_reason not in {"ask_user", "error", "tool_error"}:
             meta["_streamed"] = True
+        if msg.channel == "websocket":
+            meta["goal_state"] = goal_state_ws_blob(
+                self.sessions.get_or_create(self._effective_session_key(msg)).metadata
+            )
 
         return OutboundMessage(
             channel=msg.channel,
@@ -1639,6 +1787,13 @@ class AgentLoop:
         result = await self.commands.dispatch(cmd_ctx)
         if result is not None:
             ctx.outbound = result
+            # Shortcut commands skip BUILD/RUN/SAVE, so persist both sides of
+            # the turn here.  Otherwise the live WebUI may briefly receive the
+            # command response, then lose it when history hydration follows
+            # turn_end/session updates.  Keep these rows out of future LLM
+            # context with the _command marker.
+            self._persist_shortcut_command_turn(ctx.msg, ctx.session_key, result)
+            result.metadata["_webui_transcript_recorded"] = True
             return "shortcut"
         return "dispatch"
 
@@ -1692,23 +1847,31 @@ class AgentLoop:
         )
         ctx.runtime_context = runtime_context
         snapshot = ctx.capability_snapshot or self._snapshot_for_trigger(runtime_context.trigger)
-        result = await self._run_agent_loop(
-            ctx.initial_messages,
-            on_progress=ctx.on_progress,
-            on_stream=ctx.on_stream,
-            on_stream_end=ctx.on_stream_end,
-            on_retry_wait=ctx.on_retry_wait,
-            session=ctx.session,
-            channel=ctx.msg.channel,
-            chat_id=ctx.msg.chat_id,
-            message_id=ctx.msg.metadata.get("message_id"),
-            metadata=ctx.msg.metadata,
-            session_key=ctx.session_key,
-            pending_queue=ctx.pending_queue,
-            actor_id=runtime_context.actor_id,
-            trigger=runtime_context.trigger,
-            capability_snapshot=snapshot,
-        )
+        await publish_turn_run_status(self.bus, ctx.msg, "running")
+        try:
+            result = await self._run_agent_loop(
+                ctx.initial_messages,
+                on_progress=ctx.on_progress,
+                on_stream=ctx.on_stream,
+                on_stream_end=ctx.on_stream_end,
+                on_retry_wait=ctx.on_retry_wait,
+                session=ctx.session,
+                channel=ctx.msg.channel,
+                chat_id=ctx.msg.chat_id,
+                message_id=ctx.msg.metadata.get("message_id"),
+                metadata=ctx.msg.metadata,
+                session_key=ctx.session_key,
+                pending_queue=ctx.pending_queue,
+                actor_id=runtime_context.actor_id,
+                trigger=runtime_context.trigger,
+                capability_snapshot=snapshot,
+            )
+        finally:
+            if ctx.msg.channel == "websocket":
+                latency = websocket_turn_latency_ms(str(ctx.msg.chat_id))
+                if latency is not None:
+                    ctx.msg.metadata["webui_turn_latency_ms"] = latency
+            await publish_turn_run_status(self.bus, ctx.msg, "idle")
         final_content, tools_used, all_msgs, stop_reason, had_injections = result
         ctx.final_content = final_content
         ctx.tools_used = tools_used
@@ -1724,11 +1887,13 @@ class AgentLoop:
         ctx.save_skip = 1 + len(ctx.history) + (1 if ctx.user_persisted_early else 0)
         skip_msgs = ctx.all_messages[ctx.save_skip:]
         ctx.generated_media = generated_image_paths_from_messages(skip_msgs)
-        last_msg = ctx.all_messages[-1] if ctx.all_messages else None
-        if ctx.generated_media and last_msg and last_msg.get("role") == "assistant":
-            existing_media = last_msg.get("media")
-            media = existing_media if isinstance(existing_media, list) else []
-            last_msg["media"] = list(dict.fromkeys([*media, *ctx.generated_media]))
+        message_tool = self.tools.get("message")
+        extra_media = (
+            message_tool.turn_delivered_media_paths()
+            if hasattr(message_tool, "turn_delivered_media_paths")
+            else []
+        )
+        merge_turn_media_into_last_assistant(ctx.all_messages, ctx.generated_media, extra_media)
 
         self._save_turn(ctx.session, ctx.all_messages, ctx.save_skip)
         ctx.session.enforce_file_cap(on_archive=self.context.memory.raw_archive)

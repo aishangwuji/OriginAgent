@@ -323,9 +323,15 @@ class TestToolEventProgress:
             metadata={"webui": True},
         )), timeout=0.5)
 
-        outbound = [await bus.consume_outbound(), await bus.consume_outbound()]
-        assert outbound[0].content == "Done"
-        assert (outbound[1].metadata or {}).get("_turn_end") is True
+        outbound = []
+        for _ in range(4):
+            outbound.append(await bus.consume_outbound())
+            if (outbound[-1].metadata or {}).get("_turn_end"):
+                break
+        final = next(item for item in outbound if item.content == "Done")
+        turn_end = next(item for item in outbound if (item.metadata or {}).get("_turn_end"))
+        assert final.content == "Done"
+        assert turn_end.chat_id == "chat1"
 
         await asyncio.wait_for(title_started.wait(), timeout=0.5)
         release_title.set()

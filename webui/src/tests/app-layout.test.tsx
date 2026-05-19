@@ -1,7 +1,9 @@
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { ChatSummary } from "@/lib/types";
+import i18n from "@/i18n";
+import { fetchBootstrap } from "@/lib/bootstrap";
 
 const connectSpy = vi.fn();
 const refreshSpy = vi.fn();
@@ -9,6 +11,7 @@ const createChatSpy = vi.fn().mockResolvedValue("chat-1");
 const deleteChatSpy = vi.fn();
 const toggleThemeSpy = vi.fn();
 let mockSessions: ChatSummary[] = [];
+let mockSessionsLoading = false;
 
 vi.mock("@/hooks/useSessions", async (importOriginal) => {
   const React = await import("react");
@@ -18,8 +21,8 @@ vi.mock("@/hooks/useSessions", async (importOriginal) => {
     useSessions: () => {
       const [sessions, setSessions] = React.useState(mockSessions);
       return {
-        sessions,
-        loading: false,
+        sessions: mockSessionsLoading ? mockSessions : sessions,
+        loading: mockSessionsLoading,
         error: null,
         refresh: refreshSpy,
         createChat: createChatSpy,
@@ -57,6 +60,8 @@ vi.mock("@/lib/OpenHome-client", () => {
     defaultChatId: string | null = null;
     connect = connectSpy;
     onStatus = () => () => {};
+    onRuntimeModelUpdate = () => () => {};
+    onSessionUpdate = () => () => {};
     onError = () => () => {};
     onChat = () => () => {};
     sendMessage = vi.fn();
@@ -64,6 +69,8 @@ vi.mock("@/lib/OpenHome-client", () => {
     attach = vi.fn();
     close = vi.fn();
     updateUrl = vi.fn();
+    getRunStartedAt = vi.fn(() => null);
+    getGoalState = vi.fn(() => undefined);
   }
 
   return { OpenHomeClient: MockClient };
@@ -73,12 +80,20 @@ import App from "@/App";
 
 describe("App layout", () => {
   beforeEach(() => {
+    vi.useRealTimers();
     mockSessions = [];
+    mockSessionsLoading = false;
     connectSpy.mockClear();
     refreshSpy.mockReset();
     createChatSpy.mockClear();
     deleteChatSpy.mockReset();
     toggleThemeSpy.mockReset();
+    vi.mocked(fetchBootstrap).mockReset();
+    vi.mocked(fetchBootstrap).mockResolvedValue({
+      token: "tok",
+      ws_path: "/",
+      expires_in: 300,
+    });
     vi.stubGlobal(
       "fetch",
       vi.fn().mockResolvedValue({
@@ -204,6 +219,21 @@ describe("App layout", () => {
                   { name: "tavily", label: "Tavily", credential: "api_key" },
                 ],
               },
+              mcp: {
+                servers: [
+                  {
+                    name: "github",
+                    type: "stdio",
+                    command: "npx",
+                    args: ["-y", "@modelcontextprotocol/server-github"],
+                    env: { GITHUB_TOKEN: "••••" },
+                    url: "",
+                    headers: {},
+                    tool_timeout: 30,
+                    enabled_tools: ["*"],
+                  },
+                ],
+              },
               runtime: {
                 config_path: "/tmp/config.json",
               },
@@ -262,9 +292,228 @@ describe("App layout", () => {
     fireEvent.click(screen.getByRole("menuitem", { name: "Brave Search" }));
     expect(screen.getByText("BSAo••••ew20")).toBeInTheDocument();
     expect(screen.queryByDisplayValue("unsaved-brave-key")).not.toBeInTheDocument();
+
+    fireEvent.click(within(settingsNav).getByRole("button", { name: "MCP" }));
+    expect(screen.getByText("Configured servers")).toBeInTheDocument();
+    expect(screen.getByText("github")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+    expect(screen.getByDisplayValue("GITHUB_TOKEN=••••")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Add MCP" }));
+    expect(screen.getByText("New MCP server")).toBeInTheDocument();
   });
 
-  it("returns from settings to an available chat instead of the blank start page", async () => {
+  it("shows New chat in the thread header while a session has no generated title", async () => {
+    await i18n.changeLanguage("zh-CN");
+    mockSessions = [
+      {
+        key: "websocket:1234567890",
+        channel: "websocket",
+        chatId: "1234567890",
+        createdAt: "2026-05-18T10:00:00Z",
+        updatedAt: "2026-05-18T10:00:00Z",
+        title: "",
+        preview: "",
+      },
+    ];
+
+    render(<App />);
+
+    await waitFor(() => expect(connectSpy).toHaveBeenCalled());
+    fireEvent.click(screen.getByRole("button", { name: "新对话" }));
+
+    await waitFor(() => expect(screen.getAllByText("新对话").length).toBeGreaterThanOrEqual(2));
+    expect(screen.queryByText(/对话 123456/)).not.toBeInTheDocument();
+    expect(document.title).toBe("新对话 · OpenHome");
+  });
+
+  it("keeps settings in a loading state during transient API failures", async () => {
+    let settingsCalls = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        if (String(input).includes("/api/settings")) {
+          settingsCalls += 1;
+          if (settingsCalls < 3) {
+            return {
+              ok: false,
+              status: 503,
+              json: async () => ({}),
+            };
+          }
+          return {
+            ok: true,
+            status: 200,
+            json: async () => ({
+              agent: {
+                model: "openai/gpt-4o",
+                provider: "openai",
+                resolved_provider: "openai",
+                has_api_key: true,
+              },
+              providers: [{ name: "openai", label: "OpenAI", configured: true }],
+              web_search: {
+                provider: "duckduckgo",
+                api_key_hint: null,
+                base_url: null,
+                providers: [
+                  { name: "duckduckgo", label: "DuckDuckGo", credential: "none" },
+                ],
+              },
+              mcp: { servers: [] },
+              runtime: {
+                config_path: "/tmp/config.json",
+              },
+              requires_restart: false,
+            }),
+          };
+        }
+        return { ok: false, status: 404, json: async () => ({}) };
+      }),
+    );
+
+    render(<App />);
+
+    await waitFor(() => expect(connectSpy).toHaveBeenCalled());
+    const sidebar = screen.getByRole("navigation", { name: "Sidebar navigation" });
+    fireEvent.click(within(sidebar).getByRole("button", { name: "Settings" }));
+    expect(screen.queryByText("Could not load settings")).not.toBeInTheDocument();
+
+    await waitFor(
+      () => expect(screen.getByDisplayValue("openai/gpt-4o")).toBeInTheDocument(),
+      { timeout: 3_000 },
+    );
+    expect(settingsCalls).toBe(3);
+    expect(screen.queryByText("Could not load settings")).not.toBeInTheDocument();
+  });
+
+  it("refreshes the API token when settings returns 401", async () => {
+    let settingsCalls = 0;
+    let sawFreshToken = false;
+    vi.mocked(fetchBootstrap)
+      .mockResolvedValueOnce({
+        token: "tok",
+        ws_path: "/",
+        expires_in: 300,
+      })
+      .mockResolvedValueOnce({
+      token: "fresh-tok",
+      ws_path: "/",
+      expires_in: 300,
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        if (String(input).includes("/api/settings")) {
+          settingsCalls += 1;
+          if (settingsCalls === 1) {
+            return { ok: false, status: 401, json: async () => ({}) };
+          }
+          if ((init?.headers as Record<string, string>).Authorization === "Bearer fresh-tok") {
+            sawFreshToken = true;
+          }
+          return {
+            ok: true,
+            status: 200,
+            json: async () => ({
+              agent: {
+                model: "openai/gpt-4o",
+                provider: "openai",
+                resolved_provider: "openai",
+                has_api_key: true,
+              },
+              providers: [{ name: "openai", label: "OpenAI", configured: true }],
+              web_search: {
+                provider: "duckduckgo",
+                api_key_hint: null,
+                base_url: null,
+                providers: [
+                  { name: "duckduckgo", label: "DuckDuckGo", credential: "none" },
+                ],
+              },
+              mcp: { servers: [] },
+              runtime: {
+                config_path: "/tmp/config.json",
+              },
+              requires_restart: false,
+            }),
+          };
+        }
+        return { ok: false, status: 404, json: async () => ({}) };
+      }),
+    );
+
+    render(<App />);
+
+    await waitFor(() => expect(connectSpy).toHaveBeenCalled());
+    const sidebar = screen.getByRole("navigation", { name: "Sidebar navigation" });
+    fireEvent.click(within(sidebar).getByRole("button", { name: "Settings" }));
+
+    expect(await screen.findByRole("heading", { name: "General" })).toBeInTheDocument();
+    expect(screen.queryByText("Could not load settings")).not.toBeInTheDocument();
+    expect(sawFreshToken).toBe(true);
+    expect(settingsCalls).toBeGreaterThanOrEqual(2);
+  });
+
+  it("keeps the selected chat open when history loading refreshes an expired API token", async () => {
+    mockSessions = [
+      {
+        key: "websocket:chat-a",
+        channel: "websocket",
+        chatId: "chat-a",
+        createdAt: "2026-05-18T10:00:00Z",
+        updatedAt: "2026-05-18T10:00:00Z",
+        preview: "Idle chat",
+      },
+    ];
+    vi.mocked(fetchBootstrap)
+      .mockResolvedValueOnce({
+        token: "tok",
+        ws_path: "/",
+        expires_in: 300,
+      })
+      .mockResolvedValueOnce({
+        token: "fresh-tok",
+        ws_path: "/",
+        expires_in: 300,
+      });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        if (url.includes("websocket%3Achat-a/webui-thread")) {
+          const auth = (init?.headers as Record<string, string> | undefined)?.Authorization;
+          if (auth === "Bearer tok") {
+            return { ok: false, status: 401, json: async () => ({}) };
+          }
+          return {
+            ok: true,
+            status: 200,
+            text: async () => JSON.stringify({
+              schemaVersion: 3,
+              messages: [
+                { id: "u1", role: "user", content: "Recovered after idle", createdAt: 1 },
+              ],
+            }),
+            headers: new Headers({ "content-type": "application/json" }),
+          };
+        }
+        return { ok: false, status: 404, json: async () => ({}) };
+      }),
+    );
+
+    render(<App />);
+
+    await waitFor(() => expect(connectSpy).toHaveBeenCalled());
+    const sidebar = screen.getByRole("navigation", { name: "Sidebar navigation" });
+    fireEvent.click(within(sidebar).getByRole("button", { name: "Idle chat" }));
+
+    expect(await screen.findByText("Recovered after idle")).toBeInTheDocument();
+    expect(screen.queryByText("What can I do for you?")).not.toBeInTheDocument();
+    expect(screen.getByPlaceholderText("Type your message…")).toBeInTheDocument();
+    expect(fetchBootstrap).toHaveBeenCalledTimes(2);
+  });
+
+  it("returns from settings to the blank start page when no session was active", async () => {
     mockSessions = [
       {
         key: "websocket:chat-a",
@@ -307,6 +556,7 @@ describe("App layout", () => {
                   { name: "brave", label: "Brave Search", credential: "api_key" },
                 ],
               },
+              mcp: { servers: [] },
               runtime: {
                 config_path: "/tmp/config.json",
               },
@@ -329,10 +579,8 @@ describe("App layout", () => {
     expect(await screen.findByRole("heading", { name: "General" })).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Back to chat" }));
 
-    await waitFor(() => expect(document.title).toBe("First chat · OpenHome"));
-    const restoredSidebar = screen.getByRole("navigation", { name: "Sidebar navigation" });
-    fireEvent.click(within(restoredSidebar).getByRole("button", { name: /^Second chat$/ }));
-    await waitFor(() => expect(document.title).toBe("Second chat · OpenHome"));
+    await waitFor(() => expect(document.title).toBe("OpenHome"));
+    expect(screen.getByText("What can I do for you?")).toBeInTheDocument();
   });
 
   it("filters sidebar sessions through the lightweight search row", async () => {
@@ -343,6 +591,7 @@ describe("App layout", () => {
         chatId: "chat-alpha",
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString(),
+        title: "Q2 roadmap",
         preview: "Project planning notes",
       },
       {
@@ -359,15 +608,22 @@ describe("App layout", () => {
 
     await waitFor(() => expect(connectSpy).toHaveBeenCalled());
     const sidebar = screen.getByRole("navigation", { name: "Sidebar navigation" });
-    expect(within(sidebar).getByText("Project planning notes")).toBeInTheDocument();
+    expect(within(sidebar).getByText("Q2 roadmap")).toBeInTheDocument();
     expect(within(sidebar).getByText("Travel ideas")).toBeInTheDocument();
 
     fireEvent.change(screen.getByRole("textbox", { name: "Search chats" }), {
-      target: { value: "travel" },
+      target: { value: "planning" },
     });
 
-    expect(within(sidebar).queryByText("Project planning notes")).not.toBeInTheDocument();
-    expect(within(sidebar).getByText("Travel ideas")).toBeInTheDocument();
+    expect(within(sidebar).getByText("Q2 roadmap")).toBeInTheDocument();
+    expect(within(sidebar).queryByText("Travel ideas")).not.toBeInTheDocument();
+
+    fireEvent.change(screen.getByRole("textbox", { name: "Search chats" }), {
+      target: { value: "road q2" },
+    });
+
+    expect(within(sidebar).getByText("Q2 roadmap")).toBeInTheDocument();
+    expect(within(sidebar).queryByText("Travel ideas")).not.toBeInTheDocument();
   });
 
   it("opens a blank start page without creating an empty chat", async () => {
@@ -418,5 +674,56 @@ describe("App layout", () => {
     expect(within(sidebar).getByRole("button", { name: "Settings" })).toBeInTheDocument();
 
     expect(within(sidebar).getByText("Existing chat")).toBeInTheDocument();
+  });
+
+  it("does not flash the blank start page while the selected chat list row is refreshing", async () => {
+    mockSessions = [
+      {
+        key: "websocket:chat-a",
+        channel: "websocket",
+        chatId: "chat-a",
+        createdAt: "2026-04-16T10:00:00Z",
+        updatedAt: "2026-04-16T10:00:00Z",
+        preview: "Existing chat",
+      },
+    ];
+    let resolveHistory:
+      | ((value: { ok: boolean; status: number; json: () => Promise<unknown> }) => void)
+      | null = null;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.includes("websocket%3Achat-a/webui-thread")) {
+          return new Promise((resolve) => {
+            resolveHistory = resolve;
+          });
+        }
+        return Promise.resolve({
+          ok: false,
+          status: 404,
+          json: async () => ({}),
+        });
+      }),
+    );
+
+    const { rerender } = render(<App />);
+
+    await waitFor(() => expect(connectSpy).toHaveBeenCalled());
+    const sidebar = screen.getByRole("navigation", { name: "Sidebar navigation" });
+    fireEvent.click(within(sidebar).getByRole("button", { name: "Existing chat" }));
+    expect(screen.getByText("Loading conversation…")).toBeInTheDocument();
+
+    mockSessions = [];
+    mockSessionsLoading = true;
+    rerender(<App />);
+
+    expect(screen.getByText("Loading conversation…")).toBeInTheDocument();
+    expect(screen.queryByText("What can I do for you?")).not.toBeInTheDocument();
+    expect(screen.queryByPlaceholderText("Ask anything...")).not.toBeInTheDocument();
+
+    await act(async () => {
+      resolveHistory?.({ ok: true, status: 200, json: async () => ({ schemaVersion: 3, messages: [] }) });
+    });
   });
 });

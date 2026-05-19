@@ -388,6 +388,16 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
         backend="openai_compat",
         default_api_base="https://api.longcat.chat/openai/v1",
     ),
+    # Atomic Chat (local, OpenAI-compatible)
+    ProviderSpec(
+        name="atomic_chat",
+        keywords=("atomic-chat", "atomic_chat", "atomicchat"),
+        env_key="ATOMIC_CHAT_API_KEY",
+        display_name="Atomic Chat",
+        backend="openai_compat",
+        is_local=True,
+        default_api_base="http://localhost:15203/v1",
+    ),
     # === Local deployment (matched by config key, NOT by api_base) =========
     # vLLM / any OpenAI-compatible local server
     ProviderSpec(

@@ -22,6 +22,7 @@ def _ch(
     session_manager: SessionManager | None = None,
     static_dist_path: Path | None = None,
     port: int = _PORT,
+    runtime_model_name: Any | None = None,
     **extra: Any,
 ) -> WebSocketChannel:
     cfg: dict[str, Any] = {
@@ -33,11 +34,16 @@ def _ch(
         "websocketRequiresToken": False,
     }
     cfg.update(extra)
+    ws_kwargs: dict[str, Any] = {
+        "session_manager": session_manager,
+        "static_dist_path": static_dist_path,
+    }
+    if runtime_model_name is not None:
+        ws_kwargs["runtime_model_name"] = runtime_model_name
     return WebSocketChannel(
         cfg,
         bus,
-        session_manager=session_manager,
-        static_dist_path=static_dist_path,
+        **ws_kwargs,
     )
 
 
@@ -454,6 +460,49 @@ def test_localhost_without_auth_is_valid(bus: MagicMock) -> None:
     channel = _ch(bus, host="127.0.0.1")
     resp = channel._handle_webui_bootstrap(_LOCAL, _NO_HEADERS)
     assert resp.status_code == 200
+
+
+def test_bootstrap_prefers_runtime_model_name(bus: MagicMock, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        "OpenHome.channels.websocket._default_model_name_from_config",
+        lambda: "from-disk",
+    )
+    channel = _ch(bus, host="127.0.0.1", runtime_model_name=lambda: "  live/model  ")
+    resp = channel._handle_webui_bootstrap(_LOCAL, _NO_HEADERS)
+    assert resp.status_code == 200
+    body = json.loads(resp.body)
+    assert body["model_name"] == "live/model"
+
+
+def test_bootstrap_falls_back_when_runtime_returns_empty(
+    bus: MagicMock,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "OpenHome.channels.websocket._default_model_name_from_config",
+        lambda: "from-disk",
+    )
+    channel = _ch(bus, host="127.0.0.1", runtime_model_name=lambda: "   ")
+    resp = channel._handle_webui_bootstrap(_LOCAL, _NO_HEADERS)
+    assert resp.status_code == 200
+    body = json.loads(resp.body)
+    assert body["model_name"] == "from-disk"
+
+
+def test_bootstrap_falls_back_when_runtime_raises(bus: MagicMock, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        "OpenHome.channels.websocket._default_model_name_from_config",
+        lambda: "from-disk",
+    )
+
+    def boom() -> str:
+        raise RuntimeError("resolver failed")
+
+    channel = _ch(bus, host="127.0.0.1", runtime_model_name=boom)
+    resp = channel._handle_webui_bootstrap(_LOCAL, _NO_HEADERS)
+    assert resp.status_code == 200
+    body = json.loads(resp.body)
+    assert body["model_name"] == "from-disk"
 
 
 def test_bootstrap_rejects_wrong_secret(bus: MagicMock) -> None:

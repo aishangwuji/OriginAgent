@@ -9,7 +9,9 @@ from unittest.mock import patch
 import pytest
 
 from OpenHome.agent.tools.web import WebFetchTool
-from OpenHome.config.schema import WebFetchConfig
+from OpenHome.config.schema import ContentReadToolConfig, WebFetchConfig
+from OpenHome.integrations.content_read.reader import ContentReader
+from OpenHome.integrations.content_read.types import ContentReadResult
 
 
 def _fake_resolve_private(hostname, port, family=0, type_=0, proto=0, flags=0):
@@ -18,6 +20,157 @@ def _fake_resolve_private(hostname, port, family=0, type_=0, proto=0, flags=0):
 
 def _fake_resolve_public(hostname, port, family=0, type_=0, proto=0, flags=0):
     return [(socket.AF_INET, socket.SOCK_STREAM, 0, "", ("93.184.216.34", 0))]
+
+
+@pytest.mark.asyncio
+async def test_web_fetch_auto_routes_known_platform_to_structured_provider(monkeypatch):
+    tool = WebFetchTool(config=WebFetchConfig(use_jina_reader=False))
+    seen: dict[str, str] = {}
+
+    async def fake_read(self, url: str, provider: str = "auto") -> ContentReadResult:
+        seen["url"] = url
+        seen["provider"] = provider
+        return ContentReadResult(
+            source_type="github",
+            title="owner/repo",
+            url=url,
+            content="abcdef",
+            metadata={"stars": 1},
+        )
+
+    monkeypatch.setattr(ContentReader, "read", fake_read)
+
+    with patch("OpenHome.security.network.socket.getaddrinfo", _fake_resolve_public):
+        result = await tool.execute(
+            url="https://github.com/owner/repo",
+            provider="auto",
+            max_chars=3,
+        )
+
+    data = json.loads(result)
+    assert seen == {"url": "https://github.com/owner/repo", "provider": "github"}
+    assert data["extractor"] == "content_read:github"
+    assert data["source_type"] == "github"
+    assert data["content"] == "abc"
+    assert data["truncated"] is True
+    assert data["metadata"] == {"stars": 1}
+    assert data["untrusted"] is True
+    assert "[External content" in data["text"]
+
+
+@pytest.mark.asyncio
+async def test_web_fetch_provider_generic_forces_original_fetch_path(monkeypatch):
+    tool = WebFetchTool(config=WebFetchConfig(use_jina_reader=False))
+
+    async def fail_structured(*args, **kwargs):
+        raise AssertionError("provider=generic must not call content_read providers")
+
+    class FakeStreamResponse:
+        headers = {"content-type": "text/html"}
+        url = "https://github.com/owner/repo"
+        status_code = 200
+        encoding = "utf-8"
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        def raise_for_status(self):
+            return None
+
+        async def aiter_bytes(self):
+            yield b"<html><head><title>Repo</title></head><body><p>Hello</p></body></html>"
+
+    class FakeClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        def stream(self, method, url, headers=None):
+            return FakeStreamResponse()
+
+    monkeypatch.setattr(ContentReader, "read", fail_structured)
+    monkeypatch.setattr("OpenHome.agent.tools.web.httpx.AsyncClient", FakeClient)
+
+    with patch("OpenHome.security.network.socket.getaddrinfo", _fake_resolve_public):
+        result = await tool.execute(
+            url="https://github.com/owner/repo",
+            provider="generic",
+        )
+
+    data = json.loads(result)
+    assert data["extractor"] == "readability"
+    assert data["untrusted"] is True
+
+
+@pytest.mark.asyncio
+async def test_web_fetch_auto_respects_disabled_structured_providers(monkeypatch):
+    tool = WebFetchTool(
+        config=WebFetchConfig(use_jina_reader=False),
+        content_read_config=ContentReadToolConfig(enabled=False),
+    )
+
+    async def fail_structured(*args, **kwargs):
+        raise AssertionError("disabled content_read providers must not be called")
+
+    class FakeStreamResponse:
+        headers = {"content-type": "text/html"}
+        url = "https://github.com/owner/repo"
+        status_code = 200
+        encoding = "utf-8"
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        def raise_for_status(self):
+            return None
+
+        async def aiter_bytes(self):
+            yield b"<html><head><title>Repo</title></head><body><p>Hello</p></body></html>"
+
+    class FakeClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        def stream(self, method, url, headers=None):
+            return FakeStreamResponse()
+
+    monkeypatch.setattr(ContentReader, "read", fail_structured)
+    monkeypatch.setattr("OpenHome.agent.tools.web.httpx.AsyncClient", FakeClient)
+
+    with patch("OpenHome.security.network.socket.getaddrinfo", _fake_resolve_public):
+        result = await tool.execute(url="https://github.com/owner/repo")
+
+    data = json.loads(result)
+    assert data["extractor"] == "readability"
+    assert data["untrusted"] is True
+
+
+@pytest.mark.asyncio
+async def test_web_fetch_unknown_provider_returns_clear_error():
+    tool = WebFetchTool()
+
+    with patch("OpenHome.security.network.socket.getaddrinfo", _fake_resolve_public):
+        result = await tool.execute(url="https://example.com/page", provider="unknown")
+
+    data = json.loads(result)
+    assert "Unsupported web_fetch provider" in data["error"]
 
 
 @pytest.mark.asyncio

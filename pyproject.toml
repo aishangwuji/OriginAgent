@@ -117,12 +117,19 @@ build-backend = "hatchling.build"
 [tool.hatch.metadata]
 allow-direct-references = true
 
+[tool.hatch.build.hooks.custom]
+# Implementation lives in the conventional `hatch_build.py` at the repo root.
+
 [tool.hatch.build]
 include = [
     "OpenHome/**/*.py",
     "OpenHome/templates/**/*.md",
     "OpenHome/skills/**/*.md",
     "OpenHome/skills/**/*.sh",
+    "OpenHome/web/dist/**/*",
+]
+artifacts = [
+    "OpenHome/web/dist/**/*",
 ]
 
 [tool.hatch.build.targets.wheel]
@@ -137,7 +144,9 @@ packages = ["OpenHome"]
 [tool.hatch.build.targets.sdist]
 include = [
     "OpenHome/",
+    "OpenHome/web/dist/",
     "bridge/",
+    "hatch_build.py",
     "README.md",
     "LICENSE",
     "THIRD_PARTY_NOTICES.md",

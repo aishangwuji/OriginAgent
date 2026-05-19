@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from OpenHome.command.builtin import register_builtin_commands
+from OpenHome.command.builtin import builtin_command_palette, register_builtin_commands
 from OpenHome.command.router import CommandContext, CommandRouter
 
 
@@ -25,6 +25,11 @@ class TestIsDispatchableCommand:
         assert router.is_dispatchable_command("/dream")
         assert router.is_dispatchable_command("/dream-log")
         assert router.is_dispatchable_command("/dream-restore")
+        assert router.is_dispatchable_command("/mcp")
+        assert router.is_dispatchable_command("/skill")
+        assert router.is_dispatchable_command("/skills")
+        assert router.is_dispatchable_command("/domain")
+        assert router.is_dispatchable_command("/domains")
 
     def test_prefix_commands_match(self, router: CommandRouter) -> None:
         assert router.is_dispatchable_command("/dream-log abc123")
@@ -51,6 +56,12 @@ class TestIsDispatchableCommand:
     def test_unknown_slash_command_not_matched(self, router: CommandRouter) -> None:
         assert not router.is_dispatchable_command("/unknown")
         assert not router.is_dispatchable_command("/foo bar")
+
+    def test_palette_commands_are_registered(self, router: CommandRouter) -> None:
+        """Every command shown by /api/commands must be executable."""
+        for row in builtin_command_palette():
+            command = row["command"]
+            assert router.is_priority(command) or router.is_dispatchable_command(command)
 
 
 class TestMidTurnCommandDispatchedDirectly:

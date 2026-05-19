@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import os
 import sys
+import time
 from contextlib import suppress
 from dataclasses import dataclass
 
@@ -59,6 +60,45 @@ BUILTIN_COMMAND_SPECS: tuple[BuiltinCommandSpec, ...] = (
         "activity",
     ),
     BuiltinCommandSpec(
+        "/goal",
+        "Start long-running goal",
+        "Treat the request as a sustained goal until complete_goal is called.",
+        "target",
+        "<goal>",
+    ),
+    BuiltinCommandSpec(
+        "/model",
+        "Switch model",
+        "Show or switch the active model preset.",
+        "badge",
+        "[preset]",
+    ),
+    BuiltinCommandSpec(
+        "/pairing",
+        "Manage pairing",
+        "List, approve, deny, or revoke DM pairing requests.",
+        "key-round",
+        "[list|approve|deny|revoke]",
+    ),
+    BuiltinCommandSpec(
+        "/mcp",
+        "Show MCP servers",
+        "List configured MCP servers and registered capabilities.",
+        "server",
+    ),
+    BuiltinCommandSpec(
+        "/skill",
+        "Show skills",
+        "List available agent skills and where they come from.",
+        "graduation-cap",
+    ),
+    BuiltinCommandSpec(
+        "/domain",
+        "Show domain packs",
+        "List installed domain packs and their availability.",
+        "boxes",
+    ),
+    BuiltinCommandSpec(
         "/history",
         "Show conversation history",
         "Print the last N persisted conversation messages.",
@@ -101,7 +141,7 @@ async def cmd_stop(ctx: CommandContext) -> OutboundMessage:
     """Cancel all active tasks and subagents for the session."""
     loop = ctx.loop
     msg = ctx.msg
-    total = await loop._cancel_active_tasks(msg.session_key)
+    total = await loop._cancel_active_tasks(ctx.key)
     content = f"Stopped {total} task(s)." if total else "No active task to stop."
     return OutboundMessage(
         channel=msg.channel, chat_id=msg.chat_id, content=content,
@@ -189,6 +229,332 @@ async def cmd_new(ctx: CommandContext) -> OutboundMessage:
         channel=ctx.msg.channel, chat_id=ctx.msg.chat_id,
         content="New session started.",
         metadata=dict(ctx.msg.metadata or {})
+    )
+
+
+_GOAL_PROMPT_TEMPLATE = """The user invoked `/goal` to start a sustained objective.
+
+Inspect or clarify if needed, then call `long_task` with the refined objective and optional short `ui_summary`. Work proceeds as normal assistant turns using ordinary tools. When the objective is fully done and verified, call `complete_goal` with a brief recap. If the user later cancels or changes direction, still call `complete_goal` with an honest recap before starting a replacement goal. Do not use `long_task` / `complete_goal` for trivial one-shot answers.
+
+Goal:
+{goal}
+"""
+
+
+async def cmd_goal(ctx: CommandContext) -> OutboundMessage | None:
+    """Rewrite /goal into a normal agent turn that nudges long_task use."""
+    goal = ctx.args.strip()
+    if not goal:
+        return OutboundMessage(
+            channel=ctx.msg.channel,
+            chat_id=ctx.msg.chat_id,
+            content="Usage: /goal <long-running task description>",
+            metadata=dict(ctx.msg.metadata or {}),
+        )
+
+    active_tasks = ctx.loop._active_tasks.get(ctx.key, [])
+    if any(not task.done() for task in active_tasks):
+        return OutboundMessage(
+            channel=ctx.msg.channel,
+            chat_id=ctx.msg.chat_id,
+            content=(
+                "A task is already running in this chat. "
+                "Use `/stop` first, then send `/goal <long-running task description>` again."
+            ),
+            metadata=dict(ctx.msg.metadata or {}),
+        )
+
+    ctx.msg.metadata.update(
+        {
+            "original_command": "/goal",
+            "original_content": ctx.raw,
+            "goal_started_at": time.time(),
+        }
+    )
+    ctx.msg.content = _GOAL_PROMPT_TEMPLATE.format(goal=goal)
+    return None
+
+
+def _model_preset_names(loop) -> list[str]:
+    names = set(getattr(loop, "model_presets", {}) or {})
+    if names:
+        names.add("default")
+    return sorted(names)
+
+
+def _format_model_status(loop) -> str:
+    names = _model_preset_names(loop)
+    active = getattr(loop, "model_preset", None) or "default"
+    if not names:
+        return f"Current model: `{loop.model}`.\n\nNo model presets are configured."
+    lines = [f"Current preset: `{active}`", f"Current model: `{loop.model}`", "", "Available presets:"]
+    for name in names:
+        marker = "*" if name == active else "-"
+        lines.append(f"{marker} `{name}`")
+    return "\n".join(lines)
+
+
+async def cmd_model(ctx: CommandContext) -> OutboundMessage:
+    """Show or switch runtime model preset."""
+    name = ctx.args.strip()
+    if not name:
+        return OutboundMessage(
+            channel=ctx.msg.channel,
+            chat_id=ctx.msg.chat_id,
+            content=_format_model_status(ctx.loop),
+            metadata={**dict(ctx.msg.metadata or {}), "render_as": "text"},
+        )
+    try:
+        ctx.loop.set_model_preset(name)
+    except Exception as exc:
+        names = ", ".join(f"`{n}`" for n in _model_preset_names(ctx.loop)) or "(none)"
+        return OutboundMessage(
+            channel=ctx.msg.channel,
+            chat_id=ctx.msg.chat_id,
+            content=f"Could not switch model preset: {exc}\n\nAvailable presets: {names}",
+            metadata={**dict(ctx.msg.metadata or {}), "render_as": "text"},
+        )
+    return OutboundMessage(
+        channel=ctx.msg.channel,
+        chat_id=ctx.msg.chat_id,
+        content=f"Switched model preset to `{ctx.loop.model_preset}`.\nCurrent model: `{ctx.loop.model}`",
+        metadata={
+            **dict(ctx.msg.metadata or {}),
+            "render_as": "text",
+            "model_preset": ctx.loop.model_preset,
+            "model": ctx.loop.model,
+        },
+    )
+
+
+def _pairing_config(ctx: CommandContext):
+    config = getattr(ctx.loop, "pairing_config", None)
+    if config is not None:
+        return config
+    with suppress(Exception):
+        from OpenHome.config.loader import load_config
+
+        return load_config().security.pairing
+    from OpenHome.config.schema import PairingConfig
+
+    return PairingConfig()
+
+
+def _pairing_command_allowed(ctx: CommandContext, subcommand: str) -> bool:
+    config = _pairing_config(ctx)
+    if str(ctx.msg.channel) in set(config.approval_channels):
+        return True
+    if config.allow_self_approve:
+        return True
+    return False
+
+
+async def cmd_pairing(ctx: CommandContext) -> OutboundMessage:
+    """List, approve, deny or revoke pairing requests when pairing is enabled."""
+    from OpenHome.pairing import PAIRING_COMMAND_META_KEY, handle_pairing_command
+
+    config = _pairing_config(ctx)
+    meta = {**dict(ctx.msg.metadata or {}), PAIRING_COMMAND_META_KEY: True, "render_as": "text"}
+    if not config.enabled:
+        return OutboundMessage(
+            channel=ctx.msg.channel,
+            chat_id=ctx.msg.chat_id,
+            content="Pairing is disabled. Enable `security.pairing.enabled` to use `/pairing`.",
+            metadata=meta,
+        )
+    subcommand = (ctx.args.strip().split() or ["list"])[0]
+    if not _pairing_command_allowed(ctx, subcommand):
+        return OutboundMessage(
+            channel=ctx.msg.channel,
+            chat_id=ctx.msg.chat_id,
+            content="Pairing approval commands are restricted to trusted approval channels.",
+            metadata=meta,
+        )
+    reply = handle_pairing_command(ctx.msg.channel, ctx.args)
+    return OutboundMessage(
+        channel=ctx.msg.channel,
+        chat_id=ctx.msg.chat_id,
+        content=reply,
+        metadata=meta,
+    )
+
+
+def _format_mcp_capabilities(items: list[dict], *, limit: int = 10) -> str:
+    registered = [item for item in items if item.get("status") == "registered"]
+    names = [str(item.get("wrapped_name") or item.get("name") or "").strip() for item in registered]
+    names = [name for name in names if name]
+    if not names:
+        return "none"
+    shown = names[:limit]
+    suffix = f", +{len(names) - limit} more" if len(names) > limit else ""
+    return ", ".join(f"`{name}`" for name in shown) + suffix
+
+
+def _format_mcp_status(loop) -> str:
+    configured = getattr(loop, "_mcp_servers", {}) or {}
+    snapshot = getattr(loop, "_mcp_snapshot", {}) or {}
+    connected = getattr(loop, "_mcp_connected", False)
+    connecting = getattr(loop, "_mcp_connecting", False)
+
+    if not configured:
+        return (
+            "## MCP Servers\n\n"
+            "No MCP servers are configured.\n\n"
+            "Add entries under `tools.mcp_servers` in the OpenHome config, then restart the gateway."
+        )
+
+    lines = [
+        "## MCP Servers",
+        "",
+        f"- Configured: {len(configured)}",
+        f"- Connected: {len(getattr(loop, '_mcp_stacks', {}) or {})}",
+        f"- State: {'connecting' if connecting else 'connected' if connected else 'not connected yet'}",
+        "",
+    ]
+
+    for name in sorted(configured):
+        cfg = configured[name]
+        snap = snapshot.get(name, {})
+        status = snap.get("status") or ("connected" if name in getattr(loop, "_mcp_stacks", {}) else "pending")
+        transport = snap.get("transport") or getattr(cfg, "type", "") or ("stdio" if getattr(cfg, "command", "") else "streamableHttp" if getattr(cfg, "url", "") else "unknown")
+        tools = snap.get("tools") or []
+        resources = snap.get("resources") or []
+        prompts = snap.get("prompts") or []
+        registered_count = snap.get("registered_count")
+        if registered_count is None:
+            registered_count = sum(
+                1
+                for item in [*tools, *resources, *prompts]
+                if isinstance(item, dict) and item.get("status") == "registered"
+            )
+
+        lines.extend(
+            [
+                f"### `{name}`",
+                f"- Status: {status}",
+                f"- Transport: {transport}",
+                f"- Registered capabilities: {registered_count}",
+                f"- Tools ({sum(1 for item in tools if item.get('status') == 'registered')}/{len(tools)}): {_format_mcp_capabilities(tools)}",
+                f"- Resources ({sum(1 for item in resources if item.get('status') == 'registered')}/{len(resources)}): {_format_mcp_capabilities(resources)}",
+                f"- Prompts ({sum(1 for item in prompts if item.get('status') == 'registered')}/{len(prompts)}): {_format_mcp_capabilities(prompts)}",
+            ]
+        )
+        error = str(snap.get("error") or "").strip()
+        if error:
+            lines.append(f"- Error: {error}")
+        lines.append("")
+
+    return "\n".join(lines).rstrip()
+
+
+async def cmd_mcp(ctx: CommandContext) -> OutboundMessage:
+    """List configured MCP servers and registered capabilities."""
+    loop = ctx.loop
+    with suppress(Exception):
+        await loop._connect_mcp()
+    return OutboundMessage(
+        channel=ctx.msg.channel,
+        chat_id=ctx.msg.chat_id,
+        content=_format_mcp_status(loop),
+        metadata={**dict(ctx.msg.metadata or {}), "render_as": "text"},
+    )
+
+
+def _format_skill_status(loop) -> str:
+    loader = loop.context.skills
+    all_skills = sorted(
+        loader.list_skills(filter_unavailable=False),
+        key=lambda item: (item.get("source", ""), item.get("name", "")),
+    )
+    if not all_skills:
+        return "## Skills\n\nNo skills are available."
+
+    lines = ["## Skills", ""]
+    available_count = 0
+    workspace_count = 0
+    builtin_count = 0
+    rows: list[str] = []
+
+    for entry in all_skills:
+        name = entry["name"]
+        source = entry.get("source", "unknown")
+        if source == "workspace":
+            workspace_count += 1
+        elif source == "builtin":
+            builtin_count += 1
+        meta = loader._get_skill_meta(name)
+        available = loader._check_requirements(meta)
+        if available:
+            available_count += 1
+        desc = loader._get_skill_description(name)
+        missing = loader._get_missing_requirements(meta) if not available else ""
+        suffix = f" unavailable: {missing}" if missing else " unavailable" if not available else "available"
+        rows.append(f"- `{name}` [{source}] — {desc} ({suffix})")
+
+    always = loader.get_always_skills()
+    lines.extend(
+        [
+            f"- Total: {len(all_skills)}",
+            f"- Available: {available_count}",
+            f"- Workspace: {workspace_count}",
+            f"- Built-in: {builtin_count}",
+        ]
+    )
+    if always:
+        lines.append(f"- Always loaded: {', '.join(f'`{name}`' for name in always)}")
+    lines.extend(["", *rows])
+    return "\n".join(lines)
+
+
+async def cmd_skill(ctx: CommandContext) -> OutboundMessage:
+    """List available skills."""
+    return OutboundMessage(
+        channel=ctx.msg.channel,
+        chat_id=ctx.msg.chat_id,
+        content=_format_skill_status(ctx.loop),
+        metadata={**dict(ctx.msg.metadata or {}), "render_as": "text"},
+    )
+
+
+def _format_domain_status(loop) -> str:
+    context = getattr(loop, "context", None)
+    manager = getattr(loop, "domain_packs", None) or getattr(context, "domain_packs", None)
+    if manager is None:
+        return "## Domain Packs\n\nNo domain pack manager is configured."
+    packs = manager.list_packs()
+    if not packs:
+        return "## Domain Packs\n\nNo domain packs are installed."
+
+    lines = ["## Domain Packs", ""]
+    available_count = sum(1 for pack in packs if pack.status == "available")
+    active_count = sum(1 for pack in packs if pack.active)
+    invalid_count = sum(1 for pack in packs if pack.status == "invalid")
+    lines.extend(
+        [
+            f"- Total: {len(packs)}",
+            f"- Available: {available_count}",
+            f"- Active: {active_count}",
+            f"- Invalid: {invalid_count}",
+            "",
+        ]
+    )
+    for pack in packs:
+        active = "active" if pack.active else "inactive"
+        reason = f"; reason: {pack.unavailable_reason}" if pack.unavailable_reason else ""
+        lines.append(
+            f"- `{pack.id}` [{pack.source}] — {pack.name} "
+            f"(status: {pack.status}, {active}{reason})"
+        )
+    return "\n".join(lines)
+
+
+async def cmd_domain(ctx: CommandContext) -> OutboundMessage:
+    """List installed domain packs."""
+    return OutboundMessage(
+        channel=ctx.msg.channel,
+        chat_id=ctx.msg.chat_id,
+        content=_format_domain_status(ctx.loop),
+        metadata={**dict(ctx.msg.metadata or {}), "render_as": "text"},
     )
 
 
@@ -477,6 +843,17 @@ def register_builtin_commands(router: CommandRouter) -> None:
     router.priority("/status", cmd_status)
     router.exact("/new", cmd_new)
     router.exact("/status", cmd_status)
+    router.exact("/goal", cmd_goal)
+    router.prefix("/goal ", cmd_goal)
+    router.exact("/model", cmd_model)
+    router.prefix("/model ", cmd_model)
+    router.exact("/pairing", cmd_pairing)
+    router.prefix("/pairing ", cmd_pairing)
+    router.exact("/mcp", cmd_mcp)
+    router.exact("/skill", cmd_skill)
+    router.exact("/skills", cmd_skill)
+    router.exact("/domain", cmd_domain)
+    router.exact("/domains", cmd_domain)
     router.exact("/history", cmd_history)
     router.prefix("/history ", cmd_history)
     router.exact("/dream", cmd_dream)

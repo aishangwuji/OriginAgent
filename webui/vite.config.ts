@@ -4,15 +4,26 @@ import path from "node:path";
 
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), "");
-  const target = env.OPENHOME_API_URL ?? "http://127.0.0.1:8765";
+  const target = env.OpenHome_API_URL ?? "http://127.0.0.1:8765";
   const wsTarget = target.replace(/^http/, "ws");
+  const animalIslandTestAliases =
+    mode === "test"
+      ? [
+          {
+            find: "animal-island-ui/style",
+            replacement: path.resolve(__dirname, "./src/tests/mocks/empty-style.ts"),
+          },
+          {
+            find: "animal-island-ui",
+            replacement: path.resolve(__dirname, "./src/tests/mocks/animal-island-ui.tsx"),
+          },
+        ]
+      : [];
 
   return {
     plugins: [react()],
     resolve: {
-      alias: {
-        "@": path.resolve(__dirname, "./src"),
-      },
+      alias: [{ find: "@", replacement: path.resolve(__dirname, "./src") }, ...animalIslandTestAliases],
     },
     optimizeDeps: {
       // Radix dialog was introduced mid-session for the mobile sidebar sheet.
@@ -42,7 +53,7 @@ export default defineConfig(({ mode }) => {
         "/webui": { target, changeOrigin: true },
         "/api": { target, changeOrigin: true },
         "/auth": { target, changeOrigin: true },
-        // Forward only WebSocket upgrades on ``/`` to the OpenHome gateway;
+        // Forward only WebSocket upgrades on ``/`` to the openhome gateway;
         // plain HTTP GETs on ``/`` must stay with Vite so it can serve the SPA.
         // ``bypass`` returning the original URL skips the proxy for that
         // request; returning undefined lets the proxy (and ws upgrade handler)
@@ -60,6 +71,7 @@ export default defineConfig(({ mode }) => {
       environment: "happy-dom",
       globals: true,
       setupFiles: ["./src/tests/setup.ts"],
+      alias: animalIslandTestAliases,
     },
   };
 });

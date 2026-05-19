@@ -46,7 +46,8 @@
     },
     "nav": {
       "general": "一般",
-      "byok": "BYOK"
+      "byok": "BYOK",
+      "mcp": "MCP"
     },
     "sections": {
       "interface": "インターフェース",
@@ -125,6 +126,57 @@
         "baseUrlRequired": "SearXNG には Base URL が必要です。",
         "missingCredential": "保存する前に必要な認証情報を入力してください。",
         "saveHint": "変更は新しい web search リクエストに適用されます。"
+      }
+    },
+    "mcp": {
+      "description": "Configure MCP servers without editing config.json by hand. Changes are saved to the current OpenHome config.",
+      "quickConfig": "Quick config",
+      "add": "Add MCP",
+      "newServer": "New MCP server",
+      "editServer": "Edit MCP server",
+      "configuredServers": "Configured servers",
+      "empty": "No MCP servers configured.",
+      "restartRequired": "Saved. Restart OpenHome to connect the updated MCP servers.",
+      "editorHelp": "Leave masked or empty env/header values unchanged when editing.",
+      "name": "Server name",
+      "command": "Command",
+      "commandHelp": "Executable used to start a stdio MCP server.",
+      "args": "Arguments",
+      "argsHelp": "One argument per line.",
+      "env": "Environment",
+      "envHelp": "One KEY=value per line. Existing masked values are preserved.",
+      "url": "URL",
+      "headers": "Headers",
+      "headersHelp": "One KEY=value per line. Existing masked values are preserved.",
+      "enabledTools": "Enabled tools",
+      "enabledToolsHelp": "One tool name per line. Use * to allow all tools.",
+      "timeout": "Timeout seconds",
+      "delete": "Delete MCP server",
+      "transport": {
+        "stdio": "stdio",
+        "sse": "SSE",
+        "streamableHttp": "HTTP"
+      },
+      "homeAssistant": {
+        "title": "Home Assistant",
+        "description": "Enter the HA address and long-lived access token. OpenHome will configure the MCP URL, auth header, and local access whitelist.",
+        "address": "HA address",
+        "addressHelp": "You can paste http://localhost:8123 or the /home/0 URL from your browser.",
+        "token": "Long-lived access token",
+        "tokenHelp": "Create one from your Home Assistant profile security page.",
+        "tokenHelpExisting": "A token is already saved. Leave blank to keep using it.",
+        "tokenPlaceholder": "Paste Home Assistant long-lived access token",
+        "saveHint": "Saved as an HTTP MCP server and applied after restarting OpenHome.",
+        "save": "Save HA MCP",
+        "validation": {
+          "addressRequired": "Home Assistant address is required.",
+          "tokenRequired": "Home Assistant long-lived access token is required."
+        }
+      },
+      "validation": {
+        "nameRequired": "MCP server name is required.",
+        "commandRequired": "Command is required for stdio MCP servers.",
+        "urlRequired": "URL is required for HTTP MCP servers."
       }
     }
   },
@@ -218,6 +270,11 @@
       "placeholderStreaming": "モデルが応答しています…",
       "inputAria": "メッセージ入力欄",
       "sendHint": "Enter で送信 · Shift+Enter で改行",
+      "runRuntimeTitle": "実行中 · {{elapsed}}",
+      "goalStateStrip": "目標 · {{label}}",
+      "goalStateFallback": "目標",
+      "goalStateExpandAria": "目標の全文を表示",
+      "goalStateSheetTitle": "目標",
       "send": "メッセージを送信",
       "stop": "応答を停止",
       "attachImage": "画像を添付",
@@ -251,7 +308,7 @@
         "ariaLabel": "スラッシュコマンド",
         "label": "コマンド",
         "navigateHint": "↑↓ 選択",
-        "selectHint": "Enter/Tab 入力",
+        "selectHint": "Enter 実行 · Tab 入力",
         "closeHint": "Esc 閉じる",
         "commands": {
           "new": {
@@ -286,12 +343,17 @@
             "title": "メモリを復元",
             "description": "以前の Dream スナップショットへメモリを戻します。"
           },
+          "goal": {
+            "title": "長期目標",
+            "description": "持続的な複数ステップの目標として扱うようエージェントに伝えます。"
+          },
           "help": {
             "title": "ヘルプを表示",
             "description": "利用可能なスラッシュコマンドを一覧表示します。"
           }
         }
-      }
+      },
+      "goalStateCloseAria": "目標を閉じる"
     },
     "scrollToBottom": "一番下へスクロール"
   },
@@ -300,7 +362,19 @@
     "assistantTyping": "アシスタントが入力中",
     "toolSingle": "ツールを使用中",
     "toolMany": "{{count}} 個のツールを使用",
-    "imageAttachment": "画像の添付"
+    "toolSummary": "{{count}} 個のツール",
+    "toolSummaryMany": "{{count}} 個のツール",
+    "reasoningTools": "思考 · {{count}} 個のツール",
+    "reasoningToolsSingular": "思考 · 1 個のツール",
+    "reasoning": "思考",
+    "reasoningStreaming": "思考中…",
+    "reasoningSummary": "思考",
+    "agentActivitySummary": "{{reasoning}} ステップ · ツール呼び出し {{tools}} 回",
+    "agentActivityToolsOnly": "ツール呼び出し {{tools}} 回",
+    "agentActivityLiveSummary": "実行中… · {{reasoning}} ステップ · ツール呼び出し {{tools}} 回",
+    "agentActivityLiveToolsOnly": "実行中… · ツール呼び出し {{tools}} 回",
+    "imageAttachment": "画像の添付",
+    "turnLatencyTitle": "応答時間（全行程）"
   },
   "lightbox": {
     "title": "画像プレビュー",
@@ -325,4 +399,3 @@
     }
   }
 }
-

@@ -11,10 +11,26 @@
     />
     <meta name="theme-color" content="#fafaf9" media="(prefers-color-scheme: light)" />
     <meta name="theme-color" content="#161618" media="(prefers-color-scheme: dark)" />
+    <link rel="icon" type="image/svg+xml" href="/brand/OpenHome_mark_v2.svg" />
     <link rel="icon" type="image/png" sizes="32x32" href="/brand/OpenHome_favicon_32.png" />
     <link rel="icon" type="image/png" sizes="73x75" href="/brand/OpenHome_icon.png" />
     <link rel="apple-touch-icon" sizes="180x180" href="/brand/OpenHome_apple_touch.png" />
+    <link
+      rel="preload"
+      href="/src/assets/fonts/JetBrainsMono[wght].woff2"
+      as="font"
+      type="font/woff2"
+      crossorigin
+    />
     <style>
+      @font-face {
+        font-family: "JetBrains Mono";
+        src: url("/src/assets/fonts/JetBrainsMono[wght].woff2") format("woff2-variations");
+        font-style: normal;
+        font-weight: 100 800;
+        font-display: block;
+      }
+
       html,
       body,
       #root {
@@ -26,10 +42,10 @@
         background: #ffffff;
         color: #0a0a0a;
         font-family:
-          system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+          "JetBrains Mono", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
           "Helvetica Neue", Arial, "Noto Sans", "Noto Sans SC",
           "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei",
-          sans-serif;
+          monospace;
       }
 
       html.dark body {

@@ -261,6 +261,7 @@ class TelegramChannel(BaseChannel):
         BotCommand("restart", "Restart the bot"),
         BotCommand("status", "Show bot status"),
         BotCommand("history", "Show recent conversation messages"),
+        BotCommand("pairing", "Manage DM pairing"),
         BotCommand("dream", "Run Dream memory consolidation now"),
         BotCommand("dream_log", "Show the latest Dream memory change"),
         BotCommand("dream_restore", "Restore Dream memory to an earlier version"),
@@ -355,6 +356,12 @@ class TelegramChannel(BaseChannel):
         self._app.add_handler(
             MessageHandler(
                 filters.Regex(r"^/(new|stop|restart|status|dream)(?:@\w+)?(?:\s+.*)?$"),
+                self._forward_command,
+            )
+        )
+        self._app.add_handler(
+            MessageHandler(
+                filters.Regex(r"^/pairing(?:@\w+)?(?:\s+.*)?$"),
                 self._forward_command,
             )
         )
@@ -993,9 +1000,11 @@ class TelegramChannel(BaseChannel):
         message = update.message
         user = update.effective_user
         sender_id = self._sender_id(user)
-        if not self.is_allowed(sender_id):
+        is_dm = getattr(message.chat, "type", "") == "private"
+        if not self.is_allowed(sender_id) and not is_dm:
             return
         self._remember_thread_context(message)
+        self._chat_ids[sender_id] = message.chat_id
 
         # Strip @bot_username suffix if present
         content = message.text or ""
@@ -1011,6 +1020,7 @@ class TelegramChannel(BaseChannel):
             content=content,
             metadata=self._build_message_metadata(message, user),
             session_key=self._derive_topic_session_key(message),
+            is_dm=is_dm,
         )
 
     async def _on_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -1022,7 +1032,18 @@ class TelegramChannel(BaseChannel):
         user = update.effective_user
         chat_id = message.chat_id
         sender_id = self._sender_id(user)
+        is_dm = getattr(message.chat, "type", "") == "private"
         if not self.is_allowed(sender_id):
+            if is_dm:
+                self._chat_ids[sender_id] = chat_id
+                await self._handle_message(
+                    sender_id=sender_id,
+                    chat_id=str(chat_id),
+                    content=message.text or message.caption or "",
+                    metadata=self._build_message_metadata(message, user),
+                    session_key=self._derive_topic_session_key(message),
+                    is_dm=True,
+                )
             return
         self._remember_thread_context(message)
 
@@ -1085,6 +1106,7 @@ class TelegramChannel(BaseChannel):
                     "contents": [], "media": [],
                     "metadata": metadata,
                     "session_key": session_key,
+                    "is_dm": is_dm,
                 }
                 self._start_typing(str_chat_id)
                 await self._add_reaction(str_chat_id, message.message_id, self.config.react_emoji)
@@ -1108,6 +1130,7 @@ class TelegramChannel(BaseChannel):
             media=media_paths,
             metadata=metadata,
             session_key=session_key,
+            is_dm=is_dm,
         )
 
     async def _flush_media_group(self, key: str) -> None:
@@ -1122,6 +1145,7 @@ class TelegramChannel(BaseChannel):
                 content=content, media=list(dict.fromkeys(buf["media"])),
                 metadata=buf["metadata"],
                 session_key=buf.get("session_key"),
+                is_dm=bool(buf.get("is_dm")),
             )
         finally:
             self._media_group_tasks.pop(key, None)

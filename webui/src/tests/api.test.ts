@@ -1,13 +1,17 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
+  ApiError,
+  deleteMcpServerSettings,
   deleteSession,
-  fetchSessionMessages,
+  fetchWebuiThread,
   listSessions,
   listSlashCommands,
   updateProviderSettings,
   updateSettings,
   updateWebSearchSettings,
+  upsertHomeAssistantMcpSettings,
+  upsertMcpServerSettings,
 } from "@/lib/api";
 
 describe("webui API helpers", () => {
@@ -21,13 +25,14 @@ describe("webui API helpers", () => {
     );
   });
 
-  it("percent-encodes websocket keys when fetching session history", async () => {
-    await fetchSessionMessages("tok", "websocket:chat-1");
+  it("percent-encodes websocket keys when fetching webui-thread snapshot", async () => {
+    await fetchWebuiThread("tok", "websocket:chat-1");
 
     expect(fetch).toHaveBeenCalledWith(
-      "/api/sessions/websocket%3Achat-1/messages",
+      "/api/sessions/websocket%3Achat-1/webui-thread",
       expect.objectContaining({
         headers: { Authorization: "Bearer tok" },
+        credentials: "same-origin",
       }),
     );
   });
@@ -86,6 +91,71 @@ describe("webui API helpers", () => {
     );
   });
 
+  it("serializes MCP server upserts as encoded JSON", async () => {
+    await upsertMcpServerSettings("tok", {
+      name: "github",
+      type: "stdio",
+      command: "npx",
+      args: ["-y", "@modelcontextprotocol/server-github"],
+      env: { GITHUB_TOKEN: "ghp_test" },
+      enabled_tools: ["*"],
+      tool_timeout: 30,
+    });
+
+    const url = vi.mocked(fetch).mock.calls[0][0] as string;
+    expect(url.startsWith("/api/settings/mcp/upsert?")).toBe(true);
+    const query = new URLSearchParams(url.split("?")[1]);
+    expect(JSON.parse(query.get("config") ?? "{}")).toMatchObject({
+      name: "github",
+      type: "stdio",
+      command: "npx",
+      env: { GITHUB_TOKEN: "ghp_test" },
+    });
+  });
+
+  it("serializes Home Assistant MCP quick config requests", async () => {
+    await upsertHomeAssistantMcpSettings("tok", {
+      name: "home_assistant",
+      address: "http://localhost:8123/home/0",
+      token: "ha_token",
+    });
+
+    expect(fetch).toHaveBeenCalledWith(
+      "/api/settings/mcp/home-assistant/upsert?name=home_assistant&address=http%3A%2F%2Flocalhost%3A8123%2Fhome%2F0&token=ha_token",
+      expect.objectContaining({
+        headers: { Authorization: "Bearer tok" },
+      }),
+    );
+  });
+
+  it("reports HTML responses as API route/version errors", async () => {
+    vi.mocked(fetch).mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      headers: new Headers({ "content-type": "text/html" }),
+      text: async () => "<!doctype html><html></html>",
+    } as Response);
+
+    await expect(
+      upsertHomeAssistantMcpSettings("tok", {
+        name: "home_assistant",
+        address: "http://localhost:8123",
+        token: "ha_token",
+      }),
+    ).rejects.toThrow(ApiError);
+  });
+
+  it("serializes MCP server delete requests", async () => {
+    await deleteMcpServerSettings("tok", "github");
+
+    expect(fetch).toHaveBeenCalledWith(
+      "/api/settings/mcp/delete?name=github",
+      expect.objectContaining({
+        headers: { Authorization: "Bearer tok" },
+      }),
+    );
+  });
+
   it("maps generated session titles from the sessions list", async () => {
     vi.mocked(fetch).mockResolvedValueOnce({
       ok: true,
@@ -134,6 +204,79 @@ describe("webui API helpers", () => {
             icon: "history",
             arg_hint: "[n]",
           },
+          {
+            command: "/mcp",
+            title: "Show MCP servers",
+            description: "List configured MCP servers and registered capabilities.",
+            icon: "server",
+          },
+          {
+            command: "/skill",
+            title: "Show skills",
+            description: "List available agent skills and where they come from.",
+            icon: "graduation-cap",
+          },
+        ],
+      }),
+    } as Response);
+
+    await expect(listSlashCommands("tok")).resolves.toEqual([
+      {
+        command: "/stop",
+        title: "Stop current task",
+        description: "Cancel the active task.",
+        icon: "square",
+        argHint: "",
+      },
+      {
+        command: "/restart",
+        title: "Restart OpenHome",
+        description: "Restart the bot process.",
+        icon: "rotate-cw",
+        argHint: "",
+      },
+      {
+        command: "/history",
+        title: "Show conversation history",
+        description: "Print the last N messages.",
+        icon: "history",
+        argHint: "[n]",
+      },
+      {
+        command: "/mcp",
+        title: "Show MCP servers",
+        description: "List configured MCP servers and registered capabilities.",
+        icon: "server",
+        argHint: "",
+      },
+      {
+        command: "/skill",
+        title: "Show skills",
+        description: "List available agent skills and where they come from.",
+        icon: "graduation-cap",
+        argHint: "",
+      },
+    ]);
+    expect(fetch).toHaveBeenCalledWith(
+      "/api/commands",
+      expect.objectContaining({
+        headers: { Authorization: "Bearer tok" },
+      }),
+    );
+  });
+
+  it("does not invent slash commands missing from the commands endpoint", async () => {
+    vi.mocked(fetch).mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({
+        commands: [
+          {
+            command: "/history",
+            title: "Show conversation history",
+            description: "Print the last N messages.",
+            icon: "history",
+            arg_hint: "[n]",
+          },
         ],
       }),
     } as Response);
@@ -147,11 +290,5 @@ describe("webui API helpers", () => {
         argHint: "[n]",
       },
     ]);
-    expect(fetch).toHaveBeenCalledWith(
-      "/api/commands",
-      expect.objectContaining({
-        headers: { Authorization: "Bearer tok" },
-      }),
-    );
   });
 });

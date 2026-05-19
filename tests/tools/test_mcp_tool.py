@@ -13,6 +13,7 @@ from OpenHome.agent.tools.mcp import (
     MCPResourceWrapper,
     MCPToolWrapper,
     _normalize_windows_stdio_command,
+    _probe_http_url,
     _sanitize_name,
     connect_mcp_servers,
 )
@@ -378,6 +379,39 @@ async def test_connect_mcp_servers_enabled_tools_supports_raw_names(
         await stack.aclose()
 
     assert registry.tool_names == ["mcp_test_demo"]
+
+
+@pytest.mark.asyncio
+async def test_connect_mcp_servers_writes_capability_snapshot(
+    fake_mcp_runtime: dict[str, object | None],
+) -> None:
+    fake_mcp_runtime["session"] = _make_fake_session(["demo", "other"])
+    registry = ToolRegistry()
+    snapshot: dict = {}
+    stacks = await connect_mcp_servers(
+        {"test": MCPServerConfig(command="fake", enabled_tools=["demo"])},
+        registry,
+        snapshot_out=snapshot,
+    )
+    for stack in stacks.values():
+        await stack.aclose()
+
+    assert snapshot["test"]["status"] == "connected"
+    assert snapshot["test"]["registered_count"] == 1
+    assert snapshot["test"]["tools"] == [
+        {
+            "name": "demo",
+            "wrapped_name": "mcp_test_demo",
+            "description": "demo tool",
+            "status": "registered",
+        },
+        {
+            "name": "other",
+            "wrapped_name": "mcp_test_other",
+            "description": "other tool",
+            "status": "skipped",
+        },
+    ]
 
 
 @pytest.mark.asyncio
@@ -877,6 +911,22 @@ def test_sanitize_name_long_names_keep_distinct_hashes() -> None:
     assert first != second
     assert len(first) <= 64
     assert len(second) <= 64
+
+
+async def test_probe_http_url_reports_open_and_closed_port() -> None:
+    async def _handle(_reader, writer):
+        writer.close()
+        await writer.wait_closed()
+
+    server = await asyncio.start_server(_handle, "127.0.0.1", 0)
+    port = server.sockets[0].getsockname()[1]
+    try:
+        assert await _probe_http_url(f"http://127.0.0.1:{port}", timeout=1.0) is True
+    finally:
+        server.close()
+        await server.wait_closed()
+
+    assert await _probe_http_url(f"http://127.0.0.1:{port}", timeout=0.2) is False
 
 
 # ---------------------------------------------------------------------------

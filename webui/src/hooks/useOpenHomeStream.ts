@@ -2,26 +2,198 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 import { useClient } from "@/providers/ClientProvider";
 import { toMediaAttachment } from "@/lib/media";
+import { toolTraceLinesFromEvents } from "@/lib/tool-traces";
 import type { StreamError } from "@/lib/OpenHome-client";
 import type {
   InboundEvent,
   OutboundImageGeneration,
   OutboundMedia,
+  GoalStateWsPayload,
+  ToolProgressEvent,
   UIImage,
   UIMessage,
 } from "@/lib/types";
 
 interface StreamBuffer {
-  /** ID of the assistant message currently receiving deltas. */
+  /** ID of the assistant message currently receiving deltas (cleared on ``stream_end``). */
   messageId: string;
-  /** Sequence of deltas accumulated in order. */
-  parts: string[];
+}
+
+function normalizeToolEvents(events: unknown): ToolProgressEvent[] {
+  if (!Array.isArray(events)) return [];
+  return events.filter((event): event is ToolProgressEvent => (
+    !!event && typeof event === "object"
+  ));
+}
+
+/** Scan upward from the bottom skipping trace rows so tool breadcrumbs don't steal the stream target. */
+function findStreamingAssistantId(prev: UIMessage[]): string | null {
+  for (let i = prev.length - 1; i >= 0; i -= 1) {
+    const m = prev[i];
+    if (m.kind === "trace") continue;
+    if (m.role === "assistant" && m.isStreaming) return m.id;
+    if (m.role === "user") break;
+  }
+  return null;
+}
+
+/**
+ * Append a reasoning chunk to the last open reasoning stream in ``prev``.
+ *
+ * Lookup rule: prefer the most recent assistant turn in the active UI tail.
+ * Most providers emit reasoning before answer text, but some only expose
+ * ``reasoning_content`` after the answer stream completes. In that post-hoc
+ * case the reasoning still belongs to the same assistant turn and must render
+ * above the answer, not as a new row below it.
+ */
+function attachReasoningChunk(prev: UIMessage[], chunk: string): UIMessage[] {
+  for (let i = prev.length - 1; i >= 0; i -= 1) {
+    const candidate = prev[i];
+    // A user turn is a hard boundary: reasoning after it belongs to the new
+    // assistant turn, never to an earlier assistant reply.
+    if (candidate.role === "user") break;
+    // A trace row (e.g. Used tools) is also a phase boundary. Reasoning after
+    // tools belongs to the next assistant iteration, not the assistant turn
+    // that produced those tool calls.
+    if (candidate.kind === "trace") break;
+    if (candidate.role !== "assistant") continue;
+    const hasAnswer = candidate.content.length > 0;
+    if (
+      candidate.reasoningStreaming
+      || candidate.reasoning !== undefined
+      || hasAnswer
+      || candidate.isStreaming
+    ) {
+      const merged: UIMessage = {
+        ...candidate,
+        reasoning: (candidate.reasoning ?? "") + chunk,
+        reasoningStreaming: true,
+      };
+      return [...prev.slice(0, i), merged, ...prev.slice(i + 1)];
+    }
+    if (!hasAnswer && candidate.isStreaming) {
+      const merged: UIMessage = {
+        ...candidate,
+        reasoning: chunk,
+        reasoningStreaming: true,
+      };
+      return [...prev.slice(0, i), merged, ...prev.slice(i + 1)];
+    }
+    break;
+  }
+  return [
+    ...prev,
+    {
+      id: crypto.randomUUID(),
+      role: "assistant",
+      content: "",
+      isStreaming: true,
+      reasoning: chunk,
+      reasoningStreaming: true,
+      createdAt: Date.now(),
+    },
+  ];
+}
+
+/**
+ * Find the most recent assistant placeholder that an incoming answer
+ * delta should adopt instead of spawning a parallel row. We look for an
+ * empty-content assistant turn that is still marked ``isStreaming`` —
+ * typically created earlier by ``reasoning_delta``. Anything else means
+ * the model already produced an answer in a previous turn, so the new
+ * delta belongs in a fresh row.
+ */
+function findActiveAssistantPlaceholder(prev: UIMessage[]): string | null {
+  const last = prev[prev.length - 1];
+  if (!last) return null;
+  if (last.role !== "assistant" || last.kind === "trace") return null;
+  if (last.content.length > 0) return null;
+  if (!last.isStreaming) return null;
+  return last.id;
+}
+
+/**
+ * Close the active reasoning stream segment, if any. Idempotent: a
+ * ``reasoning_end`` with no preceding deltas is a harmless no-op.
+ */
+function closeReasoningStream(prev: UIMessage[]): UIMessage[] {
+  for (let i = prev.length - 1; i >= 0; i -= 1) {
+    const candidate = prev[i];
+    if (!candidate.reasoningStreaming) continue;
+    const merged: UIMessage = { ...candidate, reasoningStreaming: false };
+    return [...prev.slice(0, i), merged, ...prev.slice(i + 1)];
+  }
+  return prev;
+}
+
+function isReasoningOnlyPlaceholder(message: UIMessage): boolean {
+  return (
+    message.role === "assistant"
+    && message.kind !== "trace"
+    && message.content.trim().length === 0
+    && !!message.reasoning
+    && !message.reasoningStreaming
+    && !message.media?.length
+  );
+}
+
+function isToolTrace(message: UIMessage | undefined): boolean {
+  return message?.kind === "trace";
+}
+
+function pruneReasoningOnlyPlaceholders(prev: UIMessage[]): UIMessage[] {
+  return prev.filter((message, index) => {
+    if (!isReasoningOnlyPlaceholder(message)) return true;
+    // A reasoning-only assistant row immediately followed by tool traces is
+    // the live equivalent of a persisted assistant tool-call message with
+    // empty content, reasoning_content, and tool_calls. Keep it so live render
+    // and history replay stay isomorphic.
+    return isToolTrace(prev[index + 1]);
+  });
+}
+
+function stampLastAssistantLatency(prev: UIMessage[], latencyMs: number): UIMessage[] {
+  for (let i = prev.length - 1; i >= 0; i -= 1) {
+    const m = prev[i];
+    if (m.role === "assistant" && m.kind !== "trace") {
+      const merged: UIMessage = { ...m, latencyMs, isStreaming: false };
+      return [...prev.slice(0, i), merged, ...prev.slice(i + 1)];
+    }
+  }
+  return prev;
+}
+
+function absorbCompleteAssistantMessage(
+  prev: UIMessage[],
+  message: Omit<UIMessage, "id" | "role" | "createdAt">,
+): UIMessage[] {
+  const last = prev[prev.length - 1];
+  if (!last || !isReasoningOnlyPlaceholder(last)) {
+    return [
+      ...prev,
+      {
+        id: crypto.randomUUID(),
+        role: "assistant",
+        createdAt: Date.now(),
+        ...message,
+      },
+    ];
+  }
+  return [
+    ...prev.slice(0, -1),
+    {
+      ...last,
+      ...message,
+      isStreaming: false,
+      reasoningStreaming: false,
+    },
+  ];
 }
 
 /**
  * Subscribe to a chat by ID. Returns the in-memory message list for the chat,
  * a streaming flag, and a ``send`` function. Initial history must be seeded
- * separately (e.g. via ``fetchSessionMessages``) since the server only replays
+ * separately (e.g. via ``fetchWebuiThread``) since the server only replays
  * live events.
  */
 /** Payload passed to ``send`` when the user attaches one or more images.
@@ -47,6 +219,10 @@ export function useOpenHomeStream(
 ): {
   messages: UIMessage[];
   isStreaming: boolean;
+  /** Unix epoch seconds when the current user turn started (WebSocket ``goal_status``). */
+  runStartedAt: number | null;
+  /** Latest sustained goal for this ``chatId`` (``goal_state`` WS events). */
+  goalState: GoalStateWsPayload | undefined;
   send: (content: string, images?: SendImage[], options?: SendOptions) => void;
   stop: () => void;
   setMessages: React.Dispatch<React.SetStateAction<UIMessage[]>>;
@@ -66,6 +242,9 @@ export function useOpenHomeStream(
     ? initialMessages[initialMessages.length - 1].kind === "trace"
     : false;
   const [isStreaming, setIsStreaming] = useState(initialStreaming || hasPendingToolCalls);
+  /** Unix epoch seconds when the current user turn started; cleared on ``idle``. */
+  const [runStartedAt, setRunStartedAt] = useState<number | null>(null);
+  const [goalState, setGoalState] = useState<GoalStateWsPayload | undefined>(undefined);
   const [streamError, setStreamError] = useState<StreamError | null>(null);
   const buffer = useRef<StreamBuffer | null>(null);
   const suppressStreamUntilTurnEndRef = useRef(false);
@@ -95,6 +274,8 @@ export function useOpenHomeStream(
         : false) || hasPendingToolCalls,
     );
     setStreamError(null);
+    setRunStartedAt(chatId ? client.getRunStartedAt(chatId) : null);
+    setGoalState(chatId ? client.getGoalState(chatId) : undefined);
     buffer.current = null;
     suppressStreamUntilTurnEndRef.current = false;
     if (streamEndTimerRef.current !== null) {
@@ -102,7 +283,7 @@ export function useOpenHomeStream(
       streamEndTimerRef.current = null;
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [chatId]);
+  }, [chatId, client]);
 
   useEffect(() => {
     if (hasPendingToolCalls) setIsStreaming(true);
@@ -122,27 +303,42 @@ export function useOpenHomeStream(
 
       if (ev.event === "delta") {
         if (suppressStreamUntilTurnEndRef.current) return;
-        const id = buffer.current?.messageId ?? crypto.randomUUID();
-        if (!buffer.current) {
-          buffer.current = { messageId: id, parts: [] };
-          setMessages((prev) => [
-            ...prev,
-            {
-              id,
-              role: "assistant",
-              content: "",
-              isStreaming: true,
-              createdAt: Date.now(),
-            },
-          ]);
-          setIsStreaming(true);
-        }
-        buffer.current.parts.push(ev.text);
-        const combined = buffer.current.parts.join("");
-        const targetId = buffer.current.messageId;
-        setMessages((prev) =>
-          prev.map((m) => (m.id === targetId ? { ...m, content: combined } : m)),
-        );
+        const chunk = typeof ev.text === "string" ? ev.text : "";
+        setIsStreaming(true);
+        setMessages((prev) => {
+          const adopted = findActiveAssistantPlaceholder(prev);
+          const streamingAssistId = findStreamingAssistantId(prev);
+          let targetId: string;
+          let next: UIMessage[];
+
+          if (adopted) {
+            targetId = adopted;
+            next = prev;
+          } else if (streamingAssistId) {
+            targetId = streamingAssistId;
+            next = prev;
+          } else {
+            targetId = crypto.randomUUID();
+            next = [
+              ...prev,
+              {
+                id: targetId,
+                role: "assistant",
+                content: "",
+                isStreaming: true,
+                createdAt: Date.now(),
+              },
+            ];
+          }
+
+          buffer.current = { messageId: targetId };
+
+          const priorContent = next.find((m) => m.id === targetId)?.content ?? "";
+          const combined = priorContent + chunk;
+          return next.map((m) =>
+            m.id === targetId ? { ...m, content: combined, isStreaming: true } : m,
+          );
+        });
         return;
       }
 
@@ -159,7 +355,39 @@ export function useOpenHomeStream(
         return;
       }
 
+      if (ev.event === "reasoning_delta") {
+        if (suppressStreamUntilTurnEndRef.current) return;
+        const chunk = ev.text;
+        if (!chunk) return;
+        setMessages((prev) => attachReasoningChunk(prev, chunk));
+        setIsStreaming(true);
+        return;
+      }
+
+      if (ev.event === "reasoning_end") {
+        if (suppressStreamUntilTurnEndRef.current) return;
+        setMessages((prev) => closeReasoningStream(prev));
+        return;
+      }
+
+      if (ev.event === "goal_state") {
+        setGoalState(ev.goal_state);
+        return;
+      }
+
+      if (ev.event === "goal_status") {
+        if (ev.status === "running" && typeof ev.started_at === "number") {
+          setRunStartedAt(ev.started_at);
+        } else {
+          setRunStartedAt(null);
+        }
+        return;
+      }
+
       if (ev.event === "turn_end") {
+        if ("goal_state" in ev && ev.goal_state != null && typeof ev.goal_state === "object") {
+          setGoalState(ev.goal_state);
+        }
         // Definitive signal that the turn is fully complete.  Cancel any
         // pending debounce timer and stop the loading indicator immediately.
         if (streamEndTimerRef.current !== null) {
@@ -167,15 +395,15 @@ export function useOpenHomeStream(
           streamEndTimerRef.current = null;
         }
         setIsStreaming(false);
-        setMessages((prev) =>
-          prev.map((m) => (m.isStreaming ? { ...m, isStreaming: false } : m)),
-        );
+        setMessages((prev) => {
+          let finalized = prev.map((m) => (m.isStreaming ? { ...m, isStreaming: false } : m));
+          finalized = pruneReasoningOnlyPlaceholders(finalized);
+          if (typeof ev.latency_ms === "number" && ev.latency_ms >= 0) {
+            finalized = stampLastAssistantLatency(finalized, Math.round(ev.latency_ms));
+          }
+          return finalized;
+        });
         suppressStreamUntilTurnEndRef.current = false;
-        onTurnEnd?.();
-        return;
-      }
-
-      if (ev.event === "session_updated") {
         onTurnEnd?.();
         return;
       }
@@ -183,33 +411,52 @@ export function useOpenHomeStream(
       if (ev.event === "message") {
         if (
           suppressStreamUntilTurnEndRef.current &&
-          (ev.kind === "tool_hint" || ev.kind === "progress")
+          (ev.kind === "tool_hint" || ev.kind === "progress" || ev.kind === "reasoning")
         ) {
+          return;
+        }
+        // Back-compat: a legacy ``kind: "reasoning"`` message (no streaming
+        // partner) is treated as one complete delta + immediate end so the
+        // bubble renders identically to the streaming path.
+        if (ev.kind === "reasoning") {
+          const line = ev.text;
+          if (!line) return;
+          setMessages((prev) => closeReasoningStream(attachReasoningChunk(prev, line)));
           return;
         }
         // Intermediate agent breadcrumbs (tool-call hints, raw progress).
         // Attach them to the last trace row if it was the last emitted item
         // so a sequence of calls collapses into one compact trace group.
         if (ev.kind === "tool_hint" || ev.kind === "progress") {
-          const line = ev.text;
+          const toolEvents = normalizeToolEvents(ev.tool_events);
+          const structuredLines = toolTraceLinesFromEvents(ev.tool_events);
+          const lines = structuredLines.length > 0
+            ? structuredLines
+            : ev.text
+              ? [ev.text]
+              : [];
+          if (lines.length === 0 && toolEvents.length === 0) return;
           setMessages((prev) => {
             const last = prev[prev.length - 1];
             if (last && last.kind === "trace" && !last.isStreaming) {
               const merged: UIMessage = {
                 ...last,
-                traces: [...(last.traces ?? [last.content]), line],
-                content: line,
+                traces: [...(last.traces ?? [last.content]), ...lines],
+                content: lines[lines.length - 1] ?? last.content,
+                toolEvents: [...(last.toolEvents ?? []), ...toolEvents],
               };
               return [...prev.slice(0, -1), merged];
             }
+            if (lines.length === 0) return prev;
             return [
               ...prev,
               {
                 id: crypto.randomUUID(),
                 role: "tool",
                 kind: "trace",
-                content: line,
-                traces: [line],
+                content: lines[lines.length - 1],
+                traces: lines,
+                toolEvents,
                 createdAt: Date.now(),
               },
             ];
@@ -231,17 +478,16 @@ export function useOpenHomeStream(
         setMessages((prev) => {
           const filtered = activeId ? prev.filter((m) => m.id !== activeId) : prev;
           const content = ev.buttons?.length ? (ev.button_prompt ?? ev.text) : ev.text;
-          return [
-            ...filtered,
-            {
-              id: crypto.randomUUID(),
-              role: "assistant",
-              content,
-              createdAt: Date.now(),
-              ...(ev.buttons && ev.buttons.length > 0 ? { buttons: ev.buttons } : {}),
-              ...(hasMedia ? { media } : {}),
-            },
-          ];
+          const lat =
+            typeof ev.latency_ms === "number" && ev.latency_ms >= 0
+              ? Math.round(ev.latency_ms)
+              : undefined;
+          return absorbCompleteAssistantMessage(filtered, {
+            content,
+            ...(ev.buttons && ev.buttons.length > 0 ? { buttons: ev.buttons } : {}),
+            ...(hasMedia ? { media } : {}),
+            ...(lat !== undefined ? { latencyMs: lat } : {}),
+          });
         });
         if (hasMedia) {
           suppressStreamUntilTurnEndRef.current = true;
@@ -273,7 +519,7 @@ export function useOpenHomeStream(
 
       const previews = hasImages ? images!.map((i) => i.preview) : undefined;
       setMessages((prev) => [
-        ...prev,
+        ...pruneReasoningOnlyPlaceholders(prev),
         {
           id: crypto.randomUUID(),
           role: "user",
@@ -308,6 +554,8 @@ export function useOpenHomeStream(
   return {
     messages,
     isStreaming,
+    runStartedAt,
+    goalState,
     send,
     stop,
     setMessages,

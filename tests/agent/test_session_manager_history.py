@@ -43,6 +43,29 @@ def test_list_sessions_includes_metadata_title(tmp_path):
     assert rows[0]["title"] == "自动生成标题"
 
 
+def test_list_sessions_includes_preview_from_first_user_message(tmp_path):
+    manager = SessionManager(tmp_path)
+    session = manager.get_or_create("websocket:preview")
+    session.add_message("assistant", "assistant fallback")
+    session.add_message("user", "  hello\n\nwebui   history  ")
+    manager.save(session)
+
+    rows = manager.list_sessions()
+
+    assert rows[0]["preview"] == "hello webui history"
+
+
+def test_list_sessions_uses_assistant_preview_when_no_user_message(tmp_path):
+    manager = SessionManager(tmp_path)
+    session = manager.get_or_create("websocket:assistant-preview")
+    session.add_message("assistant", "assistant only")
+    manager.save(session)
+
+    rows = manager.list_sessions()
+
+    assert rows[0]["preview"] == "assistant only"
+
+
 # --- Original regression test (from PR 2075) ---
 
 def test_get_history_drops_orphan_tool_results_when_window_cuts_tool_calls():

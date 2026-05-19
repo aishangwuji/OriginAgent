@@ -6,6 +6,7 @@ interface ClientContextValue {
   client: OpenHomeClient;
   token: string;
   modelName: string | null;
+  refreshToken: () => Promise<string | null>;
 }
 
 const ClientContext = createContext<ClientContextValue | null>(null);
@@ -14,15 +15,17 @@ export function ClientProvider({
   client,
   token,
   modelName = null,
+  refreshToken = async () => null,
   children,
 }: {
   client: OpenHomeClient;
   token: string;
   modelName?: string | null;
+  refreshToken?: () => Promise<string | null>;
   children: ReactNode;
 }) {
   return (
-    <ClientContext.Provider value={{ client, token, modelName }}>
+    <ClientContext.Provider value={{ client, token, modelName, refreshToken }}>
       {children}
     </ClientContext.Provider>
   );

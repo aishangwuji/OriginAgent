@@ -9,16 +9,18 @@ import email.utils
 import hashlib
 import hmac
 import http
+import ipaddress
 import json
 import mimetypes
 import re
 import secrets
 import shutil
 import ssl
+import socket
 import time
 import uuid
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Self
+from typing import TYPE_CHECKING, Any, Callable, Self
 from urllib.parse import parse_qs, unquote, urlparse
 
 from loguru import logger
@@ -29,17 +31,21 @@ from websockets.exceptions import ConnectionClosed
 from websockets.http11 import Request as WsRequest
 from websockets.http11 import Response
 
-from OpenHome.bus.events import OutboundMessage
+from OpenHome.bus.events import OUTBOUND_META_AGENT_UI, OutboundMessage
 from OpenHome.bus.queue import MessageBus
 from OpenHome.channels.base import BaseChannel
 from OpenHome.command.builtin import builtin_command_palette
 from OpenHome.config.paths import get_media_dir
 from OpenHome.config.schema import Base
+from OpenHome.session.goal_state import goal_state_ws_blob
 from OpenHome.utils.helpers import safe_filename
 from OpenHome.utils.media_decode import (
     FileSizeExceeded,
     save_base64_data_url,
 )
+from OpenHome.utils.subagent_channel_display import scrub_subagent_messages_for_channel
+from OpenHome.utils.webui_thread_disk import delete_webui_thread
+from OpenHome.utils.webui_transcript import build_webui_thread_response
 
 if TYPE_CHECKING:
     from OpenHome.session.manager import SessionManager
@@ -155,16 +161,51 @@ def _http_json_response(data: dict[str, Any], *, status: int = 200) -> Response:
     return Response(status, reason, headers, body)
 
 
-def _read_webui_model_name() -> str | None:
+def publish_runtime_model_update(
+    bus: MessageBus,
+    model: str,
+    model_preset: str | None,
+) -> None:
+    """Enqueue a runtime model snapshot for all embedded WebUI subscribers."""
+    bus.outbound.put_nowait(OutboundMessage(
+        channel="websocket",
+        chat_id="*",
+        content="",
+        metadata={
+            "_runtime_model_updated": True,
+            "model": model,
+            "model_preset": model_preset,
+        },
+    ))
+
+
+def _default_model_name_from_config() -> str | None:
     """Return the configured default model for readonly webui display."""
     try:
         from OpenHome.config.loader import load_config
 
-        model = load_config().agents.defaults.model.strip()
+        model = load_config().resolve_preset().model.strip()
         return model or None
     except Exception as e:
         logger.debug("webui bootstrap could not load model name: {}", e)
         return None
+
+
+def _resolve_bootstrap_model_name(
+    runtime_name: Callable[[], str | None] | None,
+) -> str | None:
+    """Prefer an in-process resolver, else fall back to on-disk config."""
+    if runtime_name is not None:
+        try:
+            raw = runtime_name()
+        except Exception as e:
+            logger.debug("bootstrap runtime model resolver failed: {}", e)
+        else:
+            if isinstance(raw, str):
+                stripped = raw.strip()
+                if stripped:
+                    return stripped
+    return _default_model_name_from_config()
 
 
 def _parse_request_path(path_with_query: str) -> tuple[str, dict[str, list[str]]]:
@@ -209,6 +250,96 @@ _WEB_SEARCH_PROVIDER_OPTIONS: tuple[dict[str, str], ...] = (
 _WEB_SEARCH_PROVIDER_BY_NAME = {
     provider["name"]: provider for provider in _WEB_SEARCH_PROVIDER_OPTIONS
 }
+
+_MCP_SERVER_NAME_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
+_MCP_SECRET_HINT = "••••"
+_HA_MCP_PATH = "/api/mcp"
+
+
+def _mcp_masked_mapping(values: dict[str, str]) -> dict[str, str]:
+    return {key: _MCP_SECRET_HINT for key, value in values.items() if value}
+
+
+def _mcp_server_payload(name: str, server: Any) -> dict[str, Any]:
+    return {
+        "name": name,
+        "type": server.type,
+        "command": server.command,
+        "args": list(server.args),
+        "env": _mcp_masked_mapping(server.env),
+        "url": server.url,
+        "headers": _mcp_masked_mapping(server.headers),
+        "tool_timeout": server.tool_timeout,
+        "enabled_tools": list(server.enabled_tools),
+    }
+
+
+def _merge_mcp_secret_fields(data: dict[str, Any], existing: Any) -> dict[str, Any]:
+    merged = dict(data)
+    for field in ("env", "headers"):
+        incoming = merged.get(field)
+        if incoming is None:
+            continue
+        if not isinstance(incoming, dict):
+            continue
+        current = dict(getattr(existing, field, {}) or {})
+        cleaned: dict[str, str] = dict(current)
+        for key, value in incoming.items():
+            key_str = str(key).strip()
+            if not key_str:
+                continue
+            value_str = str(value)
+            if value_str == _MCP_SECRET_HINT or value_str == "":
+                if key_str in current:
+                    cleaned[key_str] = current[key_str]
+            else:
+                cleaned[key_str] = value_str
+        merged[field] = cleaned
+    return merged
+
+
+def _home_assistant_mcp_url(address: str) -> str | None:
+    raw = address.strip()
+    if "://" not in raw:
+        raw = f"http://{raw}"
+    parsed = urlparse(raw)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        return None
+    base = f"{parsed.scheme}://{parsed.netloc}"
+    if _strip_trailing_slash(parsed.path) == _HA_MCP_PATH:
+        return f"{base}{_HA_MCP_PATH}"
+    return f"{base}{_HA_MCP_PATH}"
+
+
+def _host_exact_cidrs(hostname: str) -> list[str]:
+    hosts = [hostname]
+    if hostname.lower() == "localhost":
+        hosts = ["127.0.0.1", "::1"]
+    cidrs: list[str] = []
+    seen: set[str] = set()
+
+    def add_addr(raw_addr: str) -> None:
+        try:
+            addr = ipaddress.ip_address(raw_addr)
+        except ValueError:
+            return
+        cidr = f"{addr}/{addr.max_prefixlen}"
+        if cidr not in seen:
+            seen.add(cidr)
+            cidrs.append(cidr)
+
+    for host in hosts:
+        before_count = len(cidrs)
+        add_addr(host)
+        if len(cidrs) > before_count:
+            continue
+        try:
+            infos = socket.getaddrinfo(host, None, socket.AF_UNSPEC, socket.SOCK_STREAM)
+        except socket.gaierror:
+            continue
+        for info in infos:
+            add_addr(info[4][0])
+    return cidrs
 
 
 def _parse_inbound_payload(raw: str) -> str | None:
@@ -330,6 +461,19 @@ def _is_localhost(connection: Any) -> bool:
     return host in _LOCALHOSTS
 
 
+def _timestamp_ms(value: Any) -> int:
+    if isinstance(value, int | float):
+        return int(value * 1000 if value < 10_000_000_000 else value)
+    if isinstance(value, str) and value:
+        try:
+            from datetime import datetime
+
+            return int(datetime.fromisoformat(value).timestamp() * 1000)
+        except ValueError:
+            pass
+    return int(time.time() * 1000)
+
+
 def _http_response(
     body: bytes,
     *,
@@ -426,6 +570,7 @@ class WebSocketChannel(BaseChannel):
         *,
         session_manager: "SessionManager | None" = None,
         static_dist_path: Path | None = None,
+        runtime_model_name: Callable[[], str | None] | None = None,
     ):
         if isinstance(config, dict):
             config = WebSocketConfig.model_validate(config)
@@ -447,6 +592,7 @@ class WebSocketChannel(BaseChannel):
         self._static_dist_path: Path | None = (
             static_dist_path.resolve() if static_dist_path is not None else None
         )
+        self._runtime_model_name = runtime_model_name
         # Process-local secret used to HMAC-sign media URLs. The signed URL is
         # the capability — anyone who holds a valid URL can fetch that one
         # file, nothing else. The secret regenerates on restart so links
@@ -471,6 +617,15 @@ class WebSocketChannel(BaseChannel):
             if not subs:
                 self._subs.pop(cid, None)
         self._conn_default.pop(connection, None)
+
+    async def _maybe_push_active_goal_state(self, chat_id: str) -> None:
+        """Replay persisted goal state after a client subscribes."""
+        if self._session_manager is None:
+            return
+        session = self._session_manager.get_or_create(f"websocket:{chat_id}")
+        blob = goal_state_ws_blob(session.metadata)
+        if blob.get("active") is True:
+            await self.send_goal_state(chat_id, blob)
 
     async def _send_event(self, connection: Any, event: str, **fields: Any) -> None:
         """Send a control event (attached, error, ...) to a single connection."""
@@ -588,9 +743,22 @@ class WebSocketChannel(BaseChannel):
         if got == "/api/settings/web-search/update":
             return self._handle_settings_web_search_update(request)
 
+        if got == "/api/settings/mcp/upsert":
+            return self._handle_settings_mcp_upsert(request)
+
+        if got == "/api/settings/mcp/home-assistant/upsert":
+            return self._handle_settings_mcp_home_assistant_upsert(request)
+
+        if got == "/api/settings/mcp/delete":
+            return self._handle_settings_mcp_delete(request)
+
         m = re.match(r"^/api/sessions/([^/]+)/messages$", got)
         if m:
             return self._handle_session_messages(request, m.group(1))
+
+        m = re.match(r"^/api/sessions/([^/]+)/webui-thread$", got)
+        if m:
+            return self._handle_webui_thread_get(request, m.group(1))
 
         # NOTE: websockets' HTTP parser only accepts GET, so we cannot expose a
         # true ``DELETE`` verb. The action is folded into the path instead.
@@ -605,6 +773,9 @@ class WebSocketChannel(BaseChannel):
         m = re.match(r"^/api/media/([A-Za-z0-9_-]+)/([A-Za-z0-9_-]+)$", got)
         if m:
             return self._handle_media_fetch(m.group(1), m.group(2))
+
+        if got.startswith("/api/"):
+            return _http_error(404, "not found")
 
         # 4. WebSocket upgrade (the channel's primary purpose). Only run the
         # handshake gate on requests that actually ask to upgrade; otherwise
@@ -683,7 +854,7 @@ class WebSocketChannel(BaseChannel):
                 "token": token,
                 "ws_path": self._expected_path(),
                 "expires_in": self.config.token_ttl_s,
-                "model_name": _read_webui_model_name(),
+                "model_name": _resolve_bootstrap_model_name(self._runtime_model_name),
             }
         )
 
@@ -715,7 +886,16 @@ class WebSocketChannel(BaseChannel):
         selected_provider = provider_name
         if defaults.provider != "auto":
             spec = find_by_name(defaults.provider)
-            selected_provider = spec.name if spec else provider_name
+            provider_config = getattr(config.providers, spec.name, None) if spec else None
+            if spec and (
+                spec.is_oauth
+                or spec.is_local
+                or spec.is_direct
+                or bool(provider_config and provider_config.api_key)
+            ):
+                selected_provider = spec.name
+            elif spec and provider_name == defaults.provider:
+                selected_provider = spec.name
         providers = []
         for spec in PROVIDERS:
             provider_config = getattr(config.providers, spec.name, None)
@@ -750,6 +930,12 @@ class WebSocketChannel(BaseChannel):
                 "api_key_hint": _mask_secret_hint(search_config.api_key),
                 "base_url": search_config.base_url or None,
                 "providers": list(_WEB_SEARCH_PROVIDER_OPTIONS),
+            },
+            "mcp": {
+                "servers": [
+                    _mcp_server_payload(name, server)
+                    for name, server in sorted(config.tools.mcp_servers.items())
+                ],
             },
             "runtime": {
                 "config_path": str(get_config_path().expanduser()),
@@ -907,6 +1093,117 @@ class WebSocketChannel(BaseChannel):
             save_config(config)
         return _http_json_response(self._settings_payload(requires_restart=False))
 
+    def _handle_settings_mcp_upsert(self, request: WsRequest) -> Response:
+        if not self._check_api_token(request):
+            return _http_error(401, "Unauthorized")
+        from pydantic import ValidationError
+
+        from OpenHome.config.loader import load_config, save_config
+        from OpenHome.config.schema import MCPServerConfig
+
+        query = _parse_query(request.path)
+        raw = _query_first(query, "config")
+        if not raw:
+            return _http_error(400, "config is required")
+        try:
+            data = json.loads(raw)
+        except json.JSONDecodeError:
+            return _http_error(400, "config must be valid JSON")
+        if not isinstance(data, dict):
+            return _http_error(400, "config must be an object")
+
+        name = str(data.pop("name", "")).strip()
+        if _MCP_SERVER_NAME_RE.fullmatch(name) is None:
+            return _http_error(400, "invalid MCP server name")
+
+        config = load_config()
+        existing = config.tools.mcp_servers.get(name)
+        if existing is not None:
+            data = _merge_mcp_secret_fields(data, existing)
+
+        try:
+            server = MCPServerConfig.model_validate(data)
+        except ValidationError as exc:
+            return _http_error(400, f"invalid MCP server config: {exc.errors()[0]['msg']}")
+
+        transport_type = server.type
+        if not transport_type:
+            transport_type = "stdio" if server.command else "streamableHttp" if server.url else None
+        if transport_type == "stdio" and not server.command.strip():
+            return _http_error(400, "command is required")
+        if transport_type in {"sse", "streamableHttp"} and not server.url.strip():
+            return _http_error(400, "url is required")
+        if transport_type is None:
+            return _http_error(400, "command or url is required")
+
+        config.tools.mcp_servers[name] = server
+        save_config(config)
+        return _http_json_response(self._settings_payload(requires_restart=True))
+
+    def _handle_settings_mcp_home_assistant_upsert(self, request: WsRequest) -> Response:
+        if not self._check_api_token(request):
+            return _http_error(401, "Unauthorized")
+        from OpenHome.config.loader import load_config, save_config
+        from OpenHome.config.schema import MCPServerConfig
+
+        query = _parse_query(request.path)
+        name = (_query_first(query, "name") or "home_assistant").strip()
+        if _MCP_SERVER_NAME_RE.fullmatch(name) is None:
+            return _http_error(400, "invalid MCP server name")
+
+        address = (_query_first(query, "address") or "").strip()
+        url = _home_assistant_mcp_url(address)
+        if url is None:
+            return _http_error(400, "Home Assistant URL must start with http:// or https://")
+        parsed = urlparse(url)
+        if parsed.hostname is None:
+            return _http_error(400, "Home Assistant URL is missing a hostname")
+
+        token = (_query_first(query, "token") or "").strip()
+        config = load_config()
+        existing = config.tools.mcp_servers.get(name)
+        existing_auth = (existing.headers.get("Authorization", "") if existing else "").strip()
+        if token:
+            authorization = token if token.lower().startswith("bearer ") else f"Bearer {token}"
+        elif existing_auth:
+            authorization = existing_auth
+        else:
+            return _http_error(400, "Home Assistant token is required")
+
+        config.tools.mcp_servers[name] = MCPServerConfig(
+            type="streamableHttp",
+            url=url,
+            headers={"Authorization": authorization},
+            tool_timeout=30,
+            enabled_tools=["*"],
+        )
+
+        for cidr in _host_exact_cidrs(parsed.hostname):
+            if cidr not in config.tools.ssrf_whitelist:
+                config.tools.ssrf_whitelist.append(cidr)
+
+        save_config(config)
+        return _http_json_response(self._settings_payload(requires_restart=True))
+
+    def _handle_settings_mcp_delete(self, request: WsRequest) -> Response:
+        if not self._check_api_token(request):
+            return _http_error(401, "Unauthorized")
+        from OpenHome.config.loader import load_config, save_config
+
+        query = _parse_query(request.path)
+        name = (_query_first(query, "name") or "").strip()
+        if _MCP_SERVER_NAME_RE.fullmatch(name) is None:
+            return _http_error(400, "invalid MCP server name")
+
+        config = load_config()
+        deleted = name in config.tools.mcp_servers
+        if deleted:
+            config.tools.mcp_servers.pop(name, None)
+            save_config(config)
+        payload = self._settings_payload(requires_restart=deleted)
+        payload["deleted"] = deleted
+        return _http_json_response(payload)
+
     @staticmethod
     def _is_webui_session_key(key: str) -> bool:
         """Return True when *key* belongs to the webui's websocket-only surface."""
@@ -928,12 +1225,111 @@ class WebSocketChannel(BaseChannel):
         data = self._session_manager.read_session_file(decoded_key)
         if data is None:
             return _http_error(404, "session not found")
+        messages = data.get("messages")
+        if isinstance(messages, list):
+            scrub_subagent_messages_for_channel(messages)
         # Decorate persisted user messages with signed media URLs so the
         # client can render previews. The raw on-disk ``media`` paths are
         # stripped on the way out — they leak server filesystem layout and
         # the client never needs them once it has the signed fetch URL.
         self._augment_media_urls(data)
         return _http_json_response(data)
+
+    def _handle_webui_thread_get(self, request: WsRequest, key: str) -> Response:
+        if not self._check_api_token(request):
+            return _http_error(401, "Unauthorized")
+        decoded_key = _decode_api_key(key)
+        if decoded_key is None:
+            return _http_error(400, "invalid session key")
+        if not self._is_webui_session_key(decoded_key):
+            return _http_error(404, "session not found")
+        data = build_webui_thread_response(
+            decoded_key,
+            augment_user_media=self._augment_transcript_user_media,
+        )
+        if data is None:
+            data = self._build_webui_thread_from_session(decoded_key)
+        elif isinstance(data.get("messages"), list):
+            scrub_subagent_messages_for_channel(data["messages"])
+        if data is None:
+            return _http_error(404, "webui thread not found")
+        return _http_json_response(data)
+
+    def _build_webui_thread_from_session(self, key: str) -> dict[str, Any] | None:
+        data = self._session_manager.read_session_file(key) if self._session_manager else None
+        if data is None:
+            return None
+        messages = data.get("messages")
+        if isinstance(messages, list):
+            scrub_subagent_messages_for_channel(messages)
+        self._augment_media_urls(data)
+        if not isinstance(messages, list):
+            return None
+        ui_messages: list[dict[str, Any]] = []
+        for idx, msg in enumerate(messages):
+            if not isinstance(msg, dict):
+                continue
+            if msg.get("_command"):
+                continue
+            role = msg.get("role")
+            if role not in {"user", "assistant", "tool"}:
+                continue
+            content = msg.get("content")
+            if not isinstance(content, str):
+                content = "" if content is None else str(content)
+            row: dict[str, Any] = {
+                "id": f"legacy-{idx}",
+                "role": role,
+                "content": content,
+                "createdAt": _timestamp_ms(msg.get("timestamp")),
+            }
+            media = msg.get("media_urls")
+            if isinstance(media, list) and media:
+                row["media"] = [
+                    {"kind": "image", "url": str(m["url"]), "name": str(m.get("name") or "")}
+                    for m in media
+                    if isinstance(m, dict) and m.get("url")
+                ]
+            if row["content"].strip() or row.get("media"):
+                ui_messages.append(row)
+        if not ui_messages:
+            return None
+        return {"schemaVersion": 3, "sessionKey": key, "messages": ui_messages}
+
+    def _try_append_webui_transcript(self, chat_id: str, wire: dict[str, Any]) -> None:
+        from OpenHome.utils.webui_transcript import append_transcript_object
+
+        if wire.get("_transcript_recorded"):
+            return
+        try:
+            dup = json.loads(json.dumps(wire, ensure_ascii=False))
+            dup.pop("_transcript_recorded", None)
+            append_transcript_object(f"websocket:{chat_id}", dup)
+        except (TypeError, ValueError, OSError) as e:
+            self.logger.warning("webui transcript append failed: {}", e)
+
+    def append_webui_transcript_event(self, chat_id: str, wire: dict[str, Any]) -> None:
+        """Append a prebuilt WebUI transcript event.
+
+        Agent command shortcuts persist to the session directly and may also
+        call this hook when the active channel supports the WebUI transcript.
+        Keeping the hook public avoids coupling the agent loop to websocket
+        channel internals while still making command turns replayable after a
+        refresh.
+        """
+        self._try_append_webui_transcript(chat_id, wire)
+
+    def _augment_transcript_user_media(self, paths: list[str]) -> list[dict[str, Any]]:
+        out: list[dict[str, Any]] = []
+        for pstr in paths:
+            path = Path(pstr)
+            att = self._sign_or_stage_media_path(path)
+            if att is None:
+                continue
+            mime, _ = mimetypes.guess_type(path.name)
+            kind = "video" if mime and mime.startswith("video/") else "image"
+            out.append({"kind": kind, "url": att["url"], "name": att.get("name", path.name)})
+        return out
 
     def _augment_media_urls(self, payload: dict[str, Any]) -> None:
         """Mutate *payload* in place: each message's ``media`` path list is
@@ -1075,6 +1471,7 @@ class WebSocketChannel(BaseChannel):
         if not self._is_webui_session_key(decoded_key):
             return _http_error(404, "session not found")
         deleted = self._session_manager.delete_session(decoded_key)
+        delete_webui_thread(decoded_key)
         return _http_json_response({"deleted": bool(deleted)})
 
     def _serve_static(self, request_path: str) -> Response | None:
@@ -1326,6 +1723,7 @@ class WebSocketChannel(BaseChannel):
             new_id = str(uuid.uuid4())
             self._attach(connection, new_id)
             await self._send_event(connection, "attached", chat_id=new_id)
+            await self._maybe_push_active_goal_state(new_id)
             return
         if t == "attach":
             cid = envelope.get("chat_id")
@@ -1334,6 +1732,7 @@ class WebSocketChannel(BaseChannel):
                 return
             self._attach(connection, cid)
             await self._send_event(connection, "attached", chat_id=cid)
+            await self._maybe_push_active_goal_state(cid)
             return
         if t == "message":
             cid = envelope.get("chat_id")
@@ -1389,6 +1788,34 @@ class WebSocketChannel(BaseChannel):
             return
         await self._send_event(connection, "error", detail=f"unknown type: {t!r}")
 
+    async def _handle_message(
+        self,
+        sender_id: str,
+        chat_id: str,
+        content: str,
+        media: list[str] | None = None,
+        metadata: dict[str, Any] | None = None,
+        session_key: str | None = None,
+    ) -> None:
+        meta = metadata or {}
+        if meta.get("webui"):
+            user_obj: dict[str, Any] = {
+                "event": "user",
+                "chat_id": chat_id,
+                "text": content,
+            }
+            if media:
+                user_obj["media_paths"] = list(media)
+            self._try_append_webui_transcript(chat_id, user_obj)
+        await super()._handle_message(
+            sender_id,
+            chat_id,
+            content,
+            media,
+            metadata,
+            session_key,
+        )
+
     async def stop(self) -> None:
         if not self._running:
             return
@@ -1419,6 +1846,13 @@ class WebSocketChannel(BaseChannel):
             raise
 
     async def send(self, msg: OutboundMessage) -> None:
+        if msg.metadata.get("_runtime_model_updated"):
+            await self.send_runtime_model_updated(
+                model_name=msg.metadata.get("model"),
+                model_preset=msg.metadata.get("model_preset"),
+            )
+            return
+
         # Snapshot the subscriber set so ConnectionClosed cleanups mid-iteration are safe.
         conns = list(self._subs.get(msg.chat_id, ()))
         if not conns:
@@ -1426,14 +1860,36 @@ class WebSocketChannel(BaseChannel):
                 msg.metadata.get("_progress")
                 or msg.metadata.get("_turn_end")
                 or msg.metadata.get("_session_updated")
+                or msg.metadata.get("_goal_status")
+                or msg.metadata.get("_goal_state_sync")
             ):
                 self.logger.debug("no active subscribers for chat_id={}", msg.chat_id)
             else:
                 self.logger.warning("no active subscribers for chat_id={}", msg.chat_id)
             return
         # Signal that the agent has fully finished processing the current turn.
+        if msg.metadata.get("_goal_state_sync"):
+            blob = msg.metadata.get("goal_state")
+            await self.send_goal_state(msg.chat_id, blob if isinstance(blob, dict) else {"active": False})
+            return
+        if msg.metadata.get("_goal_status"):
+            status = msg.metadata.get("goal_status")
+            if status in {"running", "idle"}:
+                started_at = msg.metadata.get("started_at", msg.metadata.get("goal_started_at"))
+                await self.send_goal_status(
+                    msg.chat_id,
+                    status,
+                    started_at=started_at if isinstance(started_at, int | float) else None,
+                )
+            return
         if msg.metadata.get("_turn_end"):
-            await self.send_turn_end(msg.chat_id)
+            lat = msg.metadata.get("latency_ms")
+            gs = msg.metadata.get("goal_state")
+            await self.send_turn_end(
+                msg.chat_id,
+                latency_ms=int(lat) if isinstance(lat, int | float) else None,
+                goal_state=gs if isinstance(gs, dict) else None,
+            )
             return
         if msg.metadata.get("_session_updated"):
             await self.send_session_updated(msg.chat_id)
@@ -1446,6 +1902,8 @@ class WebSocketChannel(BaseChannel):
             "chat_id": msg.chat_id,
             "text": text,
         }
+        if msg.metadata.get("_webui_transcript_recorded"):
+            payload["_transcript_recorded"] = True
         if msg.buttons:
             payload["buttons"] = msg.buttons
             payload["button_prompt"] = msg.content
@@ -1460,6 +1918,14 @@ class WebSocketChannel(BaseChannel):
                 payload["media_urls"] = urls
         if msg.reply_to:
             payload["reply_to"] = msg.reply_to
+        lat = msg.metadata.get("latency_ms")
+        if isinstance(lat, int | float):
+            payload["latency_ms"] = int(lat)
+        if msg.metadata.get("_tool_events"):
+            payload["tool_events"] = msg.metadata["_tool_events"]
+        agent_ui = msg.metadata.get(OUTBOUND_META_AGENT_UI)
+        if agent_ui is not None:
+            payload["agent_ui"] = agent_ui
         # Mark intermediate agent breadcrumbs (tool-call hints, generic
         # progress strings) so WS clients can render them as subordinate
         # trace rows rather than conversational replies.
@@ -1467,9 +1933,52 @@ class WebSocketChannel(BaseChannel):
             payload["kind"] = "tool_hint"
         elif msg.metadata.get("_progress"):
             payload["kind"] = "progress"
+        self._try_append_webui_transcript(msg.chat_id, payload)
+        payload.pop("_transcript_recorded", None)
         raw = json.dumps(payload, ensure_ascii=False)
         for connection in conns:
             await self._safe_send_to(connection, raw, label=" ")
+
+    async def send_reasoning_delta(
+        self,
+        chat_id: str,
+        delta: str,
+        metadata: dict[str, Any] | None = None,
+    ) -> None:
+        """Push one chunk of model reasoning for in-place WebUI rendering."""
+        conns = list(self._subs.get(chat_id, ()))
+        if not conns or not delta:
+            return
+        meta = metadata or {}
+        body: dict[str, Any] = {
+            "event": "reasoning_delta",
+            "chat_id": chat_id,
+            "text": delta,
+        }
+        if meta.get("_stream_id") is not None:
+            body["stream_id"] = meta["_stream_id"]
+        self._try_append_webui_transcript(chat_id, body)
+        raw = json.dumps(body, ensure_ascii=False)
+        for connection in conns:
+            await self._safe_send_to(connection, raw, label=" reasoning ")
+
+    async def send_reasoning_end(
+        self,
+        chat_id: str,
+        metadata: dict[str, Any] | None = None,
+    ) -> None:
+        """Close the current reasoning stream segment."""
+        conns = list(self._subs.get(chat_id, ()))
+        if not conns:
+            return
+        meta = metadata or {}
+        body: dict[str, Any] = {"event": "reasoning_end", "chat_id": chat_id}
+        if meta.get("_stream_id") is not None:
+            body["stream_id"] = meta["_stream_id"]
+        self._try_append_webui_transcript(chat_id, body)
+        raw = json.dumps(body, ensure_ascii=False)
+        for connection in conns:
+            await self._safe_send_to(connection, raw, label=" reasoning_end ")
 
     async def send_delta(
         self,
@@ -1491,19 +2000,59 @@ class WebSocketChannel(BaseChannel):
             }
         if meta.get("_stream_id") is not None:
             body["stream_id"] = meta["_stream_id"]
+        self._try_append_webui_transcript(chat_id, body)
         raw = json.dumps(body, ensure_ascii=False)
         for connection in conns:
             await self._safe_send_to(connection, raw, label=" stream ")
 
-    async def send_turn_end(self, chat_id: str) -> None:
+    async def send_turn_end(
+        self,
+        chat_id: str,
+        latency_ms: int | None = None,
+        *,
+        goal_state: dict[str, Any] | None = None,
+    ) -> None:
         """Signal that the agent has fully finished processing the current turn."""
         conns = list(self._subs.get(chat_id, ()))
         if not conns:
             return
         body: dict[str, Any] = {"event": "turn_end", "chat_id": chat_id}
+        if latency_ms is not None:
+            body["latency_ms"] = int(latency_ms)
+        if goal_state is not None:
+            body["goal_state"] = goal_state
+        self._try_append_webui_transcript(chat_id, body)
         raw = json.dumps(body, ensure_ascii=False)
         for connection in conns:
             await self._safe_send_to(connection, raw, label=" turn_end ")
+
+    async def send_goal_state(self, chat_id: str, blob: dict[str, Any]) -> None:
+        """Push persisted goal-state snapshot for one chat."""
+        conns = list(self._subs.get(chat_id, ()))
+        if not conns:
+            return
+        body = {"event": "goal_state", "chat_id": chat_id, "goal_state": blob}
+        raw = json.dumps(body, ensure_ascii=False)
+        for connection in conns:
+            await self._safe_send_to(connection, raw, label=" goal_state ")
+
+    async def send_goal_status(
+        self,
+        chat_id: str,
+        status: str,
+        *,
+        started_at: float | None = None,
+    ) -> None:
+        """Push running/idle status for the current turn strip."""
+        conns = list(self._subs.get(chat_id, ()))
+        if not conns:
+            return
+        body: dict[str, Any] = {"event": "goal_status", "chat_id": chat_id, "status": status}
+        if status == "running" and started_at is not None:
+            body["started_at"] = started_at
+        raw = json.dumps(body, ensure_ascii=False)
+        for connection in conns:
+            await self._safe_send_to(connection, raw, label=" goal_status ")
 
     async def send_session_updated(self, chat_id: str) -> None:
         """Notify clients that session metadata changed outside the main turn."""
@@ -1514,3 +2063,23 @@ class WebSocketChannel(BaseChannel):
         raw = json.dumps(body, ensure_ascii=False)
         for connection in conns:
             await self._safe_send_to(connection, raw, label=" session_updated ")
+
+    async def send_runtime_model_updated(
+        self,
+        *,
+        model_name: Any,
+        model_preset: Any = None,
+    ) -> None:
+        """Broadcast runtime model changes to every open websocket connection."""
+        conns = list(self._conn_chats)
+        if not conns or not isinstance(model_name, str) or not model_name.strip():
+            return
+        body: dict[str, Any] = {
+            "event": "runtime_model_updated",
+            "model_name": model_name.strip(),
+        }
+        if isinstance(model_preset, str) and model_preset.strip():
+            body["model_preset"] = model_preset.strip()
+        raw = json.dumps(body, ensure_ascii=False)
+        for connection in conns:
+            await self._safe_send_to(connection, raw, label=" runtime_model_updated ")

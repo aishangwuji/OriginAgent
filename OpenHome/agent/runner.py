@@ -27,7 +27,9 @@ from OpenHome.utils.helpers import (
     build_assistant_message,
     estimate_message_tokens,
     estimate_prompt_tokens_chain,
+    extract_reasoning,
     find_legal_message_start,
+    IncrementalThinkExtractor,
     maybe_persist_tool_result,
     strip_think,
     truncate_text,
@@ -288,6 +290,17 @@ class AgentRunner:
             context.usage = dict(raw_usage)
             context.tool_calls = list(response.tool_calls)
             self._accumulate_usage(usage, raw_usage)
+
+            reasoning_text, cleaned_content = extract_reasoning(
+                response.reasoning_content,
+                response.thinking_blocks,
+                response.content,
+            )
+            response.content = cleaned_content
+            if reasoning_text and not context.streamed_reasoning:
+                await hook.emit_reasoning(reasoning_text)
+                await hook.emit_reasoning_end()
+                context.streamed_reasoning = True
 
             if response.should_execute_tools:
                 tool_calls = list(response.tool_calls)
@@ -634,12 +647,21 @@ class AgentRunner:
                     context.streamed_content = True
                 await hook.on_stream(context, delta)
 
+            async def _thinking(delta: str) -> None:
+                if not delta:
+                    return
+                context.streamed_reasoning = True
+                await hook.emit_reasoning(delta)
+
             coro = self.provider.chat_stream_with_retry(
                 **kwargs,
                 on_content_delta=_stream,
+                on_thinking_delta=_thinking,
             )
         elif wants_progress_streaming:
             stream_buf = ""
+            think_extractor = IncrementalThinkExtractor()
+            progress_state = {"reasoning_open": False}
 
             async def _stream_progress(delta: str) -> None:
                 nonlocal stream_buf
@@ -649,7 +671,13 @@ class AgentRunner:
                 stream_buf += delta
                 new_clean = strip_think(stream_buf)
                 incremental = new_clean[len(prev_clean):]
+                if await think_extractor.feed(stream_buf, hook.emit_reasoning):
+                    context.streamed_reasoning = True
+                    progress_state["reasoning_open"] = True
                 if incremental:
+                    if progress_state["reasoning_open"]:
+                        await hook.emit_reasoning_end()
+                        progress_state["reasoning_open"] = False
                     context.streamed_content = True
                     await spec.progress_callback(incremental)
 
@@ -660,13 +688,23 @@ class AgentRunner:
         else:
             coro = self.provider.chat_with_retry(**kwargs)
 
-        if timeout_s is None:
-            return await coro
+        # Streaming providers enforce their own idle timeout. Avoid an outer
+        # wall-clock cap for streaming so active long reasoning is not killed
+        # merely because total elapsed time exceeded OPENHOME_LLM_TIMEOUT_S.
+        outer_timeout_s = None if (wants_streaming or wants_progress_streaming) else timeout_s
+        if outer_timeout_s is None:
+            response = await coro
+            if wants_progress_streaming and progress_state.get("reasoning_open"):
+                await hook.emit_reasoning_end()
+            return response
         try:
-            return await asyncio.wait_for(coro, timeout=timeout_s)
+            response = await asyncio.wait_for(coro, timeout=outer_timeout_s)
+            if wants_progress_streaming and progress_state.get("reasoning_open"):
+                await hook.emit_reasoning_end()
+            return response
         except asyncio.TimeoutError:
             return LLMResponse(
-                content=f"Error calling LLM: timed out after {timeout_s:g}s",
+                content=f"Error calling LLM: timed out after {outer_timeout_s:g}s",
                 finish_reason="error",
                 error_kind="timeout",
             )

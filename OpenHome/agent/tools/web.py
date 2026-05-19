@@ -16,6 +16,11 @@ from loguru import logger
 from OpenHome.agent.tools.base import Tool, tool_parameters
 from OpenHome.agent.tools.limits import ToolLimits
 from OpenHome.agent.tools.schema import IntegerSchema, StringSchema, tool_parameters_schema
+from OpenHome.integrations.content_read.reader import (
+    CONTENT_READ_PROVIDERS,
+    ContentReadError,
+    ContentReader,
+)
 from OpenHome.security.policy import PolicyDeniedError
 from OpenHome.utils.helpers import build_image_content_blocks
 
@@ -368,7 +373,9 @@ class WebFetchTool(Tool):
 
     name = "web_fetch"
     description = (
-        "Fetch a URL and extract readable content (HTML → markdown/text). "
+        "Fetch a URL and extract readable content. In provider=auto, "
+        "GitHub, RSS, and Hacker News URLs use structured content providers; "
+        "generic web pages use the safe HTML/Jina/readability path. "
         "Output is capped at max_chars (default 50 000). "
         "Works for most web pages and docs; may fail on login-walled or JS-heavy sites."
     )
@@ -380,6 +387,7 @@ class WebFetchTool(Tool):
         user_agent: str | None = None,
         max_chars: int | None = None,
         limits: ToolLimits | None = None,
+        content_read_config: Any | None = None,
     ):
         from OpenHome.config.schema import WebFetchConfig
 
@@ -388,6 +396,7 @@ class WebFetchTool(Tool):
         self.proxy = proxy
         self.user_agent = user_agent or _DEFAULT_USER_AGENT
         self.max_chars = max_chars if max_chars is not None else self._limits.web_fetch_max_chars
+        self.content_read_config = content_read_config
 
     @property
     def parameters(self) -> dict[str, Any]:
@@ -397,6 +406,15 @@ class WebFetchTool(Tool):
                 "type": "string",
                 "enum": ["markdown", "text"],
                 "default": "markdown",
+            },
+            provider={
+                "type": "string",
+                "description": (
+                    "Content provider. auto detects GitHub/RSS/Hacker News; "
+                    "generic forces the normal web_fetch path."
+                ),
+                "enum": list(CONTENT_READ_PROVIDERS),
+                "default": "auto",
             },
             max_chars=IntegerSchema(
                 self._limits.web_fetch_max_chars,
@@ -417,18 +435,25 @@ class WebFetchTool(Tool):
         self,
         url: str,
         extract_mode: str = "markdown",
+        provider: str = "auto",
         max_chars: int | None = None,
         **kwargs: Any,
     ) -> Any:
         url = url.strip(" \t\r\n`\"'")
         if "extractMode" in kwargs and extract_mode == "markdown":
             extract_mode = kwargs.pop("extractMode")
+        if "provider" in kwargs:
+            provider = kwargs.pop("provider")
         if "maxChars" in kwargs and max_chars is None:
             max_chars = kwargs.pop("maxChars")
         max_chars = max_chars or self.max_chars
         is_valid, error_msg = _validate_url_safe(url)
         if not is_valid:
             return json.dumps({"error": f"URL validation failed: {error_msg}", "url": url}, ensure_ascii=False)
+
+        structured = await self._fetch_structured_if_applicable(url, provider, max_chars)
+        if structured is not None:
+            return structured
 
         # Detect and fetch images directly to avoid Jina's textual image captioning
         try:
@@ -456,6 +481,67 @@ class WebFetchTool(Tool):
         if result is None:
             result = await self._fetch_readability(url, extract_mode, max_chars)
         return result
+
+    async def _fetch_structured_if_applicable(
+        self,
+        url: str,
+        provider: str,
+        max_chars: int,
+    ) -> str | None:
+        """Use content_read providers for known structured platforms."""
+        normalized = (provider or "auto").strip().lower()
+        if normalized not in CONTENT_READ_PROVIDERS:
+            return json.dumps(
+                {
+                    "error": (
+                        f"Unsupported web_fetch provider '{provider}'. "
+                        f"Supported providers: {', '.join(CONTENT_READ_PROVIDERS)}"
+                    ),
+                    "url": url,
+                },
+                ensure_ascii=False,
+            )
+        if normalized == "generic":
+            return None
+        cfg = self.content_read_config
+        if cfg is not None and not bool(getattr(cfg, "enabled", True)):
+            return None if normalized == "auto" else json.dumps(
+                {"error": "content_read providers are disabled", "url": url},
+                ensure_ascii=False,
+            )
+        enabled = set(getattr(cfg, "providers", None) or ["generic", "rss", "github", "hackernews"])
+        structured_enabled = {name for name in enabled if name != "generic"}
+        reader = ContentReader(
+            proxy=self.proxy,
+            user_agent=self.user_agent,
+            enabled_providers=structured_enabled,
+            use_jina_reader=bool(getattr(cfg, "use_jina_reader", True)),
+            rss_entry_limit=int(getattr(cfg, "rss_entry_limit", 10)),
+            hackernews_comment_limit=int(getattr(cfg, "hackernews_comment_limit", 20)),
+        )
+        try:
+            resolved = reader.detect_provider(url) if normalized == "auto" else normalized
+            if resolved == "generic":
+                return None
+            result = await reader.read(url, provider=resolved)
+        except (ContentReadError, ValueError) as exc:
+            if normalized == "auto":
+                logger.debug("Structured content provider skipped for {}: {}", url, exc)
+                return None
+            return json.dumps({"error": str(exc), "url": url}, ensure_ascii=False)
+        payload = result.to_payload(max_chars)
+        text = f"{_UNTRUSTED_BANNER}\n\n{payload['content']}"
+        payload.update(
+            {
+                "finalUrl": payload["url"],
+                "status": 200,
+                "extractor": f"content_read:{payload['source_type']}",
+                "length": len(text),
+                "untrusted": True,
+                "text": text,
+            }
+        )
+        return json.dumps(payload, ensure_ascii=False)
 
     async def _fetch_jina(self, url: str, max_chars: int) -> str | None:
         """Try fetching via Jina Reader API. Returns None on failure."""

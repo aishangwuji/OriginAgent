@@ -45,6 +45,9 @@ _MCP_CAPABILITY_SNAPSHOT: ContextVar[CapabilitySnapshot | None] = ContextVar(
     default=None,
 )
 
+McpCapabilityInfo = dict[str, str]
+McpServerSnapshot = dict[str, Any]
+
 
 def _sanitize_name(name: str) -> str:
     """Sanitize an MCP-derived name for model API compatibility."""
@@ -58,6 +61,32 @@ def _sanitize_name(name: str) -> str:
 def _is_transient(exc: BaseException) -> bool:
     """Check if an exception looks like a transient connection error."""
     return type(exc).__name__ in _TRANSIENT_EXC_NAMES
+
+
+async def _probe_http_url(url: str, timeout: float = 3.0) -> bool:
+    """Return True when an HTTP/SSE endpoint accepts a TCP connection."""
+    from urllib.parse import urlparse
+
+    parsed = urlparse(url)
+    host = parsed.hostname
+    if not host:
+        return False
+    port = parsed.port or (443 if parsed.scheme == "https" else 80)
+    use_ssl = parsed.scheme == "https"
+    writer: asyncio.StreamWriter | None = None
+    try:
+        _, writer = await asyncio.wait_for(
+            asyncio.open_connection(host, port, ssl=use_ssl),
+            timeout=timeout,
+        )
+        return True
+    except Exception:
+        return False
+    finally:
+        if writer is not None:
+            writer.close()
+            with suppress(Exception):
+                await writer.wait_closed()
 
 
 def _windows_command_basename(command: str) -> str:
@@ -532,7 +561,9 @@ class MCPPromptWrapper(Tool):
 
 
 async def connect_mcp_servers(
-    mcp_servers: dict, registry: ToolRegistry
+    mcp_servers: dict,
+    registry: ToolRegistry,
+    snapshot_out: dict[str, McpServerSnapshot] | None = None,
 ) -> dict[str, AsyncExitStack]:
     """Connect to configured MCP servers and register their tools, resources, prompts.
 
@@ -545,9 +576,22 @@ async def connect_mcp_servers(
     from mcp.client.stdio import stdio_client
     from mcp.client.streamable_http import streamable_http_client
 
-    async def connect_single_server(name: str, cfg) -> tuple[str, AsyncExitStack | None]:
+    async def connect_single_server(
+        name: str,
+        cfg,
+    ) -> tuple[str, AsyncExitStack | None, McpServerSnapshot]:
         server_stack = AsyncExitStack()
         await server_stack.__aenter__()
+        snapshot: McpServerSnapshot = {
+            "name": name,
+            "status": "connecting",
+            "transport": "",
+            "tools": [],
+            "resources": [],
+            "prompts": [],
+            "registered_count": 0,
+            "error": "",
+        }
 
         def safe_register_mcp_wrapper(wrapper: Tool) -> bool:
             try:
@@ -574,7 +618,9 @@ async def connect_mcp_servers(
                 else:
                     logger.warning("MCP server '{}': no command or url configured, skipping", name)
                     await server_stack.aclose()
-                    return name, None
+                    snapshot.update({"status": "skipped", "error": "no command or url configured"})
+                    return name, None, snapshot
+            snapshot["transport"] = transport_type
 
             if transport_type == "stdio":
                 command, args, env = _normalize_windows_stdio_command(
@@ -597,6 +643,11 @@ async def connect_mcp_servers(
                         boundary="mcp",
                         policy_rule="mcp_network_ssrf",
                     )
+                if not await _probe_http_url(cfg.url):
+                    logger.warning("MCP server '{}': SSE endpoint unreachable, skipping", name)
+                    await server_stack.aclose()
+                    snapshot.update({"status": "skipped", "error": "sse endpoint unreachable"})
+                    return name, None, snapshot
 
                 def httpx_client_factory(
                     headers: dict[str, str] | None = None,
@@ -627,6 +678,16 @@ async def connect_mcp_servers(
                         boundary="mcp",
                         policy_rule="mcp_network_ssrf",
                     )
+                if not await _probe_http_url(cfg.url):
+                    logger.warning(
+                        "MCP server '{}': streamable HTTP endpoint unreachable, skipping",
+                        name,
+                    )
+                    await server_stack.aclose()
+                    snapshot.update(
+                        {"status": "skipped", "error": "streamable http endpoint unreachable"}
+                    )
+                    return name, None, snapshot
                 http_client = await server_stack.enter_async_context(
                     httpx.AsyncClient(
                         headers=cfg.headers or None,
@@ -640,7 +701,8 @@ async def connect_mcp_servers(
             else:
                 logger.warning("MCP server '{}': unknown transport type '{}'", name, transport_type)
                 await server_stack.aclose()
-                return name, None
+                snapshot.update({"status": "skipped", "error": f"unknown transport type: {transport_type}"})
+                return name, None, snapshot
 
             session = await server_stack.enter_async_context(ClientSession(read, write))
             await session.initialize()
@@ -659,6 +721,12 @@ async def connect_mcp_servers(
             available_wrapped_names = [_sanitize_name(f"mcp_{name}_{tool_def.name}") for tool_def in tools.tools]
             for tool_def in tools.tools:
                 wrapped_name = _sanitize_name(f"mcp_{name}_{tool_def.name}")
+                tool_info: McpCapabilityInfo = {
+                    "name": tool_def.name,
+                    "wrapped_name": wrapped_name,
+                    "description": tool_def.description or "",
+                    "status": "skipped",
+                }
                 if (
                     not allow_all_tools
                     and tool_def.name not in enabled_tools
@@ -669,6 +737,7 @@ async def connect_mcp_servers(
                         wrapped_name,
                         name,
                     )
+                    snapshot["tools"].append(tool_info)
                     continue
                 wrapper = MCPToolWrapper(
                     session,
@@ -680,11 +749,13 @@ async def connect_mcp_servers(
                 if safe_register_mcp_wrapper(wrapper):
                     logger.debug("MCP: registered tool '{}' from server '{}'", wrapper.name, name)
                     registered_count += 1
+                    tool_info["status"] = "registered"
                     if enabled_tools:
                         if tool_def.name in enabled_tools:
                             matched_enabled_tools.add(tool_def.name)
                         if wrapped_name in enabled_tools:
                             matched_enabled_tools.add(wrapped_name)
+                snapshot["tools"].append(tool_info)
 
             if enabled_tools and not allow_all_tools:
                 unmatched_enabled_tools = sorted(enabled_tools - matched_enabled_tools)
@@ -701,6 +772,13 @@ async def connect_mcp_servers(
             try:
                 resources_result = await session.list_resources()
                 for resource in resources_result.resources:
+                    wrapped_name = _sanitize_name(f"mcp_{name}_resource_{resource.name}")
+                    resource_info: McpCapabilityInfo = {
+                        "name": resource.name,
+                        "wrapped_name": wrapped_name,
+                        "description": resource.description or "",
+                        "status": "skipped",
+                    }
                     wrapper = MCPResourceWrapper(
                         session,
                         name,
@@ -710,15 +788,24 @@ async def connect_mcp_servers(
                     )
                     if safe_register_mcp_wrapper(wrapper):
                         registered_count += 1
+                        resource_info["status"] = "registered"
                         logger.debug(
                             "MCP: registered resource '{}' from server '{}'", wrapper.name, name
                         )
+                    snapshot["resources"].append(resource_info)
             except Exception as e:
                 logger.debug("MCP server '{}': resources not supported or failed: {}", name, e)
 
             try:
                 prompts_result = await session.list_prompts()
                 for prompt in prompts_result.prompts:
+                    wrapped_name = _sanitize_name(f"mcp_{name}_prompt_{prompt.name}")
+                    prompt_info: McpCapabilityInfo = {
+                        "name": prompt.name,
+                        "wrapped_name": wrapped_name,
+                        "description": prompt.description or "",
+                        "status": "skipped",
+                    }
                     wrapper = MCPPromptWrapper(
                         session,
                         name,
@@ -728,14 +815,18 @@ async def connect_mcp_servers(
                     )
                     if safe_register_mcp_wrapper(wrapper):
                         registered_count += 1
+                        prompt_info["status"] = "registered"
                         logger.debug("MCP: registered prompt '{}' from server '{}'", wrapper.name, name)
+                    snapshot["prompts"].append(prompt_info)
             except Exception as e:
                 logger.debug("MCP server '{}': prompts not supported or failed: {}", name, e)
 
+            snapshot["status"] = "connected"
+            snapshot["registered_count"] = registered_count
             logger.info(
                 "MCP server '{}': connected, {} capabilities registered", name, registered_count
             )
-            return name, server_stack
+            return name, server_stack, snapshot
 
         except Exception as e:
             hint = ""
@@ -757,17 +848,35 @@ async def connect_mcp_servers(
             logger.exception("MCP server '{}': failed to connect: {}", name, hint)
             with suppress(Exception):
                 await server_stack.aclose()
-            return name, None
+            snapshot.update({"status": "error", "error": f"{type(e).__name__}: {e}"})
+            return name, None, snapshot
 
     server_stacks: dict[str, AsyncExitStack] = {}
+    snapshots: dict[str, McpServerSnapshot] = {}
 
     for name, cfg in mcp_servers.items():
         try:
             result = await connect_single_server(name, cfg)
         except Exception as e:
             logger.exception("MCP server '{}' connection failed: {}", name, e)
+            snapshots[name] = {
+                "name": name,
+                "status": "error",
+                "transport": getattr(cfg, "type", "") or "",
+                "tools": [],
+                "resources": [],
+                "prompts": [],
+                "registered_count": 0,
+                "error": f"{type(e).__name__}: {e}",
+            }
             continue
-        if result is not None and result[1] is not None:
-            server_stacks[result[0]] = result[1]
+        if result is not None:
+            server_name, stack, snapshot = result
+            snapshots[server_name] = snapshot
+            if stack is not None:
+                server_stacks[server_name] = stack
 
+    if snapshot_out is not None:
+        snapshot_out.clear()
+        snapshot_out.update(snapshots)
     return server_stacks

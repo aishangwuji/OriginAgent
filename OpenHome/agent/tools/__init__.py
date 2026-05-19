@@ -1,6 +1,8 @@
 """Agent tools module."""
 
 from OpenHome.agent.tools.base import Schema, Tool, tool_parameters
+from OpenHome.agent.tools.context import ContextAware, RequestContext, ToolContext
+from OpenHome.agent.tools.loader import ToolLoader
 from OpenHome.agent.tools.registry import (
     DuplicateToolError,
     PolicyDeniedError,
@@ -26,6 +28,10 @@ __all__ = [
     "ObjectSchema",
     "StringSchema",
     "Tool",
+    "ToolContext",
+    "ToolLoader",
+    "RequestContext",
+    "ContextAware",
     "ToolRegistry",
     "ToolLimits",
     "DuplicateToolError",

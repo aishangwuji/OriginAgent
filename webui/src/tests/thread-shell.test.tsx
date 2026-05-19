@@ -4,14 +4,19 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { ThreadShell } from "@/components/thread/ThreadShell";
 import { ClientProvider } from "@/providers/ClientProvider";
-
+import type { UIMessage } from "@/lib/types";
 function makeClient() {
   const errorHandlers = new Set<(err: { kind: string }) => void>();
   const chatHandlers = new Map<string, Set<(ev: import("@/lib/types").InboundEvent) => void>>();
+  const sessionUpdateHandlers = new Set<(chatId: string) => void>();
+  const goalStateByChatId = new Map<string, import("@/lib/types").GoalStateWsPayload>();
   return {
     status: "open" as const,
     defaultChatId: null as string | null,
     onStatus: () => () => {},
+    onRuntimeModelUpdate: () => () => {},
+    getRunStartedAt: () => null,
+    getGoalState: (chatId: string) => goalStateByChatId.get(chatId),
     onChat: (chatId: string, handler: (ev: import("@/lib/types").InboundEvent) => void) => {
       let handlers = chatHandlers.get(chatId);
       if (!handlers) {
@@ -29,11 +34,23 @@ function makeClient() {
         errorHandlers.delete(handler);
       };
     },
+    onSessionUpdate: (handler: (chatId: string) => void) => {
+      sessionUpdateHandlers.add(handler);
+      return () => {
+        sessionUpdateHandlers.delete(handler);
+      };
+    },
     _emitError(err: { kind: string }) {
       for (const h of errorHandlers) h(err);
     },
     _emitChat(chatId: string, ev: import("@/lib/types").InboundEvent) {
+      if (ev.event === "goal_state") {
+        goalStateByChatId.set(chatId, ev.goal_state);
+      }
       for (const h of chatHandlers.get(chatId) ?? []) h(ev);
+    },
+    _emitSessionUpdate(chatId: string) {
+      for (const h of sessionUpdateHandlers) h(chatId);
     },
     sendMessage: vi.fn(),
     newChat: vi.fn(),
@@ -44,11 +61,16 @@ function makeClient() {
   };
 }
 
-function wrap(client: ReturnType<typeof makeClient>, children: ReactNode) {
+function wrap(
+  client: ReturnType<typeof makeClient>,
+  children: ReactNode,
+  refreshToken: () => Promise<string | null> = async () => null,
+) {
   return (
     <ClientProvider
       client={client as unknown as import("@/lib/OpenHome-client").OpenHomeClient}
       token="tok"
+      refreshToken={refreshToken}
     >
       {children}
     </ClientProvider>
@@ -63,6 +85,20 @@ function session(chatId: string) {
     createdAt: null,
     updatedAt: null,
     preview: "",
+  };
+}
+
+function transcriptFromSimpleMessages(
+  rows: Array<{ role: "user" | "assistant"; content: string }>,
+): { schemaVersion: number; messages: UIMessage[] } {
+  return {
+    schemaVersion: 3,
+    messages: rows.map((m, i) => ({
+      id: `m-${i}`,
+      role: m.role,
+      content: m.content,
+      createdAt: 1000 + i,
+    })),
   };
 }
 
@@ -310,17 +346,16 @@ describe("ThreadShell", () => {
 
   it("sends quick action prompts from the empty thread landing", async () => {
     const client = makeClient();
-    const onNewChat = vi.fn().mockResolvedValue("chat-a");
+    const onCreateChat = vi.fn().mockResolvedValue("chat-a");
 
-    render(
+    const { rerender } = render(
       wrap(
         client,
         <ThreadShell
-          session={session("chat-a")}
-          title="Chat chat-a"
+          session={null}
+          title="OpenHome"
           onToggleSidebar={() => {}}
-          onGoHome={() => {}}
-          onNewChat={onNewChat}
+          onCreateChat={onCreateChat}
         />,
       ),
     );
@@ -330,6 +365,21 @@ describe("ThreadShell", () => {
     });
 
     fireEvent.click(screen.getByRole("button", { name: "Write code" }));
+
+    await waitFor(() => expect(onCreateChat).toHaveBeenCalledTimes(1));
+    await act(async () => {
+      rerender(
+        wrap(
+          client,
+          <ThreadShell
+            session={session("chat-a")}
+            title="Chat chat-a"
+            onToggleSidebar={() => {}}
+            onCreateChat={onCreateChat}
+          />,
+        ),
+      );
+    });
 
     await waitFor(() =>
       expect(client.sendMessage).toHaveBeenCalledWith(
@@ -347,16 +397,13 @@ describe("ThreadShell", () => {
       "fetch",
       vi.fn(async (input: RequestInfo | URL) => {
         const url = String(input);
-        if (url.includes("websocket%3Achat-a/messages")) {
-          return httpJson({
-            key: "websocket:chat-a",
-            created_at: null,
-            updated_at: null,
-            messages: [
+        if (url.includes("websocket%3Achat-a/webui-thread")) {
+          return httpJson(
+            transcriptFromSimpleMessages([
               { role: "user", content: "old question" },
               { role: "assistant", content: "old answer" },
-            ],
-          });
+            ]),
+          );
         }
         return {
           ok: false,
@@ -398,10 +445,10 @@ describe("ThreadShell", () => {
 
     expect(screen.queryByText("old answer")).not.toBeInTheDocument();
     await waitFor(() =>
-      expect(screen.getByPlaceholderText("Ask anything...")).toBeInTheDocument(),
+      expect(screen.getByPlaceholderText("Type your message…")).toBeInTheDocument(),
     );
-    const input = screen.getByPlaceholderText("Ask anything...");
-    expect(input.className).toContain("min-h-[78px]");
+    const input = screen.getByPlaceholderText("Type your message…");
+    expect(input.className).toContain("min-h-[50px]");
     expect(screen.queryByText("old answer")).not.toBeInTheDocument();
   });
 
@@ -498,15 +545,8 @@ describe("ThreadShell", () => {
       "fetch",
       vi.fn(async (input: RequestInfo | URL) => {
         const url = String(input);
-        if (url.includes("websocket%3Achat-a/messages")) {
-          return httpJson({
-            key: "websocket:chat-a",
-            created_at: null,
-            updated_at: null,
-            // Simulate a stale history response that has not persisted the
-            // just-received assistant reply yet.
-            messages: [{ role: "user", content: "hello" }],
-          });
+        if (url.includes("websocket%3Achat-a/webui-thread")) {
+          return httpJson(transcriptFromSimpleMessages([{ role: "user", content: "hello" }]));
         }
         return {
           ok: false,
@@ -572,7 +612,206 @@ describe("ThreadShell", () => {
     await waitFor(() => expect(screen.getByText("live assistant reply")).toBeInTheDocument());
   });
 
-  it("does not open slash commands on the blank welcome page", async () => {
+  it("does not refetch thread history on turn_end", async () => {
+    const client = makeClient();
+    let historyCalls = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.includes("websocket%3Achat-a/webui-thread")) {
+          historyCalls += 1;
+          return httpJson(
+            transcriptFromSimpleMessages(
+              historyCalls === 1
+                ? [{ role: "user", content: "question" }]
+                : [
+                    { role: "user", content: "question" },
+                    { role: "assistant", content: "canonical markdown answer" },
+                  ],
+            ),
+          );
+        }
+        return {
+          ok: false,
+          status: 404,
+          json: async () => ({}),
+        };
+      }),
+    );
+
+    render(
+      wrap(
+        client,
+        <ThreadShell
+          session={session("chat-a")}
+          title="Chat chat-a"
+          onToggleSidebar={() => {}}
+          onNewChat={() => {}}
+        />,
+      ),
+    );
+
+    await waitFor(() => expect(screen.getByText("question")).toBeInTheDocument());
+    await act(async () => {
+      client._emitChat("chat-a", {
+        event: "delta",
+        chat_id: "chat-a",
+        text: "live half-parsed | markdown",
+      });
+      client._emitChat("chat-a", {
+        event: "turn_end",
+        chat_id: "chat-a",
+      });
+    });
+
+    await waitFor(() => expect(screen.getByText("live half-parsed | markdown")).toBeInTheDocument());
+    expect(screen.queryByText("canonical markdown answer")).not.toBeInTheDocument();
+    expect(historyCalls).toBe(1);
+  });
+
+  it("keeps a slash command response visible after turn_end and session refresh", async () => {
+    const client = makeClient();
+    let historyCalls = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.includes("websocket%3Achat-a/webui-thread")) {
+          historyCalls += 1;
+          if (historyCalls === 1) {
+            return httpJson({ schemaVersion: 3, messages: [] });
+          }
+          return httpJson(
+            transcriptFromSimpleMessages([
+              { role: "user", content: "/mcp" },
+              { role: "assistant", content: "## MCP Servers\n\nNo MCP servers are configured." },
+            ]),
+          );
+        }
+        return {
+          ok: false,
+          status: 404,
+          json: async () => ({}),
+        };
+      }),
+    );
+
+    render(
+      wrap(
+        client,
+        <ThreadShell
+          session={session("chat-a")}
+          title="Chat chat-a"
+          onToggleSidebar={() => {}}
+          onNewChat={() => {}}
+        />,
+      ),
+    );
+
+    await waitFor(() =>
+      expect(screen.queryByText("Loading conversation…")).not.toBeInTheDocument(),
+    );
+    fireEvent.change(screen.getByLabelText("Message input"), {
+      target: { value: "/mcp" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Send message" }));
+
+    await waitFor(() =>
+      expect(client.sendMessage).toHaveBeenCalledWith("chat-a", "/mcp", undefined),
+    );
+
+    await act(async () => {
+      client._emitChat("chat-a", {
+        event: "message",
+        chat_id: "chat-a",
+        text: "## MCP Servers\n\nNo MCP servers are configured.",
+      });
+      client._emitChat("chat-a", {
+        event: "turn_end",
+        chat_id: "chat-a",
+      });
+      client._emitSessionUpdate("chat-a");
+    });
+
+    expect(screen.queryByText(/## MCP Servers/)).not.toBeInTheDocument();
+    await waitFor(() => expect(historyCalls).toBeGreaterThanOrEqual(2));
+    await waitFor(() =>
+      expect(screen.getByRole("heading", { name: "MCP Servers" })).toBeInTheDocument(),
+      { timeout: 5_000 },
+    );
+    expect(screen.queryByText(/## MCP Servers/)).not.toBeInTheDocument();
+    expect(screen.queryByText("What can I do for you?")).not.toBeInTheDocument();
+  });
+
+  it("scrolls to the bottom after loading a session from the blank new-chat page", async () => {
+    const client = makeClient();
+    const scrollIntoView = vi.fn();
+    const originalScrollIntoView = HTMLElement.prototype.scrollIntoView;
+    HTMLElement.prototype.scrollIntoView = scrollIntoView;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.includes("websocket%3Achat-a/webui-thread")) {
+          return httpJson(
+            transcriptFromSimpleMessages([
+              { role: "user", content: "question" },
+              { role: "assistant", content: "loaded answer" },
+            ]),
+          );
+        }
+        return {
+          ok: false,
+          status: 404,
+          json: async () => ({}),
+        };
+      }),
+    );
+
+    try {
+      const { rerender } = render(
+        wrap(
+          client,
+          <ThreadShell
+            session={null}
+            title="OpenHome"
+            onToggleSidebar={() => {}}
+            onNewChat={() => {}}
+          />,
+        ),
+      );
+
+      expect(screen.getByText("What can I do for you?")).toBeInTheDocument();
+      scrollIntoView.mockClear();
+
+      await act(async () => {
+        rerender(
+          wrap(
+            client,
+            <ThreadShell
+              session={session("chat-a")}
+              title="Chat chat-a"
+              onToggleSidebar={() => {}}
+              onNewChat={() => {}}
+            />,
+          ),
+        );
+      });
+
+      await waitFor(() => expect(screen.getByText("loaded answer")).toBeInTheDocument());
+      await waitFor(() =>
+        expect(scrollIntoView).toHaveBeenCalledWith({
+          block: "end",
+          behavior: "auto",
+        }),
+      );
+    } finally {
+      HTMLElement.prototype.scrollIntoView = originalScrollIntoView;
+    }
+  });
+
+  it("opens slash commands on the blank welcome page", async () => {
     const client = makeClient();
     vi.stubGlobal(
       "fetch",
@@ -582,10 +821,11 @@ describe("ThreadShell", () => {
           return httpJson({
             commands: [
               {
-                command: "/stop",
-                title: "Stop current task",
-                description: "Cancel the active agent turn.",
-                icon: "square",
+                command: "/history",
+                title: "Show conversation history",
+                description: "Print the last N persisted messages.",
+                icon: "history",
+                arg_hint: "[n]",
               },
             ],
           });
@@ -621,7 +861,109 @@ describe("ThreadShell", () => {
       target: { value: "/" },
     });
 
-    expect(screen.queryByRole("listbox", { name: "Slash commands" })).not.toBeInTheDocument();
+    expect(screen.getByRole("listbox", { name: "Slash commands" })).toBeInTheDocument();
+    expect(screen.getByRole("option", { name: /\/history/i })).toBeInTheDocument();
+  });
+
+  it("refreshes the API token when loading slash commands returns 401", async () => {
+    const client = makeClient();
+    const refreshToken = vi.fn().mockResolvedValue("fresh-tok");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        if (url.endsWith("/api/commands")) {
+          const auth = (init?.headers as Record<string, string> | undefined)?.Authorization;
+          if (auth === "Bearer tok") {
+            return { ok: false, status: 401, json: async () => ({}) };
+          }
+          return httpJson({
+            commands: [
+              {
+                command: "/history",
+                title: "Show conversation history",
+                description: "Print the last N persisted messages.",
+                icon: "history",
+                arg_hint: "[n]",
+              },
+            ],
+          });
+        }
+        return {
+          ok: false,
+          status: 404,
+          json: async () => ({}),
+        };
+      }),
+    );
+
+    render(
+      wrap(
+        client,
+        <ThreadShell
+          session={null}
+          title="OpenHome"
+          onToggleSidebar={() => {}}
+          onNewChat={() => {}}
+        />,
+        refreshToken,
+      ),
+    );
+
+    await waitFor(() => expect(fetch).toHaveBeenCalledWith(
+      "/api/commands",
+      expect.objectContaining({
+        headers: { Authorization: "Bearer fresh-tok" },
+      }),
+    ));
+    expect(refreshToken).toHaveBeenCalledTimes(1);
+
+    fireEvent.change(screen.getByLabelText("Message input"), {
+      target: { value: "/" },
+    });
+
+    expect(screen.getByRole("option", { name: /\/history/i })).toBeInTheDocument();
+  });
+
+  it("shows a retryable conversation load error instead of the welcome page", async () => {
+    const client = makeClient();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.includes("websocket%3Achat-a/webui-thread")) {
+          return {
+            ok: false,
+            status: 500,
+            json: async () => ({}),
+          };
+        }
+        return {
+          ok: false,
+          status: 404,
+          json: async () => ({}),
+        };
+      }),
+    );
+
+    render(
+      wrap(
+        client,
+        <ThreadShell
+          session={session("chat-a")}
+          title="Chat chat-a"
+          onToggleSidebar={() => {}}
+          onNewChat={() => {}}
+        />,
+      ),
+    );
+
+    expect(await screen.findByText("Could not load this conversation")).toBeInTheDocument();
+    expect(screen.getByText("HTTP 500")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Retry" })).toBeInTheDocument();
+    expect(screen.queryByText("What can I do for you?")).not.toBeInTheDocument();
+    expect(screen.getByPlaceholderText("Type your message…")).toBeInTheDocument();
+    expect(screen.queryByPlaceholderText("Ask anything...")).not.toBeInTheDocument();
   });
 
   it("switches welcome quick actions when image mode is enabled", async () => {
@@ -738,17 +1080,14 @@ describe("ThreadShell", () => {
       "fetch",
       vi.fn((input: RequestInfo | URL) => {
         const url = String(input);
-        if (url.includes("websocket%3Achat-a/messages")) {
+        if (url.includes("websocket%3Achat-a/webui-thread")) {
           return Promise.resolve(
-            httpJson({
-              key: "websocket:chat-a",
-              created_at: null,
-              updated_at: null,
-              messages: [{ role: "assistant", content: "from chat a" }],
-            }),
+            httpJson(
+              transcriptFromSimpleMessages([{ role: "assistant", content: "from chat a" }]),
+            ),
           );
         }
-        if (url.includes("websocket%3Achat-b/messages")) {
+        if (url.includes("websocket%3Achat-b/webui-thread")) {
           return new Promise((resolve) => {
             resolveChatB = resolve;
           });
@@ -793,15 +1132,13 @@ describe("ThreadShell", () => {
 
     expect(screen.queryByText("from chat a")).not.toBeInTheDocument();
     expect(screen.getByText("Loading conversation…")).toBeInTheDocument();
+    expect(screen.queryByText("What can I do for you?")).not.toBeInTheDocument();
+    expect(screen.getByPlaceholderText("Type your message…")).toBeInTheDocument();
+    expect(screen.queryByPlaceholderText("Ask anything...")).not.toBeInTheDocument();
 
     await act(async () => {
       resolveChatB?.(
-        httpJson({
-          key: "websocket:chat-b",
-          created_at: null,
-          updated_at: null,
-          messages: [{ role: "assistant", content: "from chat b" }],
-        }),
+        httpJson(transcriptFromSimpleMessages([{ role: "assistant", content: "from chat b" }])),
       );
     });
 
@@ -809,9 +1146,27 @@ describe("ThreadShell", () => {
     expect(screen.queryByText("from chat a")).not.toBeInTheDocument();
   });
 
-  it("renders ask_user options above the composer and sends selected answers", async () => {
+  it("does not flash the welcome page while an existing empty session is loading", async () => {
     const client = makeClient();
-    const onNewChat = vi.fn().mockResolvedValue("chat-a");
+    let resolveHistory:
+      | ((value: { ok: boolean; status: number; json: () => Promise<unknown> }) => void)
+      | null = null;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.includes("websocket%3Achat-a/webui-thread")) {
+          return new Promise((resolve) => {
+            resolveHistory = resolve;
+          });
+        }
+        return Promise.resolve({
+          ok: false,
+          status: 404,
+          json: async () => ({}),
+        });
+      }),
+    );
 
     render(
       wrap(
@@ -820,34 +1175,25 @@ describe("ThreadShell", () => {
           session={session("chat-a")}
           title="Chat chat-a"
           onToggleSidebar={() => {}}
-          onGoHome={() => {}}
-          onNewChat={onNewChat}
+          onNewChat={() => {}}
         />,
       ),
     );
 
+    expect(screen.getByText("Loading conversation…")).toBeInTheDocument();
+    expect(screen.queryByText("What can I do for you?")).not.toBeInTheDocument();
+    expect(screen.getByPlaceholderText("Type your message…")).toBeInTheDocument();
+    expect(screen.queryByPlaceholderText("Ask anything...")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Write code" })).not.toBeInTheDocument();
+
     await act(async () => {
-      client._emitChat("chat-a", {
-        event: "message",
-        chat_id: "chat-a",
-        text: "How should I continue?",
-        buttons: [["Short answer", "Detailed answer"]],
-      });
+      resolveHistory?.(httpJson({ schemaVersion: 3, messages: [] }));
     });
 
-    expect(screen.getByRole("group", { name: "Question" })).toHaveTextContent(
-      "How should I continue?",
+    await waitFor(() =>
+      expect(screen.queryByText("Loading conversation…")).not.toBeInTheDocument(),
     );
-
-    fireEvent.click(screen.getByRole("button", { name: "Short answer" }));
-
-    expect(client.sendMessage).toHaveBeenCalledWith(
-      "chat-a",
-      "Short answer",
-      undefined,
-    );
-    await waitFor(() => {
-      expect(screen.queryByRole("group", { name: "Question" })).not.toBeInTheDocument();
-    });
+    expect(screen.queryByText("What can I do for you?")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Write code" })).not.toBeInTheDocument();
   });
 });
