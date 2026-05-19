@@ -307,7 +307,7 @@ class ToolRegistry:
                 boundary="capability",
                 policy_rule="capability_exec_denied",
             )
-        if name in {"read_file", "list_dir", "glob", "grep", "notebook_read"} and not snapshot.can_read_files:
+        if name in {"read_file", "session_search", "list_dir", "glob", "grep", "notebook_read"} and not snapshot.can_read_files:
             raise PolicyDeniedError(
                 f"Tool '{name}' cannot read files under the current capability snapshot",
                 code="capability_denied",

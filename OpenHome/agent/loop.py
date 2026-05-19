@@ -54,6 +54,7 @@ from OpenHome.agent.tools.runtime_status import (
 )
 from OpenHome.agent.tools.search import GlobTool, GrepTool
 from OpenHome.agent.tools.self import MyTool
+from OpenHome.agent.tools.session_search import SessionSearchTool
 from OpenHome.agent.tools.shell import ExecTool
 from OpenHome.agent.tools.spawn import SpawnTool
 from OpenHome.agent.tools.web import WebFetchTool, WebSearchTool
@@ -589,6 +590,7 @@ class AgentLoop:
             self.tools.register(cls(workspace=self.workspace, allowed_dir=allowed_dir))
         for cls in (GlobTool, GrepTool):
             self.tools.register(cls(workspace=self.workspace, allowed_dir=allowed_dir))
+        self.tools.register(SessionSearchTool(workspace=self.workspace))
         self.tools.register(NotebookEditTool(workspace=self.workspace, allowed_dir=allowed_dir))
         if _should_register_exec(self.exec_config):
             self.tools.register(
