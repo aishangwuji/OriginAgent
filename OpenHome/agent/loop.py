@@ -369,8 +369,14 @@ class AgentLoop:
         self._mcp_servers = mcp_servers or {}
         self._mcp_stacks: dict[str, AsyncExitStack] = {}
         self._mcp_snapshot: dict[str, Any] = {}
+        self._mcp_state = "disconnected"
         self._mcp_connected = False
         self._mcp_connecting = False
+        self._mcp_lifecycle_lock = asyncio.Lock()
+        self._mcp_ready: asyncio.Future[bool] | None = None
+        self._mcp_shutdown_event: asyncio.Event | None = None
+        self._mcp_runtime_task: asyncio.Task[None] | None = None
+        self._mcp_startup_error: BaseException | None = None
         self._active_tasks: dict[str, list[asyncio.Task]] = {}  # session_key -> tasks
         self._background_tasks: list[asyncio.Task] = []
         self._session_locks: dict[str, asyncio.Lock] = {}
@@ -645,31 +651,120 @@ class AgentLoop:
 
     async def _connect_mcp(self) -> None:
         """Connect to configured MCP servers (one-time, lazy)."""
-        if self._mcp_connected or self._mcp_connecting or not self._mcp_servers:
+        if not self._mcp_servers:
             return
-        self._mcp_connecting = True
+        while True:
+            ready: asyncio.Future[bool] | None = None
+            runtime_task: asyncio.Task[None] | None = None
+            async with self._mcp_lifecycle_lock:
+                if self._mcp_state == "connected":
+                    return
+                if self._mcp_state == "connecting":
+                    ready = self._mcp_ready
+                elif self._mcp_state == "closing":
+                    runtime_task = self._mcp_runtime_task
+                else:
+                    ready = asyncio.get_running_loop().create_future()
+                    self._mcp_state = "connecting"
+                    self._mcp_connected = False
+                    self._mcp_connecting = True
+                    self._mcp_startup_error = None
+                    self._mcp_ready = ready
+                    self._mcp_shutdown_event = asyncio.Event()
+                    self._mcp_runtime_task = asyncio.create_task(
+                        self._run_mcp_runtime(ready, self._mcp_shutdown_event),
+                        name="openhome-mcp-runtime",
+                    )
+            if runtime_task is not None:
+                with suppress(Exception):
+                    await asyncio.shield(runtime_task)
+                continue
+            if ready is not None:
+                with suppress(Exception):
+                    await asyncio.shield(ready)
+                return
+            return
+
+    async def _run_mcp_runtime(
+        self,
+        ready: asyncio.Future[bool],
+        shutdown_event: asyncio.Event,
+    ) -> None:
+        """Own the MCP connection lifecycle inside a single task."""
         from OpenHome.agent.tools.mcp import connect_mcp_servers
 
+        stacks: dict[str, AsyncExitStack] = {}
+        clear_snapshot_on_exit = False
         try:
-            self._mcp_stacks = await connect_mcp_servers(
+            stacks = await connect_mcp_servers(
                 self._mcp_servers,
                 self.tools,
                 snapshot_out=self._mcp_snapshot,
             )
-            if self._mcp_stacks:
-                self._mcp_connected = True
-            else:
+            if not stacks:
                 logger.warning("No MCP servers connected successfully (will retry next message)")
+                async with self._mcp_lifecycle_lock:
+                    self._mcp_stacks = {}
+                    self._mcp_connected = False
+                    self._mcp_connecting = False
+                    self._mcp_state = "disconnected"
+                    if not ready.done():
+                        ready.set_result(False)
+                return
+
+            async with self._mcp_lifecycle_lock:
+                self._mcp_stacks = stacks
+                self._mcp_connected = True
+                self._mcp_connecting = False
+                self._mcp_state = "connected"
+                self._mcp_startup_error = None
+                if not ready.done():
+                    ready.set_result(True)
+
+            await shutdown_event.wait()
+            clear_snapshot_on_exit = True
         except asyncio.CancelledError:
-            logger.warning("MCP connection cancelled (will retry next message)")
-            self._mcp_stacks.clear()
-            self._mcp_snapshot.clear()
+            clear_snapshot_on_exit = True
+            logger.warning("MCP runtime cancelled (will retry next message)")
+            async with self._mcp_lifecycle_lock:
+                self._mcp_stacks.clear()
+                self._mcp_snapshot.clear()
+                self._mcp_connected = False
+                self._mcp_connecting = False
+                self._mcp_state = "disconnected"
+                if not ready.done():
+                    ready.set_result(False)
+            raise
         except BaseException as e:
+            clear_snapshot_on_exit = True
             logger.warning("Failed to connect MCP servers (will retry next message): {}", e)
-            self._mcp_stacks.clear()
-            self._mcp_snapshot.clear()
+            async with self._mcp_lifecycle_lock:
+                self._mcp_stacks.clear()
+                self._mcp_snapshot.clear()
+                self._mcp_connected = False
+                self._mcp_connecting = False
+                self._mcp_state = "disconnected"
+                self._mcp_startup_error = e
+                if not ready.done():
+                    ready.set_result(False)
+            return
         finally:
-            self._mcp_connecting = False
+            for name, stack in stacks.items():
+                try:
+                    await stack.aclose()
+                except (RuntimeError, BaseExceptionGroup):
+                    logger.debug("MCP server '{}' cleanup error (can be ignored)", name)
+            async with self._mcp_lifecycle_lock:
+                if self._mcp_runtime_task is asyncio.current_task():
+                    self._mcp_stacks.clear()
+                    if clear_snapshot_on_exit:
+                        self._mcp_snapshot.clear()
+                    self._mcp_connected = False
+                    self._mcp_connecting = False
+                    self._mcp_state = "disconnected"
+                    self._mcp_runtime_task = None
+                    self._mcp_ready = None
+                    self._mcp_shutdown_event = None
 
     def _set_tool_context(
         self, channel: str, chat_id: str,
@@ -1334,14 +1429,24 @@ class AgentLoop:
         if self._background_tasks:
             await asyncio.gather(*self._background_tasks, return_exceptions=True)
             self._background_tasks.clear()
-        for name, stack in self._mcp_stacks.items():
-            try:
-                await stack.aclose()
-            except (RuntimeError, BaseExceptionGroup):
-                logger.debug("MCP server '{}' cleanup error (can be ignored)", name)
-        self._mcp_stacks.clear()
-        self._mcp_snapshot.clear()
-        self._mcp_connected = False
+        runtime_task: asyncio.Task[None] | None = None
+        async with self._mcp_lifecycle_lock:
+            runtime_task = self._mcp_runtime_task
+            shutdown_event = self._mcp_shutdown_event
+            if runtime_task is None:
+                self._mcp_connected = False
+                self._mcp_connecting = False
+                self._mcp_state = "disconnected"
+                self._mcp_stacks.clear()
+                self._mcp_snapshot.clear()
+                return
+            self._mcp_connected = False
+            self._mcp_connecting = False
+            self._mcp_state = "closing"
+            if shutdown_event is not None:
+                shutdown_event.set()
+        with suppress(Exception):
+            await asyncio.shield(runtime_task)
 
     def _schedule_background(self, coro) -> None:
         """Schedule a coroutine as a tracked background task (drained on shutdown)."""

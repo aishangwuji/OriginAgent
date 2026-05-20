@@ -828,7 +828,7 @@ async def connect_mcp_servers(
             )
             return name, server_stack, snapshot
 
-        except Exception as e:
+        except BaseException as e:
             hint = ""
             text = str(e).lower()
             if any(
@@ -845,10 +845,11 @@ async def connect_mcp_servers(
                     " Hint: this looks like stdio protocol pollution. Make sure the MCP server writes "
                     "only JSON-RPC to stdout and sends logs/debug output to stderr instead."
                 )
-            logger.exception("MCP server '{}': failed to connect: {}", name, hint)
-            with suppress(Exception):
+            detail = f"{type(e).__name__}: {e}"
+            logger.warning("MCP server '{}': failed to connect: {}{}", name, detail, hint)
+            with suppress(BaseException):
                 await server_stack.aclose()
-            snapshot.update({"status": "error", "error": f"{type(e).__name__}: {e}"})
+            snapshot.update({"status": "error", "error": detail})
             return name, None, snapshot
 
     server_stacks: dict[str, AsyncExitStack] = {}

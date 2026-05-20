@@ -365,6 +365,16 @@ def _make_fake_session(tool_names: list[str]) -> SimpleNamespace:
     return SimpleNamespace(initialize=initialize, list_tools=list_tools)
 
 
+def _make_cancelled_session() -> SimpleNamespace:
+    async def initialize() -> None:
+        raise asyncio.CancelledError("startup cancelled")
+
+    async def list_tools() -> SimpleNamespace:  # pragma: no cover - initialize cancels first
+        return SimpleNamespace(tools=[])
+
+    return SimpleNamespace(initialize=initialize, list_tools=list_tools)
+
+
 @pytest.mark.asyncio
 async def test_connect_mcp_servers_enabled_tools_supports_raw_names(
     fake_mcp_runtime: dict[str, object | None],
@@ -379,6 +389,52 @@ async def test_connect_mcp_servers_enabled_tools_supports_raw_names(
         await stack.aclose()
 
     assert registry.tool_names == ["mcp_test_demo"]
+
+
+@pytest.mark.asyncio
+async def test_connect_mcp_servers_closes_streamable_http_stack_on_cancelled_startup(
+    fake_mcp_runtime: dict[str, object | None],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake_mcp_runtime["session"] = _make_cancelled_session()
+    seen: dict[str, object | None] = {"exit_task": None, "exit_calls": 0}
+
+    @asynccontextmanager
+    async def _tracking_streamable_http_client(_url: str, http_client=None):
+        try:
+            yield object(), object(), object()
+        finally:
+            seen["exit_calls"] = int(seen["exit_calls"] or 0) + 1
+            seen["exit_task"] = asyncio.current_task()
+
+    async def _always_reachable(_url: str, timeout: float = 3.0) -> bool:
+        return True
+
+    monkeypatch.setattr(mcp_mod, "_probe_http_url", _always_reachable)
+    monkeypatch.setattr(
+        sys.modules["mcp.client.streamable_http"],
+        "streamable_http_client",
+        _tracking_streamable_http_client,
+    )
+
+    registry = ToolRegistry()
+    snapshot: dict[str, dict] = {}
+    stacks = await connect_mcp_servers(
+        {
+            "test": MCPServerConfig(
+                type="streamableHttp",
+                url="https://example.com/api/mcp",
+            )
+        },
+        registry,
+        snapshot_out=snapshot,
+    )
+
+    assert stacks == {}
+    assert snapshot["test"]["status"] == "error"
+    assert "CancelledError" in snapshot["test"]["error"]
+    assert seen["exit_calls"] == 1
+    assert seen["exit_task"] is asyncio.current_task()
 
 
 @pytest.mark.asyncio
@@ -495,7 +551,7 @@ async def test_connect_mcp_servers_logs_stdio_pollution_hint(
 ) -> None:
     messages: list[str] = []
 
-    def _error(message: str, *args: object) -> None:
+    def _warning(message: str, *args: object) -> None:
         messages.append(message.format(*args))
 
     @asynccontextmanager
@@ -504,7 +560,7 @@ async def test_connect_mcp_servers_logs_stdio_pollution_hint(
         yield  # pragma: no cover
 
     monkeypatch.setattr(sys.modules["mcp.client.stdio"], "stdio_client", _broken_stdio_client)
-    monkeypatch.setattr("OpenHome.agent.tools.mcp.logger.exception", _error)
+    monkeypatch.setattr("OpenHome.agent.tools.mcp.logger.warning", _warning)
 
     registry = ToolRegistry()
     stacks = await connect_mcp_servers({"gh": MCPServerConfig(command="github-mcp")}, registry)
