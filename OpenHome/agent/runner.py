@@ -822,7 +822,7 @@ class AgentRunner:
         ):
             prep_error = f"Error: Tool '{tool_call.name}' requires an explicit capability snapshot"
         if prep_error:
-            self._audit_tool_from_runner(
+            await self._audit_tool_from_runner(
                 spec,
                 name=tool_call.name,
                 tool=tool,
@@ -863,7 +863,7 @@ class AgentRunner:
                 "detail": str(exc),
             }
             if isinstance(exc, AskUserInterrupt):
-                self._audit_tool_from_runner(
+                await self._audit_tool_from_runner(
                     spec,
                     name=tool_call.name,
                     tool=tool,
@@ -876,7 +876,7 @@ class AgentRunner:
                 return "", event, exc
             payload = f"Error: {type(exc).__name__}: {exc}"
             policy_rule = exc.policy_rule if isinstance(exc, PolicyDeniedError) else None
-            self._audit_tool_from_runner(
+            await self._audit_tool_from_runner(
                 spec,
                 name=tool_call.name,
                 tool=tool,
@@ -902,7 +902,7 @@ class AgentRunner:
 
         if isinstance(result, str) and result.startswith("Error"):
             policy_denied = is_policy_denial_text(result)
-            self._audit_tool_from_runner(
+            await self._audit_tool_from_runner(
                 spec,
                 name=tool_call.name,
                 tool=tool,
@@ -930,7 +930,7 @@ class AgentRunner:
                 return result + hint, event, RuntimeError(result)
             return result + hint, event, None
 
-        self._audit_tool_from_runner(
+        await self._audit_tool_from_runner(
             spec,
             name=tool_call.name,
             tool=tool,
@@ -947,7 +947,7 @@ class AgentRunner:
             detail = detail[:120] + "..."
         return result, {"name": tool_call.name, "status": "ok", "detail": detail}, None
 
-    def _audit_tool_from_runner(
+    async def _audit_tool_from_runner(
         self,
         spec: AgentRunSpec,
         *,
@@ -960,6 +960,20 @@ class AgentRunner:
         policy_rule: str | None = None,
         result: Any = None,
     ) -> None:
+        audit = getattr(spec.tools, "audit_tool_result_async", None)
+        if callable(audit):
+            with suppress(Exception):
+                await audit(
+                    name=name,
+                    tool=tool,
+                    params=params if isinstance(params, dict) else {},
+                    status=status,
+                    start=start,
+                    error_kind=error_kind,
+                    policy_rule=policy_rule,
+                    result=result,
+                )
+            return
         audit = getattr(spec.tools, "audit_tool_result", None)
         if callable(audit):
             with suppress(Exception):

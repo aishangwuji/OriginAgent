@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 from pathlib import Path
 from typing import Any
@@ -9,6 +10,7 @@ import pytest
 
 from OpenHome.agent.domain_packs import DomainPackManager
 from OpenHome.agent.loop import AgentLoop
+from OpenHome.agent.tools.audit import JsonlToolAuditSink
 from OpenHome.agent.tools.base import Tool
 from OpenHome.bus.queue import MessageBus
 from OpenHome.config.schema import Config, DeviceToolsConfig, DomainPacksConfig, ToolAuditConfig
@@ -109,6 +111,31 @@ async def test_tool_audit_security_writes_full_summary(tmp_path: Path) -> None:
     assert event["target_hash"]
     assert event["result_size"] is not None
     assert "echo ok" not in json.dumps(event, ensure_ascii=False)
+
+
+@pytest.mark.asyncio
+async def test_tool_audit_jsonl_hash_chain_survives_concurrent_records(tmp_path: Path) -> None:
+    cfg = _config(tmp_path)
+    cfg.tools.audit = ToolAuditConfig(mode="security")
+    loop = AgentLoop.from_config(cfg, bus=MessageBus(), provider=_provider())
+    loop.tools.set_capability_snapshot(CapabilitySnapshot.user_turn())
+    loop.tools.register(_FakeTool("hash_test", result={"ok": True}))
+
+    await asyncio.gather(*(loop.tools.execute("hash_test", {"index": index}) for index in range(20)))
+
+    rows = [
+        json.loads(line)
+        for line in _tool_audit_path(tmp_path).read_text(encoding="utf-8").splitlines()
+    ]
+    assert len(rows) == 20
+    previous_hash = None
+    for row in rows:
+        assert row["prev_hash"] == previous_hash
+        event_hash = row["event_hash"]
+        payload = dict(row)
+        payload["event_hash"] = None
+        assert JsonlToolAuditSink._hash_event(payload) == event_hash
+        previous_hash = event_hash
 
 
 @pytest.mark.asyncio

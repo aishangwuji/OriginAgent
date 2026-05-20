@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import threading
 import uuid
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
@@ -98,6 +99,7 @@ class JsonlToolAuditSink:
         self.workspace = Path(workspace)
         self.path = self.workspace / "memory" / "audit" / "tool_calls.jsonl"
         self._last_hash: str | None = self._load_last_hash()
+        self._lock = threading.Lock()
 
     def _load_last_hash(self) -> str | None:
         try:
@@ -123,16 +125,17 @@ class JsonlToolAuditSink:
 
     def record(self, event: ToolCallAuditEvent) -> None:
         try:
-            ensure_dir(self.path.parent)
-            event_data = event.to_dict()
-            event_data["prev_hash"] = self._last_hash
-            event_data["event_hash"] = None
-            event_data["event_hash"] = self._hash_event(event_data)
-            with self.path.open("a", encoding="utf-8") as handle:
-                handle.write(json.dumps(event_data, ensure_ascii=False, sort_keys=True))
-                handle.write("\n")
-                handle.flush()
-                os.fsync(handle.fileno())
-            self._last_hash = str(event_data["event_hash"])
+            with self._lock:
+                ensure_dir(self.path.parent)
+                event_data = event.to_dict()
+                event_data["prev_hash"] = self._last_hash
+                event_data["event_hash"] = None
+                event_data["event_hash"] = self._hash_event(event_data)
+                with self.path.open("a", encoding="utf-8") as handle:
+                    handle.write(json.dumps(event_data, ensure_ascii=False, sort_keys=True))
+                    handle.write("\n")
+                    handle.flush()
+                    os.fsync(handle.fileno())
+                self._last_hash = str(event_data["event_hash"])
         except Exception as exc:
             logger.debug("Tool audit write failed: {}", exc)

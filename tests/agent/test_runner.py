@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import os
+import threading
 import time
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -112,6 +113,64 @@ async def test_runner_preserves_reasoning_fields_and_tool_results():
         msg.get("role") == "tool" and msg.get("content") == "tool result"
         for msg in captured_second_call
     )
+
+
+@pytest.mark.asyncio
+async def test_runner_records_tool_audit_off_event_loop_thread():
+    from OpenHome.agent.runner import AgentRunSpec, AgentRunner
+
+    class ThreadRecordingSink:
+        def __init__(self) -> None:
+            self.thread_id: int | None = None
+
+        def record(self, event):
+            self.thread_id = threading.get_ident()
+
+    class AuditedTool(Tool):
+        @property
+        def name(self) -> str:
+            return "audited"
+
+        @property
+        def description(self) -> str:
+            return "audited tool"
+
+        @property
+        def parameters(self) -> dict:
+            return {"type": "object", "properties": {}}
+
+        async def execute(self, **kwargs):
+            return "tool result"
+
+    provider = MagicMock()
+    call_count = {"n": 0}
+
+    async def chat_with_retry(*, messages, **kwargs):
+        call_count["n"] += 1
+        if call_count["n"] == 1:
+            return LLMResponse(
+                content="",
+                tool_calls=[ToolCallRequest(id="call_1", name="audited", arguments={})],
+            )
+        return LLMResponse(content="done", tool_calls=[])
+
+    sink = ThreadRecordingSink()
+    tools = ToolRegistry(audit_sink=sink)
+    tools.register(AuditedTool())
+    provider.chat_with_retry = chat_with_retry
+    loop_thread_id = threading.get_ident()
+
+    result = await AgentRunner(provider).run(AgentRunSpec(
+        initial_messages=[{"role": "user", "content": "run tool"}],
+        tools=tools,
+        model="test-model",
+        max_iterations=3,
+        max_tool_result_chars=_MAX_TOOL_RESULT_CHARS,
+    ))
+
+    assert result.final_content == "done"
+    assert sink.thread_id is not None
+    assert sink.thread_id != loop_thread_id
 
 
 @pytest.mark.asyncio

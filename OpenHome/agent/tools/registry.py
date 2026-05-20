@@ -1,5 +1,6 @@
 """Tool registry for dynamic tool management."""
 
+import asyncio
 import hashlib
 import json
 import time
@@ -223,7 +224,7 @@ class ToolRegistry:
         tool, params, error = self.prepare_call(name, params)
         if error:
             status = "policy_denied" if is_policy_denial_text(error) else "validation_error"
-            self._audit_tool_call(
+            await self._audit_tool_call_async(
                 name=name,
                 tool=tool,
                 status=status,
@@ -239,7 +240,7 @@ class ToolRegistry:
             result = await tool.execute(**params)
             if isinstance(result, str) and result.startswith("Error"):
                 policy_denied = is_policy_denial_text(result)
-                self._audit_tool_call(
+                await self._audit_tool_call_async(
                     name=name,
                     tool=tool,
                     status="policy_denied" if policy_denied else "error",
@@ -249,7 +250,7 @@ class ToolRegistry:
                     params=params,
                 )
                 return result if policy_denied else result + _RETRY_HINT
-            self._audit_tool_call(
+            await self._audit_tool_call_async(
                 name=name,
                 tool=tool,
                 status="success",
@@ -260,7 +261,7 @@ class ToolRegistry:
             return result
         except BaseException as e:
             if type(e).__name__ == "AskUserInterrupt":
-                self._audit_tool_call(
+                await self._audit_tool_call_async(
                     name=name,
                     tool=tool,
                     status="interrupted",
@@ -274,7 +275,7 @@ class ToolRegistry:
             error_text = f"Error executing {name}: {str(e)}"
             policy_denied = is_policy_denial_exc(e)
             policy_rule = e.policy_rule if isinstance(e, PolicyDeniedError) else None
-            self._audit_tool_call(
+            await self._audit_tool_call_async(
                 name=name,
                 tool=tool,
                 status="policy_denied" if policy_denied else "error",
@@ -403,6 +404,12 @@ class ToolRegistry:
         except Exception:
             pass
 
+    async def _audit_tool_call_async(
+        self,
+        **kwargs: Any,
+    ) -> None:
+        await asyncio.to_thread(self._audit_tool_call, **kwargs)
+
     def _audit_tier_for(
         self,
         name: str,
@@ -435,6 +442,29 @@ class ToolRegistry:
         result: Any = None,
     ) -> None:
         self._audit_tool_call(
+            name=name,
+            tool=tool,
+            status=status,
+            start=start,
+            error_kind=error_kind,
+            policy_rule=policy_rule,
+            params=params,
+            result_size=_safe_result_size(result) if status == "success" else None,
+        )
+
+    async def audit_tool_result_async(
+        self,
+        *,
+        name: str,
+        tool: Tool | None,
+        params: dict[str, Any],
+        status: str,
+        start: float,
+        error_kind: str | None = None,
+        policy_rule: str | None = None,
+        result: Any = None,
+    ) -> None:
+        await self._audit_tool_call_async(
             name=name,
             tool=tool,
             status=status,

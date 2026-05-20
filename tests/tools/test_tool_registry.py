@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import threading
 from typing import Any
 
 import pytest
@@ -235,6 +236,25 @@ async def test_execute_audit_sink_failure_does_not_affect_tool_result() -> None:
     registry.register(_FakeTool("example", result="ok"))
 
     assert await registry.execute("example", {}) == "ok"
+
+
+@pytest.mark.asyncio
+async def test_execute_records_audit_off_event_loop_thread() -> None:
+    class ThreadRecordingSink:
+        def __init__(self) -> None:
+            self.thread_id: int | None = None
+
+        def record(self, event):
+            self.thread_id = threading.get_ident()
+
+    sink = ThreadRecordingSink()
+    loop_thread_id = threading.get_ident()
+    registry = ToolRegistry(audit_sink=sink)
+    registry.register(_FakeTool("example", result="ok"))
+
+    assert await registry.execute("example", {}) == "ok"
+    assert sink.thread_id is not None
+    assert sink.thread_id != loop_thread_id
 
 
 @pytest.mark.asyncio
