@@ -10,7 +10,19 @@ const QUICK_ACTION_KEYS = ["plan", "analyze", "brainstorm", "code", "summarize",
 const IMAGE_QUICK_ACTION_KEYS = ["icon", "sticker", "poster", "product", "portrait", "edit"];
 const SETTINGS_NAV_KEYS = ["general", "byok", "skills", "mcp"];
 const REVIEW_STATUS_KEYS = ["pending", "applied", "rejected", "deferred", "failed"];
-const REVIEW_TYPE_KEYS = ["memory", "fact", "skill", "workflow"];
+const REVIEW_TYPE_KEYS = [
+  "memory",
+  "fact",
+  "skill",
+  "workflow",
+  "promote_skill",
+  "deprecate_skill",
+  "merge_skill",
+  "archive_workflow",
+  "move_to_domain",
+  "fact_conflict",
+];
+const REVIEW_ORIGIN_KEYS = ["background_review", "curator"];
 
 describe("webui i18n", () => {
   it("switches UI copy and document locale through the language switcher", async () => {
@@ -114,17 +126,27 @@ describe("webui i18n", () => {
       expect(common.reviews.actions.apply).toBeTruthy();
       expect(common.reviews.actions.reject).toBeTruthy();
       expect(common.reviews.actions.defer).toBeTruthy();
+      expect(common.reviews.filters.origin).toBeTruthy();
+      expect(common.reviews.filters.allOrigins).toBeTruthy();
       expect(common.reviews.confirmApply.title).toBeTruthy();
       expect(common.reviews.confirmApply.skillDescription).toBeTruthy();
+      expect(common.reviews.confirmApply.promoteSkillDescription).toBeTruthy();
+      expect(common.reviews.confirmApply.deprecateSkillDescription).toBeTruthy();
       expect(common.reviews.confirmApply.skillPathPending).toBeTruthy();
       expect(common.reviews.confirmApply.workflowDescription).toBeTruthy();
       expect(common.reviews.confirmApply.workflowPathPending).toBeTruthy();
       expect(common.reviews.confirmApply.confirm).toBeTruthy();
+      expect(common.reviews.fields.origin).toBeTruthy();
+      expect(common.reviews.fields.subject).toBeTruthy();
+      expect(common.reviews.fields.suggestedAction).toBeTruthy();
       for (const key of REVIEW_STATUS_KEYS) {
         expect(common.reviews.status[key as keyof typeof common.reviews.status]).toBeTruthy();
       }
       for (const key of REVIEW_TYPE_KEYS) {
         expect(common.reviews.types[key as keyof typeof common.reviews.types]).toBeTruthy();
+      }
+      for (const key of REVIEW_ORIGIN_KEYS) {
+        expect(common.reviews.origins[key as keyof typeof common.reviews.origins]).toBeTruthy();
       }
     }
   });

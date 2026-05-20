@@ -1566,6 +1566,91 @@ def test_review_api_lists_details_and_applies_with_auth(
         "validation": "Workflow artifact is valid.",
     }
 
+    store.append_many([
+        ReviewProposal(
+            id="review_promote",
+            created_at="2026-05-20T10:02:00+00:00",
+            session_key="curator:system",
+            turn_id="turn-3",
+            origin="curator",
+            proposal_type="promote_skill",
+            domain_id="core",
+            title="Promote verified skill",
+            content="Curator recommends activating this skill.",
+            payload={
+                "skill_name": "lighting-troubleshooting",
+                "subject_id": "lighting-troubleshooting",
+                "subject_type": "skill",
+                "subject_path": "skills/lighting-troubleshooting/SKILL.md",
+                "curator_key": "promote-skill:lighting-troubleshooting",
+                "target_state_hash": "hash-promote-1",
+                "suggested_action": "promote_skill",
+            },
+        ),
+        ReviewProposal(
+            id="review_merge",
+            created_at="2026-05-20T10:03:00+00:00",
+            session_key="curator:system",
+            turn_id="turn-4",
+            origin="curator",
+            proposal_type="merge_skill",
+            domain_id="core",
+            title="Review duplicate skills",
+            content="Manual merge review required.",
+            payload={
+                "subject_id": "alpha,beta",
+                "subject_type": "skill_group",
+                "subject_path": "skills/alpha/SKILL.md",
+                "curator_key": "merge-skill:alpha",
+                "target_state_hash": "hash-merge-1",
+                "suggested_action": "merge_skill",
+            },
+        ),
+    ])
+    promote_skill_dir = workspace / "skills" / "lighting-troubleshooting"
+    promote_skill_dir.mkdir(parents=True)
+    (promote_skill_dir / "SKILL.md").write_text(
+        "---\n"
+        "name: lighting-troubleshooting\n"
+        "description: Lighting help.\n"
+        "always: false\n"
+        "metadata:\n"
+        "  OpenHome:\n"
+        "    proposal_status: proposed\n"
+        "    verification_status: verified\n"
+        "    lifecycle_status: proposed\n"
+        "    review_proposal_id: review_skill\n"
+        "    created_by: background_review\n"
+        "---\n\n# Lighting\n",
+        encoding="utf-8",
+    )
+
+    curator_listed = channel._handle_reviews_list(
+        Request("/api/reviews?status=pending&origin=curator&limit=50", authed)
+    )
+    curator_list_body = json.loads(curator_listed.body.decode())
+    assert {item["id"] for item in curator_list_body["proposals"]} == {"review_promote", "review_merge"}
+    assert curator_list_body["proposals"][0]["origin"] == "curator"
+
+    promote_applied = channel._handle_review_action(
+        Request("/api/reviews/review_promote/apply?reason=ok", authed),
+        "review_promote",
+        "apply",
+    )
+    promote_apply_body = json.loads(promote_applied.body.decode())
+    assert promote_apply_body["result"]["ok"] is True
+    assert promote_apply_body["proposal"]["status"] == "applied"
+
+    merge_apply = channel._handle_review_action(
+        Request("/api/reviews/review_merge/apply?reason=later", authed),
+        "review_merge",
+        "apply",
+    )
+    merge_apply_body = json.loads(merge_apply.body.decode())
+    assert merge_apply_body["result"]["ok"] is False
+    assert merge_apply_body["result"]["status"] == "pending"
+    assert merge_apply_body["proposal"]["status"] == "pending"
+
 
 def test_webui_skill_lifecycle_api_requires_token_and_updates_workspace_skill(
     tmp_path,

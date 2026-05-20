@@ -36,6 +36,7 @@ from OpenHome.utils.helpers import truncate_text
 from OpenHome.utils.prompt_templates import render_template
 
 DEFAULT_ALLOWED_PROPOSAL_TYPES = ("memory", "fact", "skill", "workflow")
+DEFAULT_REVIEW_ORIGIN = "background_review"
 PROPOSAL_STORE_RELATIVE = Path("memory") / "review_proposals.jsonl"
 PROPOSAL_EVENT_STORE_RELATIVE = Path("memory") / "review_proposal_events.jsonl"
 _TITLE_MAX_CHARS = 160
@@ -46,7 +47,14 @@ _EVIDENCE_MAX_CHARS = 500
 _MESSAGE_MAX_CHARS = 1600
 _REVIEW_REASON_MAX_CHARS = 1000
 _TERMINAL_REVIEW_STATUSES = {"applied", "rejected", "deferred", "failed"}
-_APPLICABLE_PROPOSAL_TYPES = {"memory", "fact", "skill", "workflow"}
+_APPLY_ACTIONS_BY_TYPE = {
+    "memory": "memory",
+    "fact": "memory",
+    "skill": "skill",
+    "workflow": "workflow",
+    "promote_skill": "promote_skill",
+    "deprecate_skill": "deprecate_skill",
+}
 _HIGH_RISK_DEVICE_DOMAINS = {"lock", "security", "camera", "gas", "presence"}
 
 
@@ -62,6 +70,7 @@ class ReviewProposal:
     domain_id: str
     title: str
     content: str
+    origin: str = DEFAULT_REVIEW_ORIGIN
     rationale: str = ""
     confidence: float | None = None
     evidence: list[str] = field(default_factory=list)
@@ -194,6 +203,7 @@ class ReviewProposalStore:
         for raw in self._iter_proposals_unlocked():
             proposal_id = str(raw.get("id") or "")
             record = dict(raw)
+            record["origin"] = _proposal_origin(record)
             record["status"] = str(record.get("status") or "pending")
             event = latest_events.get(proposal_id)
             fact_id = None
@@ -244,11 +254,13 @@ class ReviewProposalStore:
         *,
         status: str | None = None,
         proposal_type: str | None = None,
+        origin: str | None = None,
         limit: int = 50,
     ) -> list[dict[str, Any]]:
         limit = max(1, min(int(limit or 50), 50))
         status = (status or "").strip().lower()
         proposal_type = (proposal_type or "").strip().lower()
+        origin = (origin or "").strip().lower()
         records = list(reversed(self.iter_all()))
         if status:
             records = [r for r in records if str(r.get("status") or "pending") == status]
@@ -257,6 +269,8 @@ class ReviewProposalStore:
                 r for r in records
                 if str(r.get("proposal_type") or r.get("type") or "") == proposal_type
             ]
+        if origin:
+            records = [r for r in records if _proposal_origin(r) == origin]
         return records[:limit]
 
     def get(self, proposal_id: str) -> dict[str, Any] | None:
@@ -269,8 +283,29 @@ class ReviewProposalStore:
                     return record
         return None
 
-    def stats(self) -> dict[str, Any]:
+    def stats(
+        self,
+        *,
+        status: str | None = None,
+        proposal_type: str | None = None,
+        origin: str | None = None,
+    ) -> dict[str, Any]:
         records = self.iter_all()
+        if status:
+            normalized = str(status).strip().lower()
+            records = [
+                record for record in records if str(record.get("status") or "pending") == normalized
+            ]
+        if proposal_type:
+            normalized = str(proposal_type).strip().lower()
+            records = [
+                record
+                for record in records
+                if str(record.get("proposal_type") or record.get("type") or "") == normalized
+            ]
+        if origin:
+            normalized = str(origin).strip().lower()
+            records = [record for record in records if _proposal_origin(record) == normalized]
         pending = sum(
             1 for record in records if record.get("status", "pending") == "pending"
         )
@@ -286,6 +321,15 @@ class ReviewProposalStore:
             "pending_count": pending,
             "last_created_at": last_created_at,
         }
+
+    def type_counts(self, *, origin: str | None = None) -> dict[str, int]:
+        counts: dict[str, int] = {}
+        for record in self.iter_all():
+            if origin and _proposal_origin(record) != str(origin).strip().lower():
+                continue
+            proposal_type = _proposal_type(record) or "unknown"
+            counts[proposal_type] = counts.get(proposal_type, 0) + 1
+        return counts
 
     def apply(self, proposal_id: str, *, reason: str = "") -> ReviewDecisionResult:
         proposal_id = proposal_id.strip()
@@ -314,28 +358,26 @@ class ReviewProposalStore:
                 return terminal
 
             proposal_type = _proposal_type(record)
-            if proposal_type not in _APPLICABLE_PROPOSAL_TYPES:
-                event = self._append_event_unlocked(
-                    proposal_id,
-                    status="failed",
-                    reason=reason or f"{proposal_type} proposals cannot be applied in this phase.",
-                    error="unsupported_proposal_type",
-                )
+            action_kind = _apply_action_kind(proposal_type)
+            if action_kind is None:
                 return ReviewDecisionResult(
                     proposal_id=proposal_id,
-                    status="failed",
+                    status=str(record.get("status") or "pending"),
                     action="apply",
                     ok=False,
-                    message="Only memory, fact, skill, and workflow proposals can be applied.",
-                    proposal=self._find_unlocked(proposal_id),
-                    event=event,
+                    message=_unsupported_apply_message(record),
+                    proposal=record,
                     error="unsupported_proposal_type",
                 )
 
-            if proposal_type == "skill":
+            if action_kind == "skill":
                 return self._apply_to_skill_unlocked(record, reason=reason)
-            if proposal_type == "workflow":
+            if action_kind == "workflow":
                 return self._apply_to_workflow_unlocked(record, reason=reason)
+            if action_kind == "promote_skill":
+                return self._apply_promote_skill_unlocked(record, reason=reason)
+            if action_kind == "deprecate_skill":
+                return self._apply_deprecate_skill_unlocked(record, reason=reason)
 
             try:
                 fact = self._apply_to_memory(record)
@@ -582,6 +624,175 @@ class ReviewProposalStore:
             artifact=artifact,
         )
 
+    def _apply_promote_skill_unlocked(
+        self,
+        record: dict[str, Any],
+        *,
+        reason: str = "",
+    ) -> ReviewDecisionResult:
+        proposal_id = str(record.get("id") or "")
+        skill_name = _review_skill_name(record)
+        if not skill_name:
+            event = self._append_event_unlocked(
+                proposal_id,
+                status="failed",
+                reason=reason,
+                error="missing_skill_name",
+            )
+            return ReviewDecisionResult(
+                proposal_id=proposal_id,
+                status="failed",
+                action="apply",
+                ok=False,
+                message="Curator skill promotion is missing its target skill.",
+                proposal=self._find_unlocked(proposal_id),
+                event=event,
+                error="missing_skill_name",
+            )
+
+        try:
+            record_data = _workspace_skill_record(self.workspace, skill_name)
+            if record_data is None:
+                raise ValueError("workspace skill was not found")
+            if record_data.get("source") != "workspace":
+                raise ValueError("only workspace skills can be changed in P10")
+            lifecycle = str(record_data.get("lifecycle_status") or "")
+            verification = str(record_data.get("verification_status") or "")
+            if lifecycle in {"deprecated", "rejected"}:
+                raise ValueError(f"skill is already {lifecycle}")
+            from OpenHome.agent.skill_lifecycle import SkillLifecycleStore
+
+            lifecycle_store = SkillLifecycleStore(self.workspace)
+            if not (lifecycle == "active" and verification == "verified"):
+                if lifecycle == "proposed" and verification != "verified":
+                    verified = lifecycle_store.transition(skill_name, action="verify", reason=reason or "curator promote")
+                    if not verified.ok:
+                        raise ValueError(verified.error or verified.message)
+                activated = lifecycle_store.transition(skill_name, action="activate", reason=reason or "curator promote")
+                if not activated.ok:
+                    raise ValueError(activated.error or activated.message)
+            artifact = {
+                "artifact_type": "skill",
+                "skill_name": skill_name,
+                "path": f"skills/{skill_name}/SKILL.md",
+                "validation": "Skill lifecycle action applied.",
+            }
+        except Exception as exc:
+            logger.exception("Failed to promote curator skill proposal {}", proposal_id)
+            event = self._append_event_unlocked(
+                proposal_id,
+                status="failed",
+                reason=reason,
+                error=str(exc),
+            )
+            return ReviewDecisionResult(
+                proposal_id=proposal_id,
+                status="failed",
+                action="apply",
+                ok=False,
+                message="Failed to apply curator skill promotion proposal.",
+                proposal=self._find_unlocked(proposal_id),
+                event=event,
+                artifact=None,
+                error=str(exc),
+            )
+        event = self._append_event_unlocked(
+            proposal_id,
+            status="applied",
+            reason=reason,
+            artifact=artifact,
+        )
+        return ReviewDecisionResult(
+            proposal_id=proposal_id,
+            status="applied",
+            action="apply",
+            ok=True,
+            message="Curator skill promotion applied.",
+            proposal=self._find_unlocked(proposal_id),
+            event=event,
+            artifact=artifact,
+        )
+
+    def _apply_deprecate_skill_unlocked(
+        self,
+        record: dict[str, Any],
+        *,
+        reason: str = "",
+    ) -> ReviewDecisionResult:
+        proposal_id = str(record.get("id") or "")
+        skill_name = _review_skill_name(record)
+        if not skill_name:
+            event = self._append_event_unlocked(
+                proposal_id,
+                status="failed",
+                reason=reason,
+                error="missing_skill_name",
+            )
+            return ReviewDecisionResult(
+                proposal_id=proposal_id,
+                status="failed",
+                action="apply",
+                ok=False,
+                message="Curator skill deprecation is missing its target skill.",
+                proposal=self._find_unlocked(proposal_id),
+                event=event,
+                error="missing_skill_name",
+            )
+
+        try:
+            record_data = _workspace_skill_record(self.workspace, skill_name)
+            if record_data is None:
+                raise ValueError("workspace skill was not found")
+            if record_data.get("source") != "workspace":
+                raise ValueError("only workspace skills can be changed in P10")
+            from OpenHome.agent.skill_lifecycle import SkillLifecycleStore
+
+            lifecycle_store = SkillLifecycleStore(self.workspace)
+            result = lifecycle_store.transition(skill_name, action="deprecate", reason=reason or "curator deprecate")
+            if not result.ok:
+                raise ValueError(result.error or result.message)
+            artifact = {
+                "artifact_type": "skill",
+                "skill_name": skill_name,
+                "path": f"skills/{skill_name}/SKILL.md",
+                "validation": "Skill lifecycle action applied.",
+            }
+        except Exception as exc:
+            logger.exception("Failed to deprecate curator skill proposal {}", proposal_id)
+            event = self._append_event_unlocked(
+                proposal_id,
+                status="failed",
+                reason=reason,
+                error=str(exc),
+            )
+            return ReviewDecisionResult(
+                proposal_id=proposal_id,
+                status="failed",
+                action="apply",
+                ok=False,
+                message="Failed to apply curator skill deprecation proposal.",
+                proposal=self._find_unlocked(proposal_id),
+                event=event,
+                artifact=None,
+                error=str(exc),
+            )
+        event = self._append_event_unlocked(
+            proposal_id,
+            status="applied",
+            reason=reason,
+            artifact=artifact,
+        )
+        return ReviewDecisionResult(
+            proposal_id=proposal_id,
+            status="applied",
+            action="apply",
+            ok=True,
+            message="Curator skill deprecation applied.",
+            proposal=self._find_unlocked(proposal_id),
+            event=event,
+            artifact=artifact,
+        )
+
 
 class BackgroundReviewService:
     """Generate controlled learning proposals after successful user turns."""
@@ -634,7 +845,7 @@ class BackgroundReviewService:
         return bool(getattr(self.config, "enabled", False))
 
     def runtime_status(self) -> dict[str, Any]:
-        stats = self.store.stats()
+        stats = self.store.stats(origin=DEFAULT_REVIEW_ORIGIN)
         return {
             "background_review_enabled": self.enabled,
             "background_review_running_count": self._running,
@@ -849,6 +1060,14 @@ def _proposal_type(record: dict[str, Any]) -> str:
     return str(record.get("proposal_type") or record.get("type") or "").strip().lower()
 
 
+def _proposal_origin(record: dict[str, Any]) -> str:
+    return str(record.get("origin") or DEFAULT_REVIEW_ORIGIN).strip().lower() or DEFAULT_REVIEW_ORIGIN
+
+
+def _apply_action_kind(proposal_type: str) -> str | None:
+    return _APPLY_ACTIONS_BY_TYPE.get(str(proposal_type or "").strip().lower())
+
+
 def _proposal_payload(record: dict[str, Any]) -> dict[str, Any]:
     payload = record.get("payload")
     if isinstance(payload, dict):
@@ -859,6 +1078,21 @@ def _proposal_payload(record: dict[str, Any]) -> dict[str, Any]:
             return merged
         return payload
     return {}
+
+
+def _review_skill_name(record: dict[str, Any]) -> str:
+    payload = _proposal_payload(record)
+    for key in ("skill_name", "subject_id"):
+        value = str(payload.get(key) or "").strip()
+        if value:
+            return value
+    return ""
+
+
+def _workspace_skill_record(workspace: Path, skill_name: str) -> dict[str, Any] | None:
+    from OpenHome.agent.skills import SkillsLoader
+
+    return SkillsLoader(workspace).get_skill_record(skill_name)
 
 
 def _redact_json_payload(value: Any) -> Any:
@@ -891,16 +1125,40 @@ def _redacted_record(record: dict[str, Any]) -> dict[str, Any]:
 def _decorate_review_capabilities(record: dict[str, Any]) -> None:
     status = str(record.get("status") or "pending")
     proposal_type = _proposal_type(record)
-    can_apply = status == "pending" and proposal_type in _APPLICABLE_PROPOSAL_TYPES
+    payload = _proposal_payload(record)
+    can_apply = status == "pending" and _apply_action_kind(proposal_type) is not None
     record["can_apply"] = can_apply
+    record["origin"] = _proposal_origin(record)
+    record["suggested_action"] = str(payload.get("suggested_action") or proposal_type or "").strip()
+    record["subject_label"] = _review_subject_label(record)
+    record["review_only"] = status == "pending" and not can_apply
     if can_apply:
         record["unsupported_reason"] = ""
-    elif proposal_type not in _APPLICABLE_PROPOSAL_TYPES:
-        record["unsupported_reason"] = (
-            "Only memory, fact, skill, and workflow proposals can be applied."
-        )
-    else:
+    elif status != "pending":
         record["unsupported_reason"] = "This proposal is already in a terminal state."
+    else:
+        record["unsupported_reason"] = _unsupported_apply_message(record)
+
+
+def _review_subject_label(record: dict[str, Any]) -> str:
+    payload = _proposal_payload(record)
+    subject_type = str(payload.get("subject_type") or "").strip()
+    subject_id = str(payload.get("subject_id") or payload.get("skill_name") or payload.get("workflow_name") or "").strip()
+    subject_path = str(payload.get("subject_path") or "").strip()
+    if subject_type and subject_id:
+        if subject_path:
+            return f"{subject_type}:{subject_id} ({subject_path})"
+        return f"{subject_type}:{subject_id}"
+    if subject_path:
+        return subject_path
+    return ""
+
+
+def _unsupported_apply_message(record: dict[str, Any]) -> str:
+    proposal_type = _proposal_type(record)
+    if proposal_type in {"merge_skill", "archive_workflow", "move_to_domain", "fact_conflict"}:
+        return f"{proposal_type} proposals are review-only in P10."
+    return "Only memory, fact, skill, workflow, promote_skill, and deprecate_skill proposals can be applied."
 
 
 def _safe_category(value: Any, default: str = "note") -> str:

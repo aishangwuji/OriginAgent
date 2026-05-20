@@ -991,6 +991,7 @@ def _reviews_store(ctx: CommandContext):
 
 def _format_review_record(record: dict) -> str:
     proposal_id = str(record.get("id") or "unknown")
+    origin = str(record.get("origin") or "background_review")
     proposal_type = str(record.get("proposal_type") or record.get("type") or "unknown")
     domain_id = str(record.get("domain_id") or "core")
     status = str(record.get("status") or "pending")
@@ -1002,9 +1003,15 @@ def _format_review_record(record: dict) -> str:
     confidence = record.get("confidence")
     confidence_text = f", confidence={confidence}" if confidence is not None else ""
     lines = [
-        f"- `{proposal_id}` [{status}] {proposal_type}/{domain_id}: {title}",
+        f"- `{proposal_id}` [{status}] {proposal_type}/{domain_id} ({origin}): {title}",
         f"  created={created_at}{confidence_text}",
     ]
+    subject = str(record.get("subject_label") or "").strip()
+    suggested_action = str(record.get("suggested_action") or "").strip()
+    if subject:
+        lines.append(f"  subject={subject}")
+    if suggested_action:
+        lines.append(f"  suggested_action={suggested_action}")
     if content:
         lines.append(f"  {content}")
     return "\n".join(lines)
@@ -1016,6 +1023,7 @@ def _format_review_detail(record: dict) -> str:
         "",
         f"- ID: `{record.get('id') or 'unknown'}`",
         f"- Status: {record.get('status') or 'pending'}",
+        f"- Origin: {record.get('origin') or 'background_review'}",
         f"- Type: {record.get('proposal_type') or record.get('type') or 'unknown'}",
         f"- Domain: {record.get('domain_id') or 'core'}",
         f"- Created: {record.get('created_at') or ''}",
@@ -1025,6 +1033,12 @@ def _format_review_detail(record: dict) -> str:
         "",
         str(record.get("content") or "").strip() or "(empty)",
     ]
+    subject = str(record.get("subject_label") or "").strip()
+    if subject:
+        lines.insert(7, f"- Subject: {subject}")
+    suggested_action = str(record.get("suggested_action") or "").strip()
+    if suggested_action:
+        lines.insert(8 if subject else 7, f"- Suggested Action: {suggested_action}")
     rationale = str(record.get("rationale") or "").strip()
     if rationale:
         lines.extend(["", "### Rationale", "", rationale])
@@ -1044,6 +1058,9 @@ def _format_review_detail(record: dict) -> str:
     workflow_path = record.get("applied_workflow_path")
     if isinstance(workflow_path, str) and workflow_path:
         lines.extend(["", f"Applied workflow: `{workflow_path}`"])
+    unsupported = str(record.get("unsupported_reason") or "").strip()
+    if unsupported and not record.get("can_apply"):
+        lines.extend(["", f"Apply: {unsupported}"])
     return "\n".join(lines)
 
 

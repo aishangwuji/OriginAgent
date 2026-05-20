@@ -185,6 +185,19 @@ class BackgroundReviewConfig(Base):
     )
 
 
+class CuratorConfig(Base):
+    """Deterministic curator proposal generation."""
+
+    enabled: bool = False
+    max_proposals_per_run: int = Field(
+        default=12,
+        ge=1,
+        le=50,
+        validation_alias=AliasChoices("maxProposalsPerRun", "max_proposals_per_run"),
+        serialization_alias="maxProposalsPerRun",
+    )
+
+
 class LearningConfig(Base):
     """Agent self-improvement and review configuration."""
 
@@ -192,6 +205,11 @@ class LearningConfig(Base):
         default_factory=BackgroundReviewConfig,
         validation_alias=AliasChoices("backgroundReview", "background_review"),
         serialization_alias="backgroundReview",
+    )
+    curator: CuratorConfig = Field(
+        default_factory=CuratorConfig,
+        validation_alias=AliasChoices("curator"),
+        serialization_alias="curator",
     )
 
 

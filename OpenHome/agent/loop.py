@@ -34,6 +34,7 @@ from OpenHome.agent.autocompact import AutoCompact
 from OpenHome.agent.auxiliary_llm import AuxiliaryLLMRouter
 from OpenHome.agent.background_review import BackgroundReviewService
 from OpenHome.agent.context import ContextBuilder
+from OpenHome.agent.curator import CuratorService
 from OpenHome.agent.device_factory import build_device_action_executor
 from OpenHome.agent.domain_packs import DomainPackManager
 from OpenHome.agent.hook import AgentHook, CompositeHook
@@ -81,6 +82,7 @@ if TYPE_CHECKING:
         DomainPacksConfig,
         ExecToolConfig,
         BackgroundReviewConfig,
+        CuratorConfig,
         ModelPresetConfig,
         ProviderConfig,
         ToolsConfig,
@@ -243,6 +245,8 @@ class AgentLoop:
         domain_pack_manager: DomainPackManager | None = None,
         learning_config: "BackgroundReviewConfig | None" = None,
         learning_config_loader: Callable[[], "BackgroundReviewConfig"] | None = None,
+        curator_config: "CuratorConfig | None" = None,
+        curator_config_loader: Callable[[], "CuratorConfig"] | None = None,
     ):
         from OpenHome.config.schema import ExecToolConfig, ToolsConfig, WebToolsConfig
 
@@ -322,6 +326,12 @@ class AgentLoop:
             router=self.auxiliary_router,
             config=learning_config or defaults.learning.background_review,
             config_loader=learning_config_loader,
+            domain_pack_manager=self.domain_packs,
+        )
+        self.curator = CuratorService(
+            workspace=workspace,
+            config=curator_config or defaults.learning.curator,
+            config_loader=curator_config_loader,
             domain_pack_manager=self.domain_packs,
         )
         self.sessions = session_manager or SessionManager(workspace)
@@ -464,6 +474,11 @@ class AgentLoop:
 
             return load_config().agents.defaults.learning.background_review
 
+        def _curator_config_loader():
+            from OpenHome.config.loader import load_config
+
+            return load_config().agents.defaults.learning.curator
+
         return cls(
             bus=bus,
             provider=provider,
@@ -500,6 +515,8 @@ class AgentLoop:
             domain_packs_config=defaults.domain_packs,
             learning_config=defaults.learning.background_review,
             learning_config_loader=_background_review_config_loader,
+            curator_config=defaults.learning.curator,
+            curator_config_loader=_curator_config_loader,
             **extra,
         )
 
@@ -586,6 +603,7 @@ class AgentLoop:
             audit_config=self._tool_audit_config,
             domain_pack_manager=self.domain_packs,
             background_review_service=self.background_review,
+            curator_service=self.curator,
             subagent_manager=self.subagents,
             file_state_store=self._file_state_store,
             provider_snapshot_loader=self._provider_snapshot_loader,
@@ -1748,6 +1766,7 @@ class AgentLoop:
             )
         )
         self._schedule_background_review(ctx)
+        self._schedule_curator_review(ctx)
         return "ok"
 
     def _schedule_background_review(self, ctx: TurnContext) -> None:
@@ -1780,6 +1799,26 @@ class AgentLoop:
                 chat_id=ctx.msg.chat_id,
                 message_id=ctx.msg.metadata.get("message_id"),
                 messages=messages,
+            )
+        )
+
+    def _schedule_curator_review(self, ctx: TurnContext) -> None:
+        """Schedule deterministic curator review after successful foreground turns."""
+        if ctx.session is None:
+            return
+        self.curator.refresh_config()
+        if not self.curator.enabled:
+            return
+        if ctx.stop_reason in {"ask_user", "error", "tool_error"}:
+            return
+        if ctx.msg.channel == "system" or ctx.msg.sender_id == "subagent":
+            return
+        if not (ctx.final_content or "").strip():
+            return
+        self._schedule_background(
+            self.curator.review_workspace(
+                session_key=ctx.session_key,
+                turn_id=ctx.turn_id,
             )
         )
 

@@ -972,6 +972,9 @@ class WebSocketChannel(BaseChannel):
                 "background_review": {
                     "enabled": bool(defaults.learning.background_review.enabled),
                 },
+                "curator": {
+                    "enabled": bool(defaults.learning.curator.enabled),
+                },
             },
             "mcp": {
                 "servers": [
@@ -1007,6 +1010,7 @@ class WebSocketChannel(BaseChannel):
         query = _parse_query(request.path)
         status = _query_first(query, "status")
         proposal_type = _query_first(query, "type")
+        origin = _query_first(query, "origin")
         limit_raw = _query_first(query, "limit")
         try:
             limit = int(limit_raw) if limit_raw is not None else 50
@@ -1017,9 +1021,14 @@ class WebSocketChannel(BaseChannel):
             "proposals": store.list_records(
                 status=status,
                 proposal_type=proposal_type,
+                origin=origin,
                 limit=limit,
             ),
-            "stats": store.stats(),
+            "stats": store.stats(
+                status=status,
+                proposal_type=proposal_type,
+                origin=origin,
+            ),
         })
 
     def _handle_review_detail(self, request: WsRequest, proposal_id: str) -> Response:

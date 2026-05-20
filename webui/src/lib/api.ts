@@ -174,12 +174,13 @@ export async function listSlashCommands(
 
 export async function listReviewProposals(
   token: string,
-  filters: { status?: string; type?: string; limit?: number } = {},
+  filters: { status?: string; type?: string; origin?: string; limit?: number } = {},
   base: string = "",
 ): Promise<{ proposals: ReviewProposal[]; stats: ReviewProposalStats }> {
   const query = new URLSearchParams();
   if (filters.status) query.set("status", filters.status);
   if (filters.type) query.set("type", filters.type);
+  if (filters.origin) query.set("origin", filters.origin);
   if (filters.limit !== undefined) query.set("limit", String(filters.limit));
   const suffix = query.toString() ? `?${query}` : "";
   return request<{ proposals: ReviewProposal[]; stats: ReviewProposalStats }>(

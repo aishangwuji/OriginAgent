@@ -320,6 +320,35 @@ async def test_runtime_status_reports_background_review_counts(tmp_path) -> None
 
 
 @pytest.mark.asyncio
+async def test_runtime_status_reports_curator_counts(tmp_path) -> None:
+    class CuratorService:
+        def runtime_status(self):
+            return {
+                "curator_enabled": True,
+                "curator_running_count": 1,
+                "curator_proposal_count": 4,
+                "curator_pending_count": 3,
+                "curator_last_created_at": "2026-05-20T10:00:00+00:00",
+                "curator_last_result": {"status": "ok", "proposals_written": 2},
+                "curator_type_counts": {"promote_skill": 1, "deprecate_skill": 3},
+            }
+
+    result = await RuntimeStatusTool(
+        workspace=tmp_path,
+        registry=SimpleNamespace(tool_names=["a"]),
+        sessions=object(),
+        pending_queues={},
+        curator_service=CuratorService(),
+    ).execute()
+
+    assert result["curator_enabled"] is True
+    assert result["curator_running_count"] == 1
+    assert result["curator_proposal_count"] == 4
+    assert result["curator_pending_count"] == 3
+    assert result["curator_type_counts"] == {"promote_skill": 1, "deprecate_skill": 3}
+
+
+@pytest.mark.asyncio
 async def test_runtime_status_reports_skill_lifecycle_counts(tmp_path) -> None:
     skill = tmp_path / "skills" / "candidate"
     skill.mkdir(parents=True)

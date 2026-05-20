@@ -32,6 +32,7 @@ import {
 } from "@/lib/api";
 import type {
   ReviewDecisionResult,
+  ReviewProposalOrigin,
   ReviewProposal,
   ReviewProposalStats,
 } from "@/lib/types";
@@ -39,11 +40,43 @@ import { cn } from "@/lib/utils";
 import { useClient } from "@/providers/ClientProvider";
 
 type ReviewStatusFilter = "pending" | "applied" | "rejected" | "deferred" | "failed" | "";
-type ReviewTypeFilter = "memory" | "fact" | "skill" | "workflow" | "";
+type ReviewTypeFilter =
+  | "memory"
+  | "fact"
+  | "skill"
+  | "workflow"
+  | "promote_skill"
+  | "deprecate_skill"
+  | "merge_skill"
+  | "archive_workflow"
+  | "move_to_domain"
+  | "fact_conflict"
+  | "";
+type ReviewOriginFilter = ReviewProposalOrigin | "";
 
 const STATUS_FILTERS: ReviewStatusFilter[] = ["pending", "applied", "rejected", "deferred", "failed", ""];
-const TYPE_FILTERS: ReviewTypeFilter[] = ["", "memory", "fact", "skill", "workflow"];
-const APPLICABLE_TYPES = new Set(["memory", "fact", "skill", "workflow"]);
+const TYPE_FILTERS: ReviewTypeFilter[] = [
+  "",
+  "memory",
+  "fact",
+  "skill",
+  "workflow",
+  "promote_skill",
+  "deprecate_skill",
+  "merge_skill",
+  "archive_workflow",
+  "move_to_domain",
+  "fact_conflict",
+];
+const ORIGIN_FILTERS: ReviewOriginFilter[] = ["", "background_review", "curator"];
+const APPLICABLE_TYPES = new Set([
+  "memory",
+  "fact",
+  "skill",
+  "workflow",
+  "promote_skill",
+  "deprecate_skill",
+]);
 
 interface ReviewsViewProps {
   onBackToChat: () => void;
@@ -82,6 +115,7 @@ export function ReviewsView({ onBackToChat }: ReviewsViewProps) {
   const { token, refreshToken } = useClient();
   const [statusFilter, setStatusFilter] = useState<ReviewStatusFilter>("pending");
   const [typeFilter, setTypeFilter] = useState<ReviewTypeFilter>("");
+  const [originFilter, setOriginFilter] = useState<ReviewOriginFilter>("");
   const [proposals, setProposals] = useState<ReviewProposal[]>([]);
   const [stats, setStats] = useState<ReviewProposalStats | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -102,6 +136,7 @@ export function ReviewsView({ onBackToChat }: ReviewsViewProps) {
         listReviewProposals(freshToken, {
           status: statusFilter || undefined,
           type: typeFilter || undefined,
+          origin: originFilter || undefined,
           limit: 50,
         }),
       );
@@ -118,7 +153,7 @@ export function ReviewsView({ onBackToChat }: ReviewsViewProps) {
     } finally {
       setLoading(false);
     }
-  }, [refreshToken, statusFilter, token, typeFilter]);
+  }, [originFilter, refreshToken, statusFilter, token, typeFilter]);
 
   useEffect(() => {
     void loadList();
@@ -163,6 +198,8 @@ export function ReviewsView({ onBackToChat }: ReviewsViewProps) {
     typeof selected?.payload?.skill_name === "string" ? selected.payload.skill_name : "";
   const selectedPayloadWorkflowName =
     typeof selected?.payload?.workflow_name === "string" ? selected.payload.workflow_name : "";
+  const selectedPayloadSubjectId =
+    typeof selected?.payload?.subject_id === "string" ? selected.payload.subject_id : "";
 
   const runAction = useCallback(
     async (action: "apply" | "reject" | "defer") => {
@@ -271,6 +308,23 @@ export function ReviewsView({ onBackToChat }: ReviewsViewProps) {
                 </button>
               ))}
             </div>
+            <div className="flex flex-wrap gap-2" aria-label={t("reviews.filters.origin")}>
+              {ORIGIN_FILTERS.map((origin) => (
+                <button
+                  key={origin || "all-origins"}
+                  type="button"
+                  onClick={() => setOriginFilter(origin)}
+                  className={cn(
+                    "rounded-full border px-3 py-1 text-xs font-black transition",
+                    originFilter === origin
+                      ? "border-primary bg-primary text-primary-foreground"
+                      : "border-border/70 bg-background/60 text-muted-foreground hover:border-primary/70 hover:text-foreground",
+                  )}
+                >
+                  {t(origin ? `reviews.origins.${origin}` : "reviews.filters.allOrigins")}
+                </button>
+              ))}
+            </div>
           </div>
 
           <div className="min-h-0 flex-1 overflow-y-auto p-3">
@@ -305,6 +359,16 @@ export function ReviewsView({ onBackToChat }: ReviewsViewProps) {
                         <span className="shrink-0 rounded-full bg-muted px-2 py-0.5 text-[10px] font-black text-muted-foreground">
                           {proposal.proposal_type}
                         </span>
+                      </div>
+                      <div className="mt-2 flex flex-wrap gap-1.5">
+                        <span className="rounded-full bg-secondary/70 px-2 py-0.5 text-[10px] font-black text-secondary-foreground">
+                          {t(`reviews.origins.${proposal.origin || "background_review"}`)}
+                        </span>
+                        {proposal.suggested_action ? (
+                          <span className="rounded-full bg-muted px-2 py-0.5 text-[10px] font-black text-muted-foreground">
+                            {proposal.suggested_action}
+                          </span>
+                        ) : null}
                       </div>
                       <p className="mt-2 line-clamp-2 text-sm font-black text-foreground">
                         {proposal.title || t("reviews.untitled")}
@@ -352,6 +416,14 @@ export function ReviewsView({ onBackToChat }: ReviewsViewProps) {
                   <span className="rounded-full bg-secondary px-3 py-1 text-xs font-black text-secondary-foreground">
                     {selected.proposal_type}/{selected.domain_id || "core"}
                   </span>
+                  <span className="rounded-full bg-muted px-3 py-1 text-xs font-black text-muted-foreground">
+                    {t(`reviews.origins.${selected.origin || "background_review"}`)}
+                  </span>
+                  {selected.suggested_action ? (
+                    <span className="rounded-full bg-accent/80 px-3 py-1 text-xs font-black text-accent-foreground">
+                      {selected.suggested_action}
+                    </span>
+                  ) : null}
                   {selected.applied_fact_id ? (
                     <span className="rounded-full bg-primary/15 px-3 py-1 text-xs font-black text-foreground">
                       {t("reviews.appliedFact", { id: selected.applied_fact_id })}
@@ -383,6 +455,22 @@ export function ReviewsView({ onBackToChat }: ReviewsViewProps) {
                     {t("reviews.sections.context")}
                   </h3>
                   <dl className="mt-3 grid gap-3 text-sm">
+                    <div>
+                      <dt className="text-xs font-black uppercase text-muted-foreground">{t("reviews.fields.origin")}</dt>
+                      <dd className="mt-1">{t(`reviews.origins.${selected.origin || "background_review"}`)}</dd>
+                    </div>
+                    {selected.subject_label ? (
+                      <div>
+                        <dt className="text-xs font-black uppercase text-muted-foreground">{t("reviews.fields.subject")}</dt>
+                        <dd className="mt-1 break-all">{selected.subject_label}</dd>
+                      </div>
+                    ) : null}
+                    {selected.suggested_action ? (
+                      <div>
+                        <dt className="text-xs font-black uppercase text-muted-foreground">{t("reviews.fields.suggestedAction")}</dt>
+                        <dd className="mt-1">{selected.suggested_action}</dd>
+                      </div>
+                    ) : null}
                     <div>
                       <dt className="text-xs font-black uppercase text-muted-foreground">{t("reviews.fields.session")}</dt>
                       <dd className="mt-1 break-all">{selected.session_key || "-"}</dd>
@@ -465,7 +553,7 @@ export function ReviewsView({ onBackToChat }: ReviewsViewProps) {
                     </Button>
                   </div>
                 </div>
-                {!isSupportedType(selected) ? (
+                {!canApplySelected ? (
                   <p className="mt-3 text-xs text-muted-foreground">
                     {selected.unsupported_reason || t("reviews.unsupportedApply")}
                   </p>
@@ -481,7 +569,17 @@ export function ReviewsView({ onBackToChat }: ReviewsViewProps) {
           <AlertDialogHeader>
             <AlertDialogTitle>{t("reviews.confirmApply.title")}</AlertDialogTitle>
             <AlertDialogDescription>
-              {normalizeType(selected) === "skill"
+              {normalizeType(selected) === "promote_skill"
+                ? t("reviews.confirmApply.promoteSkillDescription", {
+                    name: selectedArtifact?.skill_name || selectedPayloadSubjectId || selected?.title || "",
+                    path: selectedArtifact?.path || t("reviews.confirmApply.skillPathPending"),
+                  })
+                : normalizeType(selected) === "deprecate_skill"
+                  ? t("reviews.confirmApply.deprecateSkillDescription", {
+                      name: selectedArtifact?.skill_name || selectedPayloadSubjectId || selected?.title || "",
+                      path: selectedArtifact?.path || t("reviews.confirmApply.skillPathPending"),
+                    })
+                : normalizeType(selected) === "skill"
                 ? t("reviews.confirmApply.skillDescription", {
                     name: selectedArtifact?.skill_name || selectedPayloadSkillName || selected?.title || "",
                     path: selectedArtifact?.path || t("reviews.confirmApply.skillPathPending"),

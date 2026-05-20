@@ -201,6 +201,7 @@ export interface SlashCommand {
 
 export type ReviewProposalStatus = "pending" | "applied" | "rejected" | "deferred" | "failed";
 export type ReviewProposalType = "memory" | "fact" | "skill" | "workflow" | string;
+export type ReviewProposalOrigin = "background_review" | "curator" | string;
 
 export interface ReviewProposalEvent {
   event_id?: string;
@@ -230,6 +231,7 @@ export interface ReviewProposal {
   created_at?: string;
   session_key?: string;
   turn_id?: string;
+  origin?: ReviewProposalOrigin;
   proposal_type: ReviewProposalType;
   domain_id?: string;
   title: string;
@@ -249,6 +251,9 @@ export interface ReviewProposal {
   apply_artifact?: ReviewApplyArtifact;
   can_apply?: boolean;
   unsupported_reason?: string;
+  subject_label?: string;
+  suggested_action?: string;
+  review_only?: boolean;
   review_event?: ReviewProposalEvent;
 }
 

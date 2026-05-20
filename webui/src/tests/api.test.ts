@@ -113,11 +113,12 @@ describe("webui API helpers", () => {
     await listReviewProposals("tok", {
       status: "pending",
       type: "memory",
+      origin: "curator",
       limit: 50,
     });
 
     expect(fetch).toHaveBeenCalledWith(
-      "/api/reviews?status=pending&type=memory&limit=50",
+      "/api/reviews?status=pending&type=memory&origin=curator&limit=50",
       expect.objectContaining({
         headers: { Authorization: "Bearer tok" },
       }),

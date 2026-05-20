@@ -275,7 +275,7 @@
     "appliedFact": "Fact {{id}}",
     "appliedSkill": "Skill {{path}}",
     "appliedWorkflow": "Workflow {{path}}",
-    "unsupportedApply": "Only memory, fact, skill, and workflow proposals can be applied in this phase.",
+    "unsupportedApply": "This proposal is review-only in P10 or has already reached a terminal state.",
     "reasonLabel": "Review note",
     "reasonPlaceholder": "Optional reason for applying, rejecting, or deferring this proposal.",
     "noEvidence": "No evidence snippets were stored for this proposal.",
@@ -286,8 +286,14 @@
     "filters": {
       "status": "Filter by status",
       "type": "Filter by type",
+      "origin": "Filter by origin",
       "all": "All",
-      "allTypes": "All types"
+      "allTypes": "All types",
+      "allOrigins": "All origins"
+    },
+    "origins": {
+      "background_review": "Background review",
+      "curator": "Curator"
     },
     "status": {
       "pending": "Pending",
@@ -301,13 +307,22 @@
       "memory": "Memory",
       "fact": "Fact",
       "skill": "Skill",
-      "workflow": "Workflow"
+      "workflow": "Workflow",
+      "promote_skill": "Promote skill",
+      "deprecate_skill": "Deprecate skill",
+      "merge_skill": "Merge skill",
+      "archive_workflow": "Archive workflow",
+      "move_to_domain": "Move to domain",
+      "fact_conflict": "Fact conflict"
     },
     "sections": {
       "context": "Context",
       "evidence": "Evidence"
     },
     "fields": {
+      "origin": "Origin",
+      "subject": "Subject",
+      "suggestedAction": "Suggested action",
       "session": "Session",
       "created": "Created",
       "rationale": "Rationale",
@@ -323,6 +338,8 @@
       "title": "Apply this proposal?",
       "description": "OpenHome will write this approved memory or fact into the controlled facts store and rebuild MEMORY.md.",
       "skillDescription": "OpenHome will write {{name}} as a proposed, unverified workspace skill at {{path}}. It will be discoverable but not always loaded.",
+      "promoteSkillDescription": "OpenHome will promote {{name}} by verifying it if needed and activating the workspace skill at {{path}}.",
+      "deprecateSkillDescription": "OpenHome will mark workspace skill {{name}} as deprecated at {{path}}. It will stop appearing in normal skill discovery.",
       "skillPathPending": "workspace/skills/<safe-name>/SKILL.md",
       "workflowDescription": "OpenHome will write {{name}} as a proposed, unverified manual workflow at {{path}}. It will not create automation, run tools, or schedule jobs.",
       "workflowPathPending": "workspace/workflows/<safe-name>/workflow.yaml",

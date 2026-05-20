@@ -683,6 +683,177 @@ describe("App layout", () => {
     expect(await screen.findByText("Workflow review proposal applied.")).toBeInTheDocument();
   });
 
+  it("filters curator proposals and applies a promote_skill review", async () => {
+    await i18n.changeLanguage("en");
+    const proposal = {
+      id: "review_promote_skill",
+      created_at: "2026-05-20T10:00:00+00:00",
+      session_key: "websocket:chat-a",
+      turn_id: "turn-7",
+      origin: "curator",
+      proposal_type: "promote_skill",
+      domain_id: "core",
+      title: "Promote verified skill `lighting-troubleshooting`",
+      content: "Curator recommends activating this verified workspace skill.",
+      rationale: "The skill is verified and not blocked by a stronger duplicate.",
+      confidence: 0.84,
+      evidence: ["skill=lighting-troubleshooting"],
+      payload: {
+        subject_id: "lighting-troubleshooting",
+        subject_type: "skill",
+        subject_path: "skills/lighting-troubleshooting/SKILL.md",
+        suggested_action: "promote_skill",
+      },
+      subject_label: "skill:lighting-troubleshooting (skills/lighting-troubleshooting/SKILL.md)",
+      suggested_action: "promote_skill",
+      status: "pending",
+      can_apply: true,
+    };
+    const appliedProposal = {
+      ...proposal,
+      status: "applied",
+      applied_skill_name: "lighting-troubleshooting",
+      applied_skill_path: "skills/lighting-troubleshooting/SKILL.md",
+      apply_artifact: {
+        artifact_type: "skill",
+        skill_name: "lighting-troubleshooting",
+        path: "skills/lighting-troubleshooting/SKILL.md",
+        validation: "Skill lifecycle action applied.",
+      },
+    };
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      const json = (body: unknown) => ({
+        ok: true,
+        status: 200,
+        headers: new Headers({ "content-type": "application/json" }),
+        text: async () => JSON.stringify(body),
+      });
+      if (url === "/api/reviews?status=pending&limit=50") {
+        return json({
+          proposals: [],
+          stats: { proposal_count: 1, pending_count: 1 },
+        });
+      }
+      if (url === "/api/reviews?status=pending&origin=curator&limit=50") {
+        return json({
+          proposals: [proposal],
+          stats: { proposal_count: 1, pending_count: 1 },
+        });
+      }
+      if (url === "/api/reviews/review_promote_skill") {
+        return json({
+          proposal,
+          stats: { proposal_count: 1, pending_count: 1 },
+        });
+      }
+      if (url === "/api/reviews/review_promote_skill/apply") {
+        return json({
+          result: {
+            proposal_id: "review_promote_skill",
+            status: "applied",
+            action: "apply",
+            ok: true,
+            message: "Curator skill promotion applied.",
+            artifact: appliedProposal.apply_artifact,
+          },
+          proposal: appliedProposal,
+          stats: { proposal_count: 1, pending_count: 0 },
+        });
+      }
+      return { ok: false, status: 404, json: async () => ({}) };
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<App />);
+
+    await waitFor(() => expect(connectSpy).toHaveBeenCalled());
+    const sidebar = screen.getByRole("navigation", { name: "Sidebar navigation" });
+    fireEvent.click(within(sidebar).getByRole("button", { name: "Reviews" }));
+
+    fireEvent.click(await screen.findByRole("button", { name: "Curator" }));
+    expect(await screen.findByText("Promote verified skill `lighting-troubleshooting`")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Apply" }));
+    expect(screen.getByText(/verifying it if needed and activating/)).toBeInTheDocument();
+    fireEvent.click(screen.getAllByRole("button", { name: "Apply" }).at(-1)!);
+
+    await waitFor(() =>
+      expect(fetchMock).toHaveBeenCalledWith(
+        "/api/reviews/review_promote_skill/apply",
+        expect.objectContaining({
+          headers: { Authorization: "Bearer tok" },
+        }),
+      ),
+    );
+    expect(await screen.findByText("Curator skill promotion applied.")).toBeInTheDocument();
+  });
+
+  it("disables apply for review-only curator proposals", async () => {
+    await i18n.changeLanguage("en");
+    const proposal = {
+      id: "review_merge_skill",
+      created_at: "2026-05-20T10:00:00+00:00",
+      session_key: "websocket:chat-a",
+      turn_id: "turn-8",
+      origin: "curator",
+      proposal_type: "merge_skill",
+      domain_id: "core",
+      title: "Review duplicate workspace skills: alpha, beta",
+      content: "Curator found duplicate workspace skills that need manual merge review.",
+      rationale: "The duplicate group is ambiguous.",
+      confidence: 0.78,
+      evidence: ["alpha: skills/alpha/SKILL.md", "beta: skills/beta/SKILL.md"],
+      payload: {
+        subject_id: "alpha,beta",
+        subject_type: "skill_group",
+        subject_path: "skills/alpha/SKILL.md",
+        suggested_action: "merge_skill",
+      },
+      subject_label: "skill_group:alpha,beta (skills/alpha/SKILL.md)",
+      suggested_action: "merge_skill",
+      status: "pending",
+      can_apply: false,
+      unsupported_reason: "merge_skill proposals are review-only in P10.",
+    };
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      const json = (body: unknown) => ({
+        ok: true,
+        status: 200,
+        headers: new Headers({ "content-type": "application/json" }),
+        text: async () => JSON.stringify(body),
+      });
+      if (url === "/api/reviews?status=pending&limit=50") {
+        return json({
+          proposals: [proposal],
+          stats: { proposal_count: 1, pending_count: 1 },
+        });
+      }
+      if (url === "/api/reviews/review_merge_skill") {
+        return json({
+          proposal,
+          stats: { proposal_count: 1, pending_count: 1 },
+        });
+      }
+      return { ok: false, status: 404, json: async () => ({}) };
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<App />);
+
+    await waitFor(() => expect(connectSpy).toHaveBeenCalled());
+    const sidebar = screen.getByRole("navigation", { name: "Sidebar navigation" });
+    fireEvent.click(within(sidebar).getByRole("button", { name: "Reviews" }));
+
+    expect(
+      await screen.findByRole("heading", {
+        name: "Review duplicate workspace skills: alpha, beta",
+      }),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Apply" })).toBeDisabled();
+    expect(screen.getByText("merge_skill proposals are review-only in P10.")).toBeInTheDocument();
+  });
+
   it("shows New chat in the thread header while a session has no generated title", async () => {
     await i18n.changeLanguage("zh-CN");
     mockSessions = [

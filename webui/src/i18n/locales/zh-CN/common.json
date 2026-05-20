@@ -263,7 +263,7 @@
     "appliedFact": "事实 {{id}}",
     "appliedSkill": "技能 {{path}}",
     "appliedWorkflow": "Workflow {{path}}",
-    "unsupportedApply": "本阶段可以应用 memory、fact、skill 和 workflow 提案。",
+    "unsupportedApply": "这个提案在 P10 中仅供审核，或已经进入终态，不能再直接应用。",
     "reasonLabel": "审核备注",
     "reasonPlaceholder": "可选：说明为什么应用、拒绝或延期这个提案。",
     "noEvidence": "这个提案没有保存证据片段。",
@@ -274,8 +274,14 @@
     "filters": {
       "status": "按状态筛选",
       "type": "按类型筛选",
+      "origin": "按来源筛选",
       "all": "全部",
-      "allTypes": "全部类型"
+      "allTypes": "全部类型",
+      "allOrigins": "全部来源"
+    },
+    "origins": {
+      "background_review": "背景审核",
+      "curator": "整理器"
     },
     "status": {
       "pending": "待审核",
@@ -289,13 +295,22 @@
       "memory": "记忆",
       "fact": "事实",
       "skill": "Skill",
-      "workflow": "Workflow"
+      "workflow": "Workflow",
+      "promote_skill": "提升 Skill",
+      "deprecate_skill": "废弃 Skill",
+      "merge_skill": "合并 Skill",
+      "archive_workflow": "归档 Workflow",
+      "move_to_domain": "迁移到领域包",
+      "fact_conflict": "事实冲突"
     },
     "sections": {
       "context": "上下文",
       "evidence": "证据"
     },
     "fields": {
+      "origin": "来源",
+      "subject": "对象",
+      "suggestedAction": "建议动作",
       "session": "会话",
       "created": "创建时间",
       "rationale": "理由",
@@ -311,6 +326,8 @@
       "title": "应用这个提案？",
       "description": "OpenHome 会把已批准的记忆或事实写入受控 facts store，并重新生成 MEMORY.md。",
       "skillDescription": "OpenHome 会把 {{name}} 写成 proposed/unverified workspace skill，位置是 {{path}}。它会被发现，但不会 always 自动加载。",
+      "promoteSkillDescription": "OpenHome 会提升 {{name}}：如有需要先完成 verify，再把位于 {{path}} 的 workspace skill 激活。",
+      "deprecateSkillDescription": "OpenHome 会把位于 {{path}} 的 workspace skill {{name}} 标记为 deprecated，它将不再出现在正常的 skill 发现结果中。",
       "skillPathPending": "workspace/skills/<safe-name>/SKILL.md",
       "workflowDescription": "OpenHome 会把 {{name}} 写成 proposed/unverified 手动 workflow，位置是 {{path}}。它不会创建自动化、运行工具或创建计划任务。",
       "workflowPathPending": "workspace/workflows/<safe-name>/workflow.yaml",

@@ -15,7 +15,7 @@ from OpenHome.bus.events import InboundMessage
 from OpenHome.bus.queue import MessageBus
 from OpenHome.command.builtin import cmd_reviews
 from OpenHome.command.router import CommandContext
-from OpenHome.config.schema import BackgroundReviewConfig
+from OpenHome.config.schema import BackgroundReviewConfig, CuratorConfig
 from OpenHome.providers.base import LLMProvider, LLMResponse
 from OpenHome.session.manager import Session
 
@@ -162,6 +162,48 @@ async def test_agent_loop_schedules_review_only_for_successful_user_turn(tmp_pat
     ctx.stop_reason = "ask_user"
     loop._schedule_background_review(ctx)
     assert loop.background_review.review_turn.await_count == 0
+
+
+@pytest.mark.asyncio
+async def test_agent_loop_schedules_curator_only_for_successful_user_turn(tmp_path: Path) -> None:
+    loop = AgentLoop(
+        bus=MessageBus(),
+        provider=FakeProvider(LLMResponse(content='{"proposals":[]}', finish_reason="stop")),
+        workspace=tmp_path,
+        model="fake-model",
+        curator_config=CuratorConfig(enabled=True),
+    )
+    loop.curator.review_workspace = AsyncMock(return_value=None)
+    session = Session(key="websocket:chat1")
+    session.messages.extend([
+        {"role": "user", "content": "remember this"},
+        {"role": "assistant", "content": "done"},
+    ])
+    ctx = TurnContext(
+        msg=InboundMessage(
+            channel="websocket",
+            sender_id="webui",
+            chat_id="chat1",
+            content="remember this",
+            metadata={"message_id": "m1"},
+        ),
+        session_key="websocket:chat1",
+        state=TurnState.SAVE,
+        turn_id="turn-1",
+        session=session,
+        final_content="done",
+        stop_reason="stop",
+    )
+
+    loop._schedule_curator_review(ctx)
+    await asyncio.gather(*loop._background_tasks)
+
+    loop.curator.review_workspace.assert_awaited_once()
+
+    loop.curator.review_workspace.reset_mock()
+    ctx.stop_reason = "ask_user"
+    loop._schedule_curator_review(ctx)
+    assert loop.curator.review_workspace.await_count == 0
 
 
 @pytest.mark.asyncio

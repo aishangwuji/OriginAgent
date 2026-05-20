@@ -265,7 +265,9 @@
       "status": "依狀態篩選",
       "type": "依類型篩選",
       "all": "全部",
-      "allTypes": "全部類型"
+      "allTypes": "全部類型",
+      "origin": "Filter by origin",
+      "allOrigins": "All origins"
     },
     "status": {
       "pending": "待審核",
@@ -279,7 +281,13 @@
       "memory": "記憶",
       "fact": "事實",
       "skill": "Skill",
-      "workflow": "Workflow"
+      "workflow": "Workflow",
+      "promote_skill": "Promote skill",
+      "deprecate_skill": "Deprecate skill",
+      "merge_skill": "Merge skill",
+      "archive_workflow": "Archive workflow",
+      "move_to_domain": "Move to domain",
+      "fact_conflict": "Fact conflict"
     },
     "sections": {
       "context": "上下文",
@@ -289,7 +297,10 @@
       "session": "會話",
       "created": "建立時間",
       "rationale": "理由",
-      "reviewReason": "審核備註"
+      "reviewReason": "審核備註",
+      "origin": "Origin",
+      "subject": "Subject",
+      "suggestedAction": "Suggested action"
     },
     "actions": {
       "refresh": "重新整理",
@@ -305,7 +316,13 @@
       "workflowDescription": "OpenHome 會把 {{name}} 寫成 proposed/unverified 手動 workflow，位置是 {{path}}。它不會建立自動化、執行工具或建立排程任務。",
       "workflowPathPending": "workspace/workflows/<safe-name>/workflow.yaml",
       "cancel": "取消",
-      "confirm": "套用"
+      "confirm": "套用",
+      "promoteSkillDescription": "OpenHome will promote {{name}} by verifying it if needed and activating the workspace skill at {{path}}.",
+      "deprecateSkillDescription": "OpenHome will mark workspace skill {{name}} as deprecated at {{path}}. It will stop appearing in normal skill discovery."
+    },
+    "origins": {
+      "background_review": "Background review",
+      "curator": "Curator"
     }
   },
   "chat": {

@@ -265,7 +265,9 @@
       "status": "Filter by status",
       "type": "Filter by type",
       "all": "All",
-      "allTypes": "All types"
+      "allTypes": "All types",
+      "origin": "Filter by origin",
+      "allOrigins": "All origins"
     },
     "status": {
       "pending": "Pending",
@@ -279,7 +281,13 @@
       "memory": "Memory",
       "fact": "Fact",
       "skill": "Skill",
-      "workflow": "Workflow"
+      "workflow": "Workflow",
+      "promote_skill": "Promote skill",
+      "deprecate_skill": "Deprecate skill",
+      "merge_skill": "Merge skill",
+      "archive_workflow": "Archive workflow",
+      "move_to_domain": "Move to domain",
+      "fact_conflict": "Fact conflict"
     },
     "sections": {
       "context": "Context",
@@ -289,7 +297,10 @@
       "session": "Session",
       "created": "Created",
       "rationale": "Rationale",
-      "reviewReason": "Review note"
+      "reviewReason": "Review note",
+      "origin": "Origin",
+      "subject": "Subject",
+      "suggestedAction": "Suggested action"
     },
     "actions": {
       "refresh": "Refresh",
@@ -305,7 +316,13 @@
       "workflowDescription": "OpenHome will write {{name}} as a proposed, unverified manual workflow at {{path}}. It will not create automation, run tools, or schedule jobs.",
       "workflowPathPending": "workspace/workflows/<safe-name>/workflow.yaml",
       "cancel": "Cancel",
-      "confirm": "Apply"
+      "confirm": "Apply",
+      "promoteSkillDescription": "OpenHome will promote {{name}} by verifying it if needed and activating the workspace skill at {{path}}.",
+      "deprecateSkillDescription": "OpenHome will mark workspace skill {{name}} as deprecated at {{path}}. It will stop appearing in normal skill discovery."
+    },
+    "origins": {
+      "background_review": "Background review",
+      "curator": "Curator"
     }
   },
   "chat": {

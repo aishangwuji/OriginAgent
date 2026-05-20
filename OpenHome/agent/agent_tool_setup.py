@@ -110,6 +110,7 @@ def register_default_tools(
     audit_config: Any,
     domain_pack_manager: Any,
     background_review_service: Any,
+    curator_service: Any,
     subagent_manager: Any,
     file_state_store: Any,
     provider_snapshot_loader: Callable[..., Any] | None,
@@ -136,6 +137,7 @@ def register_default_tools(
             confirmation_store=confirmation_store,
             domain_pack_manager=domain_pack_manager,
             background_review_service=background_review_service,
+            curator_service=curator_service,
         )
     )
     registry.register(ToolAuditSummaryTool(workspace=workspace, audit_mode=audit_config.mode))

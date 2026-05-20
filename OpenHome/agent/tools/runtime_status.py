@@ -30,6 +30,7 @@ class RuntimeStatusTool(Tool):
         runtime_profile: str = "default",
         domain_pack_manager: Any | None = None,
         background_review_service: Any | None = None,
+        curator_service: Any | None = None,
     ) -> None:
         self._workspace = Path(workspace)
         self._registry = registry
@@ -41,6 +42,7 @@ class RuntimeStatusTool(Tool):
         self._runtime_profile = runtime_profile
         self._domain_pack_manager = domain_pack_manager
         self._background_review_service = background_review_service
+        self._curator_service = curator_service
 
     @property
     def description(self) -> str:
@@ -57,6 +59,7 @@ class RuntimeStatusTool(Tool):
     async def execute(self) -> dict[str, Any]:
         domain_status = _domain_pack_status(self._domain_pack_manager)
         background_review_status = _background_review_status(self._background_review_service)
+        curator_status = _curator_status(self._curator_service)
         workflow_status = _workflow_artifact_status(self._workspace)
         skill_status = _skill_lifecycle_status(self._workspace, self._domain_pack_manager)
         return {
@@ -71,6 +74,7 @@ class RuntimeStatusTool(Tool):
             "confirmation_available": self._confirmation_store is not None,
             **domain_status,
             **background_review_status,
+            **curator_status,
             **skill_status,
             **workflow_status,
         }
@@ -343,6 +347,31 @@ def _background_review_status(service: Any | None) -> dict[str, Any]:
             "background_review_pending_count": 0,
             "background_review_last_created_at": None,
             "background_review_last_result": None,
+        }
+
+
+def _curator_status(service: Any | None) -> dict[str, Any]:
+    if service is None or not hasattr(service, "runtime_status"):
+        return {
+            "curator_enabled": False,
+            "curator_running_count": 0,
+            "curator_proposal_count": 0,
+            "curator_pending_count": 0,
+            "curator_last_created_at": None,
+            "curator_last_result": None,
+            "curator_type_counts": {},
+        }
+    try:
+        return dict(service.runtime_status())
+    except Exception:
+        return {
+            "curator_enabled": False,
+            "curator_running_count": 0,
+            "curator_proposal_count": 0,
+            "curator_pending_count": 0,
+            "curator_last_created_at": None,
+            "curator_last_result": None,
+            "curator_type_counts": {},
         }
 
 
