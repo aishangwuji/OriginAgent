@@ -54,6 +54,7 @@ class ExecTool(Tool):
         protected_policy: ProtectedPathPolicy | None = None,
         security_profile: Literal["secure", "local_dev", "disabled"] = "secure",
         allow_unsafe_exec: bool = False,
+        shell_syntax_policy: Literal["restricted", "shell"] = "restricted",
     ):
         self._limits = limits or ToolLimits()
         self.timeout = timeout
@@ -84,6 +85,11 @@ class ExecTool(Tool):
         self.allowed_env_keys = allowed_env_keys or []
         self.security_profile = security_profile
         self.allow_unsafe_exec = allow_unsafe_exec
+        self.shell_syntax_policy = (
+            shell_syntax_policy
+            if security_profile == "local_dev" and allow_unsafe_exec
+            else "restricted"
+        )
         workspace_for_policy = Path(working_dir) if working_dir else None
         self._protected_policy = protected_policy or ProtectedPathPolicy(workspace_for_policy)
 
@@ -348,6 +354,9 @@ class ExecTool(Tool):
             if re.search(pattern, lower):
                 return "Error: Command blocked by deny pattern filter"
 
+        if self.shell_syntax_policy == "restricted" and self._has_shell_control_syntax(cmd):
+            return "Error: Command blocked by shell syntax policy"
+
         if self.allow_patterns and not explicitly_allowed:
             return "Error: Command blocked by allowlist filter (not in allowlist)"
 
@@ -498,3 +507,44 @@ class ExecTool(Tool):
         posix_paths = re.findall(r"(?:^|[\s|>'\"])(/[^\s\"'>;|<]+)", command) # POSIX: /absolute only
         home_paths = re.findall(r"(?:^|[\s>'\"])(~[^\s\"'>;|<]*)", command) # POSIX/Windows home shortcut: ~
         return win_paths + posix_paths + home_paths
+
+    @staticmethod
+    def _has_shell_control_syntax(command: str) -> bool:
+        """Detect shell control syntax outside single-quoted literals.
+
+        Double-quoted semicolons and pipes are ordinary argument text, but
+        command substitutions still execute inside double quotes.
+        """
+        in_single = False
+        in_double = False
+        escaped = False
+        i = 0
+        while i < len(command):
+            ch = command[i]
+            if escaped:
+                escaped = False
+                i += 1
+                continue
+            if ch == "\\":
+                escaped = True
+                i += 1
+                continue
+            if ch == "'" and not in_double:
+                in_single = not in_single
+                i += 1
+                continue
+            if ch == '"' and not in_single:
+                in_double = not in_double
+                i += 1
+                continue
+            if in_single:
+                i += 1
+                continue
+            if ch == "`":
+                return True
+            if ch == "$" and i + 1 < len(command) and command[i + 1] == "(":
+                return True
+            if not in_double and ch in {";", "|", "&", "\n", "\r"}:
+                return True
+            i += 1
+        return False

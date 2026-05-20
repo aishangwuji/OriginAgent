@@ -60,6 +60,37 @@ async def test_exec_allows_curl_to_public_url():
     assert guard_result is None
 
 
+@pytest.mark.parametrize(
+    "command",
+    [
+        "echo ok; echo injected",
+        "echo ok && whoami",
+        "echo ok || whoami",
+        "echo ok | cat",
+        "echo $(whoami)",
+        "echo `id`",
+        "sleep 1 &",
+        "echo ok\necho injected",
+    ],
+)
+def test_exec_restricted_shell_policy_blocks_control_syntax(command):
+    tool = ExecTool()
+    result = tool._guard_command(command, "/tmp")
+    assert result == "Error: Command blocked by shell syntax policy"
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        'python -c "import time; print(\'ok\')"',
+        "echo 'a;b|c&&d$(x)`y`'",
+    ],
+)
+def test_exec_restricted_shell_policy_allows_quoted_argument_syntax(command):
+    tool = ExecTool()
+    assert tool._guard_command(command, "/tmp") is None
+
+
 @pytest.mark.asyncio
 async def test_exec_blocks_chained_internal_url():
     """Internal URLs buried in chained commands should still be caught."""
@@ -68,7 +99,7 @@ async def test_exec_blocks_chained_internal_url():
         result = await tool.execute(
             command="echo start && curl http://169.254.169.254/latest/meta-data/ && echo done"
         )
-    assert "Error" in result
+    assert result == "Error: Command blocked by shell syntax policy"
 
 
 # --- #2989: block writes to OpenHome internal state files -----------------
@@ -227,7 +258,14 @@ async def test_workspace_exec_without_restrict_to_workspace_fails_closed(tmp_pat
 def test_exec_allows_benign_device_targets_inside_workspace(tmp_path, command):
     workspace = tmp_path / "workspace"
     workspace.mkdir()
-    tool = ExecTool(working_dir=str(workspace), restrict_to_workspace=True, sandbox="")
+    tool = ExecTool(
+        working_dir=str(workspace),
+        restrict_to_workspace=True,
+        sandbox="",
+        security_profile="local_dev",
+        allow_unsafe_exec=True,
+        shell_syntax_policy="shell",
+    )
     assert tool._guard_command(command, str(workspace)) is None
 
 
@@ -239,7 +277,15 @@ async def test_exec_3599_regression_rm_with_dev_null_redirect(tmp_path):
     workspace.mkdir()
     target = workspace / "test_print.txt"
     target.write_text("scratch")
-    tool = ExecTool(working_dir=str(workspace), restrict_to_workspace=True, timeout=5, sandbox="bwrap")
+    tool = ExecTool(
+        working_dir=str(workspace),
+        restrict_to_workspace=True,
+        timeout=5,
+        sandbox="bwrap",
+        security_profile="local_dev",
+        allow_unsafe_exec=True,
+        shell_syntax_policy="shell",
+    )
     with patch("OpenHome.agent.tools.shell._IS_WINDOWS", False):
         with patch("OpenHome.agent.tools.shell.shutil.which", lambda name: "/usr/bin/bwrap"):
             with patch.object(tool, "_spawn") as spawn:

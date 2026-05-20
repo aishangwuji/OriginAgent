@@ -188,6 +188,7 @@ def register_default_tools(
                 deny_patterns=exec_config.deny_patterns,
                 security_profile=exec_config.profile,
                 allow_unsafe_exec=exec_config.allow_unsafe_exec,
+                shell_syntax_policy=exec_config.shell_syntax_policy,
             )
         )
 

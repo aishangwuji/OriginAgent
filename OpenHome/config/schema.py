@@ -465,6 +465,7 @@ class ExecToolConfig(Base):
     enable: bool = True
     profile: Literal["secure", "local_dev", "disabled"] = "secure"
     allow_unsafe_exec: bool = False
+    shell_syntax_policy: Literal["restricted", "shell"] = "restricted"
     timeout: int = 60
     path_append: str = ""
     sandbox: str = ""  # sandbox backend: "" (none) or "bwrap"

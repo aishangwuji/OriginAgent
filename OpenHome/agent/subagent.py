@@ -261,6 +261,7 @@ class SubagentManager:
                     deny_patterns=self.exec_config.deny_patterns,
                     security_profile=self.exec_config.profile,
                     allow_unsafe_exec=self.exec_config.allow_unsafe_exec,
+                    shell_syntax_policy=self.exec_config.shell_syntax_policy,
                 ))
             if self.web_config.enable:
                 tools.register(

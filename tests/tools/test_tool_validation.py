@@ -373,7 +373,12 @@ def test_exec_guard_allows_dev_null_redirect(tmp_path) -> None:
 
 
 def test_exec_guard_allows_dev_urandom(tmp_path) -> None:
-    tool = ExecTool(restrict_to_workspace=True)
+    tool = ExecTool(
+        restrict_to_workspace=True,
+        security_profile="local_dev",
+        allow_unsafe_exec=True,
+        shell_syntax_policy="shell",
+    )
     error = tool._guard_command("cat /dev/urandom | head -c 16 > random.bin", str(tmp_path))
     assert error is None
 
