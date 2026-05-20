@@ -47,6 +47,7 @@ import { Input } from "@/components/ui/input";
 import {
   deleteMcpServerSettings,
   domainPackAction,
+  fetchSelfModel,
   fetchSettings,
   fetchDomain,
   fetchSkill,
@@ -71,12 +72,13 @@ import type {
   McpServerSettingsUpdate,
   McpTransportType,
   SettingsPayload,
+  SelfModel,
   SkillLifecycleStats,
   SkillRecord,
   WebSearchSettingsUpdate,
 } from "@/lib/types";
 
-type SettingsSectionKey = "general" | "byok" | "skills" | "domains" | "mcp";
+type SettingsSectionKey = "general" | "self" | "byok" | "skills" | "domains" | "mcp";
 type ByokPaneKey = "llm" | "web-search";
 type McpFormState = {
   name: string;
@@ -587,6 +589,8 @@ export function SettingsView({
                   backgroundReviewSaving={backgroundReviewSaving}
                   onToggleBackgroundReview={toggleBackgroundReview}
                 />
+              ) : activeSection === "self" ? (
+                <SelfSettings />
               ) : activeSection === "skills" ? (
                 <SkillsSettings />
               ) : activeSection === "domains" ? (
@@ -668,6 +672,7 @@ export function SettingsView({
 
 const SETTINGS_NAV_ITEMS = [
   { key: "general", icon: Settings },
+  { key: "self", icon: Brain },
   { key: "byok", icon: KeyRound },
   { key: "skills", icon: GraduationCap },
   { key: "domains", icon: Boxes },
@@ -934,6 +939,257 @@ function GeneralSettings({
         </section>
       )}
     </div>
+  );
+}
+
+function SelfSettings() {
+  const { t } = useTranslation();
+  const { token, refreshToken } = useClient();
+  const [selfModel, setSelfModel] = useState<SelfModel | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const loadSelfModel = useCallback(async () => {
+    setLoading(true);
+    try {
+      const payload = await withTokenRefresh(token, refreshToken, fetchSelfModel);
+      setSelfModel(payload);
+      setError(null);
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setLoading(false);
+    }
+  }, [refreshToken, token]);
+
+  useEffect(() => {
+    void loadSelfModel();
+  }, [loadSelfModel]);
+
+  const activeDomains = selfModel?.domains.items.filter(
+    (domain) => domain.active && domain.status === "available",
+  ) ?? [];
+  const verifiedWorkspaceSkills = selfModel?.skills.items.filter(
+    (skill) => skill.source === "workspace"
+      && skill.lifecycle_status === "active"
+      && skill.verification_status === "verified",
+  ) ?? [];
+  const workflowArtifacts = selfModel?.workflows.items ?? [];
+  const pendingReviews = selfModel?.reviews.pending_count ?? 0;
+  const pendingConfirmations = selfModel?.confirmations.pending_count ?? 0;
+  const limitations = selfModel?.limitations ?? [];
+
+  if (loading && !selfModel) {
+    return (
+      <div className="flex h-48 items-center justify-center rounded-[24px] border border-border/50 bg-card/75 text-sm text-muted-foreground shadow-[0_20px_70px_rgba(15,23,42,0.07)]">
+        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+        {t("settings.self.loading")}
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-6">
+      <p className="max-w-[42rem] text-[13px] leading-6 text-muted-foreground">
+        {t("settings.self.description")}
+      </p>
+
+      {error ? (
+        <div className="rounded-[18px] border border-destructive/20 bg-destructive/5 px-4 py-3 text-[13px] text-destructive">
+          {error}
+        </div>
+      ) : null}
+
+      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+        <SkillStat label={t("settings.self.stats.activeDomains")} value={activeDomains.length} />
+        <SkillStat label={t("settings.self.stats.verifiedSkills")} value={verifiedWorkspaceSkills.length} />
+        <SkillStat label={t("settings.self.stats.workflows")} value={workflowArtifacts.length} />
+        <SkillStat label={t("settings.self.stats.pendingReviews")} value={pendingReviews} />
+        <SkillStat label={t("settings.self.stats.pendingConfirmations")} value={pendingConfirmations} />
+        <SkillStat label={t("settings.self.stats.limitations")} value={limitations.length} />
+      </div>
+
+      <section className="space-y-3">
+        <SettingsSectionTitle>{t("settings.self.sections.identity")}</SettingsSectionTitle>
+        <SettingsGroup>
+          <div className="grid gap-3 px-4 py-4 text-[12px] text-muted-foreground sm:grid-cols-2 sm:px-5">
+            <SkillMeta label={t("settings.self.fields.agent")} value={selfModel?.identity.agent_name || "OpenHome"} />
+            <SkillMeta label={t("settings.self.fields.workspace")} value={selfModel?.identity.workspace_name || "workspace"} />
+            <SkillMeta label={t("settings.self.fields.runtimeProfile")} value={selfModel?.identity.runtime_profile || "default"} />
+            <SkillMeta label={t("settings.self.fields.auditMode")} value={selfModel?.identity.audit_mode || "minimal"} />
+          </div>
+        </SettingsGroup>
+      </section>
+
+      <section className="space-y-3">
+        <SettingsSectionTitle>{t("settings.self.sections.runtime")}</SettingsSectionTitle>
+        <SettingsGroup>
+          <div className="grid gap-3 px-4 py-4 text-[12px] text-muted-foreground sm:grid-cols-2 sm:px-5">
+            <SkillMeta label={t("settings.self.fields.registeredTools")} value={String(selfModel?.runtime.registered_tools_count ?? 0)} />
+            <SkillMeta label={t("settings.self.fields.activeSessions")} value={String(selfModel?.runtime.active_sessions_count ?? 0)} />
+            <SkillMeta label={t("settings.self.fields.pendingQueues")} value={String(selfModel?.runtime.pending_queue_count ?? 0)} />
+            <SkillMeta label={t("settings.self.fields.cron")} value={(selfModel?.runtime.cron_available ?? false) ? t("settings.skills.values.yes") : t("settings.skills.values.no")} />
+            <SkillMeta label={t("settings.self.fields.confirmation")} value={(selfModel?.runtime.confirmation_available ?? false) ? t("settings.skills.values.yes") : t("settings.skills.values.no")} />
+            <SkillMeta label={t("settings.self.fields.backgroundReview")} value={(selfModel?.runtime.background_review_enabled ?? false) ? t("settings.skills.values.yes") : t("settings.skills.values.no")} />
+            <SkillMeta label={t("settings.self.fields.curator")} value={(selfModel?.runtime.curator_enabled ?? false) ? t("settings.skills.values.yes") : t("settings.skills.values.no")} />
+          </div>
+        </SettingsGroup>
+      </section>
+
+      <section className="space-y-3">
+        <SettingsSectionTitle>{t("settings.self.sections.domains")}</SettingsSectionTitle>
+        <SettingsGroup>
+          {selfModel?.domains.items.length ? (
+            selfModel.domains.items.map((domain) => (
+              <div key={`${domain.source}:${domain.id}`} className="border-b border-border/45 px-4 py-3 last:border-b-0 sm:px-5">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="mr-auto text-[13px] font-semibold text-foreground">{domain.id}</span>
+                  <SkillBadge>{t(`settings.domains.source.${domain.source}`)}</SkillBadge>
+                  <SkillBadge>{t(`settings.domains.status.${domain.status || "available"}`)}</SkillBadge>
+                  {domain.active ? <SkillBadge>{t("settings.self.badges.active")}</SkillBadge> : null}
+                </div>
+                <p className="mt-1 text-[12px] leading-5 text-muted-foreground">
+                  {domain.validation_summary || domain.description || domain.path}
+                </p>
+              </div>
+            ))
+          ) : (
+            <div className="px-4 py-8 text-sm text-muted-foreground">{t("settings.self.empty.section")}</div>
+          )}
+        </SettingsGroup>
+      </section>
+
+      <section className="space-y-3">
+        <SettingsSectionTitle>{t("settings.self.sections.skills")}</SettingsSectionTitle>
+        <SettingsGroup>
+          {selfModel?.skills.items.length ? (
+            selfModel.skills.items.map((skill) => (
+              <div key={`${skill.source}:${skill.name}`} className="border-b border-border/45 px-4 py-3 last:border-b-0 sm:px-5">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="mr-auto text-[13px] font-semibold text-foreground">{skill.name}</span>
+                  <SkillBadge>{t(`settings.skills.source.${skill.source === "workspace" ? "workspace" : skill.source === "builtin" ? "builtin" : "domain"}`)}</SkillBadge>
+                  <SkillBadge>{t(`settings.skills.status.${skill.lifecycle_status || "unknown"}`)}</SkillBadge>
+                  <SkillBadge>{t(`settings.skills.verification.${skill.verification_status || "unknown"}`)}</SkillBadge>
+                </div>
+                <p className="mt-1 text-[12px] leading-5 text-muted-foreground">
+                  {skill.description || skill.path}
+                </p>
+              </div>
+            ))
+          ) : (
+            <div className="px-4 py-8 text-sm text-muted-foreground">{t("settings.self.empty.section")}</div>
+          )}
+        </SettingsGroup>
+      </section>
+
+      <section className="space-y-3">
+        <SettingsSectionTitle>{t("settings.self.sections.workflows")}</SettingsSectionTitle>
+        <SettingsGroup>
+          {workflowArtifacts.length ? (
+            workflowArtifacts.map((workflow) => (
+              <div key={workflow.path} className="border-b border-border/45 px-4 py-3 last:border-b-0 sm:px-5">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="mr-auto text-[13px] font-semibold text-foreground">{workflow.name}</span>
+                  <SkillBadge>{t(`settings.self.workflowStatus.${workflow.status || "unknown"}`)}</SkillBadge>
+                  <SkillBadge>{t(`settings.self.verification.${workflow.verification_status || "unknown"}`)}</SkillBadge>
+                  {workflow.domain_id ? <SkillBadge>{workflow.domain_id}</SkillBadge> : null}
+                </div>
+                <p className="mt-1 text-[12px] leading-5 text-muted-foreground">
+                  {workflow.unavailable_reason || workflow.path}
+                </p>
+              </div>
+            ))
+          ) : (
+            <div className="px-4 py-8 text-sm text-muted-foreground">{t("settings.self.empty.section")}</div>
+          )}
+        </SettingsGroup>
+      </section>
+
+      <section className="space-y-3">
+        <SettingsSectionTitle>{t("settings.self.sections.reviewsConfirmations")}</SettingsSectionTitle>
+        <SettingsGroup>
+          <div className="space-y-4 px-4 py-4 sm:px-5">
+            <div className="grid gap-3 text-[12px] text-muted-foreground sm:grid-cols-2">
+              <SkillMeta label={t("settings.self.fields.pendingReviews")} value={String(selfModel?.reviews.pending_count ?? 0)} />
+              <SkillMeta label={t("settings.self.fields.pendingConfirmations")} value={String(selfModel?.confirmations.pending_count ?? 0)} />
+              <SkillMeta label={t("settings.self.fields.expiredConfirmations")} value={String(selfModel?.confirmations.expired_count ?? 0)} />
+              <SkillMeta label={t("settings.self.fields.pendingHistory")} value={String(selfModel?.memory.recent_history_pending_count ?? 0)} />
+            </div>
+            <div className="space-y-2">
+              <div className="text-[12px] font-medium text-foreground/75">{t("settings.self.fields.reviewOrigins")}</div>
+              <SelfCountBadges counts={selfModel?.reviews.origin_counts ?? {}} />
+            </div>
+            <div className="space-y-2">
+              <div className="text-[12px] font-medium text-foreground/75">{t("settings.self.fields.reviewTypes")}</div>
+              <SelfCountBadges counts={selfModel?.reviews.type_counts ?? {}} />
+            </div>
+            <div className="space-y-2">
+              <div className="text-[12px] font-medium text-foreground/75">{t("settings.self.fields.confirmationRisks")}</div>
+              <SelfCountBadges counts={selfModel?.confirmations.risk_counts ?? {}} />
+            </div>
+          </div>
+        </SettingsGroup>
+      </section>
+
+      <section className="space-y-3">
+        <SettingsSectionTitle>{t("settings.self.sections.limitations")}</SettingsSectionTitle>
+        <SettingsGroup>
+          {limitations.length ? (
+            limitations.map((item, index) => (
+              <div key={`${item.code}:${item.subject_id}:${index}`} className="border-b border-border/45 px-4 py-3 last:border-b-0 sm:px-5">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="mr-auto text-[13px] font-semibold text-foreground">
+                    {item.subject_type}: {item.subject_id}
+                  </span>
+                  <SelfLimitationBadge status={item.status}>{t(`settings.self.limitationStatus.${item.status}`)}</SelfLimitationBadge>
+                </div>
+                <p className="mt-1 text-[12px] leading-5 text-muted-foreground">{item.summary}</p>
+              </div>
+            ))
+          ) : (
+            <div className="px-4 py-8 text-sm text-muted-foreground">{t("settings.self.empty.limitations")}</div>
+          )}
+        </SettingsGroup>
+      </section>
+    </div>
+  );
+}
+
+function SelfCountBadges({ counts }: { counts: Record<string, number> }) {
+  const { t } = useTranslation();
+  const entries = Object.entries(counts).sort(([left], [right]) => left.localeCompare(right));
+  if (!entries.length) {
+    return <span className="text-[12px] text-muted-foreground">{t("settings.self.empty.none")}</span>;
+  }
+  return (
+    <div className="flex flex-wrap gap-2">
+      {entries.map(([label, value]) => (
+        <SkillBadge key={label}>{label}: {value}</SkillBadge>
+      ))}
+    </div>
+  );
+}
+
+function SelfLimitationBadge({
+  status,
+  children,
+}: {
+  status: string;
+  children: ReactNode;
+}) {
+  return (
+    <span
+      className={cn(
+        "rounded-full px-2.5 py-1 text-[11px] font-semibold",
+        status === "error"
+          ? "bg-destructive/10 text-destructive"
+          : status === "warning"
+            ? "bg-amber-500/12 text-amber-700 dark:text-amber-300"
+            : "bg-muted text-muted-foreground",
+      )}
+    >
+      {children}
+    </span>
   );
 }
 

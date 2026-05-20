@@ -12,7 +12,7 @@ from OpenHome.agent.loop import UNIFIED_SESSION_KEY, AgentLoop
 from OpenHome.agent.skills import SkillsLoader
 from OpenHome.bus.events import InboundMessage
 from OpenHome.bus.queue import MessageBus
-from OpenHome.command.builtin import cmd_domain, cmd_mcp, cmd_skill
+from OpenHome.command.builtin import cmd_domain, cmd_mcp, cmd_self, cmd_skill
 from OpenHome.command.router import CommandContext
 from OpenHome.config.schema import Config, DomainPacksConfig
 from OpenHome.providers.base import LLMProvider, LLMResponse
@@ -105,6 +105,23 @@ async def test_skill_command_lists_workspace_and_builtin_skills(tmp_path: Path) 
     assert "`alpha` [workspace]" in result.content
     assert "`beta` [builtin]" in result.content
     assert "Total: 2" in result.content
+    assert result.metadata["render_as"] == "text"
+
+
+@pytest.mark.asyncio
+async def test_self_command_renders_self_model(tmp_path: Path) -> None:
+    loop = AgentLoop(
+        bus=MessageBus(),
+        provider=_NoChatProvider(),
+        workspace=tmp_path,
+        model="test-model",
+    )
+
+    result = await cmd_self(_ctx(loop, "/self"))
+
+    assert result.content is not None
+    assert "# Self Model" in result.content
+    assert f"- Workspace: `{tmp_path.name}`" in result.content
     assert result.metadata["render_as"] == "text"
 
 
@@ -298,6 +315,7 @@ async def test_domain_command_installs_workspace_pack_from_local_path(
     ("raw", "expected"),
     [
         ("/mcp", "## MCP Servers"),
+        ("/self", "# Self Model"),
         ("/skill", "## Skills"),
         ("/skills", "## Skills"),
         ("/domain", "## Domain Packs"),

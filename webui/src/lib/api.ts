@@ -11,6 +11,7 @@ import type {
   ReviewProposalStats,
   SettingsPayload,
   SettingsUpdate,
+  SelfModel,
   SkillLifecycleResult,
   SkillLifecycleStats,
   SkillRecord,
@@ -150,6 +151,14 @@ export async function fetchSettings(
   base: string = "",
 ): Promise<SettingsPayload> {
   return request<SettingsPayload>(`${base}/api/settings`, token);
+}
+
+export async function fetchSelfModel(
+  token: string,
+  base: string = "",
+): Promise<SelfModel> {
+  const body = await request<{ self_model: SelfModel }>(`${base}/api/self`, token);
+  return body.self_model;
 }
 
 export async function listSlashCommands(

@@ -216,6 +216,7 @@ class AgentLoop:
         mcp_servers: dict | None = None,
         channels_config: ChannelsConfig | None = None,
         timezone: str | None = None,
+        runtime_profile: str = "default",
         session_ttl_minutes: int = 0,
         consolidation_ratio: float = 0.5,
         max_messages: int = 120,
@@ -305,6 +306,7 @@ class AgentLoop:
             self._image_generation_provider_configs["openrouter"] = image_generation_provider_config
         self.cron_service = cron_service
         self.restrict_to_workspace = restrict_to_workspace
+        self._runtime_profile = runtime_profile
         self._start_time = time.time()
         self._last_usage: dict[str, int] = {}
         self._extra_hooks: list[AgentHook] = hooks or []
@@ -312,12 +314,6 @@ class AgentLoop:
         self.domain_packs = domain_pack_manager or DomainPackManager(
             workspace,
             config=domain_packs_config or defaults.domain_packs,
-        )
-        self.context = ContextBuilder(
-            workspace,
-            timezone=timezone,
-            disabled_skills=disabled_skills,
-            domain_pack_manager=self.domain_packs,
         )
         self.background_review = BackgroundReviewService(
             workspace=workspace,
@@ -384,6 +380,20 @@ class AgentLoop:
         # When a session has an active task, new messages for that session
         # are routed here instead of creating a new task.
         self._pending_queues: dict[str, asyncio.Queue] = {}
+        self.context = ContextBuilder(
+            workspace,
+            timezone=timezone,
+            disabled_skills=disabled_skills,
+            domain_pack_manager=self.domain_packs,
+            audit_mode=self._tool_audit_config.mode,
+            runtime_profile=self._runtime_profile,
+            registry=self.tools,
+            sessions=self.sessions,
+            pending_queues=self._pending_queues,
+            cron_service=self.cron_service,
+            background_review_service=self.background_review,
+            curator_service=self.curator,
+        )
         # OPENHOME_MAX_CONCURRENT_REQUESTS: <=0 means unlimited; default 3.
         _max = int(os.environ.get("OPENHOME_MAX_CONCURRENT_REQUESTS", "3"))
         self._concurrency_gate: asyncio.Semaphore | None = (
@@ -502,6 +512,7 @@ class AgentLoop:
             mcp_servers=config.tools.mcp_servers,
             channels_config=config.channels,
             timezone=defaults.timezone,
+            runtime_profile=config.runtime.profile,
             unified_session=defaults.unified_session,
             disabled_skills=defaults.disabled_skills,
             session_ttl_minutes=defaults.session_ttl_minutes,
@@ -615,6 +626,7 @@ class AgentLoop:
             provider_snapshot_loader=self._provider_snapshot_loader,
             image_generation_provider_configs=self._image_generation_provider_configs,
             timezone=self.context.timezone or "UTC",
+            runtime_profile=self._runtime_profile,
             device_action_executor=self.device_action_executor,
             device_tools_real_mode=self._device_tools_real_mode,
             device_registry=self._device_registry,

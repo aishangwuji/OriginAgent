@@ -6,6 +6,7 @@ import {
   deleteSession,
   domainPackAction,
   fetchDomain,
+  fetchSelfModel,
   fetchWebuiThread,
   fetchReviewProposal,
   fetchSkill,
@@ -67,6 +68,17 @@ describe("webui API helpers", () => {
 
     expect(fetch).toHaveBeenCalledWith(
       "/api/settings/update?model=openrouter%2Ftest&provider=openrouter",
+      expect.objectContaining({
+        headers: { Authorization: "Bearer tok" },
+      }),
+    );
+  });
+
+  it("fetches the self model from the dedicated endpoint", async () => {
+    await fetchSelfModel("tok");
+
+    expect(fetch).toHaveBeenCalledWith(
+      "/api/self",
       expect.objectContaining({
         headers: { Authorization: "Bearer tok" },
       }),

@@ -258,6 +258,8 @@ async def test_runtime_status_uses_workspace_basename_not_absolute_path(tmp_path
     assert result["workspace_name"] == tmp_path.name
     assert result["registered_tools_count"] == 2
     assert result["pending_queue_count"] == 1
+    assert result["self_model"]["identity"]["workspace_name"] == tmp_path.name
+    assert result["self_model"]["runtime"]["registered_tools_count"] == 2
     assert str(tmp_path) not in _serialized(result)
 
 
@@ -317,6 +319,7 @@ async def test_runtime_status_reports_background_review_counts(tmp_path) -> None
     assert result["background_review_running_count"] == 1
     assert result["background_review_proposal_count"] == 3
     assert result["background_review_pending_count"] == 2
+    assert result["self_model"]["runtime"]["background_review_enabled"] is True
 
 
 @pytest.mark.asyncio

@@ -131,6 +131,18 @@ describe("webui i18n", () => {
     }
   });
 
+  it("ships self settings copy in English and Simplified Chinese", () => {
+    for (const locale of ["en", "zh-CN"] as const) {
+      const common = resources[locale].common;
+      expect(common.settings.nav.self).toBeTruthy();
+      expect(common.settings.self.description).toBeTruthy();
+      expect(common.settings.self.sections.identity).toBeTruthy();
+      expect(common.settings.self.stats.limitations).toBeTruthy();
+      expect(common.settings.self.workflowStatus.available).toBeTruthy();
+      expect(common.settings.self.limitationStatus.warning).toBeTruthy();
+    }
+  });
+
   it("keeps review navigation and actions localized for every registered locale", () => {
     for (const resource of Object.values(resources)) {
       const common = resource.common;

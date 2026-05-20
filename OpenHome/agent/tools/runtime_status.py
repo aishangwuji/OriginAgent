@@ -9,6 +9,7 @@ from typing import Any
 
 from OpenHome.agent.domain_pack_governance import summarize_domain_pack_governance
 from OpenHome.agent.confirmation import PendingConfirmationStore
+from OpenHome.agent.self_model import SelfModelService
 from OpenHome.agent.skills import SkillsLoader
 from OpenHome.agent.tools.base import Tool
 from OpenHome.agent.workflow_artifacts import summarize_workflow_artifacts
@@ -63,6 +64,19 @@ class RuntimeStatusTool(Tool):
         curator_status = _curator_status(self._curator_service)
         workflow_status = _workflow_artifact_status(self._workspace)
         skill_status = _skill_lifecycle_status(self._workspace, self._domain_pack_manager)
+        self_model = SelfModelService(
+            self._workspace,
+            registry=self._registry,
+            sessions=self._sessions,
+            pending_queues=self._pending_queues,
+            cron_service=self._cron_service,
+            confirmation_store=self._confirmation_store,
+            audit_mode=self._audit_mode,
+            runtime_profile=self._runtime_profile,
+            domain_pack_manager=self._domain_pack_manager,
+            background_review_service=self._background_review_service,
+            curator_service=self._curator_service,
+        ).build()
         return {
             "workspace_present": self._workspace.exists(),
             "workspace_name": self._workspace.name,
@@ -78,6 +92,7 @@ class RuntimeStatusTool(Tool):
             **curator_status,
             **skill_status,
             **workflow_status,
+            "self_model": self_model,
         }
 
 

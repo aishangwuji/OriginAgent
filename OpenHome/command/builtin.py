@@ -11,6 +11,7 @@ from contextlib import suppress
 from dataclasses import dataclass
 
 from OpenHome import __version__
+from OpenHome.agent.self_model import SelfModelRenderer, SelfModelService
 from OpenHome.bus.events import OutboundMessage
 from OpenHome.command.router import CommandContext, CommandRouter
 from OpenHome.utils.helpers import build_status_content
@@ -59,6 +60,12 @@ BUILTIN_COMMAND_SPECS: tuple[BuiltinCommandSpec, ...] = (
         "Show status",
         "Display runtime, provider, and channel status.",
         "activity",
+    ),
+    BuiltinCommandSpec(
+        "/self",
+        "Show self model",
+        "Display a read-only capability and limitation summary.",
+        "brain",
     ),
     BuiltinCommandSpec(
         "/goal",
@@ -218,6 +225,31 @@ async def cmd_status(ctx: CommandContext) -> OutboundMessage:
                 getattr(loop.provider, "generation", None), "max_tokens", 8192
             ),
         ),
+        metadata={**dict(ctx.msg.metadata or {}), "render_as": "text"},
+    )
+
+
+async def cmd_self(ctx: CommandContext) -> OutboundMessage:
+    """Render the current read-only self-model summary."""
+    loop = ctx.loop
+    service = SelfModelService(
+        loop.workspace,
+        registry=loop.tools,
+        sessions=loop.sessions,
+        pending_queues=loop._pending_queues,
+        cron_service=loop.cron_service,
+        audit_mode=loop._tool_audit_config.mode,
+        runtime_profile=getattr(loop, "_runtime_profile", "default"),
+        domain_pack_manager=loop.domain_packs,
+        background_review_service=loop.background_review,
+        curator_service=loop.curator,
+        skills_loader=loop.context.skills,
+        memory_store=loop.context.memory,
+    )
+    return OutboundMessage(
+        channel=ctx.msg.channel,
+        chat_id=ctx.msg.chat_id,
+        content=SelfModelRenderer().render(service.build()),
         metadata={**dict(ctx.msg.metadata or {}), "render_as": "text"},
     )
 
@@ -1423,6 +1455,7 @@ def register_builtin_commands(router: CommandRouter) -> None:
     router.priority("/status", cmd_status)
     router.exact("/new", cmd_new)
     router.exact("/status", cmd_status)
+    router.exact("/self", cmd_self)
     router.exact("/goal", cmd_goal)
     router.prefix("/goal ", cmd_goal)
     router.exact("/model", cmd_model)

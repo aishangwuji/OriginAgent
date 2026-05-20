@@ -66,6 +66,7 @@
     },
     "nav": {
       "general": "General",
+      "self": "Self",
       "byok": "BYOK",
       "mcp": "MCP",
       "skills": "Skills",
@@ -332,6 +333,70 @@
       },
       "validation": {
         "upgradePathRequired": "An upgrade source path is required."
+      }
+    },
+    "self": {
+      "description": "Read-only capability awareness built from the current runtime, governance state, and pending review signals.",
+      "loading": "Loading self model...",
+      "stats": {
+        "activeDomains": "Active domains",
+        "verifiedSkills": "Verified skills",
+        "workflows": "Workflows",
+        "pendingReviews": "Pending reviews",
+        "pendingConfirmations": "Pending confirmations",
+        "limitations": "Limitations"
+      },
+      "sections": {
+        "identity": "Identity",
+        "runtime": "Runtime",
+        "domains": "Domains",
+        "skills": "Skills",
+        "workflows": "Workflows",
+        "reviewsConfirmations": "Reviews & Confirmations",
+        "limitations": "Known Limitations"
+      },
+      "fields": {
+        "agent": "Agent",
+        "workspace": "Workspace",
+        "runtimeProfile": "Runtime profile",
+        "auditMode": "Audit mode",
+        "registeredTools": "Registered tools",
+        "activeSessions": "Active sessions",
+        "pendingQueues": "Pending queues",
+        "cron": "Cron available",
+        "confirmation": "Confirmation available",
+        "backgroundReview": "Background review",
+        "curator": "Curator",
+        "pendingReviews": "Pending reviews",
+        "pendingConfirmations": "Pending confirmations",
+        "expiredConfirmations": "Expired confirmations",
+        "pendingHistory": "Pending history",
+        "reviewOrigins": "Review origins",
+        "reviewTypes": "Review types",
+        "confirmationRisks": "Confirmation risks"
+      },
+      "badges": {
+        "active": "Active"
+      },
+      "empty": {
+        "section": "Nothing to show yet.",
+        "none": "None",
+        "limitations": "No current limitations."
+      },
+      "workflowStatus": {
+        "available": "Available",
+        "invalid": "Invalid",
+        "unknown": "Unknown"
+      },
+      "verification": {
+        "unverified": "Unverified",
+        "verified": "Verified",
+        "unknown": "Unknown"
+      },
+      "limitationStatus": {
+        "info": "Info",
+        "warning": "Warning",
+        "error": "Error"
       }
     }
   },

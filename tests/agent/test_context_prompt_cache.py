@@ -513,21 +513,17 @@ def test_user_content_limits_media_count_and_size(tmp_path) -> None:
 
 
 def test_always_skills_excluded_from_skills_index(tmp_path) -> None:
-    """Always skills should appear in Active Skills but NOT in the skills index."""
+    """Always skills should still be injected while the prompt uses Self Model."""
     workspace = _make_workspace(tmp_path)
     builder = ContextBuilder(workspace)
 
     prompt = builder.build_system_prompt()
 
+    assert "# Self Model" in prompt
     # memory skill should be in Active Skills section
     assert "# Active Skills" in prompt
     assert "### Skill: memory" in prompt
-
-    # memory skill should NOT appear in the skills index
-    skills_section = prompt.split("# Skills\n", 1)
-    if len(skills_section) > 1:
-        index_text = skills_section[1].split("\n\n---")[0]
-        assert "**memory**" not in index_text
+    assert "# Skills" not in prompt
 
 
 def test_selected_skills_are_loaded_and_excluded_from_index(tmp_path) -> None:
@@ -542,12 +538,10 @@ def test_selected_skills_are_loaded_and_excluded_from_index(tmp_path) -> None:
 
     prompt = builder.build_system_prompt(skill_names=["alpha"])
 
+    assert "# Self Model" in prompt
     assert "# Selected Skills" in prompt
     assert "# Alpha Body" in prompt
-    skills_section = prompt.split("# Skills\n", 1)
-    if len(skills_section) > 1:
-        index_text = skills_section[1].split("\n\n---")[0]
-        assert "**alpha**" not in index_text
+    assert "# Skills" not in prompt
 
 
 def test_template_memory_md_is_skipped(tmp_path) -> None:

@@ -303,44 +303,39 @@ def validate_workflow_artifact_content(
 def summarize_workflow_artifacts(workspace: Path) -> dict[str, Any]:
     """Return a small redacted status summary for workspace workflows."""
 
-    root = Path(workspace) / "workflows"
     status_counts: Counter[str] = Counter()
-    total = 0
+    records = list_workflow_artifact_records(workspace)
     invalid = 0
-    try:
-        children = sorted(root.iterdir(), key=lambda path: path.name)
-    except FileNotFoundError:
-        children = []
-    except OSError:
-        return {
-            "workflow_artifacts_count": 0,
-            "workflow_artifact_status_counts": {},
-            "invalid_workflow_artifacts_count": 0,
-        }
-    for child in children:
-        if not child.is_dir():
-            continue
-        total += 1
-        valid, _message = validate_workflow_artifact_dir(child, workspace=Path(workspace))
-        if not valid:
+    for record in records:
+        if str(record.get("status") or "") != "available":
             invalid += 1
             continue
-        try:
-            data = _load_workflow_yaml((child / "workflow.yaml").read_text(encoding="utf-8"))
-            status = (
-                data.get("metadata", {})
-                .get("OpenHome", {})
-                .get("proposal_status", "unknown")
-            )
-        except (OSError, ValueError, AttributeError):
-            invalid += 1
-            continue
-        status_counts[str(status or "unknown")] += 1
+        status = str(record.get("proposal_status") or "unknown")
+        status_counts[status] += 1
     return {
-        "workflow_artifacts_count": total,
+        "workflow_artifacts_count": len(records),
         "workflow_artifact_status_counts": dict(status_counts),
         "invalid_workflow_artifacts_count": invalid,
     }
+
+
+def list_workflow_artifact_records(workspace: Path) -> list[dict[str, Any]]:
+    """List workspace workflow artifacts with validation-derived status."""
+
+    root = Path(workspace) / "workflows"
+    try:
+        children = sorted(root.iterdir(), key=lambda path: path.name)
+    except FileNotFoundError:
+        return []
+    except OSError:
+        return []
+
+    records: list[dict[str, Any]] = []
+    for child in children:
+        if not child.is_dir():
+            continue
+        records.append(_workflow_artifact_record(child, Path(workspace)))
+    return records
 
 
 def _slug_from_text(text: str) -> str:
@@ -348,6 +343,57 @@ def _slug_from_text(text: str) -> str:
     slug = re.sub(r"[^a-z0-9]+", "-", redacted.casefold()).strip("-")
     slug = re.sub(r"-{2,}", "-", slug)
     return slug[:64].strip("-")
+
+
+def _workflow_artifact_record(workflow_dir: Path, workspace: Path) -> dict[str, Any]:
+    name = workflow_dir.name
+    relative_path = f"workflows/{name}/workflow.yaml"
+    valid, message = validate_workflow_artifact_dir(
+        workflow_dir,
+        workspace=workspace,
+        expected_name=name,
+    )
+    if not valid:
+        return {
+            "name": name,
+            "path": relative_path,
+            "status": "invalid",
+            "proposal_status": "unknown",
+            "verification_status": "unknown",
+            "domain_id": "",
+            "managed_by_domain_pack": False,
+            "unavailable_reason": _clean_metadata(message or "Workflow artifact is invalid."),
+        }
+
+    try:
+        data = _load_workflow_yaml((workflow_dir / "workflow.yaml").read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        return {
+            "name": name,
+            "path": relative_path,
+            "status": "invalid",
+            "proposal_status": "unknown",
+            "verification_status": "unknown",
+            "domain_id": "",
+            "managed_by_domain_pack": False,
+            "unavailable_reason": _clean_metadata(str(exc) or "Workflow artifact is invalid."),
+        }
+
+    metadata = data.get("metadata", {}) if isinstance(data, dict) else {}
+    openhome = metadata.get("OpenHome", {}) if isinstance(metadata, dict) else {}
+    managed_by_domain_pack = bool(openhome.get("managed_by_domain_pack")) or bool(
+        openhome.get("migrated_from_workspace")
+    )
+    return {
+        "name": str(data.get("name") or name),
+        "path": relative_path,
+        "status": "available",
+        "proposal_status": str(openhome.get("proposal_status") or "unknown"),
+        "verification_status": str(openhome.get("verification_status") or "unknown"),
+        "domain_id": str(openhome.get("domain_id") or ""),
+        "managed_by_domain_pack": managed_by_domain_pack,
+        "unavailable_reason": "",
+    }
 
 
 def _validate_workflow_name(name: str) -> None:

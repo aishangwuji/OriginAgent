@@ -54,6 +54,7 @@
     },
     "nav": {
       "general": "通用",
+      "self": "自我认知",
       "byok": "BYOK",
       "mcp": "MCP",
       "skills": "技能",
@@ -320,6 +321,70 @@
       },
       "validation": {
         "upgradePathRequired": "升级时必须提供源路径。"
+      }
+    },
+    "self": {
+      "description": "从当前运行态、治理对象和待审核信号汇总出的只读能力认知视图。",
+      "loading": "正在加载自我认知...",
+      "stats": {
+        "activeDomains": "已激活领域",
+        "verifiedSkills": "已验证技能",
+        "workflows": "Workflow",
+        "pendingReviews": "待审核提案",
+        "pendingConfirmations": "待确认项",
+        "limitations": "限制项"
+      },
+      "sections": {
+        "identity": "身份",
+        "runtime": "运行态",
+        "domains": "领域包",
+        "skills": "技能",
+        "workflows": "Workflow",
+        "reviewsConfirmations": "审核与确认",
+        "limitations": "已知限制"
+      },
+      "fields": {
+        "agent": "Agent",
+        "workspace": "Workspace",
+        "runtimeProfile": "运行配置",
+        "auditMode": "审计模式",
+        "registeredTools": "已注册工具",
+        "activeSessions": "活跃会话",
+        "pendingQueues": "待处理队列",
+        "cron": "可用 Cron",
+        "confirmation": "可用确认",
+        "backgroundReview": "后台审核",
+        "curator": "整理器",
+        "pendingReviews": "待审核提案",
+        "pendingConfirmations": "待确认项",
+        "expiredConfirmations": "已过期确认",
+        "pendingHistory": "待处理历史",
+        "reviewOrigins": "提案来源",
+        "reviewTypes": "提案类型",
+        "confirmationRisks": "确认风险等级"
+      },
+      "badges": {
+        "active": "已激活"
+      },
+      "empty": {
+        "section": "暂时没有可显示的内容。",
+        "none": "无",
+        "limitations": "当前没有限制项。"
+      },
+      "workflowStatus": {
+        "available": "可用",
+        "invalid": "无效",
+        "unknown": "未知"
+      },
+      "verification": {
+        "unverified": "未验证",
+        "verified": "已验证",
+        "unknown": "未知"
+      },
+      "limitationStatus": {
+        "info": "信息",
+        "warning": "警告",
+        "error": "错误"
       }
     }
   },

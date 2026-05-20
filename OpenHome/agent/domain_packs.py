@@ -12,6 +12,7 @@ from typing import Any, Literal
 import yaml
 
 BUILTIN_DOMAIN_PACKS_DIR = Path(__file__).parent.parent / "domain_packs"
+_IGNORED_PACK_DIR_NAMES = {"__pycache__"}
 _DOMAIN_ID_RE = re.compile(r"^[a-z0-9_-]+$")
 _TOOL_ID_RE = re.compile(r"^[a-z0-9_]{1,64}$")
 _MODULE_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)*$")
@@ -912,7 +913,14 @@ class DomainPackManager:
     def _pack_dirs(root: Path | None) -> list[Path]:
         if root is None or not root.exists() or not root.is_dir():
             return []
-        return sorted([path for path in root.iterdir() if path.is_dir()], key=lambda path: path.name)
+        return sorted(
+            [
+                path
+                for path in root.iterdir()
+                if path.is_dir() and path.name not in _IGNORED_PACK_DIR_NAMES
+            ],
+            key=lambda path: path.name,
+        )
 
 
 def _string_list(value: Any) -> list[str]:

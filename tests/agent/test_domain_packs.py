@@ -176,18 +176,17 @@ def test_context_prompt_injects_summary_and_active_capabilities(tmp_path: Path) 
     )
     prompt = builder.build_system_prompt()
 
-    assert "# Domain Packs" in prompt
-    assert "`research` [workspace] Research v0.1.0: active" in prompt
-    assert "`office` [workspace] Office v0.1.0: available" in prompt
-    assert "# Active Domain Packs" in prompt
-    assert "# Research Capabilities" in prompt
-    assert "[Domain capabilities truncated]" in prompt
-    assert "# Office Capabilities" not in prompt
+    assert "# Self Model" in prompt
+    assert "- Active domains: `research`" in prompt
+    assert "`office`" not in prompt
+    assert "# Domain Packs" not in prompt
+    assert "# Active Domain Packs" not in prompt
 
 
 def test_context_prompt_omits_domain_section_when_disabled_or_empty(tmp_path: Path) -> None:
     empty_manager = DomainPackManager(tmp_path, builtin_dir=tmp_path / "empty")
     empty_prompt = ContextBuilder(tmp_path, domain_pack_manager=empty_manager).build_system_prompt()
+    assert "# Self Model" in empty_prompt
     assert "# Domain Packs" not in empty_prompt
 
     _write_pack(
@@ -201,6 +200,7 @@ def test_context_prompt_omits_domain_section_when_disabled_or_empty(tmp_path: Pa
         tmp_path,
         domain_packs_config=DomainPacksConfig(enabled=False),
     ).build_system_prompt()
+    assert "# Self Model" in disabled_prompt
     assert "# Domain Packs" not in disabled_prompt
 
 

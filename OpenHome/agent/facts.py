@@ -8,6 +8,7 @@ file. Fact `content` is the remembered human-readable fact and is not redacted;
 
 from __future__ import annotations
 
+from collections import Counter
 import hashlib
 import json
 import os
@@ -556,6 +557,36 @@ def render_memory_md(records: list[FactRecord]) -> str:
     return "\n".join(lines).rstrip() + "\n"
 
 
+def summarize_facts(
+    workspace: Path,
+    *,
+    fact_store: FactStore | None = None,
+) -> dict[str, Any]:
+    """Return redacted fact counts without exposing raw content."""
+
+    store = fact_store or FactStore(Path(workspace))
+    with store._locked():
+        records = store.read_all_unlocked()
+
+    category_counts: Counter[str] = Counter()
+    domain_counts: Counter[str] = Counter()
+    active_count = 0
+    pending_confirmation_count = 0
+    for record in records:
+        if record.status == "active":
+            active_count += 1
+            category_counts[record.category] += 1
+            domain_counts[_fact_domain_key(record)] += 1
+        elif record.status == "pending_confirmation":
+            pending_confirmation_count += 1
+    return {
+        "active_count": active_count,
+        "pending_confirmation_count": pending_confirmation_count,
+        "category_counts": dict(category_counts),
+        "domain_counts": dict(domain_counts),
+    }
+
+
 class FactStore:
     def __init__(
         self,
@@ -1022,6 +1053,14 @@ def _contains_any(text: str, needles: tuple[str, ...]) -> bool:
 
 def _requires_high_risk_confirmation(*, scope: str, content: str) -> bool:
     return infer_device_domain(scope, content) in HIGH_RISK_DEVICE_DOMAINS
+
+
+def _fact_domain_key(record: FactRecord) -> str:
+    domain = infer_device_domain(record.scope, record.content)
+    if domain and domain != "general":
+        return domain
+    scope_head = record.scope.split(".", 1)[0].strip().lower()
+    return scope_head or "general"
 
 
 def _issue(code: str, severity: str, message: str) -> ValidationIssue:

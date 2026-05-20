@@ -1652,6 +1652,36 @@ def test_review_api_lists_details_and_applies_with_auth(
     assert merge_apply_body["proposal"]["status"] == "pending"
 
 
+def test_webui_self_api_requires_token_and_returns_self_model(
+    tmp_path,
+    monkeypatch,
+    bus: MagicMock,
+) -> None:
+    from websockets.datastructures import Headers
+    from websockets.http11 import Request
+
+    config_path = tmp_path / "config.json"
+    workspace = tmp_path / "workspace"
+    config = Config()
+    config.agents.defaults.workspace = str(workspace)
+    save_config(config, config_path)
+    monkeypatch.setattr("OpenHome.config.loader._current_config_path", config_path)
+
+    channel = _ch(bus)
+    channel._api_tokens["tok"] = time.monotonic() + 300
+    authed = Headers([("Authorization", "Bearer tok")])
+
+    denied = channel._handle_self(Request("/api/self", Headers([])))
+    assert denied.status_code == 401
+
+    allowed = channel._handle_self(Request("/api/self", authed))
+    assert allowed.status_code == 200
+    body = json.loads(allowed.body.decode())
+    assert body["self_model"]["schema_version"] == 1
+    assert body["self_model"]["identity"]["workspace_name"] == "workspace"
+    assert body["self_model"]["runtime"]["confirmation_available"] is True
+
+
 def test_webui_skill_lifecycle_api_requires_token_and_updates_workspace_skill(
     tmp_path,
     monkeypatch,

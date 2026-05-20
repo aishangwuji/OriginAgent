@@ -13,6 +13,7 @@ from loguru import logger
 
 from OpenHome.agent.domain_packs import DomainPackManager
 from OpenHome.agent.memory import MemoryStore
+from OpenHome.agent.self_model import SelfModelRenderer, SelfModelService
 from OpenHome.agent.skills import SkillsLoader
 from OpenHome.session.goal_state import goal_state_runtime_lines
 from OpenHome.utils.helpers import (
@@ -48,6 +49,15 @@ class ContextBuilder:
         disabled_skills: list[str] | None = None,
         domain_pack_manager: DomainPackManager | None = None,
         domain_packs_config: Any | None = None,
+        audit_mode: str = "minimal",
+        runtime_profile: str = "default",
+        registry: Any | None = None,
+        sessions: Any | None = None,
+        pending_queues: dict[str, Any] | None = None,
+        cron_service: Any | None = None,
+        confirmation_store: Any | None = None,
+        background_review_service: Any | None = None,
+        curator_service: Any | None = None,
     ):
         self.workspace = workspace
         self.timezone = timezone
@@ -61,6 +71,15 @@ class ContextBuilder:
             disabled_skills=set(disabled_skills) if disabled_skills else None,
             domain_pack_manager=self.domain_packs,
         )
+        self._audit_mode = audit_mode
+        self._runtime_profile = runtime_profile
+        self._registry = registry
+        self._sessions = sessions
+        self._pending_queues = pending_queues
+        self._cron_service = cron_service
+        self._confirmation_store = confirmation_store
+        self._background_review_service = background_review_service
+        self._curator_service = curator_service
 
     def build_system_prompt(
         self,
@@ -80,13 +99,25 @@ class ContextBuilder:
         if bootstrap:
             parts.append(bootstrap)
 
-        domain_summary = self.domain_packs.build_summary()
-        if domain_summary:
-            parts.append(domain_summary)
-
-        active_domain_context = self.domain_packs.build_active_context()
-        if active_domain_context:
-            parts.append(f"# Active Domain Packs\n\n{active_domain_context}")
+        parts.append(
+            SelfModelRenderer().render(
+                SelfModelService(
+                    self.workspace,
+                    registry=self._registry,
+                    sessions=self._sessions,
+                    pending_queues=self._pending_queues,
+                    cron_service=self._cron_service,
+                    confirmation_store=self._confirmation_store,
+                    audit_mode=self._audit_mode,
+                    runtime_profile=self._runtime_profile,
+                    domain_pack_manager=self.domain_packs,
+                    background_review_service=self._background_review_service,
+                    curator_service=self._curator_service,
+                    skills_loader=self.skills,
+                    memory_store=self.memory,
+                ).build()
+            )
+        )
 
         always_skills = self.skills.get_always_skills()
         if always_skills:
@@ -102,12 +133,6 @@ class ContextBuilder:
         selected_content = self.skills.load_skills_for_context(selected_skills)
         if selected_content:
             parts.append(f"# Selected Skills\n\n{selected_content}")
-
-        skills_summary = self.skills.build_skills_summary(
-            exclude=set(always_skills) | set(selected_skills)
-        )
-        if skills_summary:
-            parts.append(render_template("agent/skills_section.md", skills_summary=skills_summary))
 
         return "\n\n---\n\n".join(parts)
 

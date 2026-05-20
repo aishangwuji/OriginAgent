@@ -94,6 +94,7 @@ async def test_agent_loop_registers_active_domain_tools_and_reports_runtime_stat
     runtime_status = await loop.tools.execute("openhome_runtime_status", {})
     assert runtime_status["registered_domain_tools_count"] == 1
     assert runtime_status["active_domain_pack_ids"] == ["research"]
+    assert runtime_status["self_model"]["domains"]["stats"]["active_domain_pack_count"] == 1
 
 
 @pytest.mark.asyncio
@@ -108,6 +109,7 @@ async def test_runtime_status_reports_confirmation_store_available(tmp_path: Pat
     result = await loop.tools.execute("openhome_runtime_status", {})
 
     assert result["confirmation_available"] is True
+    assert result["self_model"]["runtime"]["confirmation_available"] is True
 
 
 @pytest.mark.parametrize("mode", ["off", "minimal", "security"])
@@ -139,6 +141,7 @@ async def test_runtime_status_reflects_direct_constructor_audit_mode(tmp_path: P
 
     assert result["audit_mode"] == "security"
     assert result["workspace_name"] == tmp_path.name
+    assert result["self_model"]["identity"]["audit_mode"] == "security"
 
 
 @pytest.mark.asyncio
@@ -153,3 +156,4 @@ async def test_runtime_status_reflects_from_config_audit_mode(tmp_path: Path) ->
     assert runtime_status["audit_mode"] == "off"
     assert audit_summary["audit_mode"] == "off"
     assert audit_summary["enabled"] is False
+    assert runtime_status["self_model"]["identity"]["audit_mode"] == "off"

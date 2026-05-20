@@ -746,6 +746,9 @@ class WebSocketChannel(BaseChannel):
         if got == "/api/commands":
             return self._handle_commands(request)
 
+        if got == "/api/self":
+            return self._handle_self(request)
+
         if got == "/api/reviews":
             return self._handle_reviews_list(request)
 
@@ -1011,6 +1014,33 @@ class WebSocketChannel(BaseChannel):
         if not self._check_api_token(request):
             return _http_error(401, "Unauthorized")
         return _http_json_response({"commands": builtin_command_palette()})
+
+    def _self_model_service(self):
+        from OpenHome.agent.confirmation import PendingConfirmationStore
+        from OpenHome.agent.domain_packs import DomainPackManager
+        from OpenHome.agent.self_model import SelfModelService
+        from OpenHome.config.loader import load_config
+
+        config = load_config()
+        manager = DomainPackManager(
+            config.workspace_path,
+            config=config.agents.defaults.domain_packs,
+        )
+        return SelfModelService(
+            config.workspace_path,
+            sessions=self._session_manager,
+            confirmation_store=PendingConfirmationStore(config.workspace_path),
+            audit_mode=config.tools.audit.mode,
+            runtime_profile=config.runtime.profile,
+            domain_pack_manager=manager,
+            background_review_enabled=bool(config.agents.defaults.learning.background_review.enabled),
+            curator_enabled=bool(config.agents.defaults.learning.curator.enabled),
+        )
+
+    def _handle_self(self, request: WsRequest) -> Response:
+        if not self._check_api_token(request):
+            return _http_error(401, "Unauthorized")
+        return _http_json_response({"self_model": self._self_model_service().build()})
 
     def _review_store(self):
         from OpenHome.agent.background_review import ReviewProposalStore

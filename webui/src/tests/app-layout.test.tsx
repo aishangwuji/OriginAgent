@@ -358,6 +358,132 @@ describe("App layout", () => {
             }),
           };
         }
+        if (url.includes("/api/self")) {
+          return {
+            ok: true,
+            status: 200,
+            json: async () => ({
+              self_model: {
+                schema_version: 1,
+                generated_at: "2026-05-20T12:00:00+00:00",
+                identity: {
+                  agent_name: "OpenHome",
+                  workspace_name: "OpenHome",
+                  runtime_profile: "default",
+                  audit_mode: "minimal",
+                },
+                runtime: {
+                  registered_tools_count: 12,
+                  active_sessions_count: 1,
+                  pending_queue_count: 0,
+                  cron_available: false,
+                  confirmation_available: true,
+                  background_review_enabled: false,
+                  curator_enabled: false,
+                },
+                domains: {
+                  stats: {
+                    workspace_domain_pack_count: 1,
+                    builtin_domain_pack_count: 0,
+                    domain_pack_status_counts: { available: 1 },
+                    active_domain_pack_count: 1,
+                    domain_pack_override_count: 0,
+                    domain_pack_eval_status_counts: {},
+                    last_domain_pack_event_at: null,
+                  },
+                  items: [
+                    {
+                      id: "research",
+                      name: "Research",
+                      version: "0.1.0",
+                      path: "domain_packs/research",
+                      source: "workspace",
+                      status: "available",
+                      enabled: true,
+                      active: true,
+                      verification_status: "verified",
+                      description: "Research pack.",
+                    },
+                  ],
+                },
+                skills: {
+                  stats: {
+                    skills_count: 1,
+                    workspace_skills_count: 1,
+                    skill_lifecycle_status_counts: { active: 1 },
+                    skill_verification_status_counts: { verified: 1 },
+                    unverified_skill_count: 0,
+                    deprecated_skill_count: 0,
+                    rejected_skill_count: 0,
+                    always_workspace_skill_count: 0,
+                  },
+                  items: [
+                    {
+                      name: "lighting-troubleshooting",
+                      path: "skills/lighting-troubleshooting/SKILL.md",
+                      source: "workspace",
+                      description: "Lighting help.",
+                      verification_status: "verified",
+                      lifecycle_status: "active",
+                    },
+                  ],
+                },
+                workflows: {
+                  stats: {
+                    workflow_artifacts_count: 1,
+                    workflow_artifact_status_counts: { proposed: 1 },
+                    invalid_workflow_artifacts_count: 0,
+                    workflow_status_counts: { available: 1 },
+                    workflow_verification_status_counts: { unverified: 1 },
+                    managed_by_domain_pack_count: 0,
+                  },
+                  items: [
+                    {
+                      name: "lighting-incident-response",
+                      path: "workflows/lighting-incident-response/workflow.yaml",
+                      status: "available",
+                      proposal_status: "proposed",
+                      verification_status: "unverified",
+                      domain_id: "core",
+                      managed_by_domain_pack: false,
+                    },
+                  ],
+                },
+                facts: {
+                  active_count: 2,
+                  pending_confirmation_count: 1,
+                  category_counts: { note: 2 },
+                  domain_counts: { general: 2 },
+                },
+                memory: {
+                  has_memory_context: true,
+                  recent_history_pending_count: 1,
+                },
+                reviews: {
+                  pending_count: 1,
+                  status_counts: { pending: 1 },
+                  type_counts: { workflow: 1 },
+                  origin_counts: { background_review: 1 },
+                },
+                confirmations: {
+                  pending_count: 1,
+                  expired_count: 0,
+                  kind_counts: { action_confirmation: 1 },
+                  risk_counts: { high: 1 },
+                },
+                limitations: [
+                  {
+                    code: "review_pending",
+                    status: "info",
+                    subject_type: "review",
+                    subject_id: "review_workflow",
+                    summary: "Workflow review is still pending.",
+                  },
+                ],
+              },
+            }),
+          };
+        }
         if (url.includes("/api/settings")) {
           return {
             ok: true,
@@ -437,11 +563,16 @@ describe("App layout", () => {
       "page",
     );
     expect(within(settingsNav).getByRole("button", { name: "BYOK" })).toBeInTheDocument();
+    expect(within(settingsNav).getByRole("button", { name: "Self" })).toBeInTheDocument();
     expect(within(settingsNav).getByRole("button", { name: "Skills" })).toBeInTheDocument();
     expect(within(settingsNav).getByRole("button", { name: "Domains" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Sign out" })).toBeInTheDocument();
     expect(screen.getByText("AI")).toBeInTheDocument();
     expect(screen.getByDisplayValue("openai/gpt-4o")).toBeInTheDocument();
+    fireEvent.click(within(settingsNav).getByRole("button", { name: "Self" }));
+    expect(await screen.findByText("Read-only capability awareness built from the current runtime, governance state, and pending review signals.")).toBeInTheDocument();
+    expect(screen.getByText("Known Limitations")).toBeInTheDocument();
+    expect(screen.getByText("Workflow review is still pending.")).toBeInTheDocument();
     fireEvent.click(within(settingsNav).getByRole("button", { name: "BYOK" }));
     expect(screen.getByRole("tab", { name: "LLM" })).toHaveAttribute("aria-selected", "true");
     expect(screen.getByRole("tab", { name: "Web Search" })).toBeInTheDocument();

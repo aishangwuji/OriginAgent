@@ -426,6 +426,87 @@ export interface DomainPackGovernanceResult {
   error?: string;
 }
 
+export interface WorkflowArtifactRecord {
+  name: string;
+  path: string;
+  status: string;
+  proposal_status: string;
+  verification_status: string;
+  domain_id: string;
+  managed_by_domain_pack: boolean;
+  unavailable_reason?: string;
+}
+
+export interface SelfModelLimitation {
+  code: string;
+  status: "info" | "warning" | "error" | string;
+  subject_type: string;
+  subject_id: string;
+  summary: string;
+}
+
+export interface SelfModel {
+  schema_version: number;
+  generated_at: string;
+  identity: {
+    agent_name: string;
+    workspace_name: string;
+    runtime_profile: string;
+    audit_mode: string;
+  };
+  runtime: {
+    registered_tools_count: number;
+    active_sessions_count: number;
+    pending_queue_count: number;
+    cron_available: boolean;
+    confirmation_available: boolean;
+    background_review_enabled: boolean;
+    curator_enabled: boolean;
+  };
+  domains: {
+    stats: DomainPackGovernanceStats;
+    items: DomainPackRecord[];
+  };
+  skills: {
+    stats: SkillLifecycleStats;
+    items: SkillRecord[];
+  };
+  workflows: {
+    stats: {
+      workflow_artifacts_count: number;
+      workflow_artifact_status_counts: Record<string, number>;
+      invalid_workflow_artifacts_count: number;
+      workflow_status_counts: Record<string, number>;
+      workflow_verification_status_counts: Record<string, number>;
+      managed_by_domain_pack_count: number;
+    };
+    items: WorkflowArtifactRecord[];
+  };
+  facts: {
+    active_count: number;
+    pending_confirmation_count: number;
+    category_counts: Record<string, number>;
+    domain_counts: Record<string, number>;
+  };
+  memory: {
+    has_memory_context: boolean;
+    recent_history_pending_count: number;
+  };
+  reviews: {
+    pending_count: number;
+    status_counts: Record<string, number>;
+    type_counts: Record<string, number>;
+    origin_counts: Record<string, number>;
+  };
+  confirmations: {
+    pending_count: number;
+    expired_count: number;
+    kind_counts: Record<string, number>;
+    risk_counts: Record<string, number>;
+  };
+  limitations: SelfModelLimitation[];
+}
+
 export type ConnectionStatus =
   | "idle"
   | "connecting"
