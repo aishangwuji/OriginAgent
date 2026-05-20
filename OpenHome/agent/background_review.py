@@ -6,6 +6,7 @@ before any proposal can be applied to long-term memory.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import uuid
 from dataclasses import asdict, dataclass, field
@@ -1001,7 +1002,7 @@ class BackgroundReviewService:
                 turn_id=turn_id,
                 message_id=message_id,
             )
-            written = self.store.append_many(proposals)
+            written = await asyncio.to_thread(self.store.append_many, proposals)
             return self._remember_result(
                 BackgroundReviewResult(status="ok", proposals_written=written)
             )

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import re
@@ -108,7 +109,7 @@ class CuratorService:
         self._running += 1
         try:
             proposals = self._build_proposals(session_key=session_key, turn_id=turn_id)
-            written = self.store.append_many(proposals)
+            written = await asyncio.to_thread(self.store.append_many, proposals)
             return self._remember(CuratorResult(status="ok", proposals_written=written))
         except Exception as exc:
             logger.exception("Curator review failed")

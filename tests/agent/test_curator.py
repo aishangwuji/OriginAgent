@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import json
+import threading
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -151,6 +153,33 @@ async def test_curator_generates_deduped_skill_proposals(tmp_path: Path) -> None
     assert all(record["origin"] == CURATOR_ORIGIN for record in records)
     assert all(record["payload"]["curator_key"] for record in records)
     assert all(record["payload"]["target_state_hash"] for record in records)
+
+
+@pytest.mark.asyncio
+async def test_curator_writes_proposals_off_event_loop_thread(tmp_path: Path) -> None:
+    class ThreadRecordingStore:
+        def __init__(self) -> None:
+            self.thread_id: int | None = None
+
+        def append_many(self, proposals):
+            self.thread_id = threading.get_ident()
+            return len(proposals)
+
+    store = ThreadRecordingStore()
+    loop_thread_id = threading.get_ident()
+    service = CuratorService(
+        workspace=tmp_path,
+        config=SimpleNamespace(enabled=True),
+        store=store,
+    )
+    service._build_proposals = lambda **_: [_review_proposal("review_curator", origin=CURATOR_ORIGIN)]
+
+    result = await service.review_workspace(session_key="websocket:chat1", turn_id="turn-1")
+
+    assert result.status == "ok"
+    assert result.proposals_written == 1
+    assert store.thread_id is not None
+    assert store.thread_id != loop_thread_id
 
 
 def test_curator_promote_apply_verifies_and_activates_workspace_skill(tmp_path: Path) -> None:

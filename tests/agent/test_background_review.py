@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import threading
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -120,6 +121,41 @@ async def test_background_review_writes_redacted_pending_proposals(tmp_path: Pat
     assert records[0]["status"] == "pending"
     assert "[REDACTED_SECRET]" in records[0]["content"]
     assert "sk-proj" not in records[0]["content"]
+
+
+@pytest.mark.asyncio
+async def test_background_review_writes_proposals_off_event_loop_thread(tmp_path: Path) -> None:
+    class ThreadRecordingStore:
+        def __init__(self) -> None:
+            self.thread_id: int | None = None
+
+        def append_many(self, proposals):
+            self.thread_id = threading.get_ident()
+            return len(proposals)
+
+    store = ThreadRecordingStore()
+    loop_thread_id = threading.get_ident()
+    service = BackgroundReviewService(
+        workspace=tmp_path,
+        provider=FakeProvider(_proposal_response()),
+        model="fake-model",
+        config=BackgroundReviewConfig(enabled=True, allowed_proposal_types=["memory"]),
+        store=store,
+    )
+
+    result = await service.review_turn(
+        session_key="websocket:chat1",
+        turn_id="turn-1",
+        channel="websocket",
+        chat_id="chat1",
+        message_id="m1",
+        messages=[{"role": "user", "content": "Please be direct."}],
+    )
+
+    assert result.status == "ok"
+    assert result.proposals_written == 1
+    assert store.thread_id is not None
+    assert store.thread_id != loop_thread_id
 
 
 @pytest.mark.asyncio
