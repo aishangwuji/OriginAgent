@@ -4,9 +4,13 @@ import {
   ApiError,
   deleteMcpServerSettings,
   deleteSession,
+  domainPackAction,
+  fetchDomain,
   fetchWebuiThread,
   fetchReviewProposal,
   fetchSkill,
+  installDomainPack,
+  listDomains,
   listSessions,
   listReviewProposals,
   listSkills,
@@ -156,6 +160,57 @@ describe("webui API helpers", () => {
 
     expect(fetch).toHaveBeenCalledWith(
       "/api/skills?source=workspace&status=proposed&limit=50",
+      expect.objectContaining({
+        headers: { Authorization: "Bearer tok" },
+      }),
+    );
+  });
+
+  it("serializes domain pack list filters", async () => {
+    await listDomains("tok", {
+      source: "workspace",
+      status: "available",
+      limit: 50,
+    });
+
+    expect(fetch).toHaveBeenCalledWith(
+      "/api/domains?source=workspace&status=available&limit=50",
+      expect.objectContaining({
+        headers: { Authorization: "Bearer tok" },
+      }),
+    );
+  });
+
+  it("percent-encodes domain pack ids for detail requests", async () => {
+    await fetchDomain("tok", "research:alpha");
+
+    expect(fetch).toHaveBeenCalledWith(
+      "/api/domains/research%3Aalpha",
+      expect.objectContaining({
+        headers: { Authorization: "Bearer tok" },
+      }),
+    );
+  });
+
+  it("serializes domain pack install requests", async () => {
+    await installDomainPack("tok", "D:/packs/research", "seed local pack");
+
+    expect(fetch).toHaveBeenCalledWith(
+      "/api/domains/install?source=D%3A%2Fpacks%2Fresearch&reason=seed+local+pack",
+      expect.objectContaining({
+        headers: { Authorization: "Bearer tok" },
+      }),
+    );
+  });
+
+  it("serializes domain pack actions with optional source and reason", async () => {
+    await domainPackAction("tok", "research", "upgrade", {
+      source: "D:/packs/research-v2",
+      reason: "upgrade local copy",
+    });
+
+    expect(fetch).toHaveBeenCalledWith(
+      "/api/domains/research/upgrade?source=D%3A%2Fpacks%2Fresearch-v2&reason=upgrade+local+copy",
       expect.objectContaining({
         headers: { Authorization: "Bearer tok" },
       }),

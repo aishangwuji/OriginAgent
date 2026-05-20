@@ -1732,3 +1732,82 @@ def test_webui_skill_lifecycle_api_requires_token_and_updates_workspace_skill(
     )
     always_body = json.loads(always.body.decode())
     assert always_body["skill"]["effective_always"] is True
+
+
+def test_domains_api_lists_details_and_actions_with_auth(
+    tmp_path,
+    monkeypatch,
+    bus: MagicMock,
+) -> None:
+    from urllib.parse import quote
+
+    from websockets.datastructures import Headers
+    from websockets.http11 import Request
+
+    config_path = tmp_path / "config.json"
+    workspace = tmp_path / "workspace"
+    config = Config()
+    config.agents.defaults.workspace = str(workspace)
+    save_config(config, config_path)
+    monkeypatch.setattr("OpenHome.config.loader._current_config_path", config_path)
+
+    source = tmp_path / "research-pack"
+    source.mkdir(parents=True)
+    (source / "domain_pack.yaml").write_text(
+        "id: research\n"
+        "name: Research\n"
+        "version: 0.1.0\n",
+        encoding="utf-8",
+    )
+    (source / "CAPABILITIES.md").write_text("# Research\n", encoding="utf-8")
+
+    channel = _ch(bus)
+    channel._api_tokens["tok"] = time.monotonic() + 300
+    authed = Headers([("Authorization", "Bearer tok")])
+
+    denied = channel._handle_domains_list(Request("/api/domains", Headers([])))
+    assert denied.status_code == 401
+
+    installed = channel._handle_domains_install(
+        Request(f"/api/domains/install?source={quote(str(source), safe='')}&reason=seed", authed)
+    )
+    assert installed.status_code == 200
+    install_body = json.loads(installed.body.decode())
+    assert install_body["result"]["ok"] is True
+    assert install_body["domain"]["id"] == "research"
+
+    listed = channel._handle_domains_list(
+        Request("/api/domains?source=workspace&status=available&limit=50", authed)
+    )
+    assert listed.status_code == 200
+    list_body = json.loads(listed.body.decode())
+    assert list_body["stats"]["workspace_domain_pack_count"] == 1
+    assert list_body["domains"][0]["id"] == "research"
+
+    detail = channel._handle_domain_detail(
+        Request("/api/domains/research", authed),
+        "research",
+    )
+    assert detail.status_code == 200
+    detail_body = json.loads(detail.body.decode())
+    assert detail_body["domain"]["status"] == "available"
+
+    activated = channel._handle_domain_action(
+        Request("/api/domains/research/activate?reason=useful", authed),
+        "research",
+        "activate",
+    )
+    assert activated.status_code == 200
+    activated_body = json.loads(activated.body.decode())
+    assert activated_body["result"]["ok"] is True
+    assert activated_body["domain"]["active_requested"] is True
+
+    evaluated = channel._handle_domain_action(
+        Request("/api/domains/research/eval", authed),
+        "research",
+        "eval",
+    )
+    assert evaluated.status_code == 200
+    eval_body = json.loads(evaluated.body.decode())
+    assert eval_body["result"]["ok"] is True
+    assert eval_body["result"]["eval_result"]["status"] == "ok"

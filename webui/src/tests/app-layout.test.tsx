@@ -287,6 +287,77 @@ describe("App layout", () => {
             }),
           };
         }
+        if (url.includes("/api/domains/research")) {
+          return {
+            ok: true,
+            status: 200,
+            json: async () => ({
+              domain: {
+                id: "research",
+                name: "Research",
+                version: "0.1.0",
+                path: "domain_packs/research",
+                source: "workspace",
+                status: "available",
+                enabled: true,
+                active: false,
+                verification_status: "verified",
+                overrides_builtin: false,
+                description: "Research pack.",
+                validation_summary: "Domain pack is valid.",
+                skills: [{ id: "source-synthesis", status: "available" }],
+                workflows: [],
+                can_upgrade: true,
+                can_uninstall: true,
+                can_enable: false,
+                can_disable: true,
+                can_activate: true,
+                can_deactivate: false,
+                can_eval: true,
+              },
+              stats: {
+                workspace_domain_pack_count: 1,
+                builtin_domain_pack_count: 0,
+                domain_pack_status_counts: { available: 1 },
+                active_domain_pack_count: 0,
+                domain_pack_override_count: 0,
+                domain_pack_eval_status_counts: {},
+                last_domain_pack_event_at: null,
+              },
+            }),
+          };
+        }
+        if (url.includes("/api/domains")) {
+          return {
+            ok: true,
+            status: 200,
+            json: async () => ({
+              domains: [
+                {
+                  id: "research",
+                  name: "Research",
+                  version: "0.1.0",
+                  path: "domain_packs/research",
+                  source: "workspace",
+                  status: "available",
+                  enabled: true,
+                  active: false,
+                  verification_status: "verified",
+                  description: "Research pack.",
+                },
+              ],
+              stats: {
+                workspace_domain_pack_count: 1,
+                builtin_domain_pack_count: 0,
+                domain_pack_status_counts: { available: 1 },
+                active_domain_pack_count: 0,
+                domain_pack_override_count: 0,
+                domain_pack_eval_status_counts: {},
+                last_domain_pack_event_at: null,
+              },
+            }),
+          };
+        }
         if (url.includes("/api/settings")) {
           return {
             ok: true,
@@ -367,6 +438,7 @@ describe("App layout", () => {
     );
     expect(within(settingsNav).getByRole("button", { name: "BYOK" })).toBeInTheDocument();
     expect(within(settingsNav).getByRole("button", { name: "Skills" })).toBeInTheDocument();
+    expect(within(settingsNav).getByRole("button", { name: "Domains" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Sign out" })).toBeInTheDocument();
     expect(screen.getByText("AI")).toBeInTheDocument();
     expect(screen.getByDisplayValue("openai/gpt-4o")).toBeInTheDocument();
@@ -385,6 +457,11 @@ describe("App layout", () => {
     expect(screen.getByText("open••••-key")).toBeInTheDocument();
     expect(screen.queryByDisplayValue("unsaved-openai-key")).not.toBeInTheDocument();
 
+    fireEvent.click(within(settingsNav).getByRole("button", { name: "Domains" }));
+    expect(await screen.findByText("Govern local domain packs in the current workspace. Workspace packs can be installed, upgraded, evaluated, activated, and removed; builtin packs stay read-only.")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Install" })).toBeInTheDocument();
+
+    fireEvent.click(within(settingsNav).getByRole("button", { name: "BYOK" }));
     fireEvent.click(screen.getByRole("tab", { name: "Web Search" }));
     expect(screen.getByText("Search provider")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /Brave Search/ })).toBeInTheDocument();

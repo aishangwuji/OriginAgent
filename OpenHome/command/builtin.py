@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import shlex
 import sys
 import time
 from contextlib import suppress
@@ -644,39 +645,40 @@ async def cmd_skill(ctx: CommandContext) -> OutboundMessage:
 
 
 def _format_domain_status(loop) -> str:
-    context = getattr(loop, "context", None)
-    manager = getattr(loop, "domain_packs", None) or getattr(context, "domain_packs", None)
-    if manager is None:
+    records = _domain_records(loop, limit=200)
+    if records is None:
         return "## Domain Packs\n\nNo domain pack manager is configured."
-    packs = manager.list_packs()
-    if not packs:
+    if not records:
         return "## Domain Packs\n\nNo domain packs are installed."
 
     lines = ["## Domain Packs", ""]
-    available_count = sum(1 for pack in packs if pack.status == "available")
-    active_count = sum(1 for pack in packs if pack.active)
-    invalid_count = sum(1 for pack in packs if pack.status == "invalid")
+    available_count = sum(1 for pack in records if pack["status"] == "available")
+    active_count = sum(1 for pack in records if pack["active"])
+    invalid_count = sum(1 for pack in records if pack["status"] == "invalid")
     lines.extend(
         [
-            f"- Total: {len(packs)}",
+            f"- Total: {len(records)}",
             f"- Available: {available_count}",
             f"- Active: {active_count}",
             f"- Invalid: {invalid_count}",
             "",
         ]
     )
-    for pack in packs:
-        active = "active" if pack.active else "inactive"
-        reason = f"; reason: {pack.unavailable_reason}" if pack.unavailable_reason else ""
+    for pack in records:
+        active = "active" if pack["active"] else "inactive"
+        reason = f"; reason: {pack['unavailable_reason']}" if pack.get("unavailable_reason") else ""
+        enabled = "enabled" if pack.get("enabled") else "disabled"
+        verification = str(pack.get("verification_status") or "unknown")
+        override = "; overrides builtin" if pack.get("overrides_builtin") else ""
         lines.append(
-            f"- `{pack.id}` [{pack.source}] — {pack.name} "
-            f"(status: {pack.status}, {active}{reason})"
+            f"- `{pack['id']}` [{pack['source']}] — {pack['name']} "
+            f"(status: {pack['status']}, {active}, {enabled}, verification={verification}{override}{reason})"
         )
-        if getattr(pack, "skills", ()):
-            available_skills = [skill for skill in pack.skills if skill.status == "available"]
-            skipped_skills = [skill for skill in pack.skills if skill.status == "skipped"]
+        if pack.get("skills"):
+            available_skills = [skill for skill in pack["skills"] if skill.get("status") == "available"]
+            skipped_skills = [skill for skill in pack["skills"] if skill.get("status") == "skipped"]
             available_names = [
-                skill.virtual_id or skill.id
+                skill.get("virtual_id") or skill.get("id")
                 for skill in available_skills
             ]
             available_suffix = (
@@ -687,34 +689,244 @@ def _format_domain_status(loop) -> str:
             if len(available_names) > 5:
                 available_suffix += f", +{len(available_names) - 5} more"
             lines.append(
-                f"  Skills: declared {len(pack.skills)}, available {len(available_skills)}, "
+                f"  Skills: declared {len(pack['skills'])}, available {len(available_skills)}, "
                 f"skipped {len(skipped_skills)}{available_suffix}"
             )
             for skill in skipped_skills[:3]:
-                lines.append(f"  - skipped skill `{skill.id}`: {skill.unavailable_reason}")
-        if getattr(pack, "tools", ()):
-            manifest_skipped = [tool for tool in pack.tools if tool.status == "skipped"]
-            runtime_records = (
-                manager.domain_tool_runtime_records(pack.id)
-                if hasattr(manager, "domain_tool_runtime_records")
-                else []
+                lines.append(f"  - skipped skill `{skill.get('id')}`: {skill.get('unavailable_reason')}")
+        if pack.get("workflows"):
+            available_workflows = [workflow for workflow in pack["workflows"] if workflow.get("status") == "available"]
+            skipped_workflows = [workflow for workflow in pack["workflows"] if workflow.get("status") == "skipped"]
+            lines.append(
+                f"  Workflows: declared {len(pack['workflows'])}, available {len(available_workflows)}, skipped {len(skipped_workflows)}"
             )
-            registered = [record for record in runtime_records if record.status == "registered"]
-            runtime_skipped = [record for record in runtime_records if record.status == "skipped"]
+        if pack.get("tools"):
+            manifest_skipped = [tool for tool in pack["tools"] if tool.get("status") == "skipped"]
+            runtime_records = pack.get("runtime_tools", [])
+            registered = [record for record in runtime_records if record.get("status") == "registered"]
+            runtime_skipped = [record for record in runtime_records if record.get("status") == "skipped"]
             skipped_count = len(manifest_skipped) + len(runtime_skipped)
             lines.append(
-                f"  Tools: declared {len(pack.tools)}, registered {len(registered)}, "
+                f"  Tools: declared {len(pack['tools'])}, registered {len(registered)}, "
                 f"skipped {skipped_count}"
             )
             for tool in manifest_skipped[:3]:
-                lines.append(f"  - skipped tool `{tool.id}`: {tool.unavailable_reason}")
+                lines.append(f"  - skipped tool `{tool.get('id')}`: {tool.get('unavailable_reason')}")
             for record in runtime_skipped[:3]:
-                lines.append(f"  - skipped tool `{record.tool_id}`: {record.reason}")
+                lines.append(f"  - skipped tool `{record.get('tool_id')}`: {record.get('reason')}")
     return "\n".join(lines)
 
 
+def _domain_governance(loop):
+    from OpenHome.agent.domain_pack_governance import DomainPackGovernanceService
+
+    context = getattr(loop, "context", None)
+    manager = getattr(loop, "domain_packs", None) or getattr(context, "domain_packs", None)
+    workspace = getattr(manager, "workspace", None) or getattr(loop, "workspace", None)
+    if workspace is None:
+        return None
+    return DomainPackGovernanceService(workspace, domain_pack_manager=manager)
+
+
+def _domain_records(loop, *, limit: int = 200) -> list[dict] | None:
+    service = _domain_governance(loop)
+    if service is None:
+        return None
+    records = service.list_records(limit=limit)
+    manager = getattr(service, "_domain_pack_manager", None)
+    runtime_by_pack: dict[str, list[dict[str, str]]] = {}
+    if manager is not None and hasattr(manager, "domain_tool_runtime_records"):
+        for record in manager.domain_tool_runtime_records():
+            runtime_by_pack.setdefault(record.pack_id, []).append(
+                {
+                    "tool_id": record.tool_id,
+                    "status": record.status,
+                    "reason": record.reason,
+                }
+            )
+    for record in records:
+        record["runtime_tools"] = runtime_by_pack.get(str(record.get("id") or ""), [])
+    return records
+
+
+def _format_domain_detail(record: dict | None) -> str:
+    if record is None:
+        return "Domain pack was not found."
+    lines = [
+        "## Domain Pack",
+        "",
+        f"- ID: `{record.get('id') or ''}`",
+        f"- Name: {record.get('name') or ''}",
+        f"- Version: {record.get('version') or ''}",
+        f"- Source: {record.get('source') or ''}",
+        f"- Status: {record.get('status') or ''}",
+        f"- Enabled: {'yes' if record.get('enabled') else 'no'}",
+        f"- Active: {'yes' if record.get('active') else 'no'}",
+        f"- Active in config: {'yes' if record.get('active_requested') else 'no'}",
+        f"- Verification: {record.get('verification_status') or 'unknown'}",
+        f"- Overrides builtin: {'yes' if record.get('overrides_builtin') else 'no'}",
+        f"- Path: `{record.get('path') or ''}`",
+    ]
+    description = str(record.get("description") or "").strip()
+    if description:
+        lines.extend(["", "### Description", "", description])
+    lines.extend(["", "### Validation", "", str(record.get("validation_summary") or "")])
+    if record.get("skills"):
+        skill_names = ", ".join(f"`{item.get('id')}`" for item in record["skills"])
+        lines.extend(["", f"Skills: {skill_names}"])
+    if record.get("workflows"):
+        workflow_names = ", ".join(f"`{item.get('id')}`" for item in record["workflows"])
+        lines.extend(["", f"Workflows: {workflow_names}"])
+    if record.get("dependencies", {}).get("packs"):
+        dependency_names = ", ".join(f"`{item}`" for item in record["dependencies"]["packs"])
+        lines.extend(["", f"Dependencies: {dependency_names}"])
+    last_eval = record.get("last_eval_result")
+    if isinstance(last_eval, dict):
+        lines.extend([
+            "",
+            "### Last Eval",
+            "",
+            f"- Status: {last_eval.get('status') or 'unknown'}",
+            f"- Checks: {len(last_eval.get('checks') or [])}",
+            f"- Warnings: {len(last_eval.get('warnings') or [])}",
+            f"- Errors: {len(last_eval.get('errors') or [])}",
+        ])
+    return "\n".join(lines)
+
+
+def _format_domain_result(result: object) -> str:
+    if hasattr(result, "to_json"):
+        data = result.to_json()
+    elif isinstance(result, dict):
+        data = result
+    else:
+        data = {"ok": False, "message": str(result)}
+    lines = [
+        f"Domain pack `{data.get('pack_id') or ''}`: {data.get('message') or data.get('status')}",
+        f"- Status: {data.get('status') or 'unknown'}",
+        f"- Action: {data.get('action') or 'unknown'}",
+    ]
+    artifact = data.get("artifact")
+    if isinstance(artifact, dict):
+        if artifact.get("skill_name"):
+            lines.append(f"- Skill: `{artifact.get('skill_name')}`")
+        if artifact.get("workflow_name"):
+            lines.append(f"- Workflow: `{artifact.get('workflow_name')}`")
+        if artifact.get("path"):
+            lines.append(f"- Path: `{artifact.get('path')}`")
+    eval_result = data.get("eval_result")
+    if isinstance(eval_result, dict):
+        lines.append(f"- Eval status: {eval_result.get('status') or 'unknown'}")
+        lines.append(f"- Eval checks: {len(eval_result.get('checks') or [])}")
+        if eval_result.get("errors"):
+            lines.extend(f"  - {item}" for item in eval_result["errors"][:5])
+    error = data.get("error")
+    if error:
+        lines.append(f"- Error: {error}")
+    return "\n".join(lines)
+
+
+def _domain_command_args(raw_args: str) -> list[str]:
+    if not raw_args.strip():
+        return []
+    try:
+        return shlex.split(raw_args, posix=False)
+    except ValueError:
+        return raw_args.split()
+
+
 async def cmd_domain(ctx: CommandContext) -> OutboundMessage:
-    """List installed domain packs."""
+    """List and manage installed domain packs."""
+    raw_args = ctx.args.strip()
+    args = _domain_command_args(raw_args)
+    service = _domain_governance(ctx.loop)
+    if service is None:
+        return OutboundMessage(
+            channel=ctx.msg.channel,
+            chat_id=ctx.msg.chat_id,
+            content="Domain pack governance is not available.",
+            metadata={**dict(ctx.msg.metadata or {}), "render_as": "text"},
+        )
+
+    if args and args[0] in {
+        "show",
+        "install",
+        "upgrade",
+        "enable",
+        "disable",
+        "activate",
+        "deactivate",
+        "uninstall",
+        "eval",
+    }:
+        action = args[0]
+        content = ""
+        if action == "show":
+            pack_id = args[1] if len(args) >= 2 else ""
+            record = service.get_record(pack_id) if pack_id else None
+            content = _format_domain_detail(record) if record else "Domain pack was not found."
+        elif action == "install":
+            if len(args) < 2:
+                content = "Usage: /domains install <source_path> [reason]"
+            else:
+                source_path = args[1]
+                reason = args[2] if len(args) >= 3 else ""
+                content = _format_domain_result(service.install(source_path, reason=reason))
+        elif action == "upgrade":
+            if len(args) < 3:
+                content = "Usage: /domains upgrade <pack_id> <source_path> [reason]"
+            else:
+                pack_id = args[1]
+                source_path = args[2]
+                reason = args[3] if len(args) >= 4 else ""
+                content = _format_domain_result(service.upgrade(pack_id, source_path, reason=reason))
+        elif action == "enable":
+            if len(args) < 2:
+                content = "Usage: /domains enable <pack_id> [reason]"
+            else:
+                pack_id = args[1]
+                reason = args[2] if len(args) >= 3 else ""
+                content = _format_domain_result(service.set_enabled(pack_id, enabled=True, reason=reason))
+        elif action == "disable":
+            if len(args) < 2:
+                content = "Usage: /domains disable <pack_id> [reason]"
+            else:
+                pack_id = args[1]
+                reason = args[2] if len(args) >= 3 else ""
+                content = _format_domain_result(service.set_enabled(pack_id, enabled=False, reason=reason))
+        elif action == "activate":
+            if len(args) < 2:
+                content = "Usage: /domains activate <pack_id> [reason]"
+            else:
+                pack_id = args[1]
+                reason = args[2] if len(args) >= 3 else ""
+                content = _format_domain_result(service.set_active(pack_id, active=True, reason=reason))
+        elif action == "deactivate":
+            if len(args) < 2:
+                content = "Usage: /domains deactivate <pack_id> [reason]"
+            else:
+                pack_id = args[1]
+                reason = args[2] if len(args) >= 3 else ""
+                content = _format_domain_result(service.set_active(pack_id, active=False, reason=reason))
+        elif action == "uninstall":
+            if len(args) < 2:
+                content = "Usage: /domains uninstall <pack_id> [reason]"
+            else:
+                pack_id = args[1]
+                reason = args[2] if len(args) >= 3 else ""
+                content = _format_domain_result(service.uninstall(pack_id, reason=reason))
+        elif action == "eval":
+            if len(args) < 2:
+                content = "Usage: /domains eval <pack_id>"
+            else:
+                content = _format_domain_result(service.eval_pack(args[1]))
+        return OutboundMessage(
+            channel=ctx.msg.channel,
+            chat_id=ctx.msg.chat_id,
+            content=content,
+            metadata={**dict(ctx.msg.metadata or {}), "render_as": "text"},
+        )
+
     return OutboundMessage(
         channel=ctx.msg.channel,
         chat_id=ctx.msg.chat_id,
@@ -1224,6 +1436,8 @@ def register_builtin_commands(router: CommandRouter) -> None:
     router.prefix("/skills ", cmd_skill)
     router.exact("/domain", cmd_domain)
     router.exact("/domains", cmd_domain)
+    router.prefix("/domain ", cmd_domain)
+    router.prefix("/domains ", cmd_domain)
     router.exact("/history", cmd_history)
     router.prefix("/history ", cmd_history)
     router.exact("/reviews", cmd_reviews)

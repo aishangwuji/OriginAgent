@@ -68,7 +68,8 @@
       "general": "General",
       "byok": "BYOK",
       "mcp": "MCP",
-      "skills": "Skills"
+      "skills": "Skills",
+      "domains": "Domains"
     },
     "sections": {
       "interface": "Interface",
@@ -261,6 +262,76 @@
       "confirm": {
         "activate": "Activate this verified skill for normal discovery?",
         "alwaysOn": "Always load this skill into the system prompt? Use only for highly trusted skills."
+      }
+    },
+    "domains": {
+      "description": "Govern local domain packs in the current workspace. Workspace packs can be installed, upgraded, evaluated, activated, and removed; builtin packs stay read-only.",
+      "loading": "Loading domain packs...",
+      "empty": "No matching domain packs.",
+      "noSelection": "Select a domain pack to inspect governance state.",
+      "reason": "Governance note",
+      "reasonPlaceholder": "Optional reason for this domain pack action.",
+      "overrideWarning": "This workspace pack overrides a builtin pack with the same id.",
+      "stats": {
+        "workspace": "Workspace",
+        "builtin": "Built-in",
+        "active": "Active",
+        "overrides": "Overrides"
+      },
+      "filters": {
+        "title": "Filters",
+        "allSources": "All sources",
+        "allStatuses": "All statuses"
+      },
+      "install": {
+        "title": "Install local pack",
+        "description": "Copy a local domain pack directory into workspace governance.",
+        "placeholder": "D:/path/to/domain-pack"
+      },
+      "upgrade": {
+        "placeholder": "D:/path/to/new-pack-version"
+      },
+      "source": {
+        "workspace": "Workspace",
+        "builtin": "Built-in"
+      },
+      "status": {
+        "available": "Available",
+        "unavailable": "Unavailable",
+        "invalid": "Invalid"
+      },
+      "values": {
+        "enabled": "Enabled",
+        "disabled": "Disabled"
+      },
+      "fields": {
+        "version": "Version",
+        "verification": "Verification",
+        "skills": "Skills",
+        "workflows": "Workflows",
+        "active": "Active",
+        "enabled": "Enabled",
+        "lastEval": "Last eval",
+        "checks": "Checks",
+        "warnings": "Warnings",
+        "errors": "Errors"
+      },
+      "actions": {
+        "install": "Install",
+        "upgrade": "Upgrade",
+        "enable": "Enable",
+        "disable": "Disable",
+        "activate": "Activate",
+        "deactivate": "Deactivate",
+        "eval": "Eval",
+        "uninstall": "Uninstall"
+      },
+      "confirm": {
+        "activate": "Activate this domain pack for runtime discovery?",
+        "uninstall": "Remove this workspace domain pack from governance?"
+      },
+      "validation": {
+        "upgradePathRequired": "An upgrade source path is required."
       }
     }
   },

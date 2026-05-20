@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from OpenHome.agent.domain_pack_governance import DomainPackGovernanceService
 from OpenHome.agent.domain_packs import DomainPackManager
 from OpenHome.agent.loop import UNIFIED_SESSION_KEY, AgentLoop
 from OpenHome.agent.skills import SkillsLoader
@@ -13,7 +14,7 @@ from OpenHome.bus.events import InboundMessage
 from OpenHome.bus.queue import MessageBus
 from OpenHome.command.builtin import cmd_domain, cmd_mcp, cmd_skill
 from OpenHome.command.router import CommandContext
-from OpenHome.config.schema import DomainPacksConfig
+from OpenHome.config.schema import Config, DomainPacksConfig
 from OpenHome.providers.base import LLMProvider, LLMResponse
 from OpenHome.utils.webui_transcript import read_transcript_lines, replay_transcript_to_ui_messages
 
@@ -253,6 +254,43 @@ async def test_domain_command_lists_pack_statuses(tmp_path: Path) -> None:
     assert "status: invalid" in result.content
     assert "missing domain_pack.yaml" in result.content
     assert result.metadata["render_as"] == "text"
+
+
+@pytest.mark.asyncio
+async def test_domain_command_installs_workspace_pack_from_local_path(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workspace = tmp_path / "workspace"
+    source = tmp_path / "research-pack"
+    source.mkdir(parents=True)
+    (source / "domain_pack.yaml").write_text(
+        "id: research\n"
+        "name: Research\n"
+        "version: 0.1.0\n",
+        encoding="utf-8",
+    )
+    (source / "CAPABILITIES.md").write_text("# Research\n", encoding="utf-8")
+
+    config = Config()
+    service = DomainPackGovernanceService(
+        workspace,
+        config_loader=lambda: config,
+        config_saver=lambda _config: None,
+    )
+    loop = MagicMock()
+    loop.workspace = workspace
+    loop.domain_packs = DomainPackManager(workspace, builtin_dir=tmp_path / "empty")
+    monkeypatch.setattr("OpenHome.command.builtin._domain_governance", lambda _loop: service)
+
+    command_ctx = _ctx(loop, f"/domains install {source}")
+    command_ctx.args = f"install {source}"
+    result = await cmd_domain(command_ctx)
+
+    assert result.content is not None
+    assert "Domain pack `research`: Domain pack installed." in result.content
+    assert "- Status: installed" in result.content
+    assert (workspace / "domain_packs" / "research" / "domain_pack.yaml").exists()
 
 
 @pytest.mark.asyncio

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState, type Dispatch, type ReactNode, type SetStateAction } from "react";
 import {
+  Boxes,
   Bot,
   Brain,
   ChevronLeft,
@@ -45,8 +46,12 @@ import {
 import { Input } from "@/components/ui/input";
 import {
   deleteMcpServerSettings,
+  domainPackAction,
   fetchSettings,
+  fetchDomain,
   fetchSkill,
+  installDomainPack,
+  listDomains,
   listSkills,
   skillLifecycleAction,
   updateBackgroundReviewSettings,
@@ -60,6 +65,8 @@ import {
 import { cn } from "@/lib/utils";
 import { useClient } from "@/providers/ClientProvider";
 import type {
+  DomainPackGovernanceStats,
+  DomainPackRecord,
   McpServerSettings,
   McpServerSettingsUpdate,
   McpTransportType,
@@ -69,7 +76,7 @@ import type {
   WebSearchSettingsUpdate,
 } from "@/lib/types";
 
-type SettingsSectionKey = "general" | "byok" | "skills" | "mcp";
+type SettingsSectionKey = "general" | "byok" | "skills" | "domains" | "mcp";
 type ByokPaneKey = "llm" | "web-search";
 type McpFormState = {
   name: string;
@@ -582,6 +589,8 @@ export function SettingsView({
                 />
               ) : activeSection === "skills" ? (
                 <SkillsSettings />
+              ) : activeSection === "domains" ? (
+                <DomainsSettings />
               ) : activeSection === "byok" ? (
                 <ByokSettings
                   settings={settings}
@@ -661,6 +670,7 @@ const SETTINGS_NAV_ITEMS = [
   { key: "general", icon: Settings },
   { key: "byok", icon: KeyRound },
   { key: "skills", icon: GraduationCap },
+  { key: "domains", icon: Boxes },
   { key: "mcp", icon: Server },
 ] as const;
 
@@ -1252,6 +1262,357 @@ function SkillMeta({ label, value }: { label: string; value: string }) {
     <div>
       <div className="font-medium text-foreground/75">{label}</div>
       <div className="mt-0.5 truncate">{value}</div>
+    </div>
+  );
+}
+
+const DOMAIN_STATUS_FILTERS = ["", "available", "unavailable", "invalid"] as const;
+const DOMAIN_SOURCE_FILTERS = ["", "workspace", "builtin"] as const;
+
+function emptyDomainStats(): DomainPackGovernanceStats {
+  return {
+    workspace_domain_pack_count: 0,
+    builtin_domain_pack_count: 0,
+    domain_pack_status_counts: {},
+    active_domain_pack_count: 0,
+    domain_pack_override_count: 0,
+    domain_pack_eval_status_counts: {},
+    last_domain_pack_event_at: null,
+  };
+}
+
+function DomainsSettings() {
+  const { t } = useTranslation();
+  const { token, refreshToken } = useClient();
+  const [domains, setDomains] = useState<DomainPackRecord[]>([]);
+  const [stats, setStats] = useState<DomainPackGovernanceStats>(emptyDomainStats);
+  const [selectedId, setSelectedId] = useState("");
+  const [selected, setSelected] = useState<DomainPackRecord | null>(null);
+  const [sourceFilter, setSourceFilter] = useState<(typeof DOMAIN_SOURCE_FILTERS)[number]>("");
+  const [statusFilter, setStatusFilter] = useState<(typeof DOMAIN_STATUS_FILTERS)[number]>("");
+  const [installPath, setInstallPath] = useState("");
+  const [upgradePath, setUpgradePath] = useState("");
+  const [reason, setReason] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [detailLoading, setDetailLoading] = useState(false);
+  const [acting, setActing] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const loadDomains = useCallback(async () => {
+    setLoading(true);
+    try {
+      const payload = await withTokenRefresh(token, refreshToken, (freshToken) =>
+        listDomains(freshToken, {
+          source: sourceFilter || undefined,
+          status: statusFilter || undefined,
+          limit: 100,
+        }),
+      );
+      setDomains(payload.domains);
+      setStats(payload.stats);
+      setError(null);
+      setSelectedId((current) => {
+        if (current && payload.domains.some((domain) => domain.id === current)) return current;
+        return payload.domains[0]?.id ?? "";
+      });
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setLoading(false);
+    }
+  }, [refreshToken, sourceFilter, statusFilter, token]);
+
+  useEffect(() => {
+    void loadDomains();
+  }, [loadDomains]);
+
+  useEffect(() => {
+    let cancelled = false;
+    if (!selectedId) {
+      setSelected(null);
+      return;
+    }
+    setDetailLoading(true);
+    withTokenRefresh(token, refreshToken, (freshToken) => fetchDomain(freshToken, selectedId))
+      .then((payload) => {
+        if (!cancelled) {
+          setSelected(payload.domain);
+          setStats(payload.stats);
+          setError(null);
+        }
+      })
+      .catch((err) => {
+        if (!cancelled) setError((err as Error).message);
+      })
+      .finally(() => {
+        if (!cancelled) setDetailLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [refreshToken, selectedId, token]);
+
+  const runInstall = async () => {
+    if (!installPath.trim() || acting) return;
+    setActing("install");
+    try {
+      const payload = await withTokenRefresh(token, refreshToken, (freshToken) =>
+        installDomainPack(freshToken, installPath.trim(), reason),
+      );
+      setNotice(payload.result.message);
+      setError(null);
+      setInstallPath("");
+      setReason("");
+      if (payload.domain?.id) setSelectedId(payload.domain.id);
+      await loadDomains();
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setActing(null);
+    }
+  };
+
+  const runAction = async (
+    action: "upgrade" | "enable" | "disable" | "activate" | "deactivate" | "uninstall" | "eval",
+  ) => {
+    if (!selected || acting) return;
+    if (action === "uninstall" && !window.confirm(t("settings.domains.confirm.uninstall"))) return;
+    if (action === "activate" && !window.confirm(t("settings.domains.confirm.activate"))) return;
+    const source = action === "upgrade" ? upgradePath.trim() : undefined;
+    if (action === "upgrade" && !source) {
+      setError(t("settings.domains.validation.upgradePathRequired"));
+      return;
+    }
+    setActing(action);
+    try {
+      const payload = await withTokenRefresh(token, refreshToken, (freshToken) =>
+        domainPackAction(freshToken, selected.id, action, { source, reason }),
+      );
+      setNotice(payload.result.message);
+      setError(null);
+      if (action === "upgrade") setUpgradePath("");
+      setReason("");
+      setSelected(payload.domain ?? null);
+      await loadDomains();
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setActing(null);
+    }
+  };
+
+  return (
+    <div className="space-y-6">
+      <p className="max-w-[42rem] text-[13px] leading-6 text-muted-foreground">
+        {t("settings.domains.description")}
+      </p>
+
+      <div className="grid gap-3 sm:grid-cols-4">
+        <SkillStat label={t("settings.domains.stats.workspace")} value={stats.workspace_domain_pack_count} />
+        <SkillStat label={t("settings.domains.stats.builtin")} value={stats.builtin_domain_pack_count} />
+        <SkillStat label={t("settings.domains.stats.active")} value={stats.active_domain_pack_count} />
+        <SkillStat label={t("settings.domains.stats.overrides")} value={stats.domain_pack_override_count} />
+      </div>
+
+      {error ? (
+        <div className="rounded-[18px] border border-destructive/20 bg-destructive/5 px-4 py-3 text-[13px] text-destructive">
+          {error}
+        </div>
+      ) : null}
+      {notice ? (
+        <div className="rounded-[18px] border border-emerald-500/20 bg-emerald-500/8 px-4 py-3 text-[13px] text-emerald-700 dark:text-emerald-300">
+          {notice}
+        </div>
+      ) : null}
+
+      <SettingsGroup>
+        <SettingsRow
+          title={t("settings.domains.install.title")}
+          description={t("settings.domains.install.description")}
+        >
+          <div className="flex max-w-full items-center gap-2">
+            <Input
+              value={installPath}
+              onChange={(event) => setInstallPath(event.target.value)}
+              placeholder={t("settings.domains.install.placeholder")}
+              className="h-9 w-[320px] rounded-full text-[13px]"
+            />
+            <Button size="sm" variant="outline" onClick={runInstall} disabled={acting === "install"} className="rounded-full">
+              {acting === "install" ? t("settings.actions.saving") : t("settings.domains.actions.install")}
+            </Button>
+          </div>
+        </SettingsRow>
+      </SettingsGroup>
+
+      <section className="space-y-3">
+        <SettingsSectionTitle>{t("settings.domains.filters.title")}</SettingsSectionTitle>
+        <div className="flex flex-wrap gap-2">
+          {DOMAIN_SOURCE_FILTERS.map((source) => (
+            <Button
+              key={source || "all"}
+              type="button"
+              size="sm"
+              variant={sourceFilter === source ? "default" : "outline"}
+              onClick={() => setSourceFilter(source)}
+              className="rounded-full"
+            >
+              {t(source ? `settings.domains.source.${source}` : "settings.domains.filters.allSources")}
+            </Button>
+          ))}
+        </div>
+        <div className="flex flex-wrap gap-2">
+          {DOMAIN_STATUS_FILTERS.map((status) => (
+            <Button
+              key={status || "all"}
+              type="button"
+              size="sm"
+              variant={statusFilter === status ? "default" : "outline"}
+              onClick={() => setStatusFilter(status)}
+              className="rounded-full"
+            >
+              {t(status ? `settings.domains.status.${status}` : "settings.domains.filters.allStatuses")}
+            </Button>
+          ))}
+        </div>
+      </section>
+
+      <div className="grid min-h-[420px] gap-5 lg:grid-cols-[minmax(0,0.95fr)_minmax(0,1.35fr)]">
+        <SettingsGroup>
+          {loading ? (
+            <div className="flex h-32 items-center justify-center text-sm text-muted-foreground">
+              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+              {t("settings.domains.loading")}
+            </div>
+          ) : domains.length === 0 ? (
+            <div className="px-4 py-8 text-sm text-muted-foreground">{t("settings.domains.empty")}</div>
+          ) : (
+            domains.map((domain) => {
+              const active = domain.id === selectedId;
+              return (
+                <button
+                  key={`${domain.source}:${domain.id}`}
+                  type="button"
+                  onClick={() => setSelectedId(domain.id)}
+                  className={cn(
+                    "flex min-h-[76px] w-full flex-col items-start gap-1 px-4 py-3 text-left transition-colors sm:px-5",
+                    active ? "bg-muted/70" : "hover:bg-muted/35",
+                  )}
+                >
+                  <span className="flex w-full items-center justify-between gap-3">
+                    <span className="truncate text-[14px] font-semibold text-foreground">{domain.id}</span>
+                    <span className="shrink-0 rounded-full bg-muted px-2 py-0.5 text-[11px] font-medium text-muted-foreground">
+                      {t(`settings.domains.status.${domain.status || "available"}`)}
+                    </span>
+                  </span>
+                  <span className="line-clamp-2 text-[12px] leading-5 text-muted-foreground">
+                    {domain.description || domain.path}
+                  </span>
+                </button>
+              );
+            })
+          )}
+        </SettingsGroup>
+
+        <SettingsGroup>
+          {detailLoading ? (
+            <div className="flex h-32 items-center justify-center text-sm text-muted-foreground">
+              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+              {t("settings.domains.loading")}
+            </div>
+          ) : selected ? (
+            <div className="divide-y divide-border/45">
+              <div className="px-4 py-4 sm:px-5">
+                <div className="flex flex-wrap items-center gap-2">
+                  <h2 className="mr-auto text-[17px] font-semibold tracking-[-0.02em] text-foreground">
+                    {selected.name}
+                  </h2>
+                  <SkillBadge>{t(`settings.domains.source.${selected.source}`)}</SkillBadge>
+                  <SkillBadge>{t(`settings.domains.status.${selected.status || "available"}`)}</SkillBadge>
+                  <SkillBadge>{selected.enabled ? t("settings.domains.values.enabled") : t("settings.domains.values.disabled")}</SkillBadge>
+                </div>
+                <p className="mt-3 text-[13px] leading-6 text-muted-foreground">{selected.description}</p>
+                <p className="mt-2 truncate text-[12px] text-muted-foreground">{selected.path}</p>
+                {selected.overrides_builtin ? (
+                  <p className="mt-3 rounded-[14px] border border-amber-500/20 bg-amber-500/8 px-3 py-2 text-[12px] text-amber-700 dark:text-amber-300">
+                    {t("settings.domains.overrideWarning")}
+                  </p>
+                ) : null}
+              </div>
+
+              <div className="space-y-3 px-4 py-4 sm:px-5">
+                <div className="grid gap-3 text-[12px] text-muted-foreground sm:grid-cols-2">
+                  <SkillMeta label={t("settings.domains.fields.version")} value={selected.version || "0.0.0"} />
+                  <SkillMeta label={t("settings.domains.fields.verification")} value={selected.verification_status || "unknown"} />
+                  <SkillMeta label={t("settings.domains.fields.skills")} value={String(selected.skills?.length ?? 0)} />
+                  <SkillMeta label={t("settings.domains.fields.workflows")} value={String(selected.workflows?.length ?? 0)} />
+                  <SkillMeta label={t("settings.domains.fields.active")} value={selected.active ? t("settings.skills.values.yes") : t("settings.skills.values.no")} />
+                  <SkillMeta label={t("settings.domains.fields.enabled")} value={selected.enabled ? t("settings.skills.values.yes") : t("settings.skills.values.no")} />
+                </div>
+                <pre className="max-h-40 overflow-auto whitespace-pre-wrap rounded-[14px] bg-muted/55 p-3 text-[12px] leading-5 text-foreground/82">
+                  {selected.validation_summary || t("settings.values.notAvailable")}
+                </pre>
+                {selected.last_eval_result ? (
+                  <div className="rounded-[14px] bg-muted/45 p-3 text-[12px] text-muted-foreground">
+                    <div>{t("settings.domains.fields.lastEval")}: {selected.last_eval_result.status || "unknown"}</div>
+                    <div>{t("settings.domains.fields.checks")}: {selected.last_eval_result.checks?.length ?? 0}</div>
+                    <div>{t("settings.domains.fields.warnings")}: {selected.last_eval_result.warnings?.length ?? 0}</div>
+                    <div>{t("settings.domains.fields.errors")}: {selected.last_eval_result.errors?.length ?? 0}</div>
+                  </div>
+                ) : null}
+                {selected.disabled_reason ? (
+                  <p className="text-[12px] text-muted-foreground">{selected.disabled_reason}</p>
+                ) : null}
+              </div>
+
+              <div className="space-y-3 px-4 py-4 sm:px-5">
+                <label className="block space-y-1.5">
+                  <span className="text-[12px] font-medium text-muted-foreground">
+                    {t("settings.domains.reason")}
+                  </span>
+                  <textarea
+                    value={reason}
+                    onChange={(event) => setReason(event.target.value)}
+                    placeholder={t("settings.domains.reasonPlaceholder")}
+                    className="min-h-[74px] w-full resize-y rounded-[16px] border border-input bg-background px-3 py-2 text-[13px] text-foreground shadow-sm outline-none transition-colors placeholder:text-muted-foreground focus-visible:ring-2 focus-visible:ring-ring"
+                  />
+                </label>
+                <Input
+                  value={upgradePath}
+                  onChange={(event) => setUpgradePath(event.target.value)}
+                  placeholder={t("settings.domains.upgrade.placeholder")}
+                  className="h-9 rounded-full text-[13px]"
+                />
+                <div className="flex flex-wrap gap-2">
+                  <Button size="sm" variant="outline" disabled={!selected.can_upgrade || !!acting} onClick={() => runAction("upgrade")} className="rounded-full">
+                    {acting === "upgrade" ? t("settings.actions.saving") : t("settings.domains.actions.upgrade")}
+                  </Button>
+                  <Button size="sm" variant="outline" disabled={!selected.can_enable || !!acting} onClick={() => runAction("enable")} className="rounded-full">
+                    {acting === "enable" ? t("settings.actions.saving") : t("settings.domains.actions.enable")}
+                  </Button>
+                  <Button size="sm" variant="outline" disabled={!selected.can_disable || !!acting} onClick={() => runAction("disable")} className="rounded-full">
+                    {acting === "disable" ? t("settings.actions.saving") : t("settings.domains.actions.disable")}
+                  </Button>
+                  <Button size="sm" variant="outline" disabled={!selected.can_activate || !!acting} onClick={() => runAction("activate")} className="rounded-full">
+                    {acting === "activate" ? t("settings.actions.saving") : t("settings.domains.actions.activate")}
+                  </Button>
+                  <Button size="sm" variant="outline" disabled={!selected.can_deactivate || !!acting} onClick={() => runAction("deactivate")} className="rounded-full">
+                    {acting === "deactivate" ? t("settings.actions.saving") : t("settings.domains.actions.deactivate")}
+                  </Button>
+                  <Button size="sm" variant="outline" disabled={!selected.can_eval || !!acting} onClick={() => runAction("eval")} className="rounded-full">
+                    {acting === "eval" ? t("settings.actions.saving") : t("settings.domains.actions.eval")}
+                  </Button>
+                  <Button size="sm" variant="outline" disabled={!selected.can_uninstall || !!acting} onClick={() => runAction("uninstall")} className="rounded-full">
+                    {acting === "uninstall" ? t("settings.actions.saving") : t("settings.domains.actions.uninstall")}
+                  </Button>
+                </div>
+              </div>
+            </div>
+          ) : (
+            <div className="px-4 py-8 text-sm text-muted-foreground">{t("settings.domains.noSelection")}</div>
+          )}
+        </SettingsGroup>
+      </div>
     </div>
   );
 }

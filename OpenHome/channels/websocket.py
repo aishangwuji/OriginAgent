@@ -752,6 +752,9 @@ class WebSocketChannel(BaseChannel):
         if got == "/api/skills":
             return self._handle_skills_list(request)
 
+        if got == "/api/domains":
+            return self._handle_domains_list(request)
+
         if got == "/api/settings/update":
             return self._handle_settings_update(request)
 
@@ -788,6 +791,17 @@ class WebSocketChannel(BaseChannel):
         m = re.match(r"^/api/skills/([^/]+)/(verify|activate|deprecate|reject|always)$", got)
         if m:
             return self._handle_skill_action(request, m.group(1), m.group(2))
+
+        m = re.match(r"^/api/domains/([^/]+)$", got)
+        if m:
+            return self._handle_domain_detail(request, m.group(1))
+
+        m = re.match(r"^/api/domains/([^/]+)/(upgrade|enable|disable|activate|deactivate|uninstall|eval)$", got)
+        if m:
+            return self._handle_domain_action(request, m.group(1), m.group(2))
+
+        if got == "/api/domains/install":
+            return self._handle_domains_install(request)
 
         m = re.match(r"^/api/sessions/([^/]+)/messages$", got)
         if m:
@@ -1077,6 +1091,18 @@ class WebSocketChannel(BaseChannel):
         )
         return SkillsLoader(config.workspace_path, domain_pack_manager=manager)
 
+    def _domain_governance_service(self):
+        from OpenHome.agent.domain_pack_governance import DomainPackGovernanceService
+        from OpenHome.agent.domain_packs import DomainPackManager
+        from OpenHome.config.loader import load_config
+
+        config = load_config()
+        manager = DomainPackManager(
+            config.workspace_path,
+            config=config.agents.defaults.domain_packs,
+        )
+        return DomainPackGovernanceService(config.workspace_path, domain_pack_manager=manager)
+
     def _handle_skills_list(self, request: WsRequest) -> Response:
         if not self._check_api_token(request):
             return _http_error(401, "Unauthorized")
@@ -1159,6 +1185,81 @@ class WebSocketChannel(BaseChannel):
             "result": result.to_json(),
             "skill": result.skill,
             "stats": loader.lifecycle.stats(loader.list_skills(filter_unavailable=False)),
+        }, status=status)
+
+    def _handle_domains_list(self, request: WsRequest) -> Response:
+        if not self._check_api_token(request):
+            return _http_error(401, "Unauthorized")
+        query = _parse_query(request.path)
+        source = (_query_first(query, "source") or "").strip()
+        status = (_query_first(query, "status") or "").strip()
+        limit_raw = _query_first(query, "limit")
+        try:
+            limit = max(1, min(int(limit_raw) if limit_raw is not None else 50, 200))
+        except ValueError:
+            return _http_error(400, "limit must be an integer")
+        service = self._domain_governance_service()
+        return _http_json_response({
+            "domains": service.list_records(source=source or None, status=status or None, limit=limit),
+            "stats": service.stats(),
+        })
+
+    def _handle_domain_detail(self, request: WsRequest, pack_id: str) -> Response:
+        if not self._check_api_token(request):
+            return _http_error(401, "Unauthorized")
+        pack_id = unquote(pack_id)
+        service = self._domain_governance_service()
+        record = service.get_record(pack_id)
+        if record is None:
+            return _http_error(404, "domain pack not found")
+        return _http_json_response({"domain": record, "stats": service.stats()})
+
+    def _handle_domains_install(self, request: WsRequest) -> Response:
+        if not self._check_api_token(request):
+            return _http_error(401, "Unauthorized")
+        query = _parse_query(request.path)
+        source = _query_first(query, "source") or ""
+        reason = _query_first(query, "reason") or ""
+        service = self._domain_governance_service()
+        result = service.install(source, reason=reason)
+        status = 200 if result.ok else 400
+        return _http_json_response({
+            "result": result.to_json(),
+            "domain": result.pack,
+            "stats": service.stats(),
+        }, status=status)
+
+    def _handle_domain_action(self, request: WsRequest, pack_id: str, action: str) -> Response:
+        if not self._check_api_token(request):
+            return _http_error(401, "Unauthorized")
+        pack_id = unquote(pack_id)
+        query = _parse_query(request.path)
+        reason = _query_first(query, "reason") or ""
+        source = _query_first(query, "source") or ""
+        service = self._domain_governance_service()
+        if action == "upgrade":
+            result = service.upgrade(pack_id, source, reason=reason)
+        elif action == "enable":
+            result = service.set_enabled(pack_id, enabled=True, reason=reason)
+        elif action == "disable":
+            result = service.set_enabled(pack_id, enabled=False, reason=reason)
+        elif action == "activate":
+            result = service.set_active(pack_id, active=True, reason=reason)
+        elif action == "deactivate":
+            result = service.set_active(pack_id, active=False, reason=reason)
+        elif action == "uninstall":
+            result = service.uninstall(pack_id, reason=reason)
+        elif action == "eval":
+            result = service.eval_pack(pack_id)
+        else:
+            return _http_error(400, "unknown domain action")
+        status = 200 if result.ok or result.error == "read_only" else 400
+        if result.error == "not_found":
+            status = 404
+        return _http_json_response({
+            "result": result.to_json(),
+            "domain": result.pack,
+            "stats": service.stats(),
         }, status=status)
 
     def _handle_settings_update(self, request: WsRequest) -> Response:

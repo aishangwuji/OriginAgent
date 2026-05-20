@@ -685,3 +685,117 @@ async def test_reviews_command_show_apply_reject_defer(tmp_path: Path) -> None:
     assert "workflows/command-workflow/workflow.yaml" in workflow_apply.content
     assert "rejected" in reject.content
     assert "deferred" in defer.content
+
+
+def test_move_to_domain_apply_moves_workspace_skill_into_workspace_pack(tmp_path: Path) -> None:
+    pack = tmp_path / "domain_packs" / "research"
+    pack.mkdir(parents=True)
+    (pack / "domain_pack.yaml").write_text(
+        "id: research\n"
+        "name: Research\n"
+        "version: 0.1.0\n",
+        encoding="utf-8",
+    )
+    (pack / "CAPABILITIES.md").write_text("# Research\n", encoding="utf-8")
+
+    skill_dir = tmp_path / "skills" / "lighting-troubleshooting"
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text(
+        "---\n"
+        "name: lighting-troubleshooting\n"
+        "description: Lighting help.\n"
+        "always: true\n"
+        "metadata:\n"
+        "  OpenHome:\n"
+        "    proposal_status: proposed\n"
+        "    verification_status: verified\n"
+        "    lifecycle_status: active\n"
+        "    review_proposal_id: review_source\n"
+        "    domain_id: core\n"
+        "    created_by: background_review\n"
+        "---\n\n"
+        "# Lighting troubleshooting\n",
+        encoding="utf-8",
+    )
+
+    store = ReviewProposalStore(tmp_path)
+    store.append_many([
+        ReviewProposal(
+            id="review_move_skill",
+            created_at="2026-05-19T10:00:00+00:00",
+            session_key="websocket:chat1",
+            turn_id="turn-1",
+            proposal_type="move_to_domain",
+            domain_id="research",
+            title="Move lighting skill",
+            content="Move this workspace skill into the research domain pack.",
+            payload={
+                "subject_type": "skill",
+                "subject_id": "lighting-troubleshooting",
+                "subject_path": "skills/lighting-troubleshooting/SKILL.md",
+                "suggested_action": "move_to_domain",
+            },
+        ),
+    ])
+
+    assert store.get("review_move_skill")["can_apply"] is True
+
+    result = store.apply("review_move_skill", reason="curator move")
+
+    moved_file = pack / "skills" / "lighting-troubleshooting" / "SKILL.md"
+    assert result.ok is True
+    assert result.status == "applied"
+    assert result.artifact == {
+        "artifact_type": "skill",
+        "skill_name": "lighting-troubleshooting",
+        "path": "domain_packs/research/skills/lighting-troubleshooting/SKILL.md",
+        "validation": "Moved into workspace domain pack.",
+    }
+    assert moved_file.exists()
+    assert not (skill_dir / "SKILL.md").exists()
+    manifest = yaml.safe_load((pack / "domain_pack.yaml").read_text(encoding="utf-8"))
+    assert manifest["skills"] == ["lighting-troubleshooting"]
+    frontmatter = yaml.safe_load(moved_file.read_text(encoding="utf-8").split("---", 2)[1])
+    assert frontmatter["always"] is False
+    metadata = frontmatter["metadata"]["OpenHome"]
+    assert metadata["verification_status"] == "verified"
+    assert metadata["lifecycle_status"] == "active"
+    assert metadata["migrated_from_workspace"] is True
+    assert metadata["original_path"] == "skills/lighting-troubleshooting/SKILL.md"
+    assert metadata["migrated_by"] == "curator"
+    assert metadata["migration_review_proposal_id"] == "review_move_skill"
+    assert metadata["managed_by_domain_pack"] is True
+
+
+def test_move_to_domain_builtin_target_stays_pending_without_terminal_event(tmp_path: Path) -> None:
+    store = ReviewProposalStore(tmp_path)
+    store.append_many([
+        ReviewProposal(
+            id="review_move_builtin",
+            created_at="2026-05-19T10:00:00+00:00",
+            session_key="websocket:chat1",
+            turn_id="turn-1",
+            proposal_type="move_to_domain",
+            domain_id="smart_home",
+            title="Move lighting skill",
+            content="Move this workspace skill into the builtin smart_home domain pack.",
+            payload={
+                "subject_type": "skill",
+                "subject_id": "lighting-troubleshooting",
+                "subject_path": "skills/lighting-troubleshooting/SKILL.md",
+                "suggested_action": "move_to_domain",
+            },
+        ),
+    ])
+
+    record = store.get("review_move_builtin")
+    result = store.apply("review_move_builtin")
+
+    assert record is not None
+    assert record["can_apply"] is False
+    assert "read-only" in record["unsupported_reason"]
+    assert result.ok is False
+    assert result.status == "pending"
+    assert result.error == "unsupported"
+    assert store.get("review_move_builtin")["status"] == "pending"
+    assert _events(tmp_path) == []

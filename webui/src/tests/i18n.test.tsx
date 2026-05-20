@@ -112,6 +112,25 @@ describe("webui i18n", () => {
     }
   });
 
+  it("ships domains settings copy in English and Simplified Chinese", () => {
+    for (const locale of ["en", "zh-CN"] as const) {
+      const common = resources[locale].common;
+      expect(common.settings.nav.domains).toBeTruthy();
+      expect(common.settings.domains.description).toBeTruthy();
+      expect(common.settings.domains.install.title).toBeTruthy();
+      expect(common.settings.domains.install.placeholder).toBeTruthy();
+      expect(common.settings.domains.actions.install).toBeTruthy();
+      expect(common.settings.domains.actions.eval).toBeTruthy();
+      expect(common.settings.domains.status.available).toBeTruthy();
+      expect(common.settings.domains.status.invalid).toBeTruthy();
+      expect(common.settings.domains.source.workspace).toBeTruthy();
+      expect(common.settings.domains.fields.version).toBeTruthy();
+      expect(common.settings.domains.validation.upgradePathRequired).toBeTruthy();
+      expect(common.settings.domains.confirm.activate).toBeTruthy();
+      expect(common.settings.domains.confirm.uninstall).toBeTruthy();
+    }
+  });
+
   it("keeps review navigation and actions localized for every registered locale", () => {
     for (const resource of Object.values(resources)) {
       const common = resource.common;

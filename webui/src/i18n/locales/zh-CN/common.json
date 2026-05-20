@@ -56,7 +56,8 @@
       "general": "通用",
       "byok": "BYOK",
       "mcp": "MCP",
-      "skills": "技能"
+      "skills": "技能",
+      "domains": "领域包"
     },
     "sections": {
       "interface": "界面",
@@ -249,6 +250,76 @@
       "confirm": {
         "activate": "确认启用这个已验证 skill，让它进入正常发现范围？",
         "alwaysOn": "确认把这个 skill always 加载到系统提示词？只应对高度可信 skill 使用。"
+      }
+    },
+    "domains": {
+      "description": "治理当前 workspace 中的本地领域包。Workspace pack 可以安装、升级、评估、启用和卸载；builtin pack 保持只读。",
+      "loading": "正在加载领域包...",
+      "empty": "没有匹配的领域包。",
+      "noSelection": "选择一个领域包查看治理状态。",
+      "reason": "治理备注",
+      "reasonPlaceholder": "可选：记录这次领域包操作的原因。",
+      "overrideWarning": "这个 workspace pack 覆盖了同 id 的 builtin pack。",
+      "stats": {
+        "workspace": "Workspace",
+        "builtin": "内置",
+        "active": "已激活",
+        "overrides": "覆盖"
+      },
+      "filters": {
+        "title": "筛选",
+        "allSources": "全部来源",
+        "allStatuses": "全部状态"
+      },
+      "install": {
+        "title": "安装本地领域包",
+        "description": "把本地领域包目录复制进 workspace 治理目录。",
+        "placeholder": "D:/path/to/domain-pack"
+      },
+      "upgrade": {
+        "placeholder": "D:/path/to/new-pack-version"
+      },
+      "source": {
+        "workspace": "Workspace",
+        "builtin": "内置"
+      },
+      "status": {
+        "available": "可用",
+        "unavailable": "不可用",
+        "invalid": "无效"
+      },
+      "values": {
+        "enabled": "已启用",
+        "disabled": "已禁用"
+      },
+      "fields": {
+        "version": "版本",
+        "verification": "验证状态",
+        "skills": "Skills",
+        "workflows": "Workflows",
+        "active": "已激活",
+        "enabled": "已启用",
+        "lastEval": "最近评估",
+        "checks": "检查项",
+        "warnings": "警告",
+        "errors": "错误"
+      },
+      "actions": {
+        "install": "安装",
+        "upgrade": "升级",
+        "enable": "启用",
+        "disable": "禁用",
+        "activate": "激活",
+        "deactivate": "停用",
+        "eval": "评估",
+        "uninstall": "卸载"
+      },
+      "confirm": {
+        "activate": "确认把这个领域包激活到运行时发现范围？",
+        "uninstall": "确认从治理中卸载这个 workspace 领域包？"
+      },
+      "validation": {
+        "upgradePathRequired": "升级时必须提供源路径。"
       }
     }
   },

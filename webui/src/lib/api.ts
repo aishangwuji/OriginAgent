@@ -1,5 +1,8 @@
 import type {
   ChatSummary,
+  DomainPackGovernanceResult,
+  DomainPackGovernanceStats,
+  DomainPackRecord,
   HomeAssistantMcpSettingsUpdate,
   McpServerSettingsUpdate,
   ProviderSettingsUpdate,
@@ -220,6 +223,65 @@ export async function reviewProposalAction(
     stats: ReviewProposalStats;
   }>(
     `${base}/api/reviews/${encodeURIComponent(proposalId)}/${action}${suffix}`,
+    token,
+  );
+}
+
+export async function listDomains(
+  token: string,
+  filters: { source?: string; status?: string; limit?: number } = {},
+  base: string = "",
+): Promise<{ domains: DomainPackRecord[]; stats: DomainPackGovernanceStats }> {
+  const query = new URLSearchParams();
+  if (filters.source) query.set("source", filters.source);
+  if (filters.status) query.set("status", filters.status);
+  if (filters.limit !== undefined) query.set("limit", String(filters.limit));
+  const suffix = query.toString() ? `?${query}` : "";
+  return request<{ domains: DomainPackRecord[]; stats: DomainPackGovernanceStats }>(
+    `${base}/api/domains${suffix}`,
+    token,
+  );
+}
+
+export async function fetchDomain(
+  token: string,
+  packId: string,
+  base: string = "",
+): Promise<{ domain: DomainPackRecord; stats: DomainPackGovernanceStats }> {
+  return request<{ domain: DomainPackRecord; stats: DomainPackGovernanceStats }>(
+    `${base}/api/domains/${encodeURIComponent(packId)}`,
+    token,
+  );
+}
+
+export async function installDomainPack(
+  token: string,
+  source: string,
+  reason = "",
+  base: string = "",
+): Promise<{ result: DomainPackGovernanceResult; domain: DomainPackRecord | null; stats: DomainPackGovernanceStats }> {
+  const query = new URLSearchParams();
+  query.set("source", source);
+  if (reason.trim()) query.set("reason", reason.trim());
+  return request<{ result: DomainPackGovernanceResult; domain: DomainPackRecord | null; stats: DomainPackGovernanceStats }>(
+    `${base}/api/domains/install?${query}`,
+    token,
+  );
+}
+
+export async function domainPackAction(
+  token: string,
+  packId: string,
+  action: "upgrade" | "enable" | "disable" | "activate" | "deactivate" | "uninstall" | "eval",
+  options: { source?: string; reason?: string } = {},
+  base: string = "",
+): Promise<{ result: DomainPackGovernanceResult; domain: DomainPackRecord | null; stats: DomainPackGovernanceStats }> {
+  const query = new URLSearchParams();
+  if (options.source?.trim()) query.set("source", options.source.trim());
+  if (options.reason?.trim()) query.set("reason", options.reason.trim());
+  const suffix = query.toString() ? `?${query}` : "";
+  return request<{ result: DomainPackGovernanceResult; domain: DomainPackRecord | null; stats: DomainPackGovernanceStats }>(
+    `${base}/api/domains/${encodeURIComponent(packId)}/${action}${suffix}`,
     token,
   );
 }

@@ -132,6 +132,9 @@ export interface SettingsPayload {
     background_review: {
       enabled: boolean;
     };
+    curator?: {
+      enabled: boolean;
+    };
   };
   mcp: {
     servers: McpServerSettings[];
@@ -327,6 +330,99 @@ export interface SkillLifecycleResult {
   message: string;
   skill?: SkillRecord | null;
   event?: Record<string, unknown> | null;
+  error?: string;
+}
+
+export interface DomainDeclarationRecord {
+  id: string;
+  path?: string;
+  status: string;
+  unavailable_reason?: string;
+  virtual_id?: string;
+  module?: string;
+  class_name?: string;
+  permissions?: string[];
+  audit?: string;
+  target?: string;
+  kind?: string;
+}
+
+export interface DomainPackRecord {
+  id: string;
+  name: string;
+  version: string;
+  path: string;
+  source: string;
+  status: string;
+  enabled: boolean;
+  active: boolean;
+  active_requested?: boolean;
+  verification_status: string;
+  overrides_builtin?: boolean;
+  description?: string;
+  validation_summary?: string;
+  unavailable_reason?: string;
+  capabilities?: string[];
+  triggers?: string[];
+  dependencies?: { packs: string[] };
+  source_info?: {
+    kind: "builtin" | "local_copy";
+    installed_from?: string;
+    installed_at?: string;
+  };
+  skills?: DomainDeclarationRecord[];
+  workflows?: DomainDeclarationRecord[];
+  policies?: DomainDeclarationRecord[];
+  schemas?: DomainDeclarationRecord[];
+  tools?: DomainDeclarationRecord[];
+  evals?: DomainDeclarationRecord[];
+  can_install?: boolean;
+  can_upgrade?: boolean;
+  can_uninstall?: boolean;
+  can_enable?: boolean;
+  can_disable?: boolean;
+  can_activate?: boolean;
+  can_deactivate?: boolean;
+  can_eval?: boolean;
+  disabled_reason?: string;
+  last_event?: Record<string, unknown> | null;
+  last_eval_result?: {
+    ok?: boolean;
+    status?: string;
+    checks?: Array<Record<string, unknown>>;
+    warnings?: string[];
+    errors?: string[];
+    pack?: string;
+  } | null;
+}
+
+export interface DomainPackGovernanceStats {
+  workspace_domain_pack_count: number;
+  builtin_domain_pack_count: number;
+  domain_pack_status_counts: Record<string, number>;
+  active_domain_pack_count: number;
+  domain_pack_override_count: number;
+  domain_pack_eval_status_counts: Record<string, number>;
+  last_domain_pack_event_at: string | null;
+}
+
+export interface DomainPackGovernanceResult {
+  pack_id: string;
+  status: string;
+  action: string;
+  ok: boolean;
+  message: string;
+  pack?: DomainPackRecord | null;
+  event?: Record<string, unknown> | null;
+  eval_result?: {
+    ok?: boolean;
+    status?: string;
+    checks?: Array<Record<string, unknown>>;
+    warnings?: string[];
+    errors?: string[];
+    pack?: string;
+  } | null;
+  artifact?: ReviewApplyArtifact | null;
   error?: string;
 }
 

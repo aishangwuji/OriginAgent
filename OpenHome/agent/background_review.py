@@ -17,6 +17,7 @@ from filelock import FileLock
 from loguru import logger
 
 from OpenHome.agent.auxiliary_llm import AuxiliaryLLMRouter, call_llm
+from OpenHome.agent.domain_pack_governance import DomainPackGovernanceService
 from OpenHome.agent.domain_packs import DomainPackManager
 from OpenHome.agent.facts import (
     HIGH_RISK_CATEGORIES,
@@ -54,6 +55,7 @@ _APPLY_ACTIONS_BY_TYPE = {
     "workflow": "workflow",
     "promote_skill": "promote_skill",
     "deprecate_skill": "deprecate_skill",
+    "move_to_domain": "move_to_domain",
 }
 _HIGH_RISK_DEVICE_DOMAINS = {"lock", "security", "camera", "gas", "presence"}
 
@@ -237,7 +239,7 @@ class ReviewProposalStore:
                     and workflow_path
                 ):
                     record["applied_workflow_path"] = workflow_path
-            _decorate_review_capabilities(record)
+            _decorate_review_capabilities(record, workspace=self.workspace)
             records.append(_redacted_record(record))
         return records
 
@@ -359,6 +361,7 @@ class ReviewProposalStore:
 
             proposal_type = _proposal_type(record)
             action_kind = _apply_action_kind(proposal_type)
+            can_apply, unsupported_reason = _review_apply_capability(self.workspace, record)
             if action_kind is None:
                 return ReviewDecisionResult(
                     proposal_id=proposal_id,
@@ -369,6 +372,16 @@ class ReviewProposalStore:
                     proposal=record,
                     error="unsupported_proposal_type",
                 )
+            if not can_apply:
+                return ReviewDecisionResult(
+                    proposal_id=proposal_id,
+                    status=str(record.get("status") or "pending"),
+                    action="apply",
+                    ok=False,
+                    message=unsupported_reason or _unsupported_apply_message(record),
+                    proposal=record,
+                    error="unsupported",
+                )
 
             if action_kind == "skill":
                 return self._apply_to_skill_unlocked(record, reason=reason)
@@ -378,6 +391,8 @@ class ReviewProposalStore:
                 return self._apply_promote_skill_unlocked(record, reason=reason)
             if action_kind == "deprecate_skill":
                 return self._apply_deprecate_skill_unlocked(record, reason=reason)
+            if action_kind == "move_to_domain":
+                return self._apply_move_to_domain_unlocked(record, reason=reason)
 
             try:
                 fact = self._apply_to_memory(record)
@@ -793,6 +808,70 @@ class ReviewProposalStore:
             artifact=artifact,
         )
 
+    def _apply_move_to_domain_unlocked(
+        self,
+        record: dict[str, Any],
+        *,
+        reason: str = "",
+    ) -> ReviewDecisionResult:
+        proposal_id = str(record.get("id") or "")
+        service = DomainPackGovernanceService(self.workspace)
+        try:
+            result = service.move_artifact_to_domain(
+                record,
+                reason=reason,
+                actor="curator",
+                review_proposal_id=proposal_id,
+            )
+            if not result.ok:
+                if result.error == "unsupported":
+                    return ReviewDecisionResult(
+                        proposal_id=proposal_id,
+                        status=str(record.get("status") or "pending"),
+                        action="apply",
+                        ok=False,
+                        message=result.message,
+                        proposal=self._find_unlocked(proposal_id),
+                        error="unsupported",
+                    )
+                raise ValueError(result.error or result.message)
+            artifact = result.artifact
+        except Exception as exc:
+            logger.exception("Failed to apply move_to_domain proposal {}", proposal_id)
+            event = self._append_event_unlocked(
+                proposal_id,
+                status="failed",
+                reason=reason,
+                error=str(exc),
+            )
+            return ReviewDecisionResult(
+                proposal_id=proposal_id,
+                status="failed",
+                action="apply",
+                ok=False,
+                message="Failed to move the workspace artifact into its domain pack.",
+                proposal=self._find_unlocked(proposal_id),
+                event=event,
+                artifact=None,
+                error=str(exc),
+            )
+        event = self._append_event_unlocked(
+            proposal_id,
+            status="applied",
+            reason=reason,
+            artifact=artifact,
+        )
+        return ReviewDecisionResult(
+            proposal_id=proposal_id,
+            status="applied",
+            action="apply",
+            ok=True,
+            message="Workspace artifact moved into domain pack.",
+            proposal=self._find_unlocked(proposal_id),
+            event=event,
+            artifact=artifact,
+        )
+
 
 class BackgroundReviewService:
     """Generate controlled learning proposals after successful user turns."""
@@ -1122,11 +1201,12 @@ def _redacted_record(record: dict[str, Any]) -> dict[str, Any]:
     return cleaned
 
 
-def _decorate_review_capabilities(record: dict[str, Any]) -> None:
+def _decorate_review_capabilities(record: dict[str, Any], *, workspace: Path) -> None:
     status = str(record.get("status") or "pending")
     proposal_type = _proposal_type(record)
     payload = _proposal_payload(record)
-    can_apply = status == "pending" and _apply_action_kind(proposal_type) is not None
+    can_apply, unsupported_reason = _review_apply_capability(workspace, record)
+    can_apply = status == "pending" and can_apply
     record["can_apply"] = can_apply
     record["origin"] = _proposal_origin(record)
     record["suggested_action"] = str(payload.get("suggested_action") or proposal_type or "").strip()
@@ -1137,7 +1217,7 @@ def _decorate_review_capabilities(record: dict[str, Any]) -> None:
     elif status != "pending":
         record["unsupported_reason"] = "This proposal is already in a terminal state."
     else:
-        record["unsupported_reason"] = _unsupported_apply_message(record)
+        record["unsupported_reason"] = unsupported_reason
 
 
 def _review_subject_label(record: dict[str, Any]) -> str:
@@ -1156,9 +1236,26 @@ def _review_subject_label(record: dict[str, Any]) -> str:
 
 def _unsupported_apply_message(record: dict[str, Any]) -> str:
     proposal_type = _proposal_type(record)
-    if proposal_type in {"merge_skill", "archive_workflow", "move_to_domain", "fact_conflict"}:
+    if proposal_type in {"merge_skill", "archive_workflow", "fact_conflict"}:
         return f"{proposal_type} proposals are review-only in P10."
-    return "Only memory, fact, skill, workflow, promote_skill, and deprecate_skill proposals can be applied."
+    if proposal_type == "move_to_domain":
+        return "move_to_domain proposals are only apply-capable when the target is a workspace domain pack."
+    return "Only memory, fact, skill, workflow, promote_skill, deprecate_skill, and supported move_to_domain proposals can be applied."
+
+
+def _review_apply_capability(workspace: Path, record: dict[str, Any]) -> tuple[bool, str]:
+    status = str(record.get("status") or "pending")
+    if status != "pending":
+        return False, "This proposal is already in a terminal state."
+    proposal_type = _proposal_type(record)
+    action_kind = _apply_action_kind(proposal_type)
+    if action_kind is None:
+        return False, _unsupported_apply_message(record)
+    if action_kind != "move_to_domain":
+        return True, ""
+    service = DomainPackGovernanceService(workspace)
+    allowed, reason = service.move_to_domain_capability(record)
+    return allowed, reason or _unsupported_apply_message(record)
 
 
 def _safe_category(value: Any, default: str = "note") -> str:

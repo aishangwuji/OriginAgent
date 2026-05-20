@@ -7,6 +7,7 @@ from collections import Counter
 from pathlib import Path
 from typing import Any
 
+from OpenHome.agent.domain_pack_governance import summarize_domain_pack_governance
 from OpenHome.agent.confirmation import PendingConfirmationStore
 from OpenHome.agent.skills import SkillsLoader
 from OpenHome.agent.tools.base import Tool
@@ -308,7 +309,15 @@ def _domain_pack_status(manager: Any | None) -> dict[str, Any]:
             "active_domain_pack_ids": [],
             "registered_domain_tools_count": 0,
             "skipped_domain_tools_count": 0,
+            "workspace_domain_pack_count": 0,
+            "builtin_domain_pack_count": 0,
+            "domain_pack_status_counts": {},
+            "active_domain_pack_count": 0,
+            "domain_pack_override_count": 0,
+            "domain_pack_eval_status_counts": {},
+            "last_domain_pack_event_at": None,
         }
+    governance = summarize_domain_pack_governance(getattr(manager, "workspace", Path(".")), manager)
     try:
         packs = manager.list_packs()
     except Exception:
@@ -317,6 +326,7 @@ def _domain_pack_status(manager: Any | None) -> dict[str, Any]:
             "active_domain_pack_ids": [],
             "registered_domain_tools_count": 0,
             "skipped_domain_tools_count": 0,
+            **governance,
         }
     counts = manager.domain_tool_runtime_counts() if hasattr(manager, "domain_tool_runtime_counts") else {}
     return {
@@ -324,6 +334,7 @@ def _domain_pack_status(manager: Any | None) -> dict[str, Any]:
         "active_domain_pack_ids": [pack.id for pack in packs if getattr(pack, "active", False)],
         "registered_domain_tools_count": int(counts.get("registered", 0) or 0),
         "skipped_domain_tools_count": int(counts.get("skipped", 0) or 0),
+        **governance,
     }
 
 
