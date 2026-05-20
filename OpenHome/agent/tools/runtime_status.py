@@ -33,6 +33,7 @@ class RuntimeStatusTool(Tool):
         domain_pack_manager: Any | None = None,
         background_review_service: Any | None = None,
         curator_service: Any | None = None,
+        session_search_index_service: Any | None = None,
     ) -> None:
         self._workspace = Path(workspace)
         self._registry = registry
@@ -45,6 +46,7 @@ class RuntimeStatusTool(Tool):
         self._domain_pack_manager = domain_pack_manager
         self._background_review_service = background_review_service
         self._curator_service = curator_service
+        self._session_search_index_service = session_search_index_service
 
     @property
     def description(self) -> str:
@@ -64,6 +66,7 @@ class RuntimeStatusTool(Tool):
         curator_status = _curator_status(self._curator_service)
         workflow_status = _workflow_artifact_status(self._workspace)
         skill_status = _skill_lifecycle_status(self._workspace, self._domain_pack_manager)
+        session_search_status = _session_search_status(self._session_search_index_service)
         self_model = SelfModelService(
             self._workspace,
             registry=self._registry,
@@ -92,6 +95,7 @@ class RuntimeStatusTool(Tool):
             **curator_status,
             **skill_status,
             **workflow_status,
+            **session_search_status,
             "self_model": self_model,
         }
 
@@ -427,3 +431,24 @@ def _skill_lifecycle_status(workspace: Path, domain_pack_manager: Any | None) ->
             "rejected_skill_count": 0,
             "always_workspace_skill_count": 0,
         }
+
+
+def _session_search_status(service: Any | None) -> dict[str, Any]:
+    defaults = {
+        "session_search_backend": "literal",
+        "session_search_semantic_enabled": False,
+        "session_search_index_available": False,
+        "session_search_indexed_doc_count": 0,
+        "session_search_indexed_source_counts": {},
+        "session_search_index_stale": False,
+        "session_search_refresh_running": False,
+        "session_search_last_indexed_at": None,
+        "session_search_last_index_error": None,
+        "session_search_skipped_secret_risk_count": 0,
+    }
+    if service is None or not hasattr(service, "runtime_status"):
+        return defaults
+    try:
+        return {**defaults, **dict(service.runtime_status())}
+    except Exception:
+        return defaults

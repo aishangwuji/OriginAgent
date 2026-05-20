@@ -13,9 +13,19 @@ from OpenHome.session.search import SessionSearchService
 class SessionSearchTool(Tool):
     """Read-only structured search over session/history JSONL sources."""
 
-    def __init__(self, workspace: Path):
+    def __init__(self, workspace: Path, *, config: Any | None = None, index_service: Any | None = None):
         self._workspace = Path(workspace)
-        self._service = SessionSearchService(self._workspace)
+        self._config = config
+        refresh_ms = getattr(config, "max_tool_refresh_ms", 500)
+        if refresh_ms is None:
+            refresh_ms = 500
+        self._service = SessionSearchService(
+            self._workspace,
+            index_service=index_service,
+            index_backend=str(getattr(config, "backend", "auto")),
+            semantic_enabled=bool(getattr(config, "semantic_enabled", True)),
+            max_tool_refresh_ms=int(refresh_ms),
+        )
 
     @property
     def name(self) -> str:
@@ -25,11 +35,12 @@ class SessionSearchTool(Tool):
     def description(self) -> str:
         return (
             "Search previous OpenHome conversations, memory/history archives, and WebUI "
-            "transcripts using case-insensitive literal text matching. Use this for "
+            "transcripts. Defaults to case-insensitive literal text matching; pass "
+            "mode='hybrid' or mode='semantic' for indexed multilingual recall when "
+            "enabled. Use this for "
             "questions about prior discussions, previous plans, or what was said before; "
-            "use grep for arbitrary project files. This is not semantic search: if no "
-            "results appear, try alternate keywords or a wider since/until range. Prefer "
-            "supplying since/until to reduce history scanning."
+            "use grep for arbitrary project files. Prefer supplying since/until to reduce "
+            "history scanning."
         )
 
     @property
@@ -57,10 +68,14 @@ class SessionSearchTool(Tool):
             sources=ArraySchema(
                 StringSchema(
                     "History source.",
-                    enum=["sessions", "history", "webui"],
+                    enum=["sessions", "history", "webui", "facts"],
                 ),
-                description="Optional sources to search. Defaults to all sources.",
-                max_items=3,
+                description="Optional sources to search. Defaults to sessions/history/webui.",
+                max_items=4,
+            ),
+            mode=StringSchema(
+                "Search mode. literal preserves exact legacy behavior; hybrid combines literal and indexed multilingual recall; semantic uses indexed multilingual recall.",
+                enum=["literal", "hybrid", "semantic"],
             ),
             session_key=StringSchema(
                 "Optional exact session key such as 'websocket:chat1'.",
@@ -100,6 +115,7 @@ class SessionSearchTool(Tool):
         since: str | None = None,
         until: str | None = None,
         limit: int | None = None,
+        mode: str = "literal",
     ) -> dict[str, Any]:
         return self._service.search(
             query=query,
@@ -111,4 +127,5 @@ class SessionSearchTool(Tool):
             since=since,
             until=until,
             limit=limit,
+            mode=mode,
         )

@@ -19,6 +19,7 @@ from OpenHome.agent.tools.runtime_status import (
 from OpenHome.config.schema import DomainPacksConfig
 from OpenHome.cron.service import CronService
 from OpenHome.cron.types import CronSchedule
+from OpenHome.session.search_index import SessionSearchIndexService
 
 RAW_COMMAND = "echo super-secret-command"
 RAW_PATH = "C:/secret/path/file.txt"
@@ -428,3 +429,41 @@ async def test_runtime_status_reports_workflow_artifact_counts(tmp_path) -> None
     assert result["workflow_artifacts_count"] == 2
     assert result["workflow_artifact_status_counts"] == {"proposed": 1}
     assert result["invalid_workflow_artifacts_count"] == 1
+
+
+@pytest.mark.asyncio
+async def test_runtime_status_reports_session_search_index_counts(tmp_path) -> None:
+    sessions = tmp_path / "sessions"
+    sessions.mkdir()
+    (sessions / "cli_direct.jsonl").write_text(
+        "\n".join([
+            json.dumps({"_type": "metadata", "key": "cli:direct"}),
+            json.dumps(
+                {
+                    "role": "user",
+                    "content": "智能家居 runtime status search index",
+                    "timestamp": "2026-05-20T10:00:00",
+                },
+                ensure_ascii=False,
+            ),
+        ])
+        + "\n",
+        encoding="utf-8",
+    )
+    index = SessionSearchIndexService(tmp_path, webui_dir=tmp_path / "webui")
+    index.refresh_incremental(sources=["sessions"])
+
+    result = await RuntimeStatusTool(
+        workspace=tmp_path,
+        registry=SimpleNamespace(tool_names=[]),
+        sessions=object(),
+        pending_queues={},
+        session_search_index_service=index,
+    ).execute()
+
+    assert result["session_search_backend"] == "sqlite_fts"
+    assert result["session_search_semantic_enabled"] is True
+    assert result["session_search_index_available"] is True
+    assert result["session_search_indexed_doc_count"] == 1
+    assert result["session_search_indexed_source_counts"] == {"sessions": 1}
+    assert result["session_search_index_stale"] is False

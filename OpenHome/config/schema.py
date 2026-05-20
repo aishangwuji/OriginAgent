@@ -414,6 +414,26 @@ class WebFetchConfig(Base):
     use_jina_reader: bool = True
 
 
+class SessionSearchConfig(Base):
+    """Local session_search retrieval configuration."""
+
+    enabled: bool = True
+    backend: Literal["auto", "literal", "sqlite_fts"] = "auto"
+    semantic_enabled: bool = True
+    max_tool_refresh_ms: int = Field(
+        default=500,
+        ge=0,
+        le=10_000,
+        validation_alias=AliasChoices("maxToolRefreshMs", "max_tool_refresh_ms"),
+        serialization_alias="maxToolRefreshMs",
+    )
+    rebuild_on_start: bool = Field(
+        default=False,
+        validation_alias=AliasChoices("rebuildOnStart", "rebuild_on_start"),
+        serialization_alias="rebuildOnStart",
+    )
+
+
 class WebToolsConfig(Base):
     """Web tools configuration."""
 
@@ -511,6 +531,11 @@ class ToolAuditConfig(Base):
 class ToolsConfig(Base):
     """Tools configuration."""
 
+    session_search: SessionSearchConfig = Field(
+        default_factory=SessionSearchConfig,
+        validation_alias=AliasChoices("sessionSearch", "session_search"),
+        serialization_alias="sessionSearch",
+    )
     web: WebToolsConfig = Field(default_factory=WebToolsConfig)
     content_read: ContentReadToolConfig = Field(default_factory=ContentReadToolConfig)
     exec: ExecToolConfig = Field(default_factory=ExecToolConfig)

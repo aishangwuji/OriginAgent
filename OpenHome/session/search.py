@@ -7,6 +7,7 @@ import re
 import time
 from dataclasses import dataclass
 from datetime import datetime, time as datetime_time, timezone
+from functools import lru_cache
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -16,8 +17,10 @@ from OpenHome.agent.memory import redact_memory_text
 from OpenHome.config.loader import get_config_path
 from OpenHome.utils.helpers import truncate_text
 
-SUPPORTED_SOURCES: tuple[str, ...] = ("sessions", "history", "webui")
-SOURCE_PRIORITY: dict[str, int] = {"sessions": 0, "history": 1, "webui": 2}
+DEFAULT_SOURCES: tuple[str, ...] = ("sessions", "history", "webui")
+SUPPORTED_SOURCES: tuple[str, ...] = ("sessions", "history", "webui", "facts")
+SOURCE_PRIORITY: dict[str, int] = {"sessions": 0, "history": 1, "webui": 2, "facts": 3}
+SUPPORTED_MODES: tuple[str, ...] = ("literal", "hybrid", "semantic")
 DEFAULT_LIMIT = 10
 MAX_LIMIT = 50
 DEFAULT_CACHE_TTL_S = 300.0
@@ -37,27 +40,34 @@ class SearchRecord:
     timestamp: datetime | None
     text: str
     locator: dict[str, Any]
+    record_status: str = ""
 
 
 @dataclass(frozen=True)
 class SearchResponse:
     query: str
+    mode: str
     results: list[dict[str, Any]]
     total_matches: int
     searched_sources: list[str]
     skipped_records: int
     truncated: bool
     performance_note: str | None = None
+    index_stale: bool = False
+    index_refresh_running: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "query": self.query,
+            "mode": self.mode,
             "results": self.results,
             "total_matches": self.total_matches,
             "searched_sources": self.searched_sources,
             "skipped_records": self.skipped_records,
             "truncated": self.truncated,
             "performance_note": self.performance_note,
+            "index_stale": self.index_stale,
+            "index_refresh_running": self.index_refresh_running,
         }
 
 
@@ -88,6 +98,10 @@ class SessionSearchService:
         cache_records_per_source: int = DEFAULT_CACHE_RECORDS_PER_SOURCE,
         webui_dir: Path | None = None,
         now: Any | None = None,
+        index_service: Any | None = None,
+        index_backend: str = "auto",
+        semantic_enabled: bool = True,
+        max_tool_refresh_ms: int = 500,
     ) -> None:
         self.workspace = Path(workspace)
         self.sessions_dir = self.workspace / "sessions"
@@ -97,6 +111,10 @@ class SessionSearchService:
         self._cache_records_per_source = cache_records_per_source
         self._now = now or time.monotonic
         self._cache: dict[str, _SourceCache] = {}
+        self._index_service = index_service
+        self._index_backend = index_backend
+        self._semantic_enabled = semantic_enabled
+        self._max_tool_refresh_ms = max_tool_refresh_ms
 
     def search(
         self,
@@ -110,11 +128,14 @@ class SessionSearchService:
         since: str | datetime | None = None,
         until: str | datetime | None = None,
         limit: int | None = DEFAULT_LIMIT,
+        mode: str = "literal",
     ) -> dict[str, Any]:
         query = str(query or "").strip()
+        mode = _normalize_mode(mode)
         if not query:
             return SearchResponse(
                 query=query,
+                mode=mode,
                 results=[],
                 total_matches=0,
                 searched_sources=[],
@@ -126,6 +147,19 @@ class SessionSearchService:
         requested_sources = _normalize_sources(sources)
         requested_roles = _normalize_str_set(roles)
         limit_value = _clamp_limit(limit)
+        if mode != "literal":
+            return self._indexed_search(
+                query=query,
+                mode=mode,
+                requested_sources=requested_sources,
+                requested_roles=requested_roles,
+                session_key=session_key,
+                channel=channel,
+                chat_id=chat_id,
+                since=since,
+                until=until,
+                limit_value=limit_value,
+            )
         since_dt = _parse_datetime_filter(since, is_until=False)
         until_dt = _parse_datetime_filter(until, is_until=True)
         target_session_key = session_key or _session_key_from_channel_chat(channel, chat_id)
@@ -177,6 +211,7 @@ class SessionSearchService:
 
         return SearchResponse(
             query=query,
+            mode=mode,
             results=results,
             total_matches=len(matches),
             searched_sources=list(requested_sources),
@@ -184,6 +219,115 @@ class SessionSearchService:
             truncated=truncated,
             performance_note=performance_note,
         ).to_dict()
+
+    def _indexed_search(
+        self,
+        *,
+        query: str,
+        mode: str,
+        requested_sources: tuple[str, ...],
+        requested_roles: set[str],
+        session_key: str | None,
+        channel: str | None,
+        chat_id: str | None,
+        since: str | datetime | None,
+        until: str | datetime | None,
+        limit_value: int,
+    ) -> dict[str, Any]:
+        service = self._index()
+        notes: list[str] = []
+        if not self._semantic_enabled or service is None or not getattr(service, "enabled", False):
+            notes.append("Indexed multilingual search is disabled; falling back to literal search.")
+            literal = self.search(
+                query=query,
+                roles=requested_roles,
+                sources=requested_sources,
+                session_key=session_key,
+                channel=channel,
+                chat_id=chat_id,
+                since=since,
+                until=until,
+                limit=limit_value,
+                mode="literal",
+            )
+            literal["mode"] = mode
+            literal["performance_note"] = _join_notes(notes, literal.get("performance_note"))
+            return literal
+
+        refresh_status = service.refresh_incremental(
+            sources=requested_sources,
+            budget_ms=self._max_tool_refresh_ms,
+        )
+        indexed = service.search_indexed(
+            query=query,
+            sources=requested_sources,
+            roles=requested_roles,
+            session_key=session_key,
+            channel=channel,
+            chat_id=chat_id,
+            since=since,
+            until=until,
+            limit=limit_value,
+            match_type="semantic" if mode == "semantic" else "fts",
+        )
+        if indexed.get("note"):
+            notes.append(str(indexed["note"]))
+
+        literal: dict[str, Any] | None = None
+        if mode == "hybrid" or not indexed.get("results"):
+            literal = self.search(
+                query=query,
+                roles=requested_roles,
+                sources=requested_sources,
+                session_key=session_key,
+                channel=channel,
+                chat_id=chat_id,
+                since=since,
+                until=until,
+                limit=limit_value,
+                mode="literal",
+            )
+
+        results = _merge_indexed_results(
+            literal.get("results", []) if literal else [],
+            indexed.get("results", []),
+            limit_value,
+        )
+        total_matches = len(results)
+        if literal is not None:
+            total_matches = max(total_matches, int(literal.get("total_matches", 0) or 0))
+        total_matches = max(total_matches, int(indexed.get("total_matches", 0) or 0))
+        performance_note = _join_notes(
+            notes,
+            literal.get("performance_note") if literal else None,
+        )
+        return SearchResponse(
+            query=query,
+            mode=mode,
+            results=results,
+            total_matches=total_matches,
+            searched_sources=list(requested_sources),
+            skipped_records=int(literal.get("skipped_records", 0) if literal else 0),
+            truncated=total_matches > len(results),
+            performance_note=performance_note,
+            index_stale=bool(refresh_status.get("session_search_index_stale")),
+            index_refresh_running=bool(refresh_status.get("session_search_refresh_running")),
+        ).to_dict()
+
+    def _index(self):
+        if self._index_service is not None:
+            return self._index_service
+        try:
+            from OpenHome.session.search_index import SessionSearchIndexService
+        except Exception:
+            return None
+        self._index_service = SessionSearchIndexService(
+            self.workspace,
+            webui_dir=self._webui_dir,
+            backend=self._index_backend,
+            semantic_enabled=self._semantic_enabled,
+        )
+        return self._index_service
 
     def _load_source(self, source: str, *, live: bool) -> _SourceLoad:
         paths = self._source_paths(source)
@@ -224,6 +368,9 @@ class SessionSearchService:
         if source == "webui":
             webui_dir = self._webui_dir or (get_config_path().parent / "webui")
             return sorted(webui_dir.glob("*.jsonl")) if webui_dir.is_dir() else []
+        if source == "facts":
+            facts_file = self.workspace / "memory" / "facts.jsonl"
+            return [facts_file] if facts_file.is_file() else []
         return []
 
     def _scan_source(self, source: str, paths: list[Path]) -> _SourceLoad:
@@ -285,19 +432,26 @@ class SessionSearchService:
             return _history_record_from_json(self.workspace, path, line_no, data)
         if source == "webui":
             return _webui_record_from_json(path, line_no, fallback_session_key, data)
+        if source == "facts":
+            return _fact_record_from_json(self.workspace, path, line_no, data)
         return None
 
 
 def _normalize_sources(sources: Iterable[str] | None) -> tuple[str, ...]:
     if sources is None:
-        return SUPPORTED_SOURCES
+        return DEFAULT_SOURCES
     out: list[str] = []
     for source in sources:
         if isinstance(source, str):
             value = source.strip().lower()
             if value in SUPPORTED_SOURCES and value not in out:
                 out.append(value)
-    return tuple(out) or SUPPORTED_SOURCES
+    return tuple(out) or DEFAULT_SOURCES
+
+
+def _normalize_mode(mode: str | None) -> str:
+    value = str(mode or "literal").strip().lower()
+    return value if value in SUPPORTED_MODES else "literal"
 
 
 def _normalize_str_set(values: Iterable[str] | None) -> set[str]:
@@ -508,6 +662,43 @@ def _webui_record_from_json(
     )
 
 
+def _fact_record_from_json(
+    workspace: Path,
+    path: Path,
+    line_no: int,
+    data: dict[str, Any],
+) -> SearchRecord | None:
+    status = str(data.get("status") or "").strip().lower()
+    if status not in {"active", "pending_confirmation"}:
+        return None
+    content = _text_from_content(data.get("content"))
+    source_excerpt = _text_from_content(data.get("source_excerpt"))
+    text = "\n".join(part for part in (content, source_excerpt) if part.strip())
+    if not text.strip():
+        return None
+    rel_path = _relative_path(workspace, path)
+    locator: dict[str, Any] = {
+        "path": rel_path,
+        "line": line_no,
+        "fact_id": str(data.get("fact_id") or ""),
+        "status": status,
+        "category": str(data.get("category") or ""),
+        "scope": str(data.get("scope") or ""),
+        "owner": str(data.get("owner") or ""),
+        "has_full_content": False,
+    }
+    return SearchRecord(
+        source="facts",
+        session_key="memory:facts",
+        role="archive",
+        timestamp=_parse_record_timestamp(data.get("updated_at") or data.get("created_at")),
+        text=text,
+        locator=locator,
+        record_status=status,
+    )
+
+
+@lru_cache(maxsize=2048)
 def _relative_path(workspace: Path, path: Path) -> str:
     try:
         return path.relative_to(workspace).as_posix()
@@ -541,6 +732,10 @@ def _format_result(record: SearchRecord, query_lc: str, hit_count: int) -> dict[
         "snippet": _make_snippet(record.text, query_lc),
         "locator": dict(record.locator),
         "match_count": hit_count,
+        "match_type": "literal",
+        "score": min(1.0, 0.7 + min(hit_count, 3) * 0.1),
+        "redacted": True,
+        "record_status": record.record_status,
     }
 
 
@@ -624,12 +819,57 @@ def _performance_note(
     return " ".join(notes) if notes else None
 
 
+def _result_identity(row: dict[str, Any]) -> tuple[str, str]:
+    return (
+        str(row.get("source") or ""),
+        _locator_sort_value(row.get("locator") if isinstance(row.get("locator"), dict) else {}),
+    )
+
+
+def _merge_indexed_results(
+    literal_results: list[dict[str, Any]],
+    indexed_results: list[dict[str, Any]],
+    limit: int,
+) -> list[dict[str, Any]]:
+    merged: dict[tuple[str, str], dict[str, Any]] = {}
+    for row in indexed_results:
+        merged[_result_identity(row)] = dict(row)
+    for row in literal_results:
+        identity = _result_identity(row)
+        existing = merged.get(identity)
+        if existing is None or existing.get("match_type") != "literal":
+            merged[identity] = dict(row)
+    rows = list(merged.values())
+
+    def key(row: dict[str, Any]) -> tuple[int, float, float, int, str]:
+        match_priority = 0 if row.get("match_type") == "literal" else 1
+        score = float(row.get("score") or 0.0)
+        timestamp = _parse_record_timestamp(row.get("timestamp"))
+        source_priority = SOURCE_PRIORITY.get(str(row.get("source") or ""), 99)
+        return (
+            match_priority,
+            -score,
+            -_timestamp_sort_value(timestamp),
+            source_priority,
+            _locator_sort_value(row.get("locator") if isinstance(row.get("locator"), dict) else {}),
+        )
+
+    return sorted(rows, key=key)[:limit]
+
+
+def _join_notes(*values: str | None) -> str | None:
+    parts = [str(value).strip() for value in values if str(value or "").strip()]
+    return " ".join(parts) if parts else None
+
+
 __all__ = [
     "DEFAULT_CACHE_RECORDS_PER_SOURCE",
     "DEFAULT_CACHE_TTL_S",
     "DEFAULT_LIMIT",
+    "DEFAULT_SOURCES",
     "MAX_LIMIT",
     "SUPPORTED_SOURCES",
+    "SUPPORTED_MODES",
     "SearchRecord",
     "SearchResponse",
     "SessionSearchService",

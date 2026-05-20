@@ -111,6 +111,7 @@ def register_default_tools(
     domain_pack_manager: Any,
     background_review_service: Any,
     curator_service: Any,
+    session_search_index_service: Any,
     subagent_manager: Any,
     file_state_store: Any,
     provider_snapshot_loader: Callable[..., Any] | None,
@@ -140,6 +141,7 @@ def register_default_tools(
             domain_pack_manager=domain_pack_manager,
             background_review_service=background_review_service,
             curator_service=curator_service,
+            session_search_index_service=session_search_index_service,
         )
     )
     registry.register(ToolAuditSummaryTool(workspace=workspace, audit_mode=audit_config.mode))
@@ -163,7 +165,14 @@ def register_default_tools(
         registry.register(cls(workspace=workspace, allowed_dir=allowed_dir))
     for cls in (GlobTool, GrepTool):
         registry.register(cls(workspace=workspace, allowed_dir=allowed_dir))
-    registry.register(SessionSearchTool(workspace=workspace))
+    if getattr(config.session_search, "enabled", True):
+        registry.register(
+            SessionSearchTool(
+                workspace=workspace,
+                config=config.session_search,
+                index_service=session_search_index_service,
+            )
+        )
     registry.register(NotebookEditTool(workspace=workspace, allowed_dir=allowed_dir))
 
     if should_register_exec(exec_config):

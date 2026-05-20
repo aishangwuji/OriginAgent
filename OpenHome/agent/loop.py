@@ -64,6 +64,7 @@ from OpenHome.security.capabilities import CapabilitySnapshot
 from OpenHome.security.grants import CapabilityGrantStore
 from OpenHome.session.goal_state import goal_state_ws_blob, runner_wall_llm_timeout_s
 from OpenHome.session.manager import Session, SessionManager
+from OpenHome.session.search_index import SessionSearchIndexService
 from OpenHome.utils.artifacts import generated_image_paths_from_messages
 from OpenHome.utils.document import extract_documents
 from OpenHome.utils.image_generation_intent import image_generation_prompt
@@ -297,6 +298,12 @@ class AgentLoop:
         self.web_config = web_config or WebToolsConfig()
         self.exec_config = exec_config or ExecToolConfig()
         self.tools_config = _tc
+        self.session_search_index = SessionSearchIndexService(
+            workspace,
+            backend=_tc.session_search.backend,
+            semantic_enabled=bool(_tc.session_search.semantic_enabled and _tc.session_search.enabled),
+            rebuild_on_start=_tc.session_search.rebuild_on_start,
+        )
         self.pairing_config = pairing_config
         self._image_generation_provider_configs = dict(image_generation_provider_configs or {})
         if (
@@ -621,6 +628,7 @@ class AgentLoop:
             domain_pack_manager=self.domain_packs,
             background_review_service=self.background_review,
             curator_service=self.curator,
+            session_search_index_service=self.session_search_index,
             subagent_manager=self.subagents,
             file_state_store=self._file_state_store,
             provider_snapshot_loader=self._provider_snapshot_loader,
@@ -1219,6 +1227,7 @@ class AgentLoop:
         """Run the agent loop, dispatching messages as tasks to stay responsive to /stop."""
         self._running = True
         await self._connect_mcp()
+        self._schedule_session_search_refresh(force=self.session_search_index.rebuild_on_start)
         logger.info("Agent loop started")
 
         while self._running:
@@ -1808,6 +1817,8 @@ class AgentLoop:
         ctx.user_persisted_early = self._persist_user_message_early(
             ctx.msg, ctx.session, pending_ask_id
         )
+        if ctx.user_persisted_early:
+            self._schedule_session_search_refresh(sources=["sessions"])
 
         if ctx.on_progress is None:
             ctx.on_progress = await self._build_bus_progress_callback(ctx.msg)
@@ -1876,6 +1887,7 @@ class AgentLoop:
         self._clear_pending_user_turn(ctx.session)
         self._clear_runtime_checkpoint(ctx.session)
         self.sessions.save(ctx.session)
+        self._schedule_session_search_refresh(sources=["sessions", "history"])
         self._schedule_background(
             self.consolidator.maybe_consolidate_by_tokens(
                 ctx.session,
@@ -1885,6 +1897,30 @@ class AgentLoop:
         self._schedule_background_review(ctx)
         self._schedule_curator_review(ctx)
         return "ok"
+
+    def _schedule_session_search_refresh(
+        self,
+        *,
+        sources: list[str] | None = None,
+        force: bool = False,
+    ) -> None:
+        if not getattr(self.session_search_index, "enabled", False):
+            return
+        self._schedule_background(
+            self._refresh_session_search_index(sources=sources, force=force)
+        )
+
+    async def _refresh_session_search_index(
+        self,
+        *,
+        sources: list[str] | None = None,
+        force: bool = False,
+    ) -> None:
+        await asyncio.to_thread(
+            self.session_search_index.refresh_incremental,
+            sources=sources,
+            force=force,
+        )
 
     def _schedule_background_review(self, ctx: TurnContext) -> None:
         """Schedule a controlled learning review for successful foreground turns."""
