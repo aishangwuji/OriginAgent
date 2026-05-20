@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import asyncio
 import json
+import threading
 from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock
 
 import pytest
 
+from OpenHome.agent.action_runtime import ActionExecutionResult
 from OpenHome.agent.domain_packs import DomainPackManager
 from OpenHome.agent.loop import AgentLoop
 from OpenHome.agent.tools.audit import JsonlToolAuditSink
@@ -170,3 +172,50 @@ async def test_tool_audit_off_does_not_disable_action_device_audit(tmp_path: Pat
     assert result["status"] == "success"
     assert not _tool_audit_path(tmp_path).exists()
     assert (tmp_path / "memory" / "audit" / "action_decisions.jsonl").exists()
+
+
+@pytest.mark.asyncio
+async def test_device_tool_submit_runs_off_event_loop_thread(tmp_path: Path) -> None:
+    cfg = _config(tmp_path)
+    cfg.agents.defaults.domain_packs.active = ["smart_home"]
+    cfg.tools.device = DeviceToolsConfig(
+        enabled=True,
+        lighting_enabled=True,
+        mode="dry_run",
+        backend="fake",
+    )
+    loop = AgentLoop.from_config(cfg, bus=MessageBus(), provider=_provider())
+    loop._set_tool_context(
+        "chat",
+        "home",
+        actor_id="alice",
+        trigger="user_initiated",
+        capability_snapshot=CapabilitySnapshot.user_turn(),
+    )
+    tool = loop.tools.get("openhome_device_lighting_set_power")
+    assert tool is not None
+    submit_data: dict[str, Any] = {}
+
+    def submit_typed(action):
+        submit_data["thread_id"] = threading.get_ident()
+        submit_data["requested_by"] = action.requested_by
+        submit_data["trigger"] = action.trigger
+        return ActionExecutionResult(
+            status="dry_run",
+            action_id="action_thread",
+            reason="ok",
+            backend_called=True,
+        )
+
+    tool._executor.submit_typed = submit_typed
+    loop_thread_id = threading.get_ident()
+
+    result = await loop.tools.execute(
+        "openhome_device_lighting_set_power",
+        {"device_id": "lamp", "power": "on"},
+    )
+
+    assert result["status"] == "success"
+    assert submit_data["thread_id"] != loop_thread_id
+    assert submit_data["requested_by"] == "alice"
+    assert submit_data["trigger"] == "user_initiated"

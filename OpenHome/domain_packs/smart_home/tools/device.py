@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from contextvars import ContextVar, Token
 from typing import Any
 
@@ -120,6 +121,20 @@ class _LightingToolBase(Tool):
             "human_message": device_human_message(result.status, result.reason),
         }
 
+    async def _submit_async(
+        self,
+        *,
+        device_id: str,
+        room: str | None,
+        parameters: dict[str, Any],
+    ) -> dict[str, Any]:
+        return await asyncio.to_thread(
+            self._submit,
+            device_id=device_id,
+            room=room,
+            parameters=parameters,
+        )
+
 
 def _tool_status(execution_status: str) -> str:
     if execution_status in {"executed", "dry_run"}:
@@ -152,7 +167,7 @@ class LightingSetPowerTool(_LightingToolBase):
         room: str | None = None,
         **kwargs: Any,
     ) -> dict[str, Any]:
-        return self._submit(
+        return await self._submit_async(
             device_id=device_id,
             room=room,
             parameters={"power": power},
@@ -184,7 +199,7 @@ class LightingSetBrightnessTool(_LightingToolBase):
         room: str | None = None,
         **kwargs: Any,
     ) -> dict[str, Any]:
-        return self._submit(
+        return await self._submit_async(
             device_id=device_id,
             room=room,
             parameters={"brightness": brightness},
@@ -215,7 +230,7 @@ class LightingSetColorTemperatureTool(_LightingToolBase):
         room: str | None = None,
         **kwargs: Any,
     ) -> dict[str, Any]:
-        return self._submit(
+        return await self._submit_async(
             device_id=device_id,
             room=room,
             parameters={"temperature": temperature},
@@ -239,7 +254,7 @@ class RealModeLightingSetPowerTool(LightingSetPowerTool):
         room: str | None = None,
         **kwargs: Any,
     ) -> dict[str, Any]:
-        return self._submit(device_id=device_ref, room=room, parameters={"power": power})
+        return await self._submit_async(device_id=device_ref, room=room, parameters={"power": power})
 
 
 @tool_parameters(
@@ -263,7 +278,11 @@ class RealModeLightingSetBrightnessTool(LightingSetBrightnessTool):
         room: str | None = None,
         **kwargs: Any,
     ) -> dict[str, Any]:
-        return self._submit(device_id=device_ref, room=room, parameters={"brightness": brightness})
+        return await self._submit_async(
+            device_id=device_ref,
+            room=room,
+            parameters={"brightness": brightness},
+        )
 
 
 @tool_parameters(
@@ -286,7 +305,11 @@ class RealModeLightingSetColorTemperatureTool(LightingSetColorTemperatureTool):
         room: str | None = None,
         **kwargs: Any,
     ) -> dict[str, Any]:
-        return self._submit(device_id=device_ref, room=room, parameters={"temperature": temperature})
+        return await self._submit_async(
+            device_id=device_ref,
+            room=room,
+            parameters={"temperature": temperature},
+        )
 
 
 def lighting_tools(
