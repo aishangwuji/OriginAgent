@@ -11,7 +11,8 @@ from pathlib import Path
 
 @dataclass(slots=True)
 class ReadState:
-    mtime: float
+    mtime_ns: int
+    size: int
     offset: int
     limit: int | None
     content_hash: str | None
@@ -38,18 +39,25 @@ class FileStates:
     def __init__(self) -> None:
         self._state: dict[str, ReadState] = {}
 
-    def record_read(self, path: str | Path, offset: int = 1, limit: int | None = None) -> None:
+    def record_read(
+        self,
+        path: str | Path,
+        offset: int = 1,
+        limit: int | None = None,
+        content_hash: str | None = None,
+    ) -> None:
         """Record that a file was read (called after successful read)."""
         p = str(Path(path).resolve())
         try:
-            mtime = os.path.getmtime(p)
+            stat = os.stat(p)
         except OSError:
             return
         self._state[p] = ReadState(
-            mtime=mtime,
+            mtime_ns=stat.st_mtime_ns,
+            size=stat.st_size,
             offset=offset,
             limit=limit,
-            content_hash=_hash_file(p),
+            content_hash=content_hash if content_hash is not None else _hash_file(p),
             can_dedup=True,
         )
 
@@ -57,12 +65,13 @@ class FileStates:
         """Record that a file was written (updates mtime in state)."""
         p = str(Path(path).resolve())
         try:
-            mtime = os.path.getmtime(p)
+            stat = os.stat(p)
         except OSError:
             self._state.pop(p, None)
             return
         self._state[p] = ReadState(
-            mtime=mtime,
+            mtime_ns=stat.st_mtime_ns,
+            size=stat.st_size,
             offset=1,
             limit=None,
             content_hash=_hash_file(p),
@@ -81,12 +90,13 @@ class FileStates:
         if entry is None:
             return "Warning: file has not been read yet. Read it first to verify content before editing."
         try:
-            current_mtime = os.path.getmtime(p)
+            stat = os.stat(p)
         except OSError:
             return None
-        if current_mtime != entry.mtime:
+        if stat.st_mtime_ns != entry.mtime_ns or stat.st_size != entry.size:
             if entry.content_hash and _hash_file(p) == entry.content_hash:
-                entry.mtime = current_mtime
+                entry.mtime_ns = stat.st_mtime_ns
+                entry.size = stat.st_size
                 return None
             return "Warning: file has been modified since last read. Re-read to verify content before editing."
         # mtime unchanged - still check content hash to detect quick modifications
@@ -105,19 +115,25 @@ class FileStates:
         if entry.offset != offset or entry.limit != limit:
             return False
         try:
-            current_mtime = os.path.getmtime(p)
+            stat = os.stat(p)
         except OSError:
             return False
-        current_hash = _hash_file(p)
-        if current_mtime != entry.mtime:
-            if current_hash != entry.content_hash:
-                entry.can_dedup = False
-                return False
-            entry.mtime = current_mtime
+
+        if stat.st_mtime_ns == entry.mtime_ns and stat.st_size == entry.size:
             return True
-        if current_hash != entry.content_hash:
+
+        if stat.st_size != entry.size:
             entry.can_dedup = False
             return False
+
+        current_hash = _hash_file(p)
+        if not entry.content_hash or current_hash != entry.content_hash:
+            entry.can_dedup = False
+            return False
+
+        entry.mtime_ns = stat.st_mtime_ns
+        entry.size = stat.st_size
+        entry.content_hash = current_hash
         return True
 
     def get(self, path: str | Path) -> ReadState | None:
@@ -175,8 +191,13 @@ def reset_file_states(token: Token[FileStates | None]) -> None:
 _default = FileStates()
 
 
-def record_read(path: str | Path, offset: int = 1, limit: int | None = None) -> None:
-    _default.record_read(path, offset=offset, limit=limit)
+def record_read(
+    path: str | Path,
+    offset: int = 1,
+    limit: int | None = None,
+    content_hash: str | None = None,
+) -> None:
+    _default.record_read(path, offset=offset, limit=limit, content_hash=content_hash)
 
 
 def record_write(path: str | Path) -> None:

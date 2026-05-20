@@ -2,6 +2,7 @@
 
 import asyncio
 import difflib
+import hashlib
 import mimetypes
 import os
 import tempfile
@@ -12,7 +13,7 @@ from typing import Any
 from OpenHome.agent.tools.base import Tool, tool_parameters
 from OpenHome.agent.tools.limits import ToolLimits
 from OpenHome.agent.tools.schema import BooleanSchema, IntegerSchema, StringSchema, tool_parameters_schema
-from OpenHome.agent.tools.file_state import FileStates, _hash_file, current_file_states
+from OpenHome.agent.tools.file_state import FileStates, current_file_states
 from OpenHome.utils.helpers import build_image_content_blocks, detect_image_mime
 from OpenHome.config.paths import get_media_dir
 from OpenHome.security.paths import ProtectedPathPolicy
@@ -428,12 +429,15 @@ class ReadFileTool(_FsTool):
             if fp.suffix.lower() in {".docx", ".xlsx", ".pptx"}:
                 return self._read_office_doc(fp)
 
-            raw = fp.read_bytes()
-            if not raw:
+            if stat_size == 0:
                 return f"(Empty file: {path})"
 
-            mime = detect_image_mime(raw) or mimetypes.guess_type(path)[0]
+            with fp.open("rb") as handle:
+                header = handle.read(12)
+
+            mime = detect_image_mime(header) or mimetypes.guess_type(path)[0]
             if mime and mime.startswith("image/"):
+                raw = fp.read_bytes()
                 return build_image_content_blocks(raw, mime, str(fp), f"(Image file: {path})")
 
             # Read dedup: same path + offset + limit + unchanged mtime → stub
@@ -486,7 +490,12 @@ class ReadFileTool(_FsTool):
                 result += f"\n\n(Showing lines {offset}-{end} of {total}. Use offset={end + 1} to continue.)"
             else:
                 result += f"\n\n(End of file — {total} lines total)"
-            self._file_states.record_read(fp, offset=offset, limit=limit)
+            self._file_states.record_read(
+                fp,
+                offset=offset,
+                limit=limit,
+                content_hash=hashlib.sha256(raw).hexdigest(),
+            )
             return result
         except PermissionError as e:
             return f"Error: {e}"

@@ -2,6 +2,8 @@
 
 import os
 import sys
+import hashlib
+from pathlib import Path
 from unittest.mock import patch
 
 import pytest
@@ -59,6 +61,32 @@ class TestReadDedup:
         assert "line 0" not in second
 
     @pytest.mark.asyncio
+    async def test_second_read_does_not_rehash_or_reread_body(self, tool, tmp_path, monkeypatch):
+        f = tmp_path / "data.txt"
+        f.write_text("\n".join(f"line {i}" for i in range(100)), encoding="utf-8")
+        read_bytes_calls = 0
+        original_read_bytes = Path.read_bytes
+
+        def counting_read_bytes(path: Path) -> bytes:
+            nonlocal read_bytes_calls
+            if path == f:
+                read_bytes_calls += 1
+            return original_read_bytes(path)
+
+        def fail_hash(path: str) -> str:
+            raise AssertionError(f"unexpected full-file hash for {path}")
+
+        monkeypatch.setattr(file_state, "_hash_file", fail_hash)
+        monkeypatch.setattr(Path, "read_bytes", counting_read_bytes)
+
+        first = await tool.execute(path=str(f))
+        second = await tool.execute(path=str(f))
+
+        assert "line 0" in first
+        assert "unchanged" in second.lower()
+        assert read_bytes_calls == 1
+
+    @pytest.mark.asyncio
     async def test_read_after_external_modification_returns_full(self, tool, tmp_path):
         f = tmp_path / "data.txt"
         f.write_text("original", encoding="utf-8")
@@ -75,6 +103,15 @@ class TestReadDedup:
         await tool.execute(path=str(f), offset=1, limit=5)
         second = await tool.execute(path=str(f), offset=6, limit=5)
         # Different offset → full read, not stub
+        assert "line 6" in second
+
+    @pytest.mark.asyncio
+    async def test_different_limit_returns_full(self, tool, tmp_path):
+        f = tmp_path / "data.txt"
+        f.write_text("\n".join(f"line {i}" for i in range(1, 21)), encoding="utf-8")
+        await tool.execute(path=str(f), offset=1, limit=5)
+        second = await tool.execute(path=str(f), offset=1, limit=6)
+        assert "unchanged" not in second.lower()
         assert "line 6" in second
 
     @pytest.mark.asyncio
@@ -276,6 +313,75 @@ class TestFileStateHashFallback:
         file_state.record_read(f)
 
         assert file_state.check_read(f) is None
+
+    def test_is_unchanged_uses_fingerprint_without_hash(self, tmp_path, monkeypatch):
+        f = tmp_path / "data.txt"
+        f.write_text("stable", encoding="utf-8")
+        states = file_state.FileStates()
+        states.record_read(f)
+
+        def fail_hash(path: str) -> str:
+            raise AssertionError(f"unexpected full-file hash for {path}")
+
+        monkeypatch.setattr(file_state, "_hash_file", fail_hash)
+
+        assert states.is_unchanged(f) is True
+
+    def test_is_unchanged_hashes_only_when_mtime_changes_with_same_size(self, tmp_path, monkeypatch):
+        f = tmp_path / "data.txt"
+        f.write_text("stable", encoding="utf-8")
+        states = file_state.FileStates()
+        states.record_read(f)
+        stat = f.stat()
+        os.utime(f, ns=(stat.st_atime_ns, stat.st_mtime_ns + 1_000_000_000))
+        calls = 0
+
+        def hash_file(path: str) -> str:
+            nonlocal calls
+            calls += 1
+            return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+
+        monkeypatch.setattr(file_state, "_hash_file", hash_file)
+
+        assert states.is_unchanged(f) is True
+        assert calls == 1
+
+    def test_is_unchanged_rejects_same_size_content_change(self, tmp_path, monkeypatch):
+        f = tmp_path / "data.txt"
+        f.write_text("alpha", encoding="utf-8")
+        states = file_state.FileStates()
+        states.record_read(f)
+        stat = f.stat()
+        f.write_text("omega", encoding="utf-8")
+        os.utime(f, ns=(stat.st_atime_ns, stat.st_mtime_ns + 1_000_000_000))
+        calls = 0
+
+        def hash_file(path: str) -> str:
+            nonlocal calls
+            calls += 1
+            return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+
+        monkeypatch.setattr(file_state, "_hash_file", hash_file)
+
+        assert states.is_unchanged(f) is False
+        assert states.get(f).can_dedup is False
+        assert calls == 1
+
+    @pytest.mark.asyncio
+    async def test_read_after_same_size_change_updates_dedup_state(self, tmp_path):
+        f = tmp_path / "data.txt"
+        f.write_text("alpha", encoding="utf-8")
+        tool = ReadFileTool(workspace=tmp_path)
+        await tool.execute(path=str(f))
+        stat = f.stat()
+        f.write_text("omega", encoding="utf-8")
+        os.utime(f, ns=(stat.st_atime_ns, stat.st_mtime_ns + 1_000_000_000))
+
+        second = await tool.execute(path=str(f))
+        third = await tool.execute(path=str(f))
+
+        assert "omega" in second
+        assert "unchanged" in third.lower()
 
 
 # ---------------------------------------------------------------------------
