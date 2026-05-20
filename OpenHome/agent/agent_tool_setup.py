@@ -13,7 +13,6 @@ from OpenHome.agent.tools.ask import AskUserTool
 from OpenHome.agent.tools.content_read import ContentReadTool
 from OpenHome.agent.tools.context import ToolContext
 from OpenHome.agent.tools.cron import CronTool
-from OpenHome.agent.tools.device import lighting_tools
 from OpenHome.agent.tools.domain_loader import DomainToolLoader
 from OpenHome.agent.tools.filesystem import EditFileTool, ListDirTool, ReadFileTool, WriteFileTool
 from OpenHome.agent.tools.image_generation import ImageGenerationTool
@@ -226,17 +225,6 @@ def register_default_tools(
     registry.register(SpawnTool(manager=subagent_manager))
     if cron_service:
         registry.register(CronTool(cron_service, default_timezone=timezone or "UTC"))
-
-    if device_action_executor is not None:
-        if device_tools_real_mode and device_registry is None:
-            logger.warning("Device tools real mode requires a device registry; not registering tools")
-            return
-        for tool in lighting_tools(
-            device_action_executor,
-            device_registry=device_registry,
-            real_mode=device_tools_real_mode,
-        ):
-            registry.register(tool)
 
     context = build_tool_context(
         config=config,

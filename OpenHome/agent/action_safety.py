@@ -1,16 +1,12 @@
-"""Presence-aware safety gate for action authorization decisions."""
+"""Composable safety gates for action authorization decisions."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-
-from OpenHome.agent.facts import FactRecord, FactStore
-from OpenHome.agent.presence import PresenceStore
+from typing import Protocol, runtime_checkable
 
 VALID_TRIGGERS = {"user_initiated", "scheduled", "system", "subagent"}
 VALID_RISKS = {"low", "medium", "high"}
-USER_TRIGGER = "user_initiated"
-PENDING_RELEVANT_CATEGORIES = {"policy", "safety", "temporary"}
 
 
 @dataclass
@@ -33,166 +29,61 @@ class ActionDecision:
     presence_status: str = "unknown"
 
 
-class ActionSafetyGate:
-    def __init__(self, presence_store: PresenceStore, fact_store: FactStore):
-        self.presence_store = presence_store
-        self.fact_store = fact_store
+@runtime_checkable
+class SafetyGate(Protocol):
+    def evaluate(self, request: ActionRequest) -> ActionDecision:
+        ...
+
+
+class CompositeSafetyGate:
+    def __init__(self, gates: list[SafetyGate] | None = None):
+        self.gates = list(gates or [])
 
     def evaluate(self, request: ActionRequest) -> ActionDecision:
+        final = ActionDecision(decision="allow", reason="safety checks passed")
+        for gate in self.gates:
+            decision = gate.evaluate(request)
+            if decision.decision != "allow":
+                return decision
+            final = decision
+        return final
+
+
+class DefaultSafetyGate:
+    def evaluate(self, request: ActionRequest) -> ActionDecision:
         if request.trigger not in VALID_TRIGGERS:
-            return self._deny("invalid trigger")
+            return ActionDecision(decision="deny", reason="invalid trigger")
         if request.risk not in VALID_RISKS:
-            return self._deny("invalid risk")
+            return ActionDecision(decision="deny", reason="invalid risk")
+        return ActionDecision(decision="allow", reason="safety checks passed")
 
-        occupancy = self.presence_store.resolve_occupancy()
-        presence_status = occupancy.status
 
-        try:
-            facts = self.fact_store.read_all()
-        except Exception:
-            return self._fact_read_failure(request, presence_status)
+class ActionSafetyGate:
+    """Compatibility gate that composes the core default gate with optional domain gates."""
 
-        fact_decision = self._evaluate_facts(request, facts, presence_status)
-        if fact_decision is not None:
-            return fact_decision
-
-        if request.risk == "high" and request.trigger != USER_TRIGGER:
-            return ActionDecision(
-                decision="deny",
-                reason="high-risk non-user action denied",
-                presence_status=presence_status,
-            )
-
-        if request.requires_presence_empty:
-            if presence_status == "occupied":
-                return ActionDecision(
-                    decision="deny",
-                    reason="presence is occupied",
-                    presence_status=presence_status,
-                )
-            if presence_status != "empty":
-                decision = "ask_confirmation" if request.trigger == USER_TRIGGER else "deny"
-                return ActionDecision(
-                    decision=decision,
-                    reason="presence empty is not established",
-                    presence_status=presence_status,
-                )
-
-        if request.risk == "high" and request.trigger == USER_TRIGGER and presence_status == "unknown":
-            return ActionDecision(
-                decision="ask_confirmation",
-                reason="high-risk user action needs confirmation with unknown occupancy",
-                presence_status=presence_status,
-            )
-
-        if (
-            request.risk == "medium"
-            and request.trigger != USER_TRIGGER
-            and presence_status == "unknown"
-        ):
-            return ActionDecision(
-                decision="deny",
-                reason="medium-risk non-user action denied with unknown occupancy",
-                presence_status=presence_status,
-            )
-
-        return ActionDecision(
-            decision="allow",
-            reason="safety checks passed",
-            supporting_facts=self._active_used_facts(request, facts),
-            presence_status=presence_status,
-        )
-
-    def _evaluate_facts(
+    def __init__(
         self,
-        request: ActionRequest,
-        facts: list[FactRecord],
-        presence_status: str,
-    ) -> ActionDecision | None:
-        if request.uses_facts:
-            by_id = {fact.fact_id: fact for fact in facts}
-            supporting: list[str] = []
-            pending_or_missing: list[str] = []
-            for fact_id in request.uses_facts:
-                fact = by_id.get(fact_id)
-                if fact is not None and fact.status == "active":
-                    supporting.append(fact.fact_id)
-                else:
-                    pending_or_missing.append(fact_id)
-            if pending_or_missing:
-                decision = "ask_confirmation" if request.trigger == USER_TRIGGER else "deny"
-                return ActionDecision(
-                    decision=decision,
-                    reason="requested facts are missing or not active",
-                    supporting_facts=supporting,
-                    pending_facts=pending_or_missing,
-                    presence_status=presence_status,
-                )
-            return None
-
-        pending = [
-            fact.fact_id
-            for fact in facts
-            if fact.status == "pending_confirmation"
-            and self._is_relevant_pending_fact(request, fact)
-        ]
-        if not pending:
-            return None
-        decision = "ask_confirmation" if request.trigger == USER_TRIGGER else "deny"
-        return ActionDecision(
-            decision=decision,
-            reason="related facts are pending confirmation",
-            pending_facts=pending,
-            presence_status=presence_status,
-        )
-
-    def _fact_read_failure(
-        self,
-        request: ActionRequest,
-        presence_status: str,
-    ) -> ActionDecision:
-        if (
-            request.risk == "low"
-            and request.trigger == USER_TRIGGER
-            and not request.requires_presence_empty
-            and not request.uses_facts
-        ):
-            return ActionDecision(
-                decision="allow",
-                reason="fact store unavailable; low-risk user action has no fact or presence constraint",
-                presence_status=presence_status,
+        presence_store: object | None = None,
+        fact_store: object | None = None,
+        *,
+        extra_gates: list[SafetyGate] | None = None,
+    ):
+        gates: list[SafetyGate] = [DefaultSafetyGate()]
+        gates.extend(extra_gates or [])
+        if presence_store is not None or fact_store is not None:
+            if presence_store is None or fact_store is None:
+                raise ValueError("presence_store and fact_store must be provided together")
+            from OpenHome.domain_packs.smart_home.runtime.action_safety import (
+                SmartHomeActionSafetyGate,
             )
-        return ActionDecision(
-            decision="deny",
-            reason="fact store unavailable",
-            presence_status=presence_status,
-        )
 
-    @staticmethod
-    def _is_relevant_pending_fact(request: ActionRequest, fact: FactRecord) -> bool:
-        if not _scope_related(request.scope, fact.scope):
-            return False
-        if fact.category in PENDING_RELEVANT_CATEGORIES:
-            return True
-        return request.risk in {"medium", "high"}
+            gates.append(
+                SmartHomeActionSafetyGate(
+                    presence_store=presence_store,
+                    fact_store=fact_store,
+                )
+            )
+        self._composite = CompositeSafetyGate(gates)
 
-    @staticmethod
-    def _active_used_facts(request: ActionRequest, facts: list[FactRecord]) -> list[str]:
-        if not request.uses_facts:
-            return []
-        by_id = {fact.fact_id: fact for fact in facts if fact.status == "active"}
-        return [fact_id for fact_id in request.uses_facts if fact_id in by_id]
-
-    @staticmethod
-    def _deny(reason: str) -> ActionDecision:
-        return ActionDecision(decision="deny", reason=reason)
-
-
-def _scope_related(request_scope: str, fact_scope: str) -> bool:
-    request_scope = (request_scope or "general").strip().lower()
-    fact_scope = (fact_scope or "general").strip().lower()
-    return (
-        request_scope == fact_scope
-        or request_scope.startswith(f"{fact_scope}.")
-        or fact_scope.startswith(f"{request_scope}.")
-    )
+    def evaluate(self, request: ActionRequest) -> ActionDecision:
+        return self._composite.evaluate(request)

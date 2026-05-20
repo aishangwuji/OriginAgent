@@ -1,10 +1,11 @@
 from pathlib import Path
 from unittest.mock import MagicMock
 
+from OpenHome.agent.domain_packs import DomainPackManager
 from OpenHome.agent.action_runtime import ActionExecutionResult
 from OpenHome.agent.loop import AgentLoop
 from OpenHome.bus.queue import MessageBus
-from OpenHome.config.schema import Config, DeviceToolsConfig
+from OpenHome.config.schema import Config, DeviceToolsConfig, DomainPacksConfig
 
 
 class _FakeExecutor:
@@ -42,6 +43,7 @@ def test_from_config_default_does_not_register_device_tools(tmp_path):
 
 def test_from_config_dry_run_registers_exactly_three_lighting_tools(tmp_path):
     cfg = _config(tmp_path)
+    cfg.agents.defaults.domain_packs.active = ["smart_home"]
     cfg.tools.device = DeviceToolsConfig(
         enabled=True,
         lighting_enabled=True,
@@ -75,21 +77,24 @@ def test_active_smart_home_pack_does_not_duplicate_lighting_tools(tmp_path):
         "openhome_device_lighting_set_brightness",
         "openhome_device_lighting_set_color_temperature",
     ]
-    assert loop.domain_packs.domain_tool_runtime_counts() == {"registered": 0, "skipped": 0}
+    assert loop.domain_packs.domain_tool_runtime_counts() == {"registered": 3, "skipped": 0}
 
 
 def test_from_config_explicit_executor_takes_precedence(tmp_path):
     cfg = _config(tmp_path)
-    cfg.tools.device = DeviceToolsConfig(enabled=False)
+    cfg.agents.defaults.domain_packs.active = ["smart_home"]
+    cfg.tools.device = DeviceToolsConfig(enabled=True, lighting_enabled=True, mode="dry_run", backend="fake")
+    executor = _FakeExecutor()
 
     loop = AgentLoop.from_config(
         cfg,
         bus=MessageBus(),
         provider=_provider(),
-        device_action_executor=_FakeExecutor(),
+        device_action_executor=executor,
     )
 
     assert len(_lighting_names(loop)) == 3
+    assert loop.device_action_executor is executor
 
 
 def test_from_config_real_mode_lighting_client_does_not_register_tools(tmp_path):

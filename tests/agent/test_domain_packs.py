@@ -214,7 +214,11 @@ def test_builtin_smart_home_domain_pack_is_available_and_explicitly_activated(
     assert pack.source == "builtin"
     assert pack.status == "available"
     assert pack.active is False
-    assert pack.tools == ()
+    assert [tool.id for tool in pack.tools] == [
+        "openhome_device_lighting_set_power",
+        "openhome_device_lighting_set_brightness",
+        "openhome_device_lighting_set_color_temperature",
+    ]
     assert {skill.virtual_id for skill in pack.skills} == {
         "domain:smart_home/lighting-control",
         "domain:smart_home/safety-confirmation",
@@ -234,7 +238,7 @@ def test_builtin_smart_home_domain_pack_is_available_and_explicitly_activated(
         "domain:smart_home/safety-confirmation",
         "domain:smart_home/automation-design",
     ]
-    assert "Core Device Gateway Tools" in active_manager.build_active_context()
+    assert "openhome_device_lighting_set_power" in active_manager.build_active_context()
 
     disabled_manager = DomainPackManager(
         tmp_path,

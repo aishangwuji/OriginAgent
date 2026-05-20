@@ -15,6 +15,26 @@ skills:
   - safety-confirmation
   - automation-design
 
+tools:
+  - id: openhome_device_lighting_set_power
+    module: tools.device
+    class: LightingSetPowerTool
+    permissions:
+      - device:lighting
+    audit: security
+  - id: openhome_device_lighting_set_brightness
+    module: tools.device
+    class: LightingSetBrightnessTool
+    permissions:
+      - device:lighting
+    audit: security
+  - id: openhome_device_lighting_set_color_temperature
+    module: tools.device
+    class: LightingSetColorTemperatureTool
+    permissions:
+      - device:lighting
+    audit: security
+
 activation:
   # Metadata only in P3. OpenHome does not auto-activate domain packs from
   # triggers yet; activation is still controlled by agents.defaults.domainPacks.

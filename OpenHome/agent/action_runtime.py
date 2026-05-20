@@ -11,7 +11,7 @@ import uuid
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any, Callable, Protocol
 
 from filelock import FileLock
 from loguru import logger
@@ -24,7 +24,6 @@ from OpenHome.agent.confirmation import (
     ConfirmationRequest,
     _sanitize_text,
 )
-from OpenHome.agent.devices import sanitize_device_scope
 from OpenHome.agent.permissions import (
     PermissionDecision,
     PermissionRequest,
@@ -171,12 +170,14 @@ class SafeActionExecutor:
         backend: ActionBackend,
         permission_resolver: PermissionResolver | None = None,
         audit_logger: AuditLogger | None = None,
+        scope_redactor: Callable[[str | None], str | None] | None = None,
     ):
         self.gate = gate
         self.confirmation_manager = confirmation_manager
         self.backend = backend
         self.permission_resolver = permission_resolver or PermissionResolver()
         self.audit_logger = audit_logger
+        self._scope_redactor = scope_redactor or _default_scope_redactor
         self.records: list[ActionExecutionRecord] = []
         workspace = getattr(confirmation_manager, "workspace", None)
         self._successful_key_store = (
@@ -693,7 +694,7 @@ class SafeActionExecutor:
             risk=intent.risk,
             trigger=intent.trigger,
             permission=permission,
-            device_domain=infer_device_domain(intent.scope, intent.action),
+            attributes=_permission_attributes(intent),
         )
         decision = self.permission_resolver.evaluate(request)
         self._audit_permission_decision(
@@ -759,7 +760,7 @@ class SafeActionExecutor:
                 confirmation_id=result.confirmation_id,
                 actor_id=intent.requested_by,
                 action=intent.action,
-                scope=_audit_scope(intent, result),
+                scope=_audit_scope(intent, result, self._scope_redactor),
                 risk=intent.risk,
                 trigger=intent.trigger,
                 decision=result.status,
@@ -787,11 +788,11 @@ class SafeActionExecutor:
                 confirmation_id=confirmation_id,
                 actor_id=request.actor_id,
                 action=request.action,
-                scope=_audit_permission_scope(request),
+                scope=_audit_permission_scope(request, self._scope_redactor),
                 risk=request.risk,
                 trigger=request.trigger,
                 permission=request.permission,
-                device_domain=request.device_domain,
+                attributes=request.attributes,
                 decision=decision.decision,
                 reason=decision.reason,
                 actor_role=decision.actor_role,
@@ -909,22 +910,55 @@ def _format_datetime(value: datetime) -> str:
     return _normalize_datetime(value).isoformat()
 
 
-def _audit_scope(intent: ActionIntent, result: ActionExecutionResult) -> str:
+def _audit_scope(
+    intent: ActionIntent,
+    result: ActionExecutionResult,
+    scope_redactor: Callable[[str | None], str | None] = None,
+) -> str:
+    if scope_redactor is None:
+        scope_redactor = _default_scope_redactor
     if (
-        result.backend_result.get("backend") == "real_lighting"
-        and result.backend_result.get("device_id_present") in {"True", True}
+        result.backend_result.get("device_id_present") in {"True", True}
+        or intent.payload.get("device_id")
     ):
-        return _redact_scope_device_id(intent.scope)
-    if intent.payload.get("domain") == "lighting" and intent.payload.get("device_id"):
-        return _redact_scope_device_id(intent.scope)
+        return scope_redactor(intent.scope) or "unknown"
     return intent.scope
 
 
-def _audit_permission_scope(request: PermissionRequest) -> str:
-    if request.device_domain == "lighting":
-        return _redact_scope_device_id(request.scope)
+def _audit_permission_scope(
+    request: PermissionRequest,
+    scope_redactor: Callable[[str | None], str | None] = None,
+) -> str:
+    if scope_redactor is None:
+        scope_redactor = _default_scope_redactor
+    if request.attribute("device_domain") not in {None, "", "general"}:
+        return scope_redactor(request.scope) or "unknown"
     return request.scope
 
 
-def _redact_scope_device_id(scope: str) -> str:
-    return sanitize_device_scope(scope) or "unknown"
+def _permission_attributes(intent: ActionIntent) -> dict[str, str]:
+    attributes: dict[str, str] = {}
+    domain = intent.payload.get("domain")
+    if isinstance(domain, str) and domain.strip():
+        normalized_domain = domain.strip().lower()
+    else:
+        normalized_domain = infer_device_domain(intent.scope, intent.action)
+    if normalized_domain and normalized_domain != "general":
+        attributes["device_domain"] = normalized_domain
+    if intent.payload.get("device_id"):
+        attributes["device_id_present"] = "true"
+    return attributes
+
+
+def _default_scope_redactor(scope: str | None) -> str | None:
+    if scope is None:
+        return None
+    normalized = str(scope).strip().lower()
+    if not normalized:
+        return None
+    normalized = normalized.replace(" ", ".")
+    parts = [part for part in normalized.split(".") if part]
+    if parts and parts[0] == "home" and len(parts) >= 3:
+        return ".".join([*parts[:-1], "<device>"])
+    normalized = ".".join(parts)
+    return normalized or None

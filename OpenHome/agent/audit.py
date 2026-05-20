@@ -20,7 +20,6 @@ from typing import Any, Callable
 from filelock import FileLock
 
 from OpenHome.agent.presence_signals import FORBIDDEN_METADATA_KEYS
-from OpenHome.agent.devices import sanitize_device_scope
 from OpenHome.utils.helpers import ensure_dir, truncate_text
 
 AUDIT_REASON_MAX_CHARS = 2000
@@ -78,6 +77,7 @@ _CHINA_ID_RE = re.compile(
     r"(?:0[1-9]|[12]\d|3[01])\d{3}[\dXx](?!\d)"
 )
 _LONG_NUMBER_RE = re.compile(r"(?<!\d)\d{16,}(?!\d)")
+ScopeRedactor = Callable[[str | None], str | None]
 
 
 @dataclass
@@ -106,7 +106,7 @@ class AuditEvent:
         self.actor_id = _sanitize_optional_string(self.actor_id)
         self.action_id = _sanitize_optional_string(self.action_id)
         self.confirmation_id = _sanitize_optional_string(self.confirmation_id)
-        self.scope = sanitize_device_scope(_sanitize_optional_string(self.scope))
+        self.scope = _sanitize_scope(_sanitize_optional_string(self.scope))
         self.action = _sanitize_optional_string(self.action)
         self.risk = _sanitize_optional_string(self.risk)
         self.trigger = _sanitize_optional_string(self.trigger)
@@ -145,6 +145,7 @@ class AuditLogger:
         *,
         lock_factory: Callable[[], FileLock] | None = None,
         redactor: Callable[[str], str] | None = None,
+        scope_redactor: ScopeRedactor | None = None,
     ):
         self.workspace = Path(workspace)
         self.memory_dir = ensure_dir(self.workspace / "memory")
@@ -152,6 +153,7 @@ class AuditLogger:
         self._lock_file = self.memory_dir / ".lock"
         self._lock_factory = lock_factory
         self._redactor = redactor
+        self._scope_redactor = scope_redactor or _default_scope_redactor
         self._last_hash_by_file: dict[str, str | None] = {}
 
     def log_action_decision(
@@ -177,7 +179,7 @@ class AuditLogger:
                 actor_id=actor_id,
                 action_id=action_id,
                 confirmation_id=confirmation_id,
-                scope=scope,
+                scope=self._scope_redactor(scope),
                 action=action,
                 risk=risk,
                 trigger=trigger,
@@ -210,7 +212,7 @@ class AuditLogger:
                 actor_id=actor_id,
                 action_id=action_id,
                 confirmation_id=confirmation_id,
-                scope=scope,
+                scope=self._scope_redactor(scope),
                 action=action,
                 risk=risk,
                 trigger=trigger,
@@ -230,7 +232,8 @@ class AuditLogger:
         risk: str,
         trigger: str,
         permission: str,
-        device_domain: str,
+        device_domain: str | None = None,
+        attributes: dict[str, Any] | None = None,
         decision: str,
         reason: str,
         actor_role: str,
@@ -240,10 +243,16 @@ class AuditLogger:
     ) -> AuditEvent:
         merged_metadata = {
             "permission": permission,
-            "device_domain": device_domain,
             "actor_role": actor_role,
             **(metadata or {}),
         }
+        if device_domain is not None:
+            merged_metadata["device_domain"] = device_domain
+        for key, value in (attributes or {}).items():
+            normalized_key = _sanitize_optional_string(key)
+            if normalized_key is None or value is None:
+                continue
+            merged_metadata[normalized_key] = str(value)
         return self._log(
             AuditEvent(
                 event_id=_new_event_id(),
@@ -252,7 +261,7 @@ class AuditLogger:
                 actor_id=actor_id,
                 action_id=action_id,
                 confirmation_id=confirmation_id,
-                scope=scope,
+                scope=self._scope_redactor(scope),
                 action=action,
                 risk=risk,
                 trigger=trigger,
@@ -436,6 +445,27 @@ def _sanitize_text(
     if redactor is not None:
         cleaned = redactor(cleaned)
     return truncate_text(cleaned, AUDIT_REASON_MAX_CHARS)[:AUDIT_REASON_MAX_CHARS]
+
+
+def _sanitize_scope(scope: str | None) -> str | None:
+    if scope is None:
+        return None
+    normalized = str(scope).strip().lower()
+    if not normalized:
+        return None
+    normalized = re.sub(r"\s+", ".", normalized)
+    normalized = re.sub(r"\.+", ".", normalized).strip(".")
+    return normalized or None
+
+
+def _default_scope_redactor(scope: str | None) -> str | None:
+    normalized = _sanitize_scope(scope)
+    if normalized is None:
+        return None
+    parts = [part for part in normalized.split(".") if part]
+    if parts and parts[0] == "home" and len(parts) >= 3:
+        return ".".join([*parts[:-1], "<device>"])
+    return normalized
 
 
 def _stringify_value(value: Any) -> str:

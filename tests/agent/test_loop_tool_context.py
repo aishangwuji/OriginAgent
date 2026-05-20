@@ -3,9 +3,11 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from OpenHome.agent.domain_packs import DomainPackManager
 from OpenHome.agent.loop import AgentLoop
 from OpenHome.agent.action_runtime import ActionExecutionResult
 from OpenHome.bus.queue import MessageBus
+from OpenHome.config.schema import DeviceToolsConfig, DomainPacksConfig, ToolsConfig
 from OpenHome.providers.base import LLMResponse, ToolCallRequest
 
 
@@ -78,6 +80,18 @@ def _provider():
     return provider
 
 
+def _smart_home_kwargs(tmp_path: Path) -> dict:
+    return {
+        "domain_pack_manager": DomainPackManager(
+            tmp_path,
+            config=DomainPacksConfig(active=["smart_home"]),
+        ),
+        "tools_config": ToolsConfig(
+            device=DeviceToolsConfig(enabled=True, lighting_enabled=True, mode="dry_run", backend="fake")
+        ),
+    }
+
+
 def test_loop_without_device_executor_does_not_register_lighting_tools(tmp_path: Path) -> None:
     loop = AgentLoop(
         bus=MessageBus(),
@@ -96,6 +110,7 @@ def test_loop_with_device_executor_registers_exactly_three_lighting_tools(tmp_pa
         workspace=tmp_path,
         model="test-model",
         device_action_executor=_FakeDeviceExecutor(),
+        **_smart_home_kwargs(tmp_path),
     )
 
     lighting_names = [
@@ -117,6 +132,7 @@ async def test_loop_set_tool_context_injects_device_actor_and_trigger(tmp_path: 
         workspace=tmp_path,
         model="test-model",
         device_action_executor=executor,
+        **_smart_home_kwargs(tmp_path),
     )
     loop._set_tool_context(
         "cron",
@@ -162,6 +178,7 @@ async def test_loop_hook_refresh_preserves_explicit_device_actor_and_trigger(tmp
         workspace=tmp_path,
         model="test-model",
         device_action_executor=executor,
+        **_smart_home_kwargs(tmp_path),
     )
 
     await loop._run_agent_loop(

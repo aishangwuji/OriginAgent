@@ -24,7 +24,6 @@ _ALLOWED_TOOL_PERMISSIONS = frozenset(
         "send_cross_target",
         "create_cron",
         "spawn",
-        "device:lighting",
         "mcp:read",
     }
 )
@@ -492,13 +491,10 @@ class DomainPackManager:
         module_path = _domain_tool_module_path(pack_dir, module)
 
         reason = ""
-        normalized_prefix = pack_id.replace("-", "_") + "_"
         if not tool_id:
             reason = "missing required field: id"
         elif not _TOOL_ID_RE.fullmatch(tool_id):
             reason = "tool id must match ^[a-z0-9_]{1,64}$"
-        elif not tool_id.startswith(normalized_prefix):
-            reason = f"tool id must start with {normalized_prefix}"
         elif not module:
             reason = "missing required field: module"
         elif not _valid_domain_tool_module(module):
@@ -511,9 +507,9 @@ class DomainPackManager:
             reason = "class must be a valid Python identifier"
         elif not permissions_present:
             reason = "missing permissions"
-        elif any(permission not in _ALLOWED_TOOL_PERMISSIONS for permission in permissions):
+        elif any(not _is_allowed_tool_permission(permission) for permission in permissions):
             reason = "unsupported permission(s): " + ", ".join(
-                permission for permission in permissions if permission not in _ALLOWED_TOOL_PERMISSIONS
+                permission for permission in permissions if not _is_allowed_tool_permission(permission)
             )
         elif audit not in {"minimal", "security"}:
             reason = "audit must be minimal or security"
@@ -592,3 +588,9 @@ def _domain_tool_module_path(pack_dir: Path, module: str) -> Path | None:
     except ValueError:
         return None
     return candidate
+
+
+def _is_allowed_tool_permission(permission: str) -> bool:
+    if permission in _ALLOWED_TOOL_PERMISSIONS:
+        return True
+    return bool(re.fullmatch(r"device:[a-z0-9_-]+", permission))

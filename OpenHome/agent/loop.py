@@ -440,9 +440,20 @@ class AgentLoop:
             "preset_snapshot_loader",
             preset_helpers.make_preset_snapshot_loader(config, provider_snapshot_loader),
         )
+        domain_pack_manager = extra.get("domain_pack_manager") or DomainPackManager(
+            config.workspace_path,
+            config=defaults.domain_packs,
+        )
+        extra["domain_pack_manager"] = domain_pack_manager
         explicit_device_executor = extra.pop("device_action_executor", None)
         device_action_executor = explicit_device_executor
-        if device_action_executor is None:
+        smart_home_pack = domain_pack_manager.get_pack("smart_home")
+        if (
+            device_action_executor is None
+            and smart_home_pack is not None
+            and smart_home_pack.active
+            and config.tools.device.enabled
+        ):
             device_action_executor = build_device_action_executor(
                 workspace=config.workspace_path,
                 config=config.tools.device,

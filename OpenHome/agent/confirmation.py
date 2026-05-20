@@ -10,7 +10,7 @@ from contextlib import suppress
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Protocol
 
 from filelock import FileLock
 from loguru import logger
@@ -188,6 +188,49 @@ class ConfirmationResult:
         self.reason = _sanitize_text(self.reason, REASON_MAX_CHARS)
 
 
+class ConfirmationPromptBuilder(Protocol):
+    def build(
+        self,
+        request: ActionRequest,
+        decision: ActionDecision,
+        *,
+        kind: str,
+    ) -> str:
+        ...
+
+
+class DefaultConfirmationPromptBuilder:
+    def build(
+        self,
+        request: ActionRequest,
+        decision: ActionDecision,
+        *,
+        kind: str,
+    ) -> str:
+        action_text = _human_action(request)
+        if kind == "notify_only":
+            return _sanitize_text(f"I will notify you about {action_text}.", PROMPT_MAX_CHARS)
+        if request.requires_presence_empty and decision.presence_status != "empty":
+            return _sanitize_text(
+                f"This action requires confirming the space is empty, but that is not established. Continue with {action_text} just this once?",
+                PROMPT_MAX_CHARS,
+            )
+        if decision.presence_status == "unknown":
+            return _sanitize_text(
+                f"Occupancy is unknown, so {action_text} will not run automatically. Continue now?",
+                PROMPT_MAX_CHARS,
+            )
+        if "fact" in decision.reason.casefold() or decision.pending_facts:
+            return _sanitize_text(
+                f"{action_text} depends on an unconfirmed fact. Continue just this once or cancel?",
+                PROMPT_MAX_CHARS,
+            )
+        return _sanitize_text(
+            f"Continue with {action_text} just this once?",
+            PROMPT_MAX_CHARS,
+        )
+
+
 class PendingConfirmationStore:
     def __init__(
         self,
@@ -331,10 +374,12 @@ class ConfirmationManager:
         *,
         store: PendingConfirmationStore | None = None,
         audit_logger: AuditLogger | None = None,
+        prompt_builder: ConfirmationPromptBuilder | None = None,
     ):
         self.workspace = workspace
         self.store = store or PendingConfirmationStore(workspace)
         self.audit_logger = audit_logger
+        self.prompt_builder = prompt_builder or DefaultConfirmationPromptBuilder()
 
     def create_from_action_decision(
         self,
@@ -363,7 +408,7 @@ class ConfirmationManager:
             confirmation_id=f"confirmation_{uuid.uuid4().hex[:12]}",
             kind=kind,
             status=status,
-            prompt=_build_prompt(request, decision, kind=kind),
+            prompt=self.prompt_builder.build(request, decision, kind=kind),
             action=request.action,
             scope=request.scope,
             trigger=request.trigger,
@@ -721,25 +766,7 @@ def _build_prompt(
     *,
     kind: str,
 ) -> str:
-    action_text = _human_action(request)
-    if kind == "notify_only":
-        return _sanitize_text(f"我会通知你：{action_text}。", PROMPT_MAX_CHARS)
-    if request.requires_presence_empty and decision.presence_status != "empty":
-        return _sanitize_text(
-            f"这个动作需要确认家中无人，但我现在无法确认。是否仅本次继续{action_text}？",
-            PROMPT_MAX_CHARS,
-        )
-    if decision.presence_status == "unknown":
-        return _sanitize_text(
-            f"我不确定家里是否还有人，因此不会自动执行{action_text}。你现在要继续吗？",
-            PROMPT_MAX_CHARS,
-        )
-    if "fact" in decision.reason.casefold() or decision.pending_facts:
-        return _sanitize_text(
-            "这条动作依赖一个尚未确认的家庭规则。要仅本次继续，还是取消？",
-            PROMPT_MAX_CHARS,
-        )
-    return _sanitize_text(f"是否仅本次继续{action_text}？", PROMPT_MAX_CHARS)
+    return DefaultConfirmationPromptBuilder().build(request, decision, kind=kind)
 
 
 def _human_action(request: ActionRequest) -> str:

@@ -3,6 +3,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from OpenHome.agent.domain_packs import DomainPackManager
 from OpenHome.agent.action_runtime import ActionExecutionResult
 from OpenHome.agent.identity import ActorResolver, RuntimeContext
 from OpenHome.agent.loop import AgentLoop
@@ -12,6 +13,7 @@ from OpenHome.agent.tools.registry import _safe_hash
 from OpenHome.agent.tools.schema import StringSchema, tool_parameters_schema
 from OpenHome.bus.events import InboundMessage
 from OpenHome.bus.queue import MessageBus
+from OpenHome.config.schema import DomainPacksConfig, ToolsConfig, DeviceToolsConfig
 from OpenHome.security.capabilities import CapabilitySnapshot
 
 
@@ -99,6 +101,15 @@ def _provider():
 
 
 def _loop(tmp_path: Path, *, resolver: ActorResolver | None = None, executor=None) -> AgentLoop:
+    kwargs = {}
+    if executor is not None:
+        kwargs["domain_pack_manager"] = DomainPackManager(
+            tmp_path,
+            config=DomainPacksConfig(active=["smart_home"]),
+        )
+        kwargs["tools_config"] = ToolsConfig(
+            device=DeviceToolsConfig(enabled=True, lighting_enabled=True, mode="dry_run", backend="fake")
+        )
     return AgentLoop(
         bus=MessageBus(),
         provider=_provider(),
@@ -106,6 +117,7 @@ def _loop(tmp_path: Path, *, resolver: ActorResolver | None = None, executor=Non
         model="test-model",
         actor_resolver=resolver,
         device_action_executor=executor,
+        **kwargs,
     )
 
 

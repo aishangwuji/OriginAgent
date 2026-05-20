@@ -7,10 +7,11 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from OpenHome.agent.domain_packs import DomainPackManager
 from OpenHome.agent.loop import AgentLoop
 from OpenHome.agent.tools.base import Tool
 from OpenHome.bus.queue import MessageBus
-from OpenHome.config.schema import Config, DeviceToolsConfig, ToolAuditConfig
+from OpenHome.config.schema import Config, DeviceToolsConfig, DomainPacksConfig, ToolAuditConfig
 from OpenHome.security.capabilities import CapabilitySnapshot
 
 
@@ -113,6 +114,7 @@ async def test_tool_audit_security_writes_full_summary(tmp_path: Path) -> None:
 @pytest.mark.asyncio
 async def test_tool_audit_off_does_not_disable_action_device_audit(tmp_path: Path) -> None:
     cfg = _config(tmp_path)
+    cfg.agents.defaults.domain_packs.active = ["smart_home"]
     cfg.tools.audit = ToolAuditConfig(mode="off")
     cfg.tools.device = DeviceToolsConfig(
         enabled=True,

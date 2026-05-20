@@ -91,10 +91,11 @@ def set_tool_context(
         tools.set_audit_context(actor_id=actor_id, session_key=effective_key)
     for name in context_tool_names:
         if tool := tools.get(name):
+            permissions = tuple(getattr(tool, "_domain_tool_permissions", ()) or ())
             if hasattr(tool, "set_capability_snapshot"):
                 tool.set_capability_snapshot(capability_snapshot)
             if hasattr(tool, "set_context"):
-                if name.startswith("openhome_device_lighting_"):
+                if any(permission.startswith("device:") for permission in permissions):
                     if actor_id is not None and trigger is not None:
                         tool.set_context(actor_id, trigger)
                 elif name == "spawn":

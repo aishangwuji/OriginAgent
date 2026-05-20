@@ -341,7 +341,7 @@ class ToolRegistry:
             )
         if name.startswith("openhome_device_"):
             allowed = snapshot.allowed_device_domains
-            if "lighting" not in allowed:
+            if not allowed:
                 raise PolicyDeniedError(
                     "Device tools are not allowed by the current capability snapshot",
                     code="capability_denied",
@@ -490,15 +490,16 @@ def _assert_domain_tool_capability(tool: Tool, snapshot: CapabilitySnapshot) -> 
                     policy_rule=policy_rule,
                 )
             continue
-        if permission == "device:lighting":
-            if "lighting" not in snapshot.allowed_device_domains:
+        if permission.startswith("device:"):
+            domain = permission.split(":", 1)[1]
+            if domain not in snapshot.allowed_device_domains:
                 raise PolicyDeniedError(
                     "Tool "
                     f"'{name}' is not allowed by the current capability snapshot "
-                    "(capability_domain_device_lighting_denied)",
+                    f"(capability_domain_device_{domain}_denied)",
                     code="capability_denied",
                     boundary="capability",
-                    policy_rule="capability_domain_device_lighting_denied",
+                    policy_rule=f"capability_domain_device_{domain}_denied",
                 )
             continue
         if permission == "mcp:read":

@@ -22,46 +22,95 @@ from typing import Any, Callable
 from filelock import FileLock
 from loguru import logger
 
+from OpenHome.agent.permissions import infer_device_domain
 from OpenHome.utils.helpers import ensure_dir
 
 
-CATEGORY_ORDER = (
-    "preference",
-    "routine",
-    "household",
-    "device",
-    "policy",
-    "safety",
-    "temporary",
-    "note",
+@dataclass(frozen=True)
+class FactStoreConfig:
+    category_order: tuple[str, ...]
+    legacy_categories: tuple[str, ...] = ()
+    valid_owners: tuple[str, ...] = ("user", "assistant", "system", "unknown")
+    high_risk_categories: tuple[str, ...] = ("policy", "safety")
+    conflict_categories: tuple[str, ...] = ("preference", "routine", "policy", "safety", "temporary")
+    high_risk_keywords: tuple[str, ...] = ()
+    temporary_language: tuple[str, ...] = ()
+    uncertain_language: tuple[str, ...] = ()
+
+
+DEFAULT_FACT_STORE_CONFIG = FactStoreConfig(
+    category_order=(
+        "preference",
+        "routine",
+        "device",
+        "policy",
+        "safety",
+        "temporary",
+        "note",
+    ),
+    legacy_categories=("household",),
+    valid_owners=("user", "assistant", "system", "unknown", "household"),
+    high_risk_keywords=(
+        "security",
+        "camera",
+        "gas",
+        "medication",
+        "payment",
+        "password",
+        "key",
+        "permission",
+        "token",
+    ),
+    temporary_language=(
+        "today",
+        "tomorrow",
+        "this week",
+        "temporary",
+        "for now",
+        "just this time",
+        "今天",
+        "明天",
+        "这周",
+        "本周",
+        "临时",
+        "暂时",
+        "先",
+        "这次",
+    ),
+    uncertain_language=(
+        "maybe",
+        "usually",
+        "sometimes",
+        "probably",
+        "around",
+        "roughly",
+        "可能",
+        "一般",
+        "有时",
+        "大概",
+        "差不多",
+        "左右",
+        "偶尔",
+    ),
 )
+
+CATEGORY_ORDER = DEFAULT_FACT_STORE_CONFIG.category_order + DEFAULT_FACT_STORE_CONFIG.legacy_categories
 VALID_CATEGORIES = set(CATEGORY_ORDER)
-VALID_OWNERS = {"user", "assistant", "system", "household", "unknown"}
+VALID_OWNERS = set(DEFAULT_FACT_STORE_CONFIG.valid_owners)
 VALID_STATUSES = {
     "active",
     "deprecated",
     "contradicted",
     "pending_confirmation",
 }
-HIGH_RISK_CATEGORIES = {"policy", "safety"}
-CONFLICT_CATEGORIES = {"preference", "routine", "policy", "safety", "temporary"}
+HIGH_RISK_CATEGORIES = set(DEFAULT_FACT_STORE_CONFIG.high_risk_categories)
+CONFLICT_CATEGORIES = set(DEFAULT_FACT_STORE_CONFIG.conflict_categories)
 MAX_AUTO_ACTIVE_PROPOSALS = 5
 MAX_DEPRECATIONS_PER_BATCH = 3
-HIGH_RISK_KEYWORDS = (
-    "door lock", "unlock", "lock", "front door", "security", "alarm",
-    "camera", "gas", "stove", "child", "baby", "elderly", "medication",
-    "payment", "password", "key", "permission",
-    "门锁", "开门", "解锁", "安防", "报警", "摄像头", "燃气", "煤气",
-    "灶", "儿童", "孩子", "婴儿", "老人", "药", "支付", "密码", "权限",
-)
-TEMPORARY_LANGUAGE = (
-    "today", "tomorrow", "this week", "temporary", "for now", "just this time",
-    "今天", "明天", "这周", "本周", "临时", "暂时", "先", "这次",
-)
-UNCERTAIN_LANGUAGE = (
-    "maybe", "usually", "sometimes", "probably", "around", "roughly",
-    "可能", "一般", "有时", "大概", "差不多", "左右", "偶尔",
-)
+HIGH_RISK_KEYWORDS = DEFAULT_FACT_STORE_CONFIG.high_risk_keywords
+TEMPORARY_LANGUAGE = DEFAULT_FACT_STORE_CONFIG.temporary_language
+UNCERTAIN_LANGUAGE = DEFAULT_FACT_STORE_CONFIG.uncertain_language
+HIGH_RISK_DEVICE_DOMAINS = {"lock", "security", "camera", "gas", "presence"}
 
 
 @dataclass
@@ -345,7 +394,11 @@ def validate_fact_proposal(
         proposal.scope,
         proposal.reason,
     ])
-    if category in HIGH_RISK_CATEGORIES or _contains_any(combined_text, HIGH_RISK_KEYWORDS):
+    if (
+        category in HIGH_RISK_CATEGORIES
+        or _contains_any(combined_text, HIGH_RISK_KEYWORDS)
+        or _requires_high_risk_confirmation(scope=scope, content=proposal.content)
+    ):
         issues.append(_issue(
             "high_risk_memory",
             "pending",
@@ -511,6 +564,7 @@ class FactStore:
         facts_file: Path | None = None,
         lock_factory: Callable[[], FileLock] | None = None,
         redactor: Callable[[str], str] | None = None,
+        config: FactStoreConfig | None = None,
     ):
         self.workspace = workspace
         self.memory_dir = ensure_dir(workspace / "memory")
@@ -518,6 +572,7 @@ class FactStore:
         self._lock_file = self.memory_dir / ".lock"
         self._lock_factory = lock_factory
         self._redactor = redactor or _default_redactor
+        self.config = config or DEFAULT_FACT_STORE_CONFIG
 
     def _locked(self) -> FileLock:
         if self._lock_factory is not None:
@@ -692,6 +747,7 @@ class FactStore:
             category=category,
             status=status,
             requires_confirmation=requires_confirmation,
+            config=self.config,
         )
         redacted_excerpt = self._redactor(source_excerpt.strip()) if source_excerpt else ""
         now = datetime.now().isoformat()
@@ -964,6 +1020,10 @@ def _contains_any(text: str, needles: tuple[str, ...]) -> bool:
     return any(needle.casefold() in lower for needle in needles)
 
 
+def _requires_high_risk_confirmation(*, scope: str, content: str) -> bool:
+    return infer_device_domain(scope, content) in HIGH_RISK_DEVICE_DOMAINS
+
+
 def _issue(code: str, severity: str, message: str) -> ValidationIssue:
     return ValidationIssue(code=code, severity=severity, message=message)
 
@@ -1027,11 +1087,12 @@ def _resolve_status_and_confirmation(
     category: str,
     status: str | None,
     requires_confirmation: bool | None,
+    config: FactStoreConfig = DEFAULT_FACT_STORE_CONFIG,
 ) -> tuple[str, bool]:
     if requires_confirmation is not None and not isinstance(requires_confirmation, bool):
         raise ValueError("requires_confirmation must be bool")
     requested_status = _normalize_status(status) if status is not None else None
-    if category in HIGH_RISK_CATEGORIES:
+    if category in set(config.high_risk_categories):
         if requires_confirmation is False and requested_status == "active":
             return "active", False
         if requested_status in {"deprecated", "contradicted"}:

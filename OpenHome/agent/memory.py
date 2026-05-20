@@ -33,7 +33,6 @@ from OpenHome.agent.facts import (
     validate_fact_proposal,
 )
 from OpenHome.agent.auxiliary_llm import call_llm
-from OpenHome.agent.presence import PresenceStore
 from OpenHome.agent.runner import AgentRunner, AgentRunSpec
 from OpenHome.agent.tools.registry import ToolRegistry
 from OpenHome.session.manager import Session
@@ -50,6 +49,7 @@ from OpenHome.utils.prompt_templates import render_template
 
 if TYPE_CHECKING:
     from OpenHome.agent.auxiliary_llm import AuxiliaryLLMRouter
+    from OpenHome.domain_packs.smart_home.runtime.presence import PresenceStore as SmartHomePresenceStore
     from OpenHome.providers.base import LLMProvider
     from OpenHome.session.manager import SessionManager
 
@@ -130,11 +130,7 @@ class MemoryStore:
             lock_factory=self._locked,
             redactor=redact_memory_text,
         )
-        self.presence_store = PresenceStore(
-            workspace=self.workspace,
-            presence_file=self.presence_file,
-            lock_factory=self._locked,
-        )
+        self._presence_store: SmartHomePresenceStore | None = None
         self._git = GitStore(workspace, tracked_files=[
             "SOUL.md", "USER.md", "memory/MEMORY.md",
             "memory/facts.jsonl", "memory/.dream_cursor",
@@ -144,6 +140,18 @@ class MemoryStore:
     @property
     def git(self) -> GitStore:
         return self._git
+
+    @property
+    def presence_store(self) -> "SmartHomePresenceStore":
+        if self._presence_store is None:
+            from OpenHome.domain_packs.smart_home.runtime.presence import PresenceStore
+
+            self._presence_store = PresenceStore(
+                workspace=self.workspace,
+                presence_file=self.presence_file,
+                lock_factory=self._locked,
+            )
+        return self._presence_store
 
     # -- generic helpers -----------------------------------------------------
 

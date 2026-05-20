@@ -28,6 +28,7 @@ from OpenHome.agent.facts import (
     FactRecord,
 )
 from OpenHome.agent.memory import MemoryStore, redact_memory_text
+from OpenHome.agent.permissions import infer_device_domain
 from OpenHome.agent.skill_artifacts import write_skill_artifact
 from OpenHome.agent.workflow_artifacts import write_workflow_artifact
 from OpenHome.providers.base import LLMProvider
@@ -46,6 +47,7 @@ _MESSAGE_MAX_CHARS = 1600
 _REVIEW_REASON_MAX_CHARS = 1000
 _TERMINAL_REVIEW_STATUSES = {"applied", "rejected", "deferred", "failed"}
 _APPLICABLE_PROPOSAL_TYPES = {"memory", "fact", "skill", "workflow"}
+_HIGH_RISK_DEVICE_DOMAINS = {"lock", "security", "camera", "gas", "presence"}
 
 
 @dataclass(frozen=True)
@@ -921,6 +923,7 @@ def _pending_confirmation_required(*, category: str, scope: str, content: str, e
     return (
         category in HIGH_RISK_CATEGORIES
         or _contains_any(combined, HIGH_RISK_KEYWORDS)
+        or infer_device_domain(scope, combined) in _HIGH_RISK_DEVICE_DOMAINS
         or _contains_any(combined, TEMPORARY_LANGUAGE)
         or _contains_any(combined, UNCERTAIN_LANGUAGE)
     )

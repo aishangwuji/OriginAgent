@@ -6,8 +6,8 @@ OpenHome when smart home capabilities are active.
 ## Can
 
 - Inspect configured device state when a device backend exposes reliable state.
-- Control authorized lighting through the Core device gateway when those tools
-  are registered.
+- Control authorized lighting through the smart_home domain pack tools when the
+  pack is active and device tools are enabled.
 - Help design scenes, routines, and automation plans before they are applied.
 - Explain pending confirmations, denied actions, dry-run outcomes, and backend
   failures in plain language.
@@ -22,17 +22,19 @@ OpenHome when smart home capabilities are active.
   name.
 - Execute new automation behavior that is only described as a plan.
 
-## Core Device Gateway Tools
+## Domain Tools
 
-The Core device gateway may expose these lighting tools when `tools.device` is
-configured. Use the exact tool names; do not invent shorter aliases.
+When the builtin `smart_home` domain pack is active and `tools.device` is
+enabled, this pack provides the following lighting tools. Use the exact tool
+names; do not invent shorter aliases.
 
 - `openhome_device_lighting_set_power`
 - `openhome_device_lighting_set_brightness`
 - `openhome_device_lighting_set_color_temperature`
 
-These tools remain registered by OpenHome Core, not by this domain pack
-manifest. The domain pack provides context and skills for using them safely.
+OpenHome Core still owns the confirmation, permission, audit, and capability
+boundaries around these tools. The pack provides the tool implementations,
+smart-home runtime behavior, and skills for using them safely.
 
 ## Safety Collaboration
 
