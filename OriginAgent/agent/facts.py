@@ -42,13 +42,12 @@ DEFAULT_FACT_STORE_CONFIG = FactStoreConfig(
     category_order=(
         "preference",
         "routine",
-        "device",
         "policy",
         "safety",
         "temporary",
         "note",
     ),
-    legacy_categories=("household",),
+    legacy_categories=("household", "device"),
     valid_owners=("user", "assistant", "system", "unknown", "household"),
     high_risk_keywords=(
         "security",
@@ -402,7 +401,7 @@ def validate_fact_proposal(
         issues.append(_issue(
             "high_risk_memory",
             "pending",
-            "High-risk home/security facts require confirmation.",
+            "High-risk security facts require confirmation.",
         ))
 
     if category == "temporary" and not proposal.expires_at:

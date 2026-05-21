@@ -38,7 +38,7 @@ def test_default_runtime_profile_preserves_current_defaults() -> None:
 
 
 def test_profile_defaults_are_serializable_and_conservative() -> None:
-    for profile in ("household_safe", "local_dev", "automation"):
+    for profile in ("safe", "local_dev", "automation"):
         cfg = build_runtime_profile_defaults(profile)  # type: ignore[arg-type]
         data = cfg.model_dump(mode="json", by_alias=True)
 
@@ -55,6 +55,14 @@ def test_local_dev_profile_does_not_default_to_unsafe_exec() -> None:
 
     assert cfg.tools.exec.profile == "local_dev"
     assert cfg.tools.exec.allow_unsafe_exec is False
+
+
+def test_household_safe_profile_remains_compatibility_alias() -> None:
+    cfg = build_runtime_profile_defaults("household_safe")
+
+    assert cfg.runtime.profile == "household_safe"
+    assert cfg.tools.exec.profile == "secure"
+    assert cfg.tools.device.enabled is False
 
 
 def test_automation_profile_does_not_default_to_high_power_grants() -> None:

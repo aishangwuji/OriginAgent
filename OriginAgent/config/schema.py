@@ -360,7 +360,7 @@ class GatewayConfig(Base):
     heartbeat: HeartbeatConfig = Field(default_factory=HeartbeatConfig)
 
 
-RuntimeProfile = Literal["default", "household_safe", "local_dev", "automation"]
+RuntimeProfile = Literal["default", "safe", "household_safe", "local_dev", "automation"]
 
 
 class RuntimeConfig(Base):

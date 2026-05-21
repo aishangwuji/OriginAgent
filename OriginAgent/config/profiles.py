@@ -12,7 +12,7 @@ def build_runtime_profile_defaults(profile: RuntimeProfile) -> Config:
     config.runtime.profile = profile
     if profile == "default":
         return config
-    if profile == "household_safe":
+    if profile in {"safe", "household_safe"}:
         config.tools.audit = ToolAuditConfig(mode="minimal")
         config.tools.exec = ExecToolConfig(profile="secure", allow_unsafe_exec=False)
         config.tools.device = DeviceToolsConfig(enabled=False, mode="dry_run")
