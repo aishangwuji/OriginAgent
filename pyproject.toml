@@ -125,6 +125,7 @@ allow-direct-references = true
 
 [tool.hatch.build]
 include = [
+    "OriginAgent/**/*.py",
     "OpenHome/**/*.py",
     "OpenHome/templates/**/*.md",
     "OpenHome/skills/**/*.md",
@@ -138,9 +139,10 @@ artifacts = [
 ]
 
 [tool.hatch.build.targets.wheel]
-packages = ["OpenHome"]
+packages = ["OpenHome", "OriginAgent"]
 
 [tool.hatch.build.targets.wheel.sources]
+"OriginAgent" = "OriginAgent"
 "OpenHome" = "OpenHome"
 
 [tool.hatch.build.targets.wheel.force-include]
@@ -148,6 +150,7 @@ packages = ["OpenHome"]
 
 [tool.hatch.build.targets.sdist]
 include = [
+    "OriginAgent/",
     "OpenHome/",
     "OpenHome/web/dist/",
     "bridge/",
