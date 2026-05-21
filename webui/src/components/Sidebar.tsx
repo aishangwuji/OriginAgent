@@ -91,7 +91,7 @@ export function Sidebar(props: SidebarProps) {
         <picture className="block min-w-0 flex-1">
           <img
             src="/brand/OpenHome_logo_v2.svg"
-            alt="OpenHome"
+            alt="OriginAgent"
             className="h-11 max-w-[196px] select-none object-contain object-left opacity-95"
             draggable={false}
           />

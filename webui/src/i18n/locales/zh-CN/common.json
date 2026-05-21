@@ -1,29 +1,29 @@
 {
   "app": {
-    "brand": "OpenHome",
+    "brand": "OriginAgent",
     "loading": {
-      "connecting": "正在连接 OpenHome…",
-      "boot": "正在加载 OpenHome…"
+      "connecting": "正在连接 OriginAgent…",
+      "boot": "正在加载 OriginAgent…"
     },
     "error": {
-      "title": "无法连接到 OpenHome",
+      "title": "无法连接到 OriginAgent",
       "gatewayHint": "请确认 gateway 已启动（`openhome gateway`），并且当前页面与 gateway 运行在同一台机器上。"
     },
     "system": {
       "section": "系统",
-      "restartHint": "重启 OpenHome 以应用运行时更改。",
-      "restart": "重启 OpenHome",
+      "restartHint": "重启 OriginAgent 以应用运行时更改。",
+      "restart": "重启 OriginAgent",
       "restarting": "正在重启..."
     },
     "restart": {
       "completed": "重启已完成，用时 {{seconds}} 秒。"
     },
     "documentTitle": {
-      "base": "OpenHome",
-      "chat": "{{title}} · OpenHome"
+      "base": "OriginAgent",
+      "chat": "{{title}} · OriginAgent"
     },
     "meta": {
-      "description": "OpenHome Web UI —— 与你的 OpenHome 工作区对话。"
+      "description": "OriginAgent Web UI —— 与你的 OriginAgent 工作区对话。"
     }
   },
   "sidebar": {
@@ -72,14 +72,14 @@
       "provider": "提供商",
       "model": "模型",
       "backgroundReview": "后台回顾",
-      "restart": "重启 OpenHome",
+      "restart": "重启 OriginAgent",
       "configPath": "配置路径"
     },
     "help": {
       "theme": "在浅色和深色外观之间切换。",
       "language": "选择 WebUI 使用的语言。",
       "provider": "选择新模型请求使用的服务提供商。",
-      "model": "设置 OpenHome 默认使用的模型名称。",
+      "model": "设置 OriginAgent 默认使用的模型名称。",
       "backgroundReview": "在成功回合后生成待审核学习提案。默认关闭，避免产生意外 LLM 成本。",
       "configPath": "当前网关正在使用的配置文件。"
     },
@@ -92,7 +92,7 @@
       "loading": "正在加载设置...",
       "loadError": "无法加载设置",
       "unsaved": "有未保存的更改。",
-      "savedRestart": "已保存。重启 OpenHome 后生效。"
+      "savedRestart": "已保存。重启 OriginAgent 后生效。"
     },
     "actions": {
       "save": "保存",
@@ -101,7 +101,7 @@
       "cancel": "取消"
     },
     "byok": {
-      "description": "自带 provider key。OpenHome 会从当前 config 读取这些值，只有已配置的 provider 才能在通用设置里选择。",
+      "description": "自带 provider key。OriginAgent 会从当前 config 读取这些值，只有已配置的 provider 才能在通用设置里选择。",
       "configured": "已配置",
       "notConfigured": "未配置",
       "configuredSection": "已配置",
@@ -143,14 +143,14 @@
       }
     },
     "mcp": {
-      "description": "不用手改 config.json，在这里配置 MCP server。改动会保存到当前 OpenHome 配置文件。",
+      "description": "不用手改 config.json，在这里配置 MCP server。改动会保存到当前 OriginAgent 配置文件。",
       "quickConfig": "快速配置",
       "add": "添加 MCP",
       "newServer": "新建 MCP server",
       "editServer": "编辑 MCP server",
       "configuredServers": "已配置 server",
       "empty": "还没有配置 MCP server。",
-      "restartRequired": "已保存。重启 OpenHome 后会连接更新后的 MCP server。",
+      "restartRequired": "已保存。重启 OriginAgent 后会连接更新后的 MCP server。",
       "editorHelp": "编辑时，env/header 中保留掩码或留空会沿用旧值。",
       "name": "Server 名称",
       "command": "命令",
@@ -173,14 +173,14 @@
       },
       "homeAssistant": {
         "title": "Home Assistant",
-        "description": "只填 HA 地址和长期访问令牌，OpenHome 会自动配置 MCP 地址、认证 Header 和本地访问白名单。",
+        "description": "只填 HA 地址和长期访问令牌，OriginAgent 会自动配置 MCP 地址、认证 Header 和本地访问白名单。",
         "address": "HA 地址",
         "addressHelp": "可以粘贴 http://localhost:8123 或浏览器里的 /home/0 地址。",
         "token": "长期访问令牌",
         "tokenHelp": "在 Home Assistant 个人资料的安全页面创建。",
         "tokenHelpExisting": "已保存令牌。留空会继续使用旧令牌。",
         "tokenPlaceholder": "粘贴 Home Assistant 长期访问令牌",
-        "saveHint": "保存后会注册为 HTTP MCP，并在重启 OpenHome 后生效。",
+        "saveHint": "保存后会注册为 HTTP MCP，并在重启 OriginAgent 后生效。",
         "save": "保存 HA MCP",
         "validation": {
           "addressRequired": "请填写 Home Assistant 地址。",
@@ -460,12 +460,12 @@
     },
     "confirmApply": {
       "title": "应用这个提案？",
-      "description": "OpenHome 会把已批准的记忆或事实写入受控 facts store，并重新生成 MEMORY.md。",
-      "skillDescription": "OpenHome 会把 {{name}} 写成 proposed/unverified workspace skill，位置是 {{path}}。它会被发现，但不会 always 自动加载。",
-      "promoteSkillDescription": "OpenHome 会提升 {{name}}：如有需要先完成 verify，再把位于 {{path}} 的 workspace skill 激活。",
-      "deprecateSkillDescription": "OpenHome 会把位于 {{path}} 的 workspace skill {{name}} 标记为 deprecated，它将不再出现在正常的 skill 发现结果中。",
+      "description": "OriginAgent 会把已批准的记忆或事实写入受控 facts store，并重新生成 MEMORY.md。",
+      "skillDescription": "OriginAgent 会把 {{name}} 写成 proposed/unverified workspace skill，位置是 {{path}}。它会被发现，但不会 always 自动加载。",
+      "promoteSkillDescription": "OriginAgent 会提升 {{name}}：如有需要先完成 verify，再把位于 {{path}} 的 workspace skill 激活。",
+      "deprecateSkillDescription": "OriginAgent 会把位于 {{path}} 的 workspace skill {{name}} 标记为 deprecated，它将不再出现在正常的 skill 发现结果中。",
       "skillPathPending": "workspace/skills/<safe-name>/SKILL.md",
-      "workflowDescription": "OpenHome 会把 {{name}} 写成 proposed/unverified 手动 workflow，位置是 {{path}}。它不会创建自动化、运行工具或创建计划任务。",
+      "workflowDescription": "OriginAgent 会把 {{name}} 写成 proposed/unverified 手动 workflow，位置是 {{path}}。它不会创建自动化、运行工具或创建计划任务。",
       "workflowPathPending": "workspace/workflows/<safe-name>/workflow.yaml",
       "cancel": "取消",
       "confirm": "应用"
@@ -532,7 +532,7 @@
       "imageQuickActions": {
         "icon": {
           "title": "设计应用图标",
-          "prompt": "生成一个干净的 1:1 OpenHome 应用图标：友好的机器人，简洁矢量风格，蓝白柔和配色，不要文字。"
+          "prompt": "生成一个干净的 1:1 OriginAgent 应用图标：友好的机器人，简洁矢量风格，蓝白柔和配色，不要文字。"
         },
         "sticker": {
           "title": "制作贴纸",
@@ -614,7 +614,7 @@
             "description": "取消这个对话中正在运行的 agent 回合。"
           },
           "restart": {
-            "title": "重启 OpenHome",
+            "title": "重启 OriginAgent",
             "description": "原地重启 bot 进程。"
           },
           "status": {

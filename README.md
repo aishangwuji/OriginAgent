@@ -19,7 +19,7 @@
   </p>
 </div>
 
-**OpenHome** is a local AI assistant and agent core built on the lightweight nanobot agent runtime. It is designed to run near your private data, connect to chat channels, MCP tools, skills, and domain capabilities, and help coordinate work across conversations without turning the core agent loop into a heavy platform. Smart-home automation remains an important domain capability, but it is no longer the default identity of the core assistant.
+**OriginAgent** is a local AI agent runtime built on the lightweight nanobot agent core. It is designed to run near your private data, connect to chat channels, MCP tools, skills, and domain capabilities, and help coordinate work across conversations without turning the core agent loop into a heavy platform. Smart-home automation remains an important first-party domain capability, but it is no longer the default identity of the core assistant.
 
 ## 📢 News
 
@@ -118,7 +118,7 @@
 </details>
 
 
-## 💡 Key Features of OpenHome
+## 💡 Key Features of OriginAgent
 
 - **Ultra-lightweight**: stable long-running agent behavior with a small, readable core.
 - **Research-ready**: the codebase is intentionally simple enough to study, modify, and extend.
@@ -160,6 +160,9 @@ pip install openhome
 openhome onboard
 ```
 
+> [!NOTE]
+> OriginAgent is in a staged rename. During the compatibility period, the Python package, CLI command, and default config directory still use the legacy `openhome` / `~/.openhome` names.
+
 **2. Configure** (`~/.openhome/config.json`)
 
 Configure these **two parts** in your config (other options have defaults). Add or merge the following blocks into your existing config instead of replacing the whole file.
@@ -196,7 +199,7 @@ openhome agent
 ```
 
 
-- OpenHome v1 docs are being rebuilt around the smart-home product direction. Start with [Plan 1](./docs/plan1.md) and the [v1 development plan](./docs/openhome-v1-development-plan.md).
+- OriginAgent docs are being rebuilt around the general-purpose agent runtime direction. The existing OpenHome v1 planning docs are retained as historical migration notes.
 
 ## 🧪 WebUI (Development)
 
@@ -204,7 +207,7 @@ openhome agent
 > The WebUI development workflow currently requires a source checkout and is not yet shipped together with the official packaged release. See [WebUI Document](./webui/README.md) for full WebUI development docs and build steps.
 
 <p align="center">
-  <img src="images/OpenHome_webui.png" alt="OpenHome webui preview" width="900">
+  <img src="images/OpenHome_webui.png" alt="OriginAgent webui preview" width="900">
 </p>
 
 **1. Enable the WebSocket channel in `~/.openhome/config.json`**
@@ -230,10 +233,10 @@ bun run dev
 ## 🏗️ Architecture
 
 <p align="center">
-  <img src="images/OpenHome_arch.png" alt="OpenHome architecture" width="800">
+  <img src="images/OpenHome_arch.png" alt="OriginAgent architecture" width="800">
 </p>
 
-OpenHome stays lightweight by centering everything around a small agent loop: messages come in from chat apps, the LLM decides when tools are needed, and memory or skills are pulled in only as context instead of becoming a heavy orchestration layer. That keeps the core path readable and easy to extend, while still letting you add channels, tools, memory, and deployment options without turning the system into a monolith.
+OriginAgent stays lightweight by centering everything around a small agent loop: messages come in from chat apps, the LLM decides when tools are needed, and memory or skills are pulled in only as context instead of becoming a heavy orchestration layer. That keeps the core path readable and easy to extend, while still letting you add channels, tools, memory, and deployment options without turning the system into a monolith.
 
 ## ✨ Features
 
@@ -260,10 +263,10 @@ OpenHome stays lightweight by centering everything around a small agent loop: me
 
 ## 📚 Docs
 
-The inherited framework docs have been removed while OpenHome is being reshaped into a smart-home product. Current planning docs live in [docs/README.md](./docs/README.md):
+The inherited framework docs are being rebuilt while OpenHome is renamed into OriginAgent and repositioned as a general-purpose agent runtime. Current planning docs live in [docs/README.md](./docs/README.md):
 
-- [Plan 1](./docs/plan1.md): product identity, default configuration, and Home Assistant minimum loop.
-- [OpenHome v1 development plan](./docs/openhome-v1-development-plan.md): broader v1 task breakdown and delivery boundary.
+- [Plan 1](./docs/plan1.md): historical OpenHome productization plan.
+- [OpenHome v1 development plan](./docs/openhome-v1-development-plan.md): historical v1 task breakdown and delivery boundary.
 
 ## 🤝 Contribute & Roadmap
 
@@ -310,6 +313,6 @@ This project was started by [Xubin Ren](https://github.com/re-bin) as a personal
 </div>
 
 <p align="center">
-  <em> Thanks for visiting ✨ OpenHome!</em><br><br>
+  <em> Thanks for visiting ✨ OriginAgent!</em><br><br>
   <img src="https://visitor-badge.laobi.icu/badge?page_id=HKUDS.OpenHome&style=for-the-badge&color=00d4ff" alt="Views">
 </p>

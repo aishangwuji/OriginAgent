@@ -1,29 +1,29 @@
 {
   "app": {
-    "brand": "OpenHome",
+    "brand": "OriginAgent",
     "loading": {
-      "connecting": "Menghubungkan ke OpenHome…",
-      "boot": "Memuat OpenHome…"
+      "connecting": "Menghubungkan ke OriginAgent…",
+      "boot": "Memuat OriginAgent…"
     },
     "error": {
-      "title": "Tidak dapat menjangkau OpenHome",
+      "title": "Tidak dapat menjangkau OriginAgent",
       "gatewayHint": "Pastikan gateway sedang berjalan (`openhome gateway`) dan halaman ini dibuka pada mesin yang sama."
     },
     "system": {
       "section": "Sistem",
-      "restartHint": "Mulai ulang OpenHome untuk menerapkan perubahan runtime.",
-      "restart": "Mulai ulang OpenHome",
+      "restartHint": "Mulai ulang OriginAgent untuk menerapkan perubahan runtime.",
+      "restart": "Mulai ulang OriginAgent",
       "restarting": "Memulai ulang..."
     },
     "restart": {
       "completed": "Mulai ulang selesai dalam {{seconds}} dtk."
     },
     "documentTitle": {
-      "base": "OpenHome",
-      "chat": "{{title}} · OpenHome"
+      "base": "OriginAgent",
+      "chat": "{{title}} · OriginAgent"
     },
     "meta": {
-      "description": "UI web OpenHome — ngobrol dengan workspace OpenHome Anda."
+      "description": "UI web OriginAgent — ngobrol dengan workspace OriginAgent Anda."
     }
   },
   "sidebar": {
@@ -61,14 +61,14 @@
       "language": "Bahasa",
       "provider": "Penyedia",
       "model": "Model",
-      "restart": "Mulai ulang OpenHome",
+      "restart": "Mulai ulang OriginAgent",
       "configPath": "Path konfigurasi"
     },
     "help": {
       "theme": "Beralih antara tampilan terang dan gelap.",
       "language": "Pilih bahasa yang digunakan WebUI.",
       "provider": "Pilih penyedia untuk permintaan model baru.",
-      "model": "Atur nama model default yang digunakan OpenHome.",
+      "model": "Atur nama model default yang digunakan OriginAgent.",
       "configPath": "File konfigurasi gateway yang sedang digunakan."
     },
     "values": {
@@ -80,7 +80,7 @@
       "loading": "Memuat pengaturan...",
       "loadError": "Tidak dapat memuat pengaturan",
       "unsaved": "Ada perubahan yang belum disimpan.",
-      "savedRestart": "Tersimpan. Mulai ulang OpenHome untuk menerapkan."
+      "savedRestart": "Tersimpan. Mulai ulang OriginAgent untuk menerapkan."
     },
     "actions": {
       "save": "Simpan",
@@ -89,7 +89,7 @@
       "cancel": "Batal"
     },
     "byok": {
-      "description": "Gunakan kunci provider Anda sendiri. OpenHome membaca nilai ini dari config saat ini, dan hanya provider yang sudah dikonfigurasi yang bisa dipilih di Umum.",
+      "description": "Gunakan kunci provider Anda sendiri. OriginAgent membaca nilai ini dari config saat ini, dan hanya provider yang sudah dikonfigurasi yang bisa dipilih di Umum.",
       "configured": "Terkonfigurasi",
       "notConfigured": "Belum dikonfigurasi",
       "configuredSection": "Terkonfigurasi",
@@ -131,14 +131,14 @@
       }
     },
     "mcp": {
-      "description": "Configure MCP servers without editing config.json by hand. Changes are saved to the current OpenHome config.",
+      "description": "Configure MCP servers without editing config.json by hand. Changes are saved to the current OriginAgent config.",
       "quickConfig": "Quick config",
       "add": "Add MCP",
       "newServer": "New MCP server",
       "editServer": "Edit MCP server",
       "configuredServers": "Configured servers",
       "empty": "No MCP servers configured.",
-      "restartRequired": "Saved. Restart OpenHome to connect the updated MCP servers.",
+      "restartRequired": "Saved. Restart OriginAgent to connect the updated MCP servers.",
       "editorHelp": "Leave masked or empty env/header values unchanged when editing.",
       "name": "Server name",
       "command": "Command",
@@ -161,14 +161,14 @@
       },
       "homeAssistant": {
         "title": "Home Assistant",
-        "description": "Enter the HA address and long-lived access token. OpenHome will configure the MCP URL, auth header, and local access whitelist.",
+        "description": "Enter the HA address and long-lived access token. OriginAgent will configure the MCP URL, auth header, and local access whitelist.",
         "address": "HA address",
         "addressHelp": "You can paste http://localhost:8123 or the /home/0 URL from your browser.",
         "token": "Long-lived access token",
         "tokenHelp": "Create one from your Home Assistant profile security page.",
         "tokenHelpExisting": "A token is already saved. Leave blank to keep using it.",
         "tokenPlaceholder": "Paste Home Assistant long-lived access token",
-        "saveHint": "Saved as an HTTP MCP server and applied after restarting OpenHome.",
+        "saveHint": "Saved as an HTTP MCP server and applied after restarting OriginAgent.",
         "save": "Save HA MCP",
         "validation": {
           "addressRequired": "Home Assistant address is required.",
@@ -310,15 +310,15 @@
     },
     "confirmApply": {
       "title": "Apply this proposal?",
-      "description": "OpenHome will write this approved memory or fact into the controlled facts store and rebuild MEMORY.md.",
-      "skillDescription": "OpenHome will write {{name}} as a proposed, unverified workspace skill at {{path}}. It will be discoverable but not always loaded.",
+      "description": "OriginAgent will write this approved memory or fact into the controlled facts store and rebuild MEMORY.md.",
+      "skillDescription": "OriginAgent will write {{name}} as a proposed, unverified workspace skill at {{path}}. It will be discoverable but not always loaded.",
       "skillPathPending": "workspace/skills/<safe-name>/SKILL.md",
-      "workflowDescription": "OpenHome will write {{name}} as a proposed, unverified manual workflow at {{path}}. It will not create automation, run tools, or schedule jobs.",
+      "workflowDescription": "OriginAgent will write {{name}} as a proposed, unverified manual workflow at {{path}}. It will not create automation, run tools, or schedule jobs.",
       "workflowPathPending": "workspace/workflows/<safe-name>/workflow.yaml",
       "cancel": "Cancel",
       "confirm": "Apply",
-      "promoteSkillDescription": "OpenHome will promote {{name}} by verifying it if needed and activating the workspace skill at {{path}}.",
-      "deprecateSkillDescription": "OpenHome will mark workspace skill {{name}} as deprecated at {{path}}. It will stop appearing in normal skill discovery."
+      "promoteSkillDescription": "OriginAgent will promote {{name}} by verifying it if needed and activating the workspace skill at {{path}}.",
+      "deprecateSkillDescription": "OriginAgent will mark workspace skill {{name}} as deprecated at {{path}}. It will stop appearing in normal skill discovery."
     },
     "origins": {
       "background_review": "Background review",
@@ -381,7 +381,7 @@
       "imageQuickActions": {
         "icon": {
           "title": "Desain ikon aplikasi",
-          "prompt": "Buat ikon aplikasi 1:1 yang bersih untuk OpenHome: robot ramah, gaya vektor sederhana, palet biru dan putih lembut, tanpa teks."
+          "prompt": "Buat ikon aplikasi 1:1 yang bersih untuk OriginAgent: robot ramah, gaya vektor sederhana, palet biru dan putih lembut, tanpa teks."
         },
         "sticker": {
           "title": "Buat stiker",
@@ -465,7 +465,7 @@
             "description": "Batalkan giliran agent yang sedang aktif di chat ini."
           },
           "restart": {
-            "title": "Mulai ulang OpenHome",
+            "title": "Mulai ulang OriginAgent",
             "description": "Mulai ulang proses bot di tempat."
           },
           "status": {

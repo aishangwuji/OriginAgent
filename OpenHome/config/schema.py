@@ -251,8 +251,8 @@ class AgentDefaults(Base):
     )
     learning: LearningConfig = Field(default_factory=LearningConfig)
     timezone: str = "Asia/Shanghai"  # IANA timezone, e.g. "Asia/Shanghai", "America/New_York"
-    bot_name: str = "OpenHome"  # Display name shown in CLI prompts (e.g. "{name} is thinking...")
-    bot_icon: str = "Home"  # Short icon (emoji or text) shown next to the bot name in CLI; "" to omit
+    bot_name: str = "OriginAgent"  # Display name shown in CLI prompts (e.g. "{name} is thinking...")
+    bot_icon: str = "OA"  # Short icon (emoji or text) shown next to the bot name in CLI; "" to omit
     unified_session: bool = False  # Share one session across all channels (single-user multi-device)
     disabled_skills: list[str] = Field(default_factory=list)  # Skill names to exclude from loading (e.g. ["summarize", "skill-creator"])
     session_ttl_minutes: int = Field(
@@ -550,7 +550,7 @@ class ToolsConfig(Base):
 
 
 class Config(BaseSettings):
-    """Root configuration for OpenHome."""
+    """Root configuration for OriginAgent."""
 
     agents: AgentsConfig = Field(default_factory=AgentsConfig)
     channels: ChannelsConfig = Field(default_factory=ChannelsConfig)

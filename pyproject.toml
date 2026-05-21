@@ -1,15 +1,15 @@
 [project]
 name = "openhome"
 version = "0.1.5.post3"
-description = "A local AI home assistant built on a lightweight agent runtime"
+description = "A local AI agent runtime built for modular, extensible automation"
 readme = { file = "README.md", content-type = "text/markdown" }
 requires-python = ">=3.11"
 license = {text = "MIT"}
 authors = [
     {name = "Xubin Ren"},
-    {name = "the OpenHome contributors"}
+    {name = "the OriginAgent contributors"}
 ]
-keywords = ["ai", "agent", "smart-home", "home-assistant", "home-automation"]
+keywords = ["ai", "agent", "runtime", "automation", "plugins"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",

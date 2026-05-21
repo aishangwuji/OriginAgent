@@ -1,5 +1,5 @@
 """
-OpenHome - A lightweight AI agent framework
+OriginAgent - A lightweight AI agent framework
 """
 
 from importlib.metadata import PackageNotFoundError, version as _pkg_version
@@ -25,7 +25,7 @@ def _resolve_version() -> str:
 
 
 __version__ = _resolve_version()
-__logo__ = "Home"
+__logo__ = "OA"
 
 from OpenHome.OpenHome import OpenHome, RunResult
 

@@ -1,1 +1,1 @@
-"""OpenAI-compatible HTTP API for OpenHome."""
+"""OpenAI-compatible HTTP API for OriginAgent."""

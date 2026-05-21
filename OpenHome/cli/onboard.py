@@ -1,4 +1,4 @@
-"""Interactive onboarding questionnaire for OpenHome."""
+"""Interactive onboarding questionnaire for OriginAgent."""
 
 import json
 import types
@@ -370,7 +370,7 @@ def _show_main_menu_header() -> None:
     from rich.align import Align
 
     console.print(
-        Align.center(f"{__logo__} [bold cyan]OpenHome[{__version__}][/bold cyan]")
+        Align.center(f"{__logo__} [bold cyan]OriginAgent[{__version__}][/bold cyan]")
     )
     console.print()
 

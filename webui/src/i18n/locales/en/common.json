@@ -1,12 +1,12 @@
 {
   "app": {
-    "brand": "OpenHome",
+    "brand": "OriginAgent",
     "loading": {
-      "connecting": "Connecting to OpenHome…",
-      "boot": "Loading OpenHome…"
+      "connecting": "Connecting to OriginAgent…",
+      "boot": "Loading OriginAgent…"
     },
     "error": {
-      "title": "Couldn't reach OpenHome",
+      "title": "Couldn't reach OriginAgent",
       "gatewayHint": "Make sure the gateway is running (`openhome gateway`) and that this page is open on the same machine."
     },
     "auth": {
@@ -23,19 +23,19 @@
     },
     "system": {
       "section": "System",
-      "restartHint": "Restart OpenHome to apply runtime changes.",
-      "restart": "Restart OpenHome",
+      "restartHint": "Restart OriginAgent to apply runtime changes.",
+      "restart": "Restart OriginAgent",
       "restarting": "Restarting..."
     },
     "restart": {
       "completed": "Restart completed in {{seconds}}s."
     },
     "documentTitle": {
-      "base": "OpenHome",
-      "chat": "{{title}} · OpenHome"
+      "base": "OriginAgent",
+      "chat": "{{title}} · OriginAgent"
     },
     "meta": {
-      "description": "OpenHome web UI — chat with your OpenHome workspace."
+      "description": "OriginAgent web UI — chat with your OriginAgent workspace."
     }
   },
   "sidebar": {
@@ -84,14 +84,14 @@
       "provider": "Provider",
       "model": "Model",
       "backgroundReview": "Background review",
-      "restart": "Restart OpenHome",
+      "restart": "Restart OriginAgent",
       "configPath": "Config path"
     },
     "help": {
       "theme": "Switch between light and dark appearance.",
       "language": "Choose the language used by the WebUI.",
       "provider": "Select the provider that should serve new model requests.",
-      "model": "Set the default model name used by OpenHome.",
+      "model": "Set the default model name used by OriginAgent.",
       "backgroundReview": "Generate pending learning proposals after successful turns. Off by default to avoid unexpected LLM cost.",
       "configPath": "The gateway configuration file currently in use."
     },
@@ -104,7 +104,7 @@
       "loading": "Loading settings...",
       "loadError": "Could not load settings",
       "unsaved": "Unsaved changes.",
-      "savedRestart": "Saved. Restart OpenHome to apply."
+      "savedRestart": "Saved. Restart OriginAgent to apply."
     },
     "actions": {
       "save": "Save",
@@ -113,7 +113,7 @@
       "cancel": "Cancel"
     },
     "byok": {
-      "description": "Bring your own provider keys. OpenHome reads these values from the current config and only configured providers can be selected in General.",
+      "description": "Bring your own provider keys. OriginAgent reads these values from the current config and only configured providers can be selected in General.",
       "configured": "Configured",
       "notConfigured": "Not configured",
       "configuredSection": "Configured",
@@ -155,14 +155,14 @@
       }
     },
     "mcp": {
-      "description": "Configure MCP servers without editing config.json by hand. Changes are saved to the current OpenHome config.",
+      "description": "Configure MCP servers without editing config.json by hand. Changes are saved to the current OriginAgent config.",
       "quickConfig": "Quick config",
       "add": "Add MCP",
       "newServer": "New MCP server",
       "editServer": "Edit MCP server",
       "configuredServers": "Configured servers",
       "empty": "No MCP servers configured.",
-      "restartRequired": "Saved. Restart OpenHome to connect the updated MCP servers.",
+      "restartRequired": "Saved. Restart OriginAgent to connect the updated MCP servers.",
       "editorHelp": "Leave masked or empty env/header values unchanged when editing.",
       "name": "Server name",
       "command": "Command",
@@ -185,14 +185,14 @@
       },
       "homeAssistant": {
         "title": "Home Assistant",
-        "description": "Enter the HA address and long-lived access token. OpenHome will configure the MCP URL, auth header, and local access whitelist.",
+        "description": "Enter the HA address and long-lived access token. OriginAgent will configure the MCP URL, auth header, and local access whitelist.",
         "address": "HA address",
         "addressHelp": "You can paste http://localhost:8123 or the /home/0 URL from your browser.",
         "token": "Long-lived access token",
         "tokenHelp": "Create one from your Home Assistant profile security page.",
         "tokenHelpExisting": "A token is already saved. Leave blank to keep using it.",
         "tokenPlaceholder": "Paste Home Assistant long-lived access token",
-        "saveHint": "Saved as an HTTP MCP server and applied after restarting OpenHome.",
+        "saveHint": "Saved as an HTTP MCP server and applied after restarting OriginAgent.",
         "save": "Save HA MCP",
         "validation": {
           "addressRequired": "Home Assistant address is required.",
@@ -472,12 +472,12 @@
     },
     "confirmApply": {
       "title": "Apply this proposal?",
-      "description": "OpenHome will write this approved memory or fact into the controlled facts store and rebuild MEMORY.md.",
-      "skillDescription": "OpenHome will write {{name}} as a proposed, unverified workspace skill at {{path}}. It will be discoverable but not always loaded.",
-      "promoteSkillDescription": "OpenHome will promote {{name}} by verifying it if needed and activating the workspace skill at {{path}}.",
-      "deprecateSkillDescription": "OpenHome will mark workspace skill {{name}} as deprecated at {{path}}. It will stop appearing in normal skill discovery.",
+      "description": "OriginAgent will write this approved memory or fact into the controlled facts store and rebuild MEMORY.md.",
+      "skillDescription": "OriginAgent will write {{name}} as a proposed, unverified workspace skill at {{path}}. It will be discoverable but not always loaded.",
+      "promoteSkillDescription": "OriginAgent will promote {{name}} by verifying it if needed and activating the workspace skill at {{path}}.",
+      "deprecateSkillDescription": "OriginAgent will mark workspace skill {{name}} as deprecated at {{path}}. It will stop appearing in normal skill discovery.",
       "skillPathPending": "workspace/skills/<safe-name>/SKILL.md",
-      "workflowDescription": "OpenHome will write {{name}} as a proposed, unverified manual workflow at {{path}}. It will not create automation, run tools, or schedule jobs.",
+      "workflowDescription": "OriginAgent will write {{name}} as a proposed, unverified manual workflow at {{path}}. It will not create automation, run tools, or schedule jobs.",
       "workflowPathPending": "workspace/workflows/<safe-name>/workflow.yaml",
       "cancel": "Cancel",
       "confirm": "Apply"
@@ -544,7 +544,7 @@
       "imageQuickActions": {
         "icon": {
           "title": "Design an app icon",
-          "prompt": "Generate a clean 1:1 app icon for OpenHome: friendly robot, simple vector style, soft blue and white palette, no text."
+          "prompt": "Generate a clean 1:1 app icon for OriginAgent: friendly robot, simple vector style, soft blue and white palette, no text."
         },
         "sticker": {
           "title": "Make a sticker",
@@ -627,7 +627,7 @@
             "description": "Cancel the active agent turn for this chat."
           },
           "restart": {
-            "title": "Restart OpenHome",
+            "title": "Restart OriginAgent",
             "description": "Restart the bot process in place."
           },
           "status": {

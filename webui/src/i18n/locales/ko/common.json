@@ -1,29 +1,29 @@
 {
   "app": {
-    "brand": "OpenHome",
+    "brand": "OriginAgent",
     "loading": {
-      "connecting": "OpenHome에 연결 중…",
-      "boot": "OpenHome 불러오는 중…"
+      "connecting": "OriginAgent에 연결 중…",
+      "boot": "OriginAgent 불러오는 중…"
     },
     "error": {
-      "title": "OpenHome에 연결할 수 없습니다",
+      "title": "OriginAgent에 연결할 수 없습니다",
       "gatewayHint": "gateway(`openhome gateway`)가 실행 중인지, 그리고 이 페이지가 같은 머신에서 열려 있는지 확인하세요."
     },
     "system": {
       "section": "시스템",
-      "restartHint": "런타임 변경 사항을 적용하려면 OpenHome을 다시 시작하세요.",
-      "restart": "OpenHome 다시 시작",
+      "restartHint": "런타임 변경 사항을 적용하려면 OriginAgent을 다시 시작하세요.",
+      "restart": "OriginAgent 다시 시작",
       "restarting": "다시 시작 중..."
     },
     "restart": {
       "completed": "{{seconds}}초 만에 다시 시작되었습니다."
     },
     "documentTitle": {
-      "base": "OpenHome",
-      "chat": "{{title}} · OpenHome"
+      "base": "OriginAgent",
+      "chat": "{{title}} · OriginAgent"
     },
     "meta": {
-      "description": "OpenHome 웹 UI — OpenHome 작업공간과 대화하세요."
+      "description": "OriginAgent 웹 UI — OriginAgent 작업공간과 대화하세요."
     }
   },
   "sidebar": {
@@ -61,14 +61,14 @@
       "language": "언어",
       "provider": "제공자",
       "model": "모델",
-      "restart": "OpenHome 재시작",
+      "restart": "OriginAgent 재시작",
       "configPath": "설정 경로"
     },
     "help": {
       "theme": "밝은 모드와 어두운 모드를 전환합니다.",
       "language": "WebUI에서 사용할 언어를 선택합니다.",
       "provider": "새 모델 요청에 사용할 제공자를 선택합니다.",
-      "model": "OpenHome이 기본으로 사용할 모델 이름을 설정합니다.",
+      "model": "OriginAgent이 기본으로 사용할 모델 이름을 설정합니다.",
       "configPath": "현재 게이트웨이가 사용하는 설정 파일입니다."
     },
     "values": {
@@ -80,7 +80,7 @@
       "loading": "설정을 불러오는 중...",
       "loadError": "설정을 불러올 수 없습니다",
       "unsaved": "저장되지 않은 변경 사항이 있습니다.",
-      "savedRestart": "저장되었습니다. 적용하려면 OpenHome을 재시작하세요."
+      "savedRestart": "저장되었습니다. 적용하려면 OriginAgent을 재시작하세요."
     },
     "actions": {
       "save": "저장",
@@ -89,7 +89,7 @@
       "cancel": "취소"
     },
     "byok": {
-      "description": "직접 provider 키를 가져옵니다. OpenHome은 현재 config에서 값을 읽고, 설정된 provider만 일반 설정에서 선택할 수 있습니다.",
+      "description": "직접 provider 키를 가져옵니다. OriginAgent은 현재 config에서 값을 읽고, 설정된 provider만 일반 설정에서 선택할 수 있습니다.",
       "configured": "설정됨",
       "notConfigured": "설정 안 됨",
       "configuredSection": "설정됨",
@@ -131,14 +131,14 @@
       }
     },
     "mcp": {
-      "description": "Configure MCP servers without editing config.json by hand. Changes are saved to the current OpenHome config.",
+      "description": "Configure MCP servers without editing config.json by hand. Changes are saved to the current OriginAgent config.",
       "quickConfig": "Quick config",
       "add": "Add MCP",
       "newServer": "New MCP server",
       "editServer": "Edit MCP server",
       "configuredServers": "Configured servers",
       "empty": "No MCP servers configured.",
-      "restartRequired": "Saved. Restart OpenHome to connect the updated MCP servers.",
+      "restartRequired": "Saved. Restart OriginAgent to connect the updated MCP servers.",
       "editorHelp": "Leave masked or empty env/header values unchanged when editing.",
       "name": "Server name",
       "command": "Command",
@@ -161,14 +161,14 @@
       },
       "homeAssistant": {
         "title": "Home Assistant",
-        "description": "Enter the HA address and long-lived access token. OpenHome will configure the MCP URL, auth header, and local access whitelist.",
+        "description": "Enter the HA address and long-lived access token. OriginAgent will configure the MCP URL, auth header, and local access whitelist.",
         "address": "HA address",
         "addressHelp": "You can paste http://localhost:8123 or the /home/0 URL from your browser.",
         "token": "Long-lived access token",
         "tokenHelp": "Create one from your Home Assistant profile security page.",
         "tokenHelpExisting": "A token is already saved. Leave blank to keep using it.",
         "tokenPlaceholder": "Paste Home Assistant long-lived access token",
-        "saveHint": "Saved as an HTTP MCP server and applied after restarting OpenHome.",
+        "saveHint": "Saved as an HTTP MCP server and applied after restarting OriginAgent.",
         "save": "Save HA MCP",
         "validation": {
           "addressRequired": "Home Assistant address is required.",
@@ -310,15 +310,15 @@
     },
     "confirmApply": {
       "title": "Apply this proposal?",
-      "description": "OpenHome will write this approved memory or fact into the controlled facts store and rebuild MEMORY.md.",
-      "skillDescription": "OpenHome will write {{name}} as a proposed, unverified workspace skill at {{path}}. It will be discoverable but not always loaded.",
+      "description": "OriginAgent will write this approved memory or fact into the controlled facts store and rebuild MEMORY.md.",
+      "skillDescription": "OriginAgent will write {{name}} as a proposed, unverified workspace skill at {{path}}. It will be discoverable but not always loaded.",
       "skillPathPending": "workspace/skills/<safe-name>/SKILL.md",
-      "workflowDescription": "OpenHome will write {{name}} as a proposed, unverified manual workflow at {{path}}. It will not create automation, run tools, or schedule jobs.",
+      "workflowDescription": "OriginAgent will write {{name}} as a proposed, unverified manual workflow at {{path}}. It will not create automation, run tools, or schedule jobs.",
       "workflowPathPending": "workspace/workflows/<safe-name>/workflow.yaml",
       "cancel": "Cancel",
       "confirm": "Apply",
-      "promoteSkillDescription": "OpenHome will promote {{name}} by verifying it if needed and activating the workspace skill at {{path}}.",
-      "deprecateSkillDescription": "OpenHome will mark workspace skill {{name}} as deprecated at {{path}}. It will stop appearing in normal skill discovery."
+      "promoteSkillDescription": "OriginAgent will promote {{name}} by verifying it if needed and activating the workspace skill at {{path}}.",
+      "deprecateSkillDescription": "OriginAgent will mark workspace skill {{name}} as deprecated at {{path}}. It will stop appearing in normal skill discovery."
     },
     "origins": {
       "background_review": "Background review",
@@ -381,7 +381,7 @@
       "imageQuickActions": {
         "icon": {
           "title": "앱 아이콘 디자인",
-          "prompt": "OpenHome을 위한 깔끔한 1:1 앱 아이콘을 생성해 주세요. 친근한 로봇, 단순한 벡터 스타일, 부드러운 파란색과 흰색 팔레트, 텍스트 없음."
+          "prompt": "OriginAgent을 위한 깔끔한 1:1 앱 아이콘을 생성해 주세요. 친근한 로봇, 단순한 벡터 스타일, 부드러운 파란색과 흰색 팔레트, 텍스트 없음."
         },
         "sticker": {
           "title": "스티커 만들기",
@@ -465,7 +465,7 @@
             "description": "이 채팅에서 실행 중인 agent 턴을 취소합니다."
           },
           "restart": {
-            "title": "OpenHome 재시작",
+            "title": "OriginAgent 재시작",
             "description": "bot 프로세스를 제자리에서 재시작합니다."
           },
           "status": {

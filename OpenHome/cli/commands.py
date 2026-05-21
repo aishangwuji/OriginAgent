@@ -91,7 +91,7 @@ from OpenHome.utils.restart import (
 app = typer.Typer(
     name="openhome",
     context_settings={"help_option_names": ["-h", "--help"]},
-    help=f"{__logo__} OpenHome - Local AI Home Assistant",
+    help=f"{__logo__} OriginAgent - Local AI Agent Runtime",
     no_args_is_help=True,
 )
 
@@ -188,7 +188,7 @@ def _print_agent_response(
     content = response or ""
     body = _response_renderable(content, render_markdown, metadata)
     console.print()
-    console.print(f"[cyan]{__logo__} OpenHome[/cyan]")
+    console.print(f"[cyan]{__logo__} OriginAgent[/cyan]")
     console.print(body)
     console.print()
 
@@ -224,7 +224,7 @@ async def _print_interactive_response(
         ansi = _render_interactive_ansi(
             lambda c: (
                 c.print(),
-                c.print(f"[cyan]{__logo__} OpenHome[/cyan]"),
+                c.print(f"[cyan]{__logo__} OriginAgent[/cyan]"),
                 c.print(_response_renderable(content, render_markdown, metadata)),
                 c.print(),
             )
@@ -313,7 +313,7 @@ async def _read_interactive_input_async() -> str:
 
 def version_callback(value: bool):
     if value:
-        console.print(f"{__logo__} OpenHome v{__version__}")
+        console.print(f"{__logo__} OriginAgent v{__version__}")
         raise typer.Exit()
 
 
@@ -323,7 +323,7 @@ def main(
         None, "--version", "-v", callback=version_callback, is_eager=True
     ),
 ):
-    """OpenHome - Local AI Home Assistant."""
+    """OriginAgent - Local AI Agent Runtime."""
     pass
 
 
@@ -338,7 +338,7 @@ def onboard(
     config: str | None = typer.Option(None, "--config", "-c", help="Path to config file"),
     wizard: bool = typer.Option(False, "--wizard", help="Use interactive wizard"),
 ):
-    """Initialize OpenHome configuration and workspace."""
+    """Initialize OriginAgent configuration and workspace."""
     from OpenHome.config.loader import get_config_path, load_config, save_config, set_config_path
     from OpenHome.config.schema import Config
 
@@ -416,7 +416,7 @@ def onboard(
         agent_cmd += f" --config {config_path}"
         gateway_cmd += f" --config {config_path}"
 
-    console.print(f"\n{__logo__} OpenHome is ready!")
+    console.print(f"\n{__logo__} OriginAgent is ready!")
     console.print("\nNext steps:")
     if wizard:
         console.print(f"  1. Chat: [cyan]{agent_cmd}[/cyan]")
@@ -426,7 +426,7 @@ def onboard(
         console.print("     Get one at: https://openrouter.ai/keys")
         console.print(f"  2. Chat: [cyan]{agent_cmd}[/cyan]")
     console.print(
-        "\n[dim]Want Telegram/WhatsApp? See the OpenHome channel docs for setup.[/dim]"
+        "\n[dim]Want Telegram/WhatsApp? See the OriginAgent channel docs for setup.[/dim]"
     )
 
 
@@ -533,7 +533,7 @@ def serve(
     port: int | None = typer.Option(None, "--port", "-p", help="API server port"),
     host: str | None = typer.Option(None, "--host", "-H", help="Bind address"),
     timeout: float | None = typer.Option(None, "--timeout", "-t", help="Per-request timeout (seconds)"),
-    verbose: bool = typer.Option(False, "--verbose", "-v", help="Show OpenHome runtime logs"),
+    verbose: bool = typer.Option(False, "--verbose", "-v", help="Show OriginAgent runtime logs"),
     workspace: str | None = typer.Option(None, "--workspace", "-w", help="Workspace directory"),
     config: str | None = typer.Option(None, "--config", "-c", help="Path to config file"),
 ):
@@ -615,7 +615,7 @@ def gateway(
     verbose: bool = typer.Option(False, "--verbose", "-v", help="Verbose output"),
     config: str | None = typer.Option(None, "--config", "-c", help="Path to config file"),
 ):
-    """Start the OpenHome gateway."""
+    """Start the OriginAgent gateway."""
     if verbose:
         logger.remove(_log_handler_id)
         logger.add(
@@ -653,7 +653,7 @@ def _run_gateway(
 
     port = port if port is not None else config.gateway.port
 
-    console.print(f"{__logo__} Starting OpenHome gateway version {__version__} on port {port}...")
+    console.print(f"{__logo__} Starting OriginAgent gateway version {__version__} on port {port}...")
     sync_workspace_templates(config.workspace_path)
     bus = MessageBus()
     try:
@@ -1057,7 +1057,7 @@ def agent(
     workspace: str | None = typer.Option(None, "--workspace", "-w", help="Workspace directory"),
     config: str | None = typer.Option(None, "--config", "-c", help="Config file path"),
     markdown: bool = typer.Option(True, "--markdown/--no-markdown", help="Render assistant output as Markdown"),
-    logs: bool = typer.Option(False, "--logs/--no-logs", help="Show OpenHome runtime logs during chat"),
+    logs: bool = typer.Option(False, "--logs/--no-logs", help="Show OriginAgent runtime logs during chat"),
 ):
     """Interact with the agent directly."""
     from loguru import logger
@@ -1495,14 +1495,14 @@ def plugins_list():
 
 @app.command()
 def status():
-    """Show OpenHome status."""
+    """Show OriginAgent status."""
     from OpenHome.config.loader import get_config_path, load_config
 
     config_path = get_config_path()
     config = load_config()
     workspace = config.workspace_path
 
-    console.print(f"{__logo__} OpenHome Status\n")
+    console.print(f"{__logo__} OriginAgent Status\n")
 
     console.print(f"Config: {config_path} {'[green]✓[/green]' if config_path.exists() else '[red]✗[/red]'}")
     console.print(f"Workspace: {workspace} {'[green]✓[/green]' if workspace.exists() else '[red]✗[/red]'}")

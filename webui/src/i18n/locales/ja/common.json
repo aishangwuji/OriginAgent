@@ -1,29 +1,29 @@
 {
   "app": {
-    "brand": "OpenHome",
+    "brand": "OriginAgent",
     "loading": {
-      "connecting": "OpenHome に接続中…",
-      "boot": "OpenHome を読み込み中…"
+      "connecting": "OriginAgent に接続中…",
+      "boot": "OriginAgent を読み込み中…"
     },
     "error": {
-      "title": "OpenHome に接続できませんでした",
+      "title": "OriginAgent に接続できませんでした",
       "gatewayHint": "gateway（`openhome gateway`）が起動しており、このページが同じマシン上で開かれていることを確認してください。"
     },
     "system": {
       "section": "システム",
-      "restartHint": "実行時の変更を適用するには OpenHome を再起動します。",
-      "restart": "OpenHome を再起動",
+      "restartHint": "実行時の変更を適用するには OriginAgent を再起動します。",
+      "restart": "OriginAgent を再起動",
       "restarting": "再起動中..."
     },
     "restart": {
       "completed": "{{seconds}} 秒で再起動が完了しました。"
     },
     "documentTitle": {
-      "base": "OpenHome",
-      "chat": "{{title}} · OpenHome"
+      "base": "OriginAgent",
+      "chat": "{{title}} · OriginAgent"
     },
     "meta": {
-      "description": "OpenHome Web UI — OpenHome ワークスペースと会話します。"
+      "description": "OriginAgent Web UI — OriginAgent ワークスペースと会話します。"
     }
   },
   "sidebar": {
@@ -61,14 +61,14 @@
       "language": "言語",
       "provider": "プロバイダー",
       "model": "モデル",
-      "restart": "OpenHome を再起動",
+      "restart": "OriginAgent を再起動",
       "configPath": "設定パス"
     },
     "help": {
       "theme": "ライト表示とダーク表示を切り替えます。",
       "language": "WebUI で使用する言語を選択します。",
       "provider": "新しいモデルリクエストに使うプロバイダーを選択します。",
-      "model": "OpenHome が既定で使用するモデル名を設定します。",
+      "model": "OriginAgent が既定で使用するモデル名を設定します。",
       "configPath": "現在ゲートウェイが使用している設定ファイルです。"
     },
     "values": {
@@ -80,7 +80,7 @@
       "loading": "設定を読み込んでいます...",
       "loadError": "設定を読み込めませんでした",
       "unsaved": "未保存の変更があります。",
-      "savedRestart": "保存しました。反映するには OpenHome を再起動してください。"
+      "savedRestart": "保存しました。反映するには OriginAgent を再起動してください。"
     },
     "actions": {
       "save": "保存",
@@ -89,7 +89,7 @@
       "cancel": "キャンセル"
     },
     "byok": {
-      "description": "自分の provider キーを使います。OpenHome は現在の config から値を読み込み、設定済みの provider だけを一般設定で選択できます。",
+      "description": "自分の provider キーを使います。OriginAgent は現在の config から値を読み込み、設定済みの provider だけを一般設定で選択できます。",
       "configured": "設定済み",
       "notConfigured": "未設定",
       "configuredSection": "設定済み",
@@ -131,14 +131,14 @@
       }
     },
     "mcp": {
-      "description": "Configure MCP servers without editing config.json by hand. Changes are saved to the current OpenHome config.",
+      "description": "Configure MCP servers without editing config.json by hand. Changes are saved to the current OriginAgent config.",
       "quickConfig": "Quick config",
       "add": "Add MCP",
       "newServer": "New MCP server",
       "editServer": "Edit MCP server",
       "configuredServers": "Configured servers",
       "empty": "No MCP servers configured.",
-      "restartRequired": "Saved. Restart OpenHome to connect the updated MCP servers.",
+      "restartRequired": "Saved. Restart OriginAgent to connect the updated MCP servers.",
       "editorHelp": "Leave masked or empty env/header values unchanged when editing.",
       "name": "Server name",
       "command": "Command",
@@ -161,14 +161,14 @@
       },
       "homeAssistant": {
         "title": "Home Assistant",
-        "description": "Enter the HA address and long-lived access token. OpenHome will configure the MCP URL, auth header, and local access whitelist.",
+        "description": "Enter the HA address and long-lived access token. OriginAgent will configure the MCP URL, auth header, and local access whitelist.",
         "address": "HA address",
         "addressHelp": "You can paste http://localhost:8123 or the /home/0 URL from your browser.",
         "token": "Long-lived access token",
         "tokenHelp": "Create one from your Home Assistant profile security page.",
         "tokenHelpExisting": "A token is already saved. Leave blank to keep using it.",
         "tokenPlaceholder": "Paste Home Assistant long-lived access token",
-        "saveHint": "Saved as an HTTP MCP server and applied after restarting OpenHome.",
+        "saveHint": "Saved as an HTTP MCP server and applied after restarting OriginAgent.",
         "save": "Save HA MCP",
         "validation": {
           "addressRequired": "Home Assistant address is required.",
@@ -310,15 +310,15 @@
     },
     "confirmApply": {
       "title": "Apply this proposal?",
-      "description": "OpenHome will write this approved memory or fact into the controlled facts store and rebuild MEMORY.md.",
-      "skillDescription": "OpenHome will write {{name}} as a proposed, unverified workspace skill at {{path}}. It will be discoverable but not always loaded.",
+      "description": "OriginAgent will write this approved memory or fact into the controlled facts store and rebuild MEMORY.md.",
+      "skillDescription": "OriginAgent will write {{name}} as a proposed, unverified workspace skill at {{path}}. It will be discoverable but not always loaded.",
       "skillPathPending": "workspace/skills/<safe-name>/SKILL.md",
-      "workflowDescription": "OpenHome will write {{name}} as a proposed, unverified manual workflow at {{path}}. It will not create automation, run tools, or schedule jobs.",
+      "workflowDescription": "OriginAgent will write {{name}} as a proposed, unverified manual workflow at {{path}}. It will not create automation, run tools, or schedule jobs.",
       "workflowPathPending": "workspace/workflows/<safe-name>/workflow.yaml",
       "cancel": "Cancel",
       "confirm": "Apply",
-      "promoteSkillDescription": "OpenHome will promote {{name}} by verifying it if needed and activating the workspace skill at {{path}}.",
-      "deprecateSkillDescription": "OpenHome will mark workspace skill {{name}} as deprecated at {{path}}. It will stop appearing in normal skill discovery."
+      "promoteSkillDescription": "OriginAgent will promote {{name}} by verifying it if needed and activating the workspace skill at {{path}}.",
+      "deprecateSkillDescription": "OriginAgent will mark workspace skill {{name}} as deprecated at {{path}}. It will stop appearing in normal skill discovery."
     },
     "origins": {
       "background_review": "Background review",
@@ -381,7 +381,7 @@
       "imageQuickActions": {
         "icon": {
           "title": "アプリアイコンを作る",
-          "prompt": "OpenHome のクリーンな 1:1 アプリアイコンを生成してください。親しみやすいロボット、シンプルなベクター風、柔らかい青と白の配色、文字なし。"
+          "prompt": "OriginAgent のクリーンな 1:1 アプリアイコンを生成してください。親しみやすいロボット、シンプルなベクター風、柔らかい青と白の配色、文字なし。"
         },
         "sticker": {
           "title": "ステッカーを作る",
@@ -465,7 +465,7 @@
             "description": "このチャットで実行中の agent ターンをキャンセルします。"
           },
           "restart": {
-            "title": "OpenHome を再起動",
+            "title": "OriginAgent を再起動",
             "description": "bot プロセスをその場で再起動します。"
           },
           "status": {
