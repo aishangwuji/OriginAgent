@@ -2,7 +2,7 @@
 
 from pathlib import Path
 
-from OpenHome.session.manager import Session, SessionManager
+from OriginAgent.session.manager import Session, SessionManager
 
 
 def _seed(workspace: Path, key: str = "telegram:abc") -> SessionManager:

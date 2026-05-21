@@ -2,8 +2,8 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from OpenHome.agent.presence import PresenceStore
-from OpenHome.agent.presence_signals import (
+from OriginAgent.agent.presence import PresenceStore
+from OriginAgent.agent.presence_signals import (
     FORBIDDEN_METADATA_KEYS,
     PresenceSignal,
     PresenceSignalIngestor,

@@ -16,7 +16,7 @@ export function EmptyState({
       <div className="space-y-1">
         <p className="text-lg font-medium">No chats yet</p>
         <p className="max-w-sm text-sm text-muted-foreground">
-          Start a conversation — your sessions are stored locally on the OpenHome
+          Start a conversation — your sessions are stored locally on the OriginAgent
           workspace and stay available across reloads.
         </p>
       </div>

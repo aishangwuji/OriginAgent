@@ -4,11 +4,11 @@ from typing import Any
 
 import pytest
 
-from OpenHome.agent.tools.audit import InMemoryToolAuditSink, ToolAuditConfig
-from OpenHome.agent.tools.base import Tool
-from OpenHome.agent.tools.registry import ToolRegistry
-from OpenHome.agent.tools.shell import ExecTool
-from OpenHome.security.capabilities import CapabilitySnapshot
+from OriginAgent.agent.tools.audit import InMemoryToolAuditSink, ToolAuditConfig
+from OriginAgent.agent.tools.base import Tool
+from OriginAgent.agent.tools.registry import ToolRegistry
+from OriginAgent.agent.tools.shell import ExecTool
+from OriginAgent.security.capabilities import CapabilitySnapshot
 
 
 class EchoTool(Tool):
@@ -81,7 +81,7 @@ def test_low_risk_helper_prepare_call_without_snapshot_succeeds() -> None:
         "message",
         "cron",
         "spawn",
-        "openhome_device_lighting_set_power",
+        "originagent_device_lighting_set_power",
         "mcp_demo_tool",
     ],
 )
@@ -108,9 +108,9 @@ def test_scheduled_snapshot_denies_exec() -> None:
 
 def test_system_snapshot_denies_device_tool() -> None:
     registry = ToolRegistry(capability_snapshot=CapabilitySnapshot.system_default())
-    registry.register(NamedTool("openhome_device_lighting_set_power"))
+    registry.register(NamedTool("originagent_device_lighting_set_power"))
 
-    _, _, error = registry.prepare_call("openhome_device_lighting_set_power", {})
+    _, _, error = registry.prepare_call("originagent_device_lighting_set_power", {})
 
     assert error is not None
     assert "Device tools are not allowed" in error

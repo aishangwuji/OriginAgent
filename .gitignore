@@ -100,7 +100,7 @@ temp/
 /memory/
 /data/
 /secrets/
-/.openhome/
+/.originagent/
 *.sqlite
 *.sqlite3
 *.db

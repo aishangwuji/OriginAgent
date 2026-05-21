@@ -16,12 +16,12 @@ WORKDIR /app
 
 # Install Python dependencies first (cached layer)
 COPY pyproject.toml README.md LICENSE ./
-RUN mkdir -p OpenHome bridge && touch OpenHome/__init__.py && \
+RUN mkdir -p OriginAgent bridge && touch OriginAgent/__init__.py && \
     uv pip install --system --no-cache . && \
-    rm -rf OpenHome bridge
+    rm -rf OriginAgent bridge
 
 # Copy the full source and install
-COPY OpenHome/ OpenHome/
+COPY OriginAgent/ OriginAgent/
 COPY bridge/ bridge/
 RUN uv pip install --system --no-cache .
 
@@ -33,15 +33,15 @@ RUN git config --global --add url."https://github.com/".insteadOf ssh://git@gith
 WORKDIR /app
 
 # Create non-root user and config directory
-RUN useradd -m -u 1000 -s /bin/bash openhome && \
-    mkdir -p /home/openhome/.openhome && \
-    chown -R openhome:openhome /home/openhome /app
+RUN useradd -m -u 1000 -s /bin/bash originagent && \
+    mkdir -p /home/originagent/.originagent && \
+    chown -R originagent:originagent /home/originagent /app
 
 COPY entrypoint.sh /usr/local/bin/entrypoint.sh
 RUN sed -i 's/\r$//' /usr/local/bin/entrypoint.sh && chmod +x /usr/local/bin/entrypoint.sh
 
-USER openhome
-ENV HOME=/home/openhome
+USER originagent
+ENV HOME=/home/originagent
 
 # Gateway default port
 EXPOSE 18790

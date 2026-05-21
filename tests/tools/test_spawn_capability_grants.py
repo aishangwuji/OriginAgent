@@ -10,14 +10,14 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from OpenHome.agent.subagent import SubagentManager, SubagentStatus
-from OpenHome.agent.tools.shell import ExecTool
-from OpenHome.agent.tools.spawn import SpawnTool
-from OpenHome.bus.queue import MessageBus
-from OpenHome.config.schema import ExecToolConfig
-from OpenHome.security.capabilities import CapabilitySnapshot
-from OpenHome.security.grants import CapabilityGrant, CapabilityGrantStore
-from OpenHome.security.policy import PolicyDeniedError
+from OriginAgent.agent.subagent import SubagentManager, SubagentStatus
+from OriginAgent.agent.tools.shell import ExecTool
+from OriginAgent.agent.tools.spawn import SpawnTool
+from OriginAgent.bus.queue import MessageBus
+from OriginAgent.config.schema import ExecToolConfig
+from OriginAgent.security.capabilities import CapabilitySnapshot
+from OriginAgent.security.grants import CapabilityGrant, CapabilityGrantStore
+from OriginAgent.security.policy import PolicyDeniedError
 
 
 def _provider() -> MagicMock:

@@ -1,6 +1,6 @@
 """Tests for heartbeat context bridge — injecting delivered messages into channel session."""
 
-from OpenHome.session.manager import SessionManager
+from OriginAgent.session.manager import SessionManager
 
 
 class TestHeartbeatContextBridge:

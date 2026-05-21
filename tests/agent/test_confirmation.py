@@ -3,18 +3,18 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from OpenHome.agent.action_safety import ActionDecision, ActionRequest, ActionSafetyGate
-from OpenHome.agent.audit import AuditLogger
-from OpenHome.agent.confirmation import (
+from OriginAgent.agent.action_safety import ActionDecision, ActionRequest, ActionSafetyGate
+from OriginAgent.agent.audit import AuditLogger
+from OriginAgent.agent.confirmation import (
     PROMPT_MAX_CHARS,
     REASON_MAX_CHARS,
     ConfirmationManager,
     ConfirmationRequest,
     PendingConfirmationStore,
 )
-from OpenHome.agent.facts import FactStore
-from OpenHome.agent.memory import MemoryWorkspaceSnapshot
-from OpenHome.agent.presence import PresenceStore
+from OriginAgent.agent.facts import FactStore
+from OriginAgent.agent.memory import MemoryWorkspaceSnapshot
+from OriginAgent.agent.presence import PresenceStore
 
 NOW = datetime(2026, 5, 15, 12, 0, 0, tzinfo=timezone.utc)
 
@@ -449,7 +449,7 @@ def test_pending_confirmations_store_uses_lock_and_atomic_writer(tmp_path, monke
         events.append(("write", path, json.loads(content)))
 
     monkeypatch.setattr(store, "_locked", lambda: FakeLock())
-    monkeypatch.setattr("OpenHome.agent.confirmation._write_text_atomic", fake_write)
+    monkeypatch.setattr("OriginAgent.agent.confirmation._write_text_atomic", fake_write)
 
     store.write_all([
         ConfirmationRequest(

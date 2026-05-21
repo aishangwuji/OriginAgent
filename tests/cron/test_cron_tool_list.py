@@ -4,10 +4,10 @@ from datetime import datetime, timezone
 
 import pytest
 
-from OpenHome.agent.tools.cron import CronTool
-from OpenHome.cron.service import CronService
-from OpenHome.cron.types import CronJob, CronJobState, CronPayload, CronSchedule
-from OpenHome.security.capabilities import CapabilitySnapshot
+from OriginAgent.agent.tools.cron import CronTool
+from OriginAgent.cron.service import CronService
+from OriginAgent.cron.types import CronJob, CronJobState, CronPayload, CronSchedule
+from OriginAgent.security.capabilities import CapabilitySnapshot
 
 
 def _make_tool(tmp_path) -> CronTool:

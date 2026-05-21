@@ -4,7 +4,7 @@ import json
 from datetime import datetime
 from pathlib import Path
 
-from OpenHome.session.manager import Session, SessionManager
+from OriginAgent.session.manager import Session, SessionManager
 
 
 class TestAtomicSave:
@@ -63,7 +63,7 @@ class TestAtomicSave:
         ]
 
         import unittest.mock
-        with unittest.mock.patch("OpenHome.session.manager.json.dumps", side_effect=failing_dumps):
+        with unittest.mock.patch("OriginAgent.session.manager.json.dumps", side_effect=failing_dumps):
             try:
                 mgr.save(session)
             except OSError:

@@ -13,7 +13,7 @@ from types import SimpleNamespace
 import pytest
 
 try:
-    from OpenHome.channels import qq
+    from OriginAgent.channels import qq
 
     QQ_AVAILABLE = getattr(qq, "QQ_AVAILABLE", False)
 except ImportError:
@@ -22,8 +22,8 @@ except ImportError:
 if not QQ_AVAILABLE:
     pytest.skip("QQ dependencies not installed (qq-botpy)", allow_module_level=True)
 
-from OpenHome.bus.queue import MessageBus
-from OpenHome.channels.qq import QQChannel, QQConfig
+from OriginAgent.bus.queue import MessageBus
+from OriginAgent.channels.qq import QQChannel, QQConfig
 
 
 class _FakeApi:

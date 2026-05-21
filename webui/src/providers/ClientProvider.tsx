@@ -1,9 +1,9 @@
 import { createContext, useContext, type ReactNode } from "react";
 
-import type { OpenHomeClient } from "@/lib/OpenHome-client";
+import type { OriginAgentClient } from "@/lib/OriginAgent-client";
 
 interface ClientContextValue {
-  client: OpenHomeClient;
+  client: OriginAgentClient;
   token: string;
   modelName: string | null;
   refreshToken: () => Promise<string | null>;
@@ -18,7 +18,7 @@ export function ClientProvider({
   refreshToken = async () => null,
   children,
 }: {
-  client: OpenHomeClient;
+  client: OriginAgentClient;
   token: string;
   modelName?: string | null;
   refreshToken?: () => Promise<string | null>;

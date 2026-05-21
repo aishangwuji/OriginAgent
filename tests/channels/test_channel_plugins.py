@@ -8,14 +8,14 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from OpenHome.bus.events import OutboundMessage
-from OpenHome.bus.queue import MessageBus
-from OpenHome.channels.base import BaseChannel
-from OpenHome.channels.manager import ChannelManager
-from OpenHome.config.schema import ChannelsConfig
-from OpenHome.providers.transcription import GroqTranscriptionProvider as _GroqProvider
-from OpenHome.providers.transcription import OpenAITranscriptionProvider as _OpenAIProvider
-from OpenHome.utils.restart import RestartNotice
+from OriginAgent.bus.events import OutboundMessage
+from OriginAgent.bus.queue import MessageBus
+from OriginAgent.channels.base import BaseChannel
+from OriginAgent.channels.manager import ChannelManager
+from OriginAgent.config.schema import ChannelsConfig
+from OriginAgent.providers.transcription import GroqTranscriptionProvider as _GroqProvider
+from OriginAgent.providers.transcription import OpenAITranscriptionProvider as _OpenAIProvider
+from OriginAgent.utils.restart import RestartNotice
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -101,7 +101,7 @@ _EP_TARGET = "importlib.metadata.entry_points"
 
 
 def test_discover_plugins_loads_entry_points():
-    from OpenHome.channels.registry import discover_plugins
+    from OriginAgent.channels.registry import discover_plugins
 
     ep = _make_entry_point("line", _FakePlugin)
     with patch(_EP_TARGET, return_value=[ep]):
@@ -112,7 +112,7 @@ def test_discover_plugins_loads_entry_points():
 
 
 def test_discover_plugins_handles_load_error():
-    from OpenHome.channels.registry import discover_plugins
+    from OriginAgent.channels.registry import discover_plugins
 
     def _boom():
         raise RuntimeError("broken")
@@ -129,7 +129,7 @@ def test_discover_plugins_handles_load_error():
 # ---------------------------------------------------------------------------
 
 def test_discover_all_includes_builtins():
-    from OpenHome.channels.registry import discover_all, discover_channel_names
+    from OriginAgent.channels.registry import discover_all, discover_channel_names
 
     with patch(_EP_TARGET, return_value=[]):
         result = discover_all()
@@ -142,7 +142,7 @@ def test_discover_all_includes_builtins():
 
 
 def test_discover_all_includes_external_plugin():
-    from OpenHome.channels.registry import discover_all
+    from OriginAgent.channels.registry import discover_all
 
     ep = _make_entry_point("line", _FakePlugin)
     with patch(_EP_TARGET, return_value=[ep]):
@@ -153,7 +153,7 @@ def test_discover_all_includes_external_plugin():
 
 
 def test_discover_all_builtin_shadows_plugin():
-    from OpenHome.channels.registry import discover_all
+    from OriginAgent.channels.registry import discover_all
 
     ep = _make_entry_point("telegram", _FakeTelegram)
     with patch(_EP_TARGET, return_value=[ep]):
@@ -170,7 +170,7 @@ def test_discover_all_builtin_shadows_plugin():
 @pytest.mark.asyncio
 async def test_manager_loads_plugin_from_dict_config():
     """ChannelManager should instantiate a plugin channel from a raw dict config."""
-    from OpenHome.channels.manager import ChannelManager
+    from OriginAgent.channels.manager import ChannelManager
 
     fake_config = SimpleNamespace(
         channels=ChannelsConfig.model_validate({
@@ -180,7 +180,7 @@ async def test_manager_loads_plugin_from_dict_config():
     )
 
     with patch(
-        "OpenHome.channels.registry.discover_all",
+        "OriginAgent.channels.registry.discover_all",
         return_value={"fakeplugin": _FakePlugin},
     ):
         mgr = ChannelManager.__new__(ChannelManager)
@@ -196,7 +196,7 @@ async def test_manager_loads_plugin_from_dict_config():
 
 @pytest.mark.asyncio
 async def test_manager_propagates_groq_transcription_api_base_to_channels():
-    from OpenHome.channels.manager import ChannelManager
+    from OriginAgent.channels.manager import ChannelManager
 
     fake_config = SimpleNamespace(
         channels=ChannelsConfig.model_validate({
@@ -210,7 +210,7 @@ async def test_manager_propagates_groq_transcription_api_base_to_channels():
     )
 
     with patch(
-        "OpenHome.channels.registry.discover_all",
+        "OriginAgent.channels.registry.discover_all",
         return_value={"fakeplugin": _FakePlugin},
     ):
         mgr = ChannelManager.__new__(ChannelManager)
@@ -229,7 +229,7 @@ async def test_manager_propagates_groq_transcription_api_base_to_channels():
 
 @pytest.mark.asyncio
 async def test_manager_propagates_openai_transcription_api_base_to_channels():
-    from OpenHome.channels.manager import ChannelManager
+    from OriginAgent.channels.manager import ChannelManager
 
     fake_config = SimpleNamespace(
         channels=ChannelsConfig.model_validate({
@@ -246,7 +246,7 @@ async def test_manager_propagates_openai_transcription_api_base_to_channels():
     )
 
     with patch(
-        "OpenHome.channels.registry.discover_all",
+        "OriginAgent.channels.registry.discover_all",
         return_value={"fakeplugin": _FakePlugin},
     ):
         mgr = ChannelManager.__new__(ChannelManager)
@@ -265,7 +265,7 @@ async def test_manager_propagates_openai_transcription_api_base_to_channels():
 @pytest.mark.asyncio
 async def test_base_channel_passes_api_base_to_openai_transcription_provider():
     """BaseChannel.transcribe_audio must forward transcription_api_base to OpenAI."""
-    from OpenHome.providers import transcription as transcription_mod
+    from OriginAgent.providers import transcription as transcription_mod
 
     channel = _FakePlugin({"enabled": True, "allowFrom": ["*"]}, MessageBus())
     channel.transcription_provider = "openai"
@@ -294,7 +294,7 @@ async def test_base_channel_passes_api_base_to_openai_transcription_provider():
 
 
 def test_openai_transcription_provider_honors_api_base_argument():
-    from OpenHome.providers.transcription import OpenAITranscriptionProvider
+    from OriginAgent.providers.transcription import OpenAITranscriptionProvider
 
     default = OpenAITranscriptionProvider(api_key="k")
     assert default.api_url == "https://api.openai.com/v1/audio/transcriptions"
@@ -308,7 +308,7 @@ def test_openai_transcription_provider_honors_api_base_argument():
 @pytest.mark.asyncio
 async def test_base_channel_passes_language_to_groq_transcription_provider():
     """BaseChannel.transcribe_audio must forward transcription_language to Groq."""
-    from OpenHome.providers import transcription as transcription_mod
+    from OriginAgent.providers import transcription as transcription_mod
 
     channel = _FakePlugin({"enabled": True, "allowFrom": ["*"]}, MessageBus())
     channel.transcription_provider = "groq"
@@ -379,7 +379,7 @@ async def test_transcription_provider_includes_language(tmp_path, provider_cls, 
     audio.write_bytes(b"audio")
     captured: dict[str, object] = {}
 
-    with patch("OpenHome.providers.transcription.httpx.AsyncClient", return_value=_stub_async_client(captured)):
+    with patch("OriginAgent.providers.transcription.httpx.AsyncClient", return_value=_stub_async_client(captured)):
         provider = provider_cls(api_key="k", language=language)
         result = await provider.transcribe(audio)
 
@@ -399,7 +399,7 @@ async def test_transcription_provider_omits_language_when_none(tmp_path, provide
     audio.write_bytes(b"audio")
     captured: dict[str, object] = {}
 
-    with patch("OpenHome.providers.transcription.httpx.AsyncClient", return_value=_stub_async_client(captured)):
+    with patch("OriginAgent.providers.transcription.httpx.AsyncClient", return_value=_stub_async_client(captured)):
         provider = provider_cls(api_key="k")
         result = await provider.transcribe(audio)
 
@@ -410,8 +410,8 @@ async def test_transcription_provider_omits_language_when_none(tmp_path, provide
 def test_channels_login_uses_discovered_plugin_class(monkeypatch):
     from typer.testing import CliRunner
 
-    from OpenHome.cli.commands import app
-    from OpenHome.config.schema import Config
+    from OriginAgent.cli.commands import app
+    from OriginAgent.config.schema import Config
 
     runner = CliRunner()
     seen: dict[str, object] = {}
@@ -424,9 +424,9 @@ def test_channels_login_uses_discovered_plugin_class(monkeypatch):
             seen["config"] = self.config
             return True
 
-    monkeypatch.setattr("OpenHome.config.loader.load_config", lambda config_path=None: Config())
+    monkeypatch.setattr("OriginAgent.config.loader.load_config", lambda config_path=None: Config())
     monkeypatch.setattr(
-        "OpenHome.channels.registry.discover_all",
+        "OriginAgent.channels.registry.discover_all",
         lambda: {"fakeplugin": _LoginPlugin},
     )
 
@@ -439,8 +439,8 @@ def test_channels_login_uses_discovered_plugin_class(monkeypatch):
 def test_channels_login_sets_custom_config_path(monkeypatch, tmp_path):
     from typer.testing import CliRunner
 
-    from OpenHome.cli.commands import app
-    from OpenHome.config.schema import Config
+    from OriginAgent.cli.commands import app
+    from OriginAgent.config.schema import Config
 
     runner = CliRunner()
     seen: dict[str, object] = {}
@@ -450,13 +450,13 @@ def test_channels_login_sets_custom_config_path(monkeypatch, tmp_path):
         async def login(self, force: bool = False) -> bool:
             return True
 
-    monkeypatch.setattr("OpenHome.config.loader.load_config", lambda config_path=None: Config())
+    monkeypatch.setattr("OriginAgent.config.loader.load_config", lambda config_path=None: Config())
     monkeypatch.setattr(
-        "OpenHome.config.loader.set_config_path",
+        "OriginAgent.config.loader.set_config_path",
         lambda path: seen.__setitem__("config_path", path),
     )
     monkeypatch.setattr(
-        "OpenHome.channels.registry.discover_all",
+        "OriginAgent.channels.registry.discover_all",
         lambda: {"fakeplugin": _LoginPlugin},
     )
 
@@ -469,19 +469,19 @@ def test_channels_login_sets_custom_config_path(monkeypatch, tmp_path):
 def test_channels_status_sets_custom_config_path(monkeypatch, tmp_path):
     from typer.testing import CliRunner
 
-    from OpenHome.cli.commands import app
-    from OpenHome.config.schema import Config
+    from OriginAgent.cli.commands import app
+    from OriginAgent.config.schema import Config
 
     runner = CliRunner()
     seen: dict[str, object] = {}
     config_path = tmp_path / "custom-config.json"
 
-    monkeypatch.setattr("OpenHome.config.loader.load_config", lambda config_path=None: Config())
+    monkeypatch.setattr("OriginAgent.config.loader.load_config", lambda config_path=None: Config())
     monkeypatch.setattr(
-        "OpenHome.config.loader.set_config_path",
+        "OriginAgent.config.loader.set_config_path",
         lambda path: seen.__setitem__("config_path", path),
     )
-    monkeypatch.setattr("OpenHome.channels.registry.discover_all", lambda: {})
+    monkeypatch.setattr("OriginAgent.channels.registry.discover_all", lambda: {})
 
     result = runner.invoke(app, ["channels", "status", "--config", str(config_path)])
 
@@ -499,7 +499,7 @@ async def test_manager_skips_disabled_plugin():
     )
 
     with patch(
-        "OpenHome.channels.registry.discover_all",
+        "OriginAgent.channels.registry.discover_all",
         return_value={"fakeplugin": _FakePlugin},
     ):
         mgr = ChannelManager.__new__(ChannelManager)
@@ -518,7 +518,7 @@ async def test_manager_skips_disabled_plugin():
 
 def test_builtin_channel_default_config():
     """Built-in channels expose default_config() returning a dict with 'enabled': False."""
-    from OpenHome.channels.telegram import TelegramChannel
+    from OriginAgent.channels.telegram import TelegramChannel
     cfg = TelegramChannel.default_config()
     assert isinstance(cfg, dict)
     assert cfg["enabled"] is False
@@ -527,7 +527,7 @@ def test_builtin_channel_default_config():
 
 def test_builtin_channel_init_from_dict():
     """Built-in channels accept a raw dict and convert to Pydantic internally."""
-    from OpenHome.channels.telegram import TelegramChannel
+    from OriginAgent.channels.telegram import TelegramChannel
     bus = MessageBus()
     ch = TelegramChannel({"enabled": False, "token": "test-tok", "allowFrom": ["*"]}, bus)
     assert ch.config.token == "test-tok"
@@ -658,7 +658,7 @@ async def test_send_with_retry_retries_on_failure():
     msg = OutboundMessage(channel="failing", chat_id="123", content="test")
 
     # Patch asyncio.sleep to avoid actual delays
-    with patch("OpenHome.channels.manager.asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
+    with patch("OriginAgent.channels.manager.asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
         await mgr._send_with_retry(mgr.channels["failing"], msg)
 
     assert call_count == 3  # 3 total attempts (initial + 2 retries)
@@ -698,7 +698,7 @@ async def test_send_with_retry_no_retry_when_max_is_zero():
 
     msg = OutboundMessage(channel="failing", chat_id="123", content="test")
 
-    with patch("OpenHome.channels.manager.asyncio.sleep", new_callable=AsyncMock):
+    with patch("OriginAgent.channels.manager.asyncio.sleep", new_callable=AsyncMock):
         await mgr._send_with_retry(mgr.channels["failing"], msg)
 
     assert call_count == 1  # Called once but no retry (max(0, 1) = 1)
@@ -906,7 +906,7 @@ async def test_send_with_retry_propagates_cancelled_error_during_sleep():
     async def cancel_during_sleep(_):
         raise asyncio.CancelledError("cancelled during sleep")
 
-    with patch("OpenHome.channels.manager.asyncio.sleep", side_effect=cancel_during_sleep):
+    with patch("OriginAgent.channels.manager.asyncio.sleep", side_effect=cancel_during_sleep):
         with pytest.raises(asyncio.CancelledError):
             await mgr._send_with_retry(mgr.channels["failing"], msg)
 
@@ -1248,7 +1248,7 @@ async def test_notify_restart_done_enqueues_outbound_message():
     mgr._send_with_retry = AsyncMock()
 
     notice = RestartNotice(channel="feishu", chat_id="oc_123", started_at_raw="100.0")
-    with patch("OpenHome.channels.manager.consume_restart_notice_from_env", return_value=notice):
+    with patch("OriginAgent.channels.manager.consume_restart_notice_from_env", return_value=notice):
         mgr._notify_restart_done_if_needed()
 
     await asyncio.sleep(0)

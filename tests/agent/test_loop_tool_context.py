@@ -3,12 +3,12 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from OpenHome.agent.domain_packs import DomainPackManager
-from OpenHome.agent.loop import AgentLoop
-from OpenHome.agent.action_runtime import ActionExecutionResult
-from OpenHome.bus.queue import MessageBus
-from OpenHome.config.schema import DeviceToolsConfig, DomainPacksConfig, ToolsConfig
-from OpenHome.providers.base import LLMResponse, ToolCallRequest
+from OriginAgent.agent.domain_packs import DomainPackManager
+from OriginAgent.agent.loop import AgentLoop
+from OriginAgent.agent.action_runtime import ActionExecutionResult
+from OriginAgent.bus.queue import MessageBus
+from OriginAgent.config.schema import DeviceToolsConfig, DomainPacksConfig, ToolsConfig
+from OriginAgent.providers.base import LLMResponse, ToolCallRequest
 
 
 class _ContextRecordingTool:
@@ -100,7 +100,7 @@ def test_loop_without_device_executor_does_not_register_lighting_tools(tmp_path:
         model="test-model",
     )
 
-    assert not any(name.startswith("openhome_device_lighting_") for name in loop.tools.tool_names)
+    assert not any(name.startswith("originagent_device_lighting_") for name in loop.tools.tool_names)
 
 
 def test_loop_with_device_executor_registers_exactly_three_lighting_tools(tmp_path: Path) -> None:
@@ -114,12 +114,12 @@ def test_loop_with_device_executor_registers_exactly_three_lighting_tools(tmp_pa
     )
 
     lighting_names = [
-        name for name in loop.tools.tool_names if name.startswith("openhome_device_lighting_")
+        name for name in loop.tools.tool_names if name.startswith("originagent_device_lighting_")
     ]
     assert lighting_names == [
-        "openhome_device_lighting_set_power",
-        "openhome_device_lighting_set_brightness",
-        "openhome_device_lighting_set_color_temperature",
+        "originagent_device_lighting_set_power",
+        "originagent_device_lighting_set_brightness",
+        "originagent_device_lighting_set_color_temperature",
     ]
 
 
@@ -141,7 +141,7 @@ async def test_loop_set_tool_context_injects_device_actor_and_trigger(tmp_path: 
         trigger="scheduled",
     )
 
-    tool = loop.tools.get("openhome_device_lighting_set_power")
+    tool = loop.tools.get("originagent_device_lighting_set_power")
     assert tool is not None
     result = await tool.execute(device_id="lamp", power="on")
 
@@ -164,7 +164,7 @@ async def test_loop_hook_refresh_preserves_explicit_device_actor_and_trigger(tmp
                 tool_calls=[
                     ToolCallRequest(
                         id="call_1",
-                        name="openhome_device_lighting_set_power",
+                        name="originagent_device_lighting_set_power",
                         arguments={"device_id": "lamp", "power": "on"},
                     )
                 ],

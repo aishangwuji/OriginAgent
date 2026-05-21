@@ -12,7 +12,7 @@ Default thinking behavior per Xiaomi docs:
   - mimo-v2-flash: disabled
   - mimo-v2.5-pro, mimo-v2.5, mimo-v2-pro, mimo-v2-omni: enabled
 
-Without an explicit reasoning_effort, OpenHome must not send the
+Without an explicit reasoning_effort, OriginAgent must not send the
 thinking field so the provider default is preserved (issue #3585).
 """
 
@@ -20,9 +20,9 @@ from __future__ import annotations
 
 from typing import Any
 
-from OpenHome.config.schema import ProvidersConfig
-from OpenHome.providers.openai_compat_provider import OpenAICompatProvider
-from OpenHome.providers.registry import PROVIDERS
+from OriginAgent.config.schema import ProvidersConfig
+from OriginAgent.providers.openai_compat_provider import OpenAICompatProvider
+from OriginAgent.providers.registry import PROVIDERS
 
 
 def _mimo_spec():

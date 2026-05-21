@@ -3,8 +3,8 @@
 
 import pytest
 
-from OpenHome.agent.tools.filesystem import EditFileTool, ReadFileTool, WriteFileTool
-from OpenHome.agent.tools import file_state
+from OriginAgent.agent.tools.filesystem import EditFileTool, ReadFileTool, WriteFileTool
+from OriginAgent.agent.tools import file_state
 
 
 # ---------------------------------------------------------------------------

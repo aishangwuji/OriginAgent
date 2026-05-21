@@ -2,9 +2,9 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
-from OpenHome.security.capabilities import CapabilitySnapshot
-from OpenHome.security.capabilities import intersect_capability_snapshots
-from OpenHome.security.grants import CapabilityGrant, CapabilityGrantStore
+from OriginAgent.security.capabilities import CapabilitySnapshot
+from OriginAgent.security.capabilities import intersect_capability_snapshots
+from OriginAgent.security.grants import CapabilityGrant, CapabilityGrantStore
 
 
 def _now() -> datetime:

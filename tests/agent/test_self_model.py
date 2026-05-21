@@ -3,10 +3,10 @@ from __future__ import annotations
 import json
 from datetime import datetime, timedelta, timezone
 
-from OpenHome.agent.background_review import ReviewProposal, ReviewProposalStore
-from OpenHome.agent.confirmation import ConfirmationRequest, PendingConfirmationStore
-from OpenHome.agent.facts import FactStore
-from OpenHome.agent.self_model import SelfModelService
+from OriginAgent.agent.background_review import ReviewProposal, ReviewProposalStore
+from OriginAgent.agent.confirmation import ConfirmationRequest, PendingConfirmationStore
+from OriginAgent.agent.facts import FactStore
+from OriginAgent.agent.self_model import SelfModelService
 
 RAW_SECRET = "sk-proj-secretsecretsecretsecret"
 
@@ -34,7 +34,7 @@ def test_self_model_derives_limitations_and_redacts_sensitive_content(tmp_path) 
         "description: Manual lighting recovery.\n"
         "always: false\n"
         "metadata:\n"
-        "  OpenHome:\n"
+        "  OriginAgent:\n"
         "    proposal_status: proposed\n"
         "    verification_status: unverified\n"
         "    lifecycle_status: proposed\n"

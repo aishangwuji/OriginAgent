@@ -1,7 +1,7 @@
 """Tests for the MiniMax Anthropic provider registration."""
 
-from OpenHome.config.schema import ProvidersConfig
-from OpenHome.providers.registry import PROVIDERS
+from OriginAgent.config.schema import ProvidersConfig
+from OriginAgent.providers.registry import PROVIDERS
 
 
 def test_minimax_anthropic_config_field_exists():

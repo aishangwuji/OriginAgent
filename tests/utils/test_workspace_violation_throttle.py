@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from OpenHome.utils.runtime import (
+from OriginAgent.utils.runtime import (
     repeated_workspace_violation_error,
     workspace_violation_signature,
 )

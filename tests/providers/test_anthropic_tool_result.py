@@ -7,7 +7,7 @@ were passed to Anthropic unconverted, causing silent image drops with a
 warning.
 """
 
-from OpenHome.providers.anthropic_provider import AnthropicProvider
+from OriginAgent.providers.anthropic_provider import AnthropicProvider
 
 
 def test_tool_result_block_converts_image_url_in_list_content():

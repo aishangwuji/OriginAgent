@@ -1,9 +1,9 @@
 from pathlib import Path
 
-from OpenHome.config.loader import get_config_path, set_config_path
-from OpenHome.config.paths import get_media_dir
-from OpenHome.utils import session_attachments
-from OpenHome.utils.session_attachments import (
+from OriginAgent.config.loader import get_config_path, set_config_path
+from OriginAgent.config.paths import get_media_dir
+from OriginAgent.utils import session_attachments
+from OriginAgent.utils.session_attachments import (
     MAX_SESSION_REPLAY_MEDIA_BYTES,
     merge_turn_media_into_last_assistant,
     stage_media_paths_for_session_replay,

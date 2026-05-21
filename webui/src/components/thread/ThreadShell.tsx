@@ -19,7 +19,7 @@ import { ThreadComposer } from "@/components/thread/ThreadComposer";
 import { ThreadHeader } from "@/components/thread/ThreadHeader";
 import { StreamErrorNotice } from "@/components/thread/StreamErrorNotice";
 import { ThreadViewport } from "@/components/thread/ThreadViewport";
-import { useOpenHomeStream, type SendImage, type SendOptions } from "@/hooks/useOpenHomeStream";
+import { useOriginAgentStream, type SendImage, type SendOptions } from "@/hooks/useOriginAgentStream";
 import { useSessionHistory } from "@/hooks/useSessions";
 import { listSlashCommands, withTokenRefresh } from "@/lib/api";
 import type { ChatSummary, SlashCommand, UIMessage } from "@/lib/types";
@@ -129,7 +129,7 @@ export function ThreadShell({
     setMessages,
     streamError,
     dismissStreamError,
-  } = useOpenHomeStream(chatId, initial, hasPendingToolCalls, handleTurnEnd);
+  } = useOriginAgentStream(chatId, initial, hasPendingToolCalls, handleTurnEnd);
   const pendingAsk = useMemo(() => {
     for (let index = messages.length - 1; index >= 0; index -= 1) {
       const message = messages[index];
@@ -236,7 +236,7 @@ export function ThreadShell({
     }
   }, [chatId, messages]);
 
-  // Persist thread to in-memory cache after paint so ``useOpenHomeStream``'s chat switch
+  // Persist thread to in-memory cache after paint so ``useOriginAgentStream``'s chat switch
   // ``useEffect`` reset has flushed; ``skipLayoutCacheRef`` drops the first run that still
   // sees the *previous* chat's ``messages`` (avoids stale rows leaking across sessions).
   useEffect(() => {

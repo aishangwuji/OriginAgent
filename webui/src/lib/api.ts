@@ -58,7 +58,7 @@ async function parseJsonResponse<T>(res: Response): Promise<T> {
     if (looksLikeHtml) {
       throw new ApiError(
         res.status || 500,
-        "API returned HTML instead of JSON. Refresh the page or restart OpenHome so the latest backend routes are active.",
+        "API returned HTML instead of JSON. Refresh the page or restart OriginAgent so the latest backend routes are active.",
       );
     }
     throw new ApiError(

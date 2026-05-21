@@ -1,4 +1,4 @@
-from OpenHome.utils.helpers import strip_think
+from OriginAgent.utils.helpers import strip_think
 
 
 class TestStripThinkTag:

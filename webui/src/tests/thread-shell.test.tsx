@@ -68,7 +68,7 @@ function wrap(
 ) {
   return (
     <ClientProvider
-      client={client as unknown as import("@/lib/OpenHome-client").OpenHomeClient}
+      client={client as unknown as import("@/lib/OriginAgent-client").OriginAgentClient}
       token="tok"
       refreshToken={refreshToken}
     >
@@ -243,7 +243,7 @@ describe("ThreadShell", () => {
           client,
           <ThreadShell
             session={null}
-            title="OpenHome"
+            title="OriginAgent"
             onToggleSidebar={() => {}}
             onGoHome={() => {}}
             onNewChat={onNewChat}
@@ -268,7 +268,7 @@ describe("ThreadShell", () => {
         client,
         <ThreadShell
           session={null}
-          title="OpenHome"
+          title="OriginAgent"
           onToggleSidebar={() => {}}
           onGoHome={() => {}}
           onNewChat={onNewChat}
@@ -303,7 +303,7 @@ describe("ThreadShell", () => {
         client,
         <ThreadShell
           session={null}
-          title="OpenHome"
+          title="OriginAgent"
           onToggleSidebar={() => {}}
           onCreateChat={onCreateChat}
         />,
@@ -353,7 +353,7 @@ describe("ThreadShell", () => {
         client,
         <ThreadShell
           session={null}
-          title="OpenHome"
+          title="OriginAgent"
           onToggleSidebar={() => {}}
           onCreateChat={onCreateChat}
         />,
@@ -584,7 +584,7 @@ describe("ThreadShell", () => {
           client,
           <ThreadShell
             session={null}
-            title="OpenHome"
+            title="OriginAgent"
             onToggleSidebar={() => {}}
             onNewChat={() => {}}
           />,
@@ -775,7 +775,7 @@ describe("ThreadShell", () => {
           client,
           <ThreadShell
             session={null}
-            title="OpenHome"
+            title="OriginAgent"
             onToggleSidebar={() => {}}
             onNewChat={() => {}}
           />,
@@ -843,7 +843,7 @@ describe("ThreadShell", () => {
         client,
         <ThreadShell
           session={null}
-          title="OpenHome"
+          title="OriginAgent"
           onToggleSidebar={() => {}}
           onNewChat={() => {}}
         />,
@@ -902,7 +902,7 @@ describe("ThreadShell", () => {
         client,
         <ThreadShell
           session={null}
-          title="OpenHome"
+          title="OriginAgent"
           onToggleSidebar={() => {}}
           onNewChat={() => {}}
         />,
@@ -973,7 +973,7 @@ describe("ThreadShell", () => {
         client,
         <ThreadShell
           session={null}
-          title="OpenHome"
+          title="OriginAgent"
           onToggleSidebar={() => {}}
           onNewChat={() => {}}
         />,

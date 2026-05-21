@@ -6,13 +6,13 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from OpenHome.agent.loop import AgentLoop
-from OpenHome.bus.events import InboundMessage
-from OpenHome.bus.queue import MessageBus
-from OpenHome.config.loader import set_config_path
-from OpenHome.config.schema import ImageGenerationToolConfig, ProviderConfig, ToolsConfig
-from OpenHome.providers.base import LLMResponse, ToolCallRequest
-from OpenHome.providers.image_generation import GeneratedImageResponse
+from OriginAgent.agent.loop import AgentLoop
+from OriginAgent.bus.events import InboundMessage
+from OriginAgent.bus.queue import MessageBus
+from OriginAgent.config.loader import set_config_path
+from OriginAgent.config.schema import ImageGenerationToolConfig, ProviderConfig, ToolsConfig
+from OriginAgent.providers.base import LLMResponse, ToolCallRequest
+from OriginAgent.providers.image_generation import GeneratedImageResponse
 
 PNG_DATA_URL = (
     "data:image/png;base64,"
@@ -35,7 +35,7 @@ async def test_generated_image_media_is_attached_to_final_assistant_message(
 ) -> None:
     set_config_path(tmp_path / "config.json")
     monkeypatch.setattr(
-        "OpenHome.agent.tools.image_generation.OpenRouterImageGenerationClient",
+        "OriginAgent.agent.tools.image_generation.OpenRouterImageGenerationClient",
         FakeImageClient,
     )
     provider = MagicMock()

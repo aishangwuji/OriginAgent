@@ -9,14 +9,14 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from OpenHome.agent.action_runtime import ActionExecutionResult
-from OpenHome.agent.domain_packs import DomainPackManager
-from OpenHome.agent.loop import AgentLoop
-from OpenHome.agent.tools.audit import JsonlToolAuditSink
-from OpenHome.agent.tools.base import Tool
-from OpenHome.bus.queue import MessageBus
-from OpenHome.config.schema import Config, DeviceToolsConfig, DomainPacksConfig, ToolAuditConfig
-from OpenHome.security.capabilities import CapabilitySnapshot
+from OriginAgent.agent.action_runtime import ActionExecutionResult
+from OriginAgent.agent.domain_packs import DomainPackManager
+from OriginAgent.agent.loop import AgentLoop
+from OriginAgent.agent.tools.audit import JsonlToolAuditSink
+from OriginAgent.agent.tools.base import Tool
+from OriginAgent.bus.queue import MessageBus
+from OriginAgent.config.schema import Config, DeviceToolsConfig, DomainPacksConfig, ToolAuditConfig
+from OriginAgent.security.capabilities import CapabilitySnapshot
 
 
 def _provider():
@@ -165,7 +165,7 @@ async def test_tool_audit_off_does_not_disable_action_device_audit(tmp_path: Pat
     )
 
     result = await loop.tools.execute(
-        "openhome_device_lighting_set_power",
+        "originagent_device_lighting_set_power",
         {"device_id": "lamp", "power": "on"},
     )
 
@@ -192,7 +192,7 @@ async def test_device_tool_submit_runs_off_event_loop_thread(tmp_path: Path) -> 
         trigger="user_initiated",
         capability_snapshot=CapabilitySnapshot.user_turn(),
     )
-    tool = loop.tools.get("openhome_device_lighting_set_power")
+    tool = loop.tools.get("originagent_device_lighting_set_power")
     assert tool is not None
     submit_data: dict[str, Any] = {}
 
@@ -211,7 +211,7 @@ async def test_device_tool_submit_runs_off_event_loop_thread(tmp_path: Path) -> 
     loop_thread_id = threading.get_ident()
 
     result = await loop.tools.execute(
-        "openhome_device_lighting_set_power",
+        "originagent_device_lighting_set_power",
         {"device_id": "lamp", "power": "on"},
     )
 

@@ -2,9 +2,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from OpenHome.agent.context import ContextBuilder
-from OpenHome.agent.domain_packs import DomainPackManager
-from OpenHome.config.schema import DomainPacksConfig
+from OriginAgent.agent.context import ContextBuilder
+from OriginAgent.agent.domain_packs import DomainPackManager
+from OriginAgent.config.schema import DomainPacksConfig
 
 
 def _write_pack(
@@ -120,18 +120,18 @@ def test_unavailable_reasons_and_active_available_only(tmp_path: Path, monkeypat
         root,
         "missing-bin",
         pack_id="missing_bin",
-        requires_bins=["definitely-not-openhome-bin"],
+        requires_bins=["definitely-not-originagent-bin"],
         capabilities_text="# Bin",
     )
     _write_pack(
         root,
         "missing-env",
         pack_id="missing_env",
-        requires_env=["OPENHOME_TEST_MISSING_ENV"],
+        requires_env=["ORIGINAGENT_TEST_MISSING_ENV"],
         capabilities_text="# Env",
     )
     _write_pack(root, "disabled", pack_id="disabled", capabilities_text="# Disabled")
-    monkeypatch.delenv("OPENHOME_TEST_MISSING_ENV", raising=False)
+    monkeypatch.delenv("ORIGINAGENT_TEST_MISSING_ENV", raising=False)
 
     manager = DomainPackManager(
         workspace,
@@ -147,8 +147,8 @@ def test_unavailable_reasons_and_active_available_only(tmp_path: Path, monkeypat
     assert packs["disabled"].unavailable_reason == "disabled by config"
     assert packs["manifest_off"].unavailable_reason == "disabled by manifest"
     assert packs["missing_caps"].unavailable_reason == "missing CAPABILITIES.md"
-    assert "CLI: definitely-not-openhome-bin" in packs["missing_bin"].unavailable_reason
-    assert "ENV: OPENHOME_TEST_MISSING_ENV" in packs["missing_env"].unavailable_reason
+    assert "CLI: definitely-not-originagent-bin" in packs["missing_bin"].unavailable_reason
+    assert "ENV: ORIGINAGENT_TEST_MISSING_ENV" in packs["missing_env"].unavailable_reason
 
 
 def test_context_prompt_injects_summary_and_active_capabilities(tmp_path: Path) -> None:
@@ -215,9 +215,9 @@ def test_builtin_smart_home_domain_pack_is_available_and_explicitly_activated(
     assert pack.status == "available"
     assert pack.active is False
     assert [tool.id for tool in pack.tools] == [
-        "openhome_device_lighting_set_power",
-        "openhome_device_lighting_set_brightness",
-        "openhome_device_lighting_set_color_temperature",
+        "originagent_device_lighting_set_power",
+        "originagent_device_lighting_set_brightness",
+        "originagent_device_lighting_set_color_temperature",
     ]
     assert {skill.virtual_id for skill in pack.skills} == {
         "domain:smart_home/lighting-control",
@@ -238,7 +238,7 @@ def test_builtin_smart_home_domain_pack_is_available_and_explicitly_activated(
         "domain:smart_home/safety-confirmation",
         "domain:smart_home/automation-design",
     ]
-    assert "openhome_device_lighting_set_power" in active_manager.build_active_context()
+    assert "originagent_device_lighting_set_power" in active_manager.build_active_context()
 
     disabled_manager = DomainPackManager(
         tmp_path,

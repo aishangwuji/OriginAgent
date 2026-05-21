@@ -7,7 +7,7 @@
     },
     "error": {
       "title": "无法连接到 OriginAgent",
-      "gatewayHint": "请确认 gateway 已启动（`openhome gateway`），并且当前页面与 gateway 运行在同一台机器上。"
+      "gatewayHint": "请确认 gateway 已启动（`originagent gateway`），并且当前页面与 gateway 运行在同一台机器上。"
     },
     "system": {
       "section": "系统",

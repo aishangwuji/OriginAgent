@@ -1,4 +1,4 @@
-"""Lightweight WebSocket test client for integration testing the OpenHome WebSocket channel.
+"""Lightweight WebSocket test client for integration testing the OriginAgent WebSocket channel.
 
 Provides an async ``WsTestClient`` class and token-issuance helpers that
 integration tests can import and use directly::

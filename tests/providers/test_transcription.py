@@ -8,7 +8,7 @@ from unittest.mock import AsyncMock, patch
 import httpx
 import pytest
 
-from OpenHome.providers.transcription import GroqTranscriptionProvider, OpenAITranscriptionProvider
+from OriginAgent.providers.transcription import GroqTranscriptionProvider, OpenAITranscriptionProvider
 
 
 @pytest.fixture

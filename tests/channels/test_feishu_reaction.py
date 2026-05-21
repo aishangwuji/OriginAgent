@@ -4,8 +4,8 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from OpenHome.bus.queue import MessageBus
-from OpenHome.channels.feishu import FeishuChannel, FeishuConfig, _FeishuStreamBuf
+from OriginAgent.bus.queue import MessageBus
+from OriginAgent.channels.feishu import FeishuChannel, FeishuConfig, _FeishuStreamBuf
 
 
 def _make_channel() -> FeishuChannel:

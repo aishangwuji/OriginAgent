@@ -1,6 +1,6 @@
 import pytest
 
-from OpenHome.agent.permissions import (
+from OriginAgent.agent.permissions import (
     HouseholdActor,
     PermissionRequest,
     PermissionResolver,

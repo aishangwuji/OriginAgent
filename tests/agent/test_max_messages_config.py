@@ -7,11 +7,11 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from OpenHome.agent.loop import AgentLoop
-from OpenHome.bus.events import InboundMessage
-from OpenHome.bus.queue import MessageBus
-from OpenHome.providers.base import LLMResponse
-from OpenHome.session.manager import Session
+from OriginAgent.agent.loop import AgentLoop
+from OriginAgent.bus.events import InboundMessage
+from OriginAgent.bus.queue import MessageBus
+from OriginAgent.providers.base import LLMResponse
+from OriginAgent.session.manager import Session
 
 DEFAULT_MAX_MESSAGES = 120
 
@@ -135,25 +135,25 @@ class TestSchemaConfig:
     """Verify the config schema accepts max_messages."""
 
     def test_schema_default(self) -> None:
-        from OpenHome.config.schema import AgentDefaults
+        from OriginAgent.config.schema import AgentDefaults
 
         defaults = AgentDefaults()
         assert defaults.max_messages == DEFAULT_MAX_MESSAGES
 
     def test_schema_accepts_zero_as_builtin_limit(self) -> None:
-        from OpenHome.config.schema import AgentDefaults
+        from OriginAgent.config.schema import AgentDefaults
 
         defaults = AgentDefaults(max_messages=0)
         assert defaults.max_messages == 0
 
     def test_schema_accepts_positive(self) -> None:
-        from OpenHome.config.schema import AgentDefaults
+        from OriginAgent.config.schema import AgentDefaults
 
         defaults = AgentDefaults(max_messages=25)
         assert defaults.max_messages == 25
 
     def test_schema_rejects_negative(self) -> None:
-        from OpenHome.config.schema import AgentDefaults
+        from OriginAgent.config.schema import AgentDefaults
 
         with pytest.raises(Exception):  # Pydantic validation error
             AgentDefaults(max_messages=-1)

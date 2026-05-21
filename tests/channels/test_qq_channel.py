@@ -7,7 +7,7 @@ import pytest
 
 # Check optional QQ dependencies before running tests
 try:
-    from OpenHome.channels import qq
+    from OriginAgent.channels import qq
     QQ_AVAILABLE = getattr(qq, "QQ_AVAILABLE", False)
 except ImportError:
     QQ_AVAILABLE = False
@@ -17,9 +17,9 @@ if not QQ_AVAILABLE:
 
 import aiohttp
 
-from OpenHome.bus.events import OutboundMessage
-from OpenHome.bus.queue import MessageBus
-from OpenHome.channels.qq import QQChannel, QQConfig
+from OriginAgent.bus.events import OutboundMessage
+from OriginAgent.bus.queue import MessageBus
+from OriginAgent.channels.qq import QQChannel, QQConfig
 
 
 class _FakeApi:

@@ -1,8 +1,8 @@
 from types import SimpleNamespace
 
-from OpenHome.providers.anthropic_provider import AnthropicProvider
-from OpenHome.providers.azure_openai_provider import AzureOpenAIProvider
-from OpenHome.providers.openai_compat_provider import OpenAICompatProvider
+from OriginAgent.providers.anthropic_provider import AnthropicProvider
+from OriginAgent.providers.azure_openai_provider import AzureOpenAIProvider
+from OriginAgent.providers.openai_compat_provider import OpenAICompatProvider
 
 
 def test_openai_compat_error_captures_retry_after_from_headers() -> None:

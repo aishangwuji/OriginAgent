@@ -55,7 +55,7 @@ export interface UIMessage {
   reasoningStreaming?: boolean;
   /** End-to-end wall time for this assistant turn (persisted ``latency_ms`` / ``turn_end``). */
   latencyMs?: number;
-  /** Optional answer choices for a pending OpenHome confirmation/question. */
+  /** Optional answer choices for a pending OriginAgent confirmation/question. */
   buttons?: string[][];
 }
 

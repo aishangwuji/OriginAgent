@@ -4,9 +4,9 @@ from types import SimpleNamespace
 
 import pytest
 
-from OpenHome.agent.action_runtime import ActionExecutionResult
-from OpenHome.agent.device_actions import TypedDeviceAction
-from OpenHome.agent.tools.device import (
+from OriginAgent.agent.action_runtime import ActionExecutionResult
+from OriginAgent.agent.device_actions import TypedDeviceAction
+from OriginAgent.agent.tools.device import (
     LightingSetBrightnessTool,
     LightingSetColorTemperatureTool,
     LightingSetPowerTool,
@@ -142,7 +142,7 @@ def test_lighting_tools_register_exactly_three_names():
     tools = lighting_tools(SimpleNamespace(submit_typed=lambda action: None))  # type: ignore[arg-type]
 
     assert [tool.name for tool in tools] == [
-        "openhome_device_lighting_set_power",
-        "openhome_device_lighting_set_brightness",
-        "openhome_device_lighting_set_color_temperature",
+        "originagent_device_lighting_set_power",
+        "originagent_device_lighting_set_brightness",
+        "originagent_device_lighting_set_color_temperature",
     ]

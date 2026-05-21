@@ -8,8 +8,8 @@ from unittest.mock import patch
 
 import pytest
 
-from OpenHome.agent.tools.shell import ExecTool
-from OpenHome.agent.tools.sandbox import build_bwrap_argv
+from OriginAgent.agent.tools.shell import ExecTool
+from OriginAgent.agent.tools.sandbox import build_bwrap_argv
 
 
 def _fake_resolve_private(hostname, port, family=0, type_=0):
@@ -27,7 +27,7 @@ def _fake_resolve_public(hostname, port, family=0, type_=0):
 @pytest.mark.asyncio
 async def test_exec_blocks_curl_metadata():
     tool = ExecTool()
-    with patch("OpenHome.security.network.socket.getaddrinfo", _fake_resolve_private):
+    with patch("OriginAgent.security.network.socket.getaddrinfo", _fake_resolve_private):
         result = await tool.execute(
             command='curl -s -H "Metadata-Flavor: Google" http://169.254.169.254/computeMetadata/v1/'
         )
@@ -38,7 +38,7 @@ async def test_exec_blocks_curl_metadata():
 @pytest.mark.asyncio
 async def test_exec_blocks_wget_localhost():
     tool = ExecTool()
-    with patch("OpenHome.security.network.socket.getaddrinfo", _fake_resolve_localhost):
+    with patch("OriginAgent.security.network.socket.getaddrinfo", _fake_resolve_localhost):
         result = await tool.execute(command="wget http://localhost:8080/secret -O /tmp/out")
     assert "Error" in result
 
@@ -55,7 +55,7 @@ async def test_exec_allows_normal_commands():
 async def test_exec_allows_curl_to_public_url():
     """Commands with public URLs should not be blocked by the internal URL check."""
     tool = ExecTool()
-    with patch("OpenHome.security.network.socket.getaddrinfo", _fake_resolve_public):
+    with patch("OriginAgent.security.network.socket.getaddrinfo", _fake_resolve_public):
         guard_result = tool._guard_command("curl https://example.com/api", "/tmp")
     assert guard_result is None
 
@@ -95,14 +95,14 @@ def test_exec_restricted_shell_policy_allows_quoted_argument_syntax(command):
 async def test_exec_blocks_chained_internal_url():
     """Internal URLs buried in chained commands should still be caught."""
     tool = ExecTool()
-    with patch("OpenHome.security.network.socket.getaddrinfo", _fake_resolve_private):
+    with patch("OriginAgent.security.network.socket.getaddrinfo", _fake_resolve_private):
         result = await tool.execute(
             command="echo start && curl http://169.254.169.254/latest/meta-data/ && echo done"
         )
     assert result == "Error: Command blocked by shell syntax policy"
 
 
-# --- #2989: block writes to OpenHome internal state files -----------------
+# --- #2989: block writes to OriginAgent internal state files -----------------
 
 
 @pytest.mark.parametrize(
@@ -188,8 +188,8 @@ async def test_exec_allows_working_dir_within_workspace(tmp_path):
     subdir = workspace / "project"
     subdir.mkdir(parents=True)
     tool = ExecTool(working_dir=str(workspace), restrict_to_workspace=True, timeout=5, sandbox="bwrap")
-    with patch("OpenHome.agent.tools.shell._IS_WINDOWS", False):
-        with patch("OpenHome.agent.tools.shell.shutil.which", lambda name: "/usr/bin/bwrap"):
+    with patch("OriginAgent.agent.tools.shell._IS_WINDOWS", False):
+        with patch("OriginAgent.agent.tools.shell.shutil.which", lambda name: "/usr/bin/bwrap"):
             with patch.object(tool, "_spawn") as spawn:
                 class FakeProcess:
                     returncode = 0
@@ -207,8 +207,8 @@ async def test_exec_allows_working_dir_equal_to_workspace(tmp_path):
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     tool = ExecTool(working_dir=str(workspace), restrict_to_workspace=True, timeout=5, sandbox="bwrap")
-    with patch("OpenHome.agent.tools.shell._IS_WINDOWS", False):
-        with patch("OpenHome.agent.tools.shell.shutil.which", lambda name: "/usr/bin/bwrap"):
+    with patch("OriginAgent.agent.tools.shell._IS_WINDOWS", False):
+        with patch("OriginAgent.agent.tools.shell.shutil.which", lambda name: "/usr/bin/bwrap"):
             with patch.object(tool, "_spawn") as spawn:
                 class FakeProcess:
                     returncode = 0
@@ -286,8 +286,8 @@ async def test_exec_3599_regression_rm_with_dev_null_redirect(tmp_path):
         allow_unsafe_exec=True,
         shell_syntax_policy="shell",
     )
-    with patch("OpenHome.agent.tools.shell._IS_WINDOWS", False):
-        with patch("OpenHome.agent.tools.shell.shutil.which", lambda name: "/usr/bin/bwrap"):
+    with patch("OriginAgent.agent.tools.shell._IS_WINDOWS", False):
+        with patch("OriginAgent.agent.tools.shell.shutil.which", lambda name: "/usr/bin/bwrap"):
             with patch.object(tool, "_spawn") as spawn:
                 class FakeProcess:
                     returncode = 0
@@ -330,9 +330,9 @@ async def test_exec_restrict_to_workspace_requires_sandbox(tmp_path):
 
 
 def test_bwrap_profile_contains_network_off_and_ro_media(tmp_path, monkeypatch):
-    from OpenHome.config import paths as config_paths
-    from OpenHome.security import paths as security_paths
-    from OpenHome.agent.tools import sandbox as sandbox_mod
+    from OriginAgent.config import paths as config_paths
+    from OriginAgent.security import paths as security_paths
+    from OriginAgent.agent.tools import sandbox as sandbox_mod
 
     workspace = tmp_path / "workspace"
     media = tmp_path / "media"

@@ -5,13 +5,13 @@ from dataclasses import replace
 from pathlib import Path
 from unittest.mock import MagicMock
 
-from OpenHome.agent.loop import AgentLoop
-from OpenHome.agent.runner import AgentRunResult, AgentRunSpec
-from OpenHome.agent.subagent import SubagentManager, SubagentStatus
-from OpenHome.agent.tools.shell import ExecTool
-from OpenHome.bus.queue import MessageBus
-from OpenHome.config.schema import Config, ExecToolConfig
-from OpenHome.security.capabilities import CapabilitySnapshot
+from OriginAgent.agent.loop import AgentLoop
+from OriginAgent.agent.runner import AgentRunResult, AgentRunSpec
+from OriginAgent.agent.subagent import SubagentManager, SubagentStatus
+from OriginAgent.agent.tools.shell import ExecTool
+from OriginAgent.bus.queue import MessageBus
+from OriginAgent.config.schema import Config, ExecToolConfig
+from OriginAgent.security.capabilities import CapabilitySnapshot
 
 
 def _provider() -> MagicMock:

@@ -4,11 +4,11 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from OpenHome.bus.events import OutboundMessage
-from OpenHome.bus.queue import MessageBus
-from OpenHome.channels.base import BaseChannel
-from OpenHome.channels.manager import ChannelManager
-from OpenHome.config.schema import Config
+from OriginAgent.bus.events import OutboundMessage
+from OriginAgent.bus.queue import MessageBus
+from OriginAgent.channels.base import BaseChannel
+from OriginAgent.channels.manager import ChannelManager
+from OriginAgent.config.schema import Config
 
 
 class MockChannel(BaseChannel):

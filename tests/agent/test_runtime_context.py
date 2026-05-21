@@ -1,4 +1,4 @@
-from OpenHome.agent.identity import ActorResolver
+from OriginAgent.agent.identity import ActorResolver
 
 
 def test_runtime_context_uses_sender_as_actor():

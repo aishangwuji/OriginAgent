@@ -1,4 +1,4 @@
-from OpenHome.session.goal_state import (
+from OriginAgent.session.goal_state import (
     GOAL_STATE_KEY,
     discard_legacy_goal_state_key,
     goal_state_runtime_lines,

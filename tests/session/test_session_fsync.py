@@ -8,7 +8,7 @@ from unittest.mock import patch
 
 import pytest
 
-from OpenHome.session.manager import SessionManager
+from OriginAgent.session.manager import SessionManager
 
 _IS_WINDOWS = sys.platform == "win32"
 

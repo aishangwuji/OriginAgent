@@ -11,10 +11,10 @@ from __future__ import annotations
 
 import pytest
 
-from OpenHome.agent.tools.cron import CronTool
-from OpenHome.agent.tools.registry import ToolRegistry
-from OpenHome.security.capabilities import CapabilitySnapshot
-from OpenHome.security.policy import PolicyDeniedError
+from OriginAgent.agent.tools.cron import CronTool
+from OriginAgent.agent.tools.registry import ToolRegistry
+from OriginAgent.security.capabilities import CapabilitySnapshot
+from OriginAgent.security.policy import PolicyDeniedError
 
 
 class _SvcStub:

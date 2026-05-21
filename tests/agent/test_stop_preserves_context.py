@@ -4,7 +4,7 @@ When /stop cancels an active task, the runtime checkpoint (tool results,
 assistant messages accumulated so far) should be materialized into session
 history rather than silently discarded.
 
-See: https://github.com/HKUDS/OpenHome/issues/2966
+See: https://github.com/HKUDS/OriginAgent/issues/2966
 """
 
 from __future__ import annotations
@@ -16,7 +16,7 @@ from unittest.mock import MagicMock, patch, AsyncMock
 
 import pytest
 
-from OpenHome.agent.loop import AgentLoop
+from OriginAgent.agent.loop import AgentLoop
 
 
 @pytest.fixture
@@ -96,8 +96,8 @@ async def test_dispatch_cancellation_restores_checkpoint():
     isolation, so a future refactor that drops the cancel-time restore is
     caught by CI instead of silently regressing.
     """
-    from OpenHome.bus.events import InboundMessage
-    from OpenHome.bus.queue import MessageBus
+    from OriginAgent.bus.events import InboundMessage
+    from OriginAgent.bus.queue import MessageBus
 
     bus = MessageBus()
     provider = MagicMock()
@@ -105,9 +105,9 @@ async def test_dispatch_cancellation_restores_checkpoint():
     workspace = MagicMock()
     workspace.__truediv__ = MagicMock(return_value=MagicMock())
 
-    with patch("OpenHome.agent.loop.ContextBuilder"), \
-         patch("OpenHome.agent.loop.SessionManager"), \
-         patch("OpenHome.agent.loop.SubagentManager") as MockSubMgr:
+    with patch("OriginAgent.agent.loop.ContextBuilder"), \
+         patch("OriginAgent.agent.loop.SessionManager"), \
+         patch("OriginAgent.agent.loop.SubagentManager") as MockSubMgr:
         MockSubMgr.return_value.cancel_by_session = AsyncMock(return_value=0)
         loop = AgentLoop(bus=bus, provider=provider, workspace=workspace)
 

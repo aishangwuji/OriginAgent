@@ -7,8 +7,8 @@ from types import ModuleType, SimpleNamespace
 
 import pytest
 
-import OpenHome.agent.tools.mcp as mcp_mod
-from OpenHome.agent.tools.mcp import (
+import OriginAgent.agent.tools.mcp as mcp_mod
+from OriginAgent.agent.tools.mcp import (
     MCPPromptWrapper,
     MCPResourceWrapper,
     MCPToolWrapper,
@@ -17,10 +17,10 @@ from OpenHome.agent.tools.mcp import (
     _sanitize_name,
     connect_mcp_servers,
 )
-from OpenHome.agent.tools.registry import ToolRegistry
-from OpenHome.config.schema import MCPServerConfig
-from OpenHome.security.capabilities import CapabilitySnapshot
-from OpenHome.security.policy import PolicyDeniedError
+from OriginAgent.agent.tools.registry import ToolRegistry
+from OriginAgent.config.schema import MCPServerConfig
+from OriginAgent.security.capabilities import CapabilitySnapshot
+from OriginAgent.security.policy import PolicyDeniedError
 
 
 class _FakeTextContent:
@@ -529,7 +529,7 @@ async def test_connect_mcp_servers_enabled_tools_warns_on_unknown_entries(
     def _warning(message: str, *args: object) -> None:
         warnings.append(message.format(*args))
 
-    monkeypatch.setattr("OpenHome.agent.tools.mcp.logger.warning", _warning)
+    monkeypatch.setattr("OriginAgent.agent.tools.mcp.logger.warning", _warning)
 
     stacks = await connect_mcp_servers(
         {"test": MCPServerConfig(command="fake", enabled_tools=["unknown"])},
@@ -560,7 +560,7 @@ async def test_connect_mcp_servers_logs_stdio_pollution_hint(
         yield  # pragma: no cover
 
     monkeypatch.setattr(sys.modules["mcp.client.stdio"], "stdio_client", _broken_stdio_client)
-    monkeypatch.setattr("OpenHome.agent.tools.mcp.logger.warning", _warning)
+    monkeypatch.setattr("OriginAgent.agent.tools.mcp.logger.warning", _warning)
 
     registry = ToolRegistry()
     stacks = await connect_mcp_servers({"gh": MCPServerConfig(command="github-mcp")}, registry)
@@ -912,7 +912,7 @@ async def test_connect_skips_duplicate_wrapper_without_aborting_server(
     def _warning(message: str, *args: object) -> None:
         warnings.append(message.format(*args))
 
-    monkeypatch.setattr("OpenHome.agent.tools.mcp.logger.warning", _warning)
+    monkeypatch.setattr("OriginAgent.agent.tools.mcp.logger.warning", _warning)
 
     stacks = await connect_mcp_servers(
         {"test": MCPServerConfig(command="fake")},

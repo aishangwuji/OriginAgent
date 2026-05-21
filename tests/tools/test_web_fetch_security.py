@@ -8,10 +8,10 @@ from unittest.mock import patch
 
 import pytest
 
-from OpenHome.agent.tools.web import WebFetchTool
-from OpenHome.config.schema import ContentReadToolConfig, WebFetchConfig
-from OpenHome.integrations.content_read.reader import ContentReader
-from OpenHome.integrations.content_read.types import ContentReadResult
+from OriginAgent.agent.tools.web import WebFetchTool
+from OriginAgent.config.schema import ContentReadToolConfig, WebFetchConfig
+from OriginAgent.integrations.content_read.reader import ContentReader
+from OriginAgent.integrations.content_read.types import ContentReadResult
 
 
 def _fake_resolve_private(hostname, port, family=0, type_=0, proto=0, flags=0):
@@ -40,7 +40,7 @@ async def test_web_fetch_auto_routes_known_platform_to_structured_provider(monke
 
     monkeypatch.setattr(ContentReader, "read", fake_read)
 
-    with patch("OpenHome.security.network.socket.getaddrinfo", _fake_resolve_public):
+    with patch("OriginAgent.security.network.socket.getaddrinfo", _fake_resolve_public):
         result = await tool.execute(
             url="https://github.com/owner/repo",
             provider="auto",
@@ -97,9 +97,9 @@ async def test_web_fetch_provider_generic_forces_original_fetch_path(monkeypatch
             return FakeStreamResponse()
 
     monkeypatch.setattr(ContentReader, "read", fail_structured)
-    monkeypatch.setattr("OpenHome.agent.tools.web.httpx.AsyncClient", FakeClient)
+    monkeypatch.setattr("OriginAgent.agent.tools.web.httpx.AsyncClient", FakeClient)
 
-    with patch("OpenHome.security.network.socket.getaddrinfo", _fake_resolve_public):
+    with patch("OriginAgent.security.network.socket.getaddrinfo", _fake_resolve_public):
         result = await tool.execute(
             url="https://github.com/owner/repo",
             provider="generic",
@@ -152,9 +152,9 @@ async def test_web_fetch_auto_respects_disabled_structured_providers(monkeypatch
             return FakeStreamResponse()
 
     monkeypatch.setattr(ContentReader, "read", fail_structured)
-    monkeypatch.setattr("OpenHome.agent.tools.web.httpx.AsyncClient", FakeClient)
+    monkeypatch.setattr("OriginAgent.agent.tools.web.httpx.AsyncClient", FakeClient)
 
-    with patch("OpenHome.security.network.socket.getaddrinfo", _fake_resolve_public):
+    with patch("OriginAgent.security.network.socket.getaddrinfo", _fake_resolve_public):
         result = await tool.execute(url="https://github.com/owner/repo")
 
     data = json.loads(result)
@@ -166,7 +166,7 @@ async def test_web_fetch_auto_respects_disabled_structured_providers(monkeypatch
 async def test_web_fetch_unknown_provider_returns_clear_error():
     tool = WebFetchTool()
 
-    with patch("OpenHome.security.network.socket.getaddrinfo", _fake_resolve_public):
+    with patch("OriginAgent.security.network.socket.getaddrinfo", _fake_resolve_public):
         result = await tool.execute(url="https://example.com/page", provider="unknown")
 
     data = json.loads(result)
@@ -176,7 +176,7 @@ async def test_web_fetch_unknown_provider_returns_clear_error():
 @pytest.mark.asyncio
 async def test_web_fetch_blocks_private_ip():
     tool = WebFetchTool()
-    with patch("OpenHome.security.network.socket.getaddrinfo", _fake_resolve_private):
+    with patch("OriginAgent.security.network.socket.getaddrinfo", _fake_resolve_private):
         result = await tool.execute(url="http://169.254.169.254/computeMetadata/v1/")
     data = json.loads(result)
     assert "error" in data
@@ -188,7 +188,7 @@ async def test_web_fetch_blocks_localhost():
     tool = WebFetchTool()
     def _resolve_localhost(hostname, port, family=0, type_=0):
         return [(socket.AF_INET, socket.SOCK_STREAM, 0, "", ("127.0.0.1", 0))]
-    with patch("OpenHome.security.network.socket.getaddrinfo", _resolve_localhost):
+    with patch("OriginAgent.security.network.socket.getaddrinfo", _resolve_localhost):
         result = await tool.execute(url="http://localhost/admin")
     data = json.loads(result)
     assert "error" in data
@@ -232,8 +232,8 @@ async def test_web_fetch_result_contains_untrusted_flag():
         def stream(self, method, url, headers=None):
             return FakeStreamResponse()
 
-    with patch("OpenHome.security.network.socket.getaddrinfo", _fake_resolve_public), \
-         patch("OpenHome.agent.tools.web.httpx.AsyncClient", FakeClient):
+    with patch("OriginAgent.security.network.socket.getaddrinfo", _fake_resolve_public), \
+         patch("OriginAgent.agent.tools.web.httpx.AsyncClient", FakeClient):
         result = await tool.execute(url="https://example.com/page")
 
     data = json.loads(result)
@@ -245,7 +245,7 @@ async def test_web_fetch_result_contains_untrusted_flag():
 async def test_web_fetch_can_skip_jina_and_use_custom_user_agent(monkeypatch):
     tool = WebFetchTool(
         config=WebFetchConfig(use_jina_reader=False),
-        user_agent="OpenHome-test-agent",
+        user_agent="OriginAgent-test-agent",
     )
     seen_headers: list[dict] = []
 
@@ -285,16 +285,16 @@ async def test_web_fetch_can_skip_jina_and_use_custom_user_agent(monkeypatch):
             return FakeStreamResponse()
 
     monkeypatch.setattr(tool, "_fetch_jina", _fail_jina)
-    monkeypatch.setattr("OpenHome.agent.tools.web.httpx.AsyncClient", FakeClient)
+    monkeypatch.setattr("OriginAgent.agent.tools.web.httpx.AsyncClient", FakeClient)
 
-    with patch("OpenHome.security.network.socket.getaddrinfo", _fake_resolve_public):
+    with patch("OriginAgent.security.network.socket.getaddrinfo", _fake_resolve_public):
         result = await tool.execute(url="https://example.com/page")
 
     data = json.loads(result)
     assert data["extractor"] == "readability"
     assert [headers["User-Agent"] for headers in seen_headers] == [
-        "OpenHome-test-agent",
-        "OpenHome-test-agent",
+        "OriginAgent-test-agent",
+        "OriginAgent-test-agent",
     ]
 
 
@@ -336,9 +336,9 @@ async def test_web_fetch_blocks_private_redirect_before_returning_image(monkeypa
         def stream(self, method, url, headers=None):
             return FakeStreamResponse()
 
-    monkeypatch.setattr("OpenHome.agent.tools.web.httpx.AsyncClient", FakeClient)
+    monkeypatch.setattr("OriginAgent.agent.tools.web.httpx.AsyncClient", FakeClient)
 
-    with patch("OpenHome.security.network.socket.getaddrinfo", _fake_resolve_public):
+    with patch("OriginAgent.security.network.socket.getaddrinfo", _fake_resolve_public):
         result = await tool.execute(url="https://example.com/image.png")
 
     data = json.loads(result)
@@ -348,8 +348,8 @@ async def test_web_fetch_blocks_private_redirect_before_returning_image(monkeypa
 
 @pytest.mark.asyncio
 async def test_web_fetch_readability_stream_rejects_oversize_binary(monkeypatch):
-    from OpenHome.agent.tools.limits import ToolLimits
-    from OpenHome.security.policy import PolicyDeniedError
+    from OriginAgent.agent.tools.limits import ToolLimits
+    from OriginAgent.security.policy import PolicyDeniedError
 
     tool = WebFetchTool(
         config=WebFetchConfig(use_jina_reader=False),
@@ -388,9 +388,9 @@ async def test_web_fetch_readability_stream_rejects_oversize_binary(monkeypatch)
         def stream(self, method, url, headers=None):
             return FakeStreamResponse()
 
-    monkeypatch.setattr("OpenHome.agent.tools.web.httpx.AsyncClient", FakeClient)
+    monkeypatch.setattr("OriginAgent.agent.tools.web.httpx.AsyncClient", FakeClient)
 
-    with patch("OpenHome.security.network.socket.getaddrinfo", _fake_resolve_public):
+    with patch("OriginAgent.security.network.socket.getaddrinfo", _fake_resolve_public):
         with pytest.raises(PolicyDeniedError) as exc:
             await tool.execute(url="https://example.com/blob")
 
@@ -399,8 +399,8 @@ async def test_web_fetch_readability_stream_rejects_oversize_binary(monkeypatch)
 
 @pytest.mark.asyncio
 async def test_web_fetch_stream_rejects_oversize_image(monkeypatch):
-    from OpenHome.agent.tools.limits import ToolLimits
-    from OpenHome.security.policy import PolicyDeniedError
+    from OriginAgent.agent.tools.limits import ToolLimits
+    from OriginAgent.security.policy import PolicyDeniedError
 
     tool = WebFetchTool(
         config=WebFetchConfig(use_jina_reader=False),
@@ -442,9 +442,9 @@ async def test_web_fetch_stream_rejects_oversize_image(monkeypatch):
         def stream(self, method, url, headers=None):
             return FakeStreamResponse()
 
-    monkeypatch.setattr("OpenHome.agent.tools.web.httpx.AsyncClient", FakeClient)
+    monkeypatch.setattr("OriginAgent.agent.tools.web.httpx.AsyncClient", FakeClient)
 
-    with patch("OpenHome.security.network.socket.getaddrinfo", _fake_resolve_public):
+    with patch("OriginAgent.security.network.socket.getaddrinfo", _fake_resolve_public):
         with pytest.raises(PolicyDeniedError) as exc:
             await tool.execute(url="https://example.com/image.png")
 
@@ -454,8 +454,8 @@ async def test_web_fetch_stream_rejects_oversize_image(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_web_fetch_stream_rejects_oversize_html_without_text_property(monkeypatch):
-    from OpenHome.agent.tools.limits import ToolLimits
-    from OpenHome.security.policy import PolicyDeniedError
+    from OriginAgent.agent.tools.limits import ToolLimits
+    from OriginAgent.security.policy import PolicyDeniedError
 
     tool = WebFetchTool(
         config=WebFetchConfig(use_jina_reader=False),
@@ -498,9 +498,9 @@ async def test_web_fetch_stream_rejects_oversize_html_without_text_property(monk
         def stream(self, method, url, headers=None):
             return FakeStreamResponse()
 
-    monkeypatch.setattr("OpenHome.agent.tools.web.httpx.AsyncClient", FakeClient)
+    monkeypatch.setattr("OriginAgent.agent.tools.web.httpx.AsyncClient", FakeClient)
 
-    with patch("OpenHome.security.network.socket.getaddrinfo", _fake_resolve_public):
+    with patch("OriginAgent.security.network.socket.getaddrinfo", _fake_resolve_public):
         with pytest.raises(PolicyDeniedError) as exc:
             await tool.execute(url="https://example.com/huge")
 

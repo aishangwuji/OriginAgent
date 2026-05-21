@@ -4,13 +4,13 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from OpenHome.agent.context import ContextBuilder
-from OpenHome.agent.loop import AgentLoop
-from OpenHome.bus.events import InboundMessage
-from OpenHome.bus.queue import MessageBus
-from OpenHome.providers.base import LLMResponse
-from OpenHome.session.manager import Session
-from OpenHome.utils.webui_titles import (
+from OriginAgent.agent.context import ContextBuilder
+from OriginAgent.agent.loop import AgentLoop
+from OriginAgent.bus.events import InboundMessage
+from OriginAgent.bus.queue import MessageBus
+from OriginAgent.providers.base import LLMResponse
+from OriginAgent.session.manager import Session
+from OriginAgent.utils.webui_titles import (
     WEBUI_SESSION_METADATA_KEY,
     WEBUI_TITLE_METADATA_KEY,
     maybe_generate_webui_title,
@@ -19,7 +19,7 @@ from OpenHome.utils.webui_titles import (
 
 def _mk_loop() -> AgentLoop:
     loop = AgentLoop.__new__(AgentLoop)
-    from OpenHome.config.schema import AgentDefaults
+    from OriginAgent.config.schema import AgentDefaults
 
     loop.max_tool_result_chars = AgentDefaults().max_tool_result_chars
     return loop
@@ -554,8 +554,8 @@ async def test_next_turn_after_crash_closes_pending_user_turn_before_new_input(t
 
 @pytest.mark.asyncio
 async def test_stop_preserves_runtime_checkpoint_for_next_turn(tmp_path: Path) -> None:
-    from OpenHome.command.builtin import cmd_stop
-    from OpenHome.command.router import CommandContext
+    from OriginAgent.command.builtin import cmd_stop
+    from OriginAgent.command.router import CommandContext
 
     loop = _make_full_loop(tmp_path)
     loop.consolidator.maybe_consolidate_by_tokens = AsyncMock(return_value=False)  # type: ignore[method-assign]

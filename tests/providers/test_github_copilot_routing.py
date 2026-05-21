@@ -10,8 +10,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from OpenHome.providers.openai_compat_provider import OpenAICompatProvider
-from OpenHome.providers.registry import find_by_name
+from OriginAgent.providers.openai_compat_provider import OpenAICompatProvider
+from OriginAgent.providers.registry import find_by_name
 
 
 def _make_copilot_provider() -> OpenAICompatProvider:
@@ -50,7 +50,7 @@ def test_build_responses_body_strips_github_copilot_prefix():
 @pytest.mark.asyncio
 async def test_github_copilot_does_not_fall_back_from_responses_error():
     """On /responses failure, github_copilot must re-raise instead of hitting /chat/completions."""
-    from OpenHome.providers.github_copilot_provider import GitHubCopilotProvider
+    from OriginAgent.providers.github_copilot_provider import GitHubCopilotProvider
 
     mock_client = MagicMock()
     mock_client.api_key = "no-key"
@@ -63,7 +63,7 @@ async def test_github_copilot_does_not_fall_back_from_responses_error():
     mock_client.responses.create = AsyncMock(side_effect=_CompatError("boom"))
     mock_client.chat.completions.create = AsyncMock()
 
-    with patch("OpenHome.providers.openai_compat_provider.AsyncOpenAI", return_value=mock_client):
+    with patch("OriginAgent.providers.openai_compat_provider.AsyncOpenAI", return_value=mock_client):
         provider = GitHubCopilotProvider(default_model="github_copilot/gpt-5.4-mini")
     provider._get_copilot_access_token = AsyncMock(return_value="copilot-access-token")
 

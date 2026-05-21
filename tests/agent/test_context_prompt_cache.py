@@ -9,7 +9,7 @@ from importlib.resources import files as pkg_files
 from pathlib import Path
 import datetime as datetime_module
 
-from OpenHome.agent.context import ContextBuilder
+from OriginAgent.agent.context import ContextBuilder
 
 
 class _FakeDatetime(real_datetime):
@@ -47,14 +47,14 @@ def _runtime_payload(content) -> dict:
 
 
 def test_bootstrap_files_are_backed_by_templates() -> None:
-    template_dir = pkg_files("OpenHome") / "templates"
+    template_dir = pkg_files("OriginAgent") / "templates"
 
     for filename in ContextBuilder.BOOTSTRAP_FILES:
         assert (template_dir / filename).is_file(), f"missing bootstrap template: {filename}"
 
 
 def test_default_templates_are_not_smart_home_centered() -> None:
-    template_dir = pkg_files("OpenHome") / "templates"
+    template_dir = pkg_files("OriginAgent") / "templates"
     texts = [
         (template_dir / "AGENTS.md").read_text(encoding="utf-8"),
         (template_dir / "SOUL.md").read_text(encoding="utf-8"),
@@ -320,7 +320,7 @@ def test_partial_dream_processing_shows_only_remainder(tmp_path) -> None:
 
 def test_execution_rules_in_system_prompt(tmp_path) -> None:
     """Execution rules should appear in the system prompt via default SOUL.md."""
-    from OpenHome.utils.helpers import sync_workspace_templates
+    from OriginAgent.utils.helpers import sync_workspace_templates
 
     workspace = _make_workspace(tmp_path)
     sync_workspace_templates(workspace, silent=True)
@@ -340,7 +340,7 @@ def test_identity_has_no_behavioral_instructions(tmp_path) -> None:
     builder = ContextBuilder(workspace)
 
     identity = builder._get_identity(channel=None)
-    assert "You are OpenHome" not in identity
+    assert "You are OriginAgent" not in identity
     assert "Act, don't narrate" not in identity
     assert "Execution Rules" not in identity
 
@@ -358,7 +358,7 @@ def test_system_prompt_does_not_warn_about_message_time_markers(tmp_path) -> Non
 
 def test_default_soul_template_contains_execution_rules() -> None:
     """Default SOUL.md template must contain execution rules with act/plan layering."""
-    soul = (pkg_files("OpenHome") / "templates" / "SOUL.md").read_text(encoding="utf-8")
+    soul = (pkg_files("OriginAgent") / "templates" / "SOUL.md").read_text(encoding="utf-8")
     assert "## Execution Rules" in soul
     assert "Act immediately on simple, low-risk requests" in soul
     assert "For multi-step tasks, summarize the plan" in soul
@@ -367,11 +367,11 @@ def test_default_soul_template_contains_execution_rules() -> None:
 
 def test_dream_phase1_prompt_uses_generic_scope_examples() -> None:
     dream = (
-        pkg_files("OpenHome") / "templates" / "agent" / "dream_phase1.md"
+        pkg_files("OriginAgent") / "templates" / "agent" / "dream_phase1.md"
     ).read_text(encoding="utf-8")
 
     assert "user.communication.style" in dream
-    assert "project.openhome.priority" in dream
+    assert "project.originagent.priority" in dream
     assert "workspace.tooling.python" in dream
     assert "domain-pack-defined prefix" in dream
     assert "home.living_room.lighting" not in dream
@@ -547,7 +547,7 @@ def test_selected_skills_are_loaded_and_excluded_from_index(tmp_path) -> None:
 def test_template_memory_md_is_skipped(tmp_path) -> None:
     """MEMORY.md matching the bundled template should not inject the Memory section."""
     workspace = _make_workspace(tmp_path)
-    from OpenHome.utils.helpers import sync_workspace_templates
+    from OriginAgent.utils.helpers import sync_workspace_templates
     sync_workspace_templates(workspace, silent=True)
 
     builder = ContextBuilder(workspace)
@@ -558,13 +558,13 @@ def test_template_memory_md_is_skipped(tmp_path) -> None:
     # also contains "# Memory" but is followed by "## Structure", not
     # "## Long-term Memory".
     assert "# Memory\n\n## Long-term Memory" not in prompt
-    assert "This file is automatically updated by OpenHome" not in prompt
+    assert "This file is automatically updated by OriginAgent" not in prompt
 
 
 def test_customized_memory_md_is_injected_as_reference_context(tmp_path) -> None:
     """A Dream-populated MEMORY.md should be injected as reference data."""
     workspace = _make_workspace(tmp_path)
-    from OpenHome.utils.helpers import sync_workspace_templates
+    from OriginAgent.utils.helpers import sync_workspace_templates
     sync_workspace_templates(workspace, silent=True)
 
     (workspace / "memory" / "MEMORY.md").write_text(

@@ -5,7 +5,7 @@ from datetime import datetime
 
 import pytest
 
-from OpenHome.agent.memory import _HISTORY_ENTRY_HARD_CAP, MemoryStore
+from OriginAgent.agent.memory import _HISTORY_ENTRY_HARD_CAP, MemoryStore
 
 
 @pytest.fixture

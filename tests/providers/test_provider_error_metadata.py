@@ -1,7 +1,7 @@
 from types import SimpleNamespace
 
-from OpenHome.providers.anthropic_provider import AnthropicProvider
-from OpenHome.providers.openai_compat_provider import OpenAICompatProvider
+from OriginAgent.providers.anthropic_provider import AnthropicProvider
+from OriginAgent.providers.openai_compat_provider import OpenAICompatProvider
 
 
 def _fake_response(

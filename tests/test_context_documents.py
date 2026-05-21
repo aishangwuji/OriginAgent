@@ -9,8 +9,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from OpenHome.agent.context import ContextBuilder
-from OpenHome.utils.document import extract_documents
+from OriginAgent.agent.context import ContextBuilder
+from OriginAgent.utils.document import extract_documents
 
 
 def _make_builder(tmp_path: Path) -> ContextBuilder:

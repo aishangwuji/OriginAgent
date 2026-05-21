@@ -10,7 +10,7 @@ import json
 
 import pytest
 
-from OpenHome.agent.memory import MemoryStore
+from OriginAgent.agent.memory import MemoryStore
 
 
 @pytest.fixture

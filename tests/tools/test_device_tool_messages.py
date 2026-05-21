@@ -4,9 +4,9 @@ import json
 
 import pytest
 
-from OpenHome.agent.action_runtime import ActionExecutionResult
-from OpenHome.agent.tools.device import LightingSetPowerTool
-from OpenHome.agent.tools.device_messages import (
+from OriginAgent.agent.action_runtime import ActionExecutionResult
+from OriginAgent.agent.tools.device import LightingSetPowerTool
+from OriginAgent.agent.tools.device_messages import (
     BACKEND_FAILED,
     CONFIRMATION_REQUIRED,
     DRY_RUN_ACCEPTED,

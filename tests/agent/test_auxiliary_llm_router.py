@@ -5,15 +5,15 @@ import json
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
-from OpenHome.agent.auxiliary_llm import AuxiliaryLLMRouter, AuxiliaryTaskProvider
-from OpenHome.agent.memory import ArchiveResult, Consolidator, Dream, MemoryStore
-from OpenHome.config.schema import (
+from OriginAgent.agent.auxiliary_llm import AuxiliaryLLMRouter, AuxiliaryTaskProvider
+from OriginAgent.agent.memory import ArchiveResult, Consolidator, Dream, MemoryStore
+from OriginAgent.config.schema import (
     AuxiliaryConfig,
     AuxiliaryTaskConfig,
     Config,
     InlineFallbackConfig,
 )
-from OpenHome.providers.base import LLMProvider, LLMResponse
+from OriginAgent.providers.base import LLMProvider, LLMResponse
 
 
 EMPTY_FACT_PROPOSALS = json.dumps({

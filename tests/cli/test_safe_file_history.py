@@ -3,7 +3,7 @@
 Surrogate characters in CLI input must not crash history file writes.
 """
 
-from OpenHome.cli.commands import SafeFileHistory, _sanitize_surrogates
+from OriginAgent.cli.commands import SafeFileHistory, _sanitize_surrogates
 
 
 class TestSanitizeSurrogates:
@@ -23,7 +23,7 @@ class TestSanitizeSurrogates:
 
     def test_emoji_already_correct(self):
         """Properly encoded emoji should pass through unchanged."""
-        assert _sanitize_surrogates("hello 🐈 OpenHome") == "hello 🐈 OpenHome"
+        assert _sanitize_surrogates("hello 🐈 OriginAgent") == "hello 🐈 OriginAgent"
 
     def test_mixed_unicode_preserved(self):
         assert _sanitize_surrogates("你好 hello こんにちは 🎉") == "你好 hello こんにちは 🎉"
@@ -53,9 +53,9 @@ class TestSafeFileHistory:
 
     def test_emoji_preserved(self, tmp_path):
         hist = SafeFileHistory(str(tmp_path / "history"))
-        hist.store_string("hello 🐈 OpenHome")
+        hist.store_string("hello 🐈 OriginAgent")
         entries = list(hist.load_history_strings())
-        assert entries[0] == "hello 🐈 OpenHome"
+        assert entries[0] == "hello 🐈 OriginAgent"
 
     def test_mixed_unicode_preserved(self, tmp_path):
         """CJK + emoji + latin should all pass through cleanly."""

@@ -10,8 +10,8 @@ from unittest.mock import AsyncMock, MagicMock
 import httpx
 import pytest
 
-from OpenHome.channels.websocket import WebSocketChannel
-from OpenHome.session.manager import Session, SessionManager
+from OriginAgent.channels.websocket import WebSocketChannel
+from OriginAgent.session.manager import Session, SessionManager
 
 _PORT = 29900
 
@@ -440,7 +440,7 @@ def test_wildcard_ipv6_without_auth_raises(bus: MagicMock) -> None:
 def test_wildcard_ipv6_with_secret_is_valid(bus: MagicMock) -> None:
     channel = _ch(bus, host="::", tokenIssueSecret="s3cret")
     resp = channel._handle_webui_bootstrap(
-        _REMOTE, _FakeReq({"X-OpenHome-Auth": "s3cret"})
+        _REMOTE, _FakeReq({"X-OriginAgent-Auth": "s3cret"})
     )
     assert resp.status_code == 200
 
@@ -464,7 +464,7 @@ def test_localhost_without_auth_is_valid(bus: MagicMock) -> None:
 
 def test_bootstrap_prefers_runtime_model_name(bus: MagicMock, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
-        "OpenHome.channels.websocket._default_model_name_from_config",
+        "OriginAgent.channels.websocket._default_model_name_from_config",
         lambda: "from-disk",
     )
     channel = _ch(bus, host="127.0.0.1", runtime_model_name=lambda: "  live/model  ")
@@ -479,7 +479,7 @@ def test_bootstrap_falls_back_when_runtime_returns_empty(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(
-        "OpenHome.channels.websocket._default_model_name_from_config",
+        "OriginAgent.channels.websocket._default_model_name_from_config",
         lambda: "from-disk",
     )
     channel = _ch(bus, host="127.0.0.1", runtime_model_name=lambda: "   ")
@@ -491,7 +491,7 @@ def test_bootstrap_falls_back_when_runtime_returns_empty(
 
 def test_bootstrap_falls_back_when_runtime_raises(bus: MagicMock, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
-        "OpenHome.channels.websocket._default_model_name_from_config",
+        "OriginAgent.channels.websocket._default_model_name_from_config",
         lambda: "from-disk",
     )
 
@@ -523,10 +523,10 @@ def test_bootstrap_accepts_remote_with_valid_secret(bus: MagicMock) -> None:
     assert body["token"].startswith("nbwt_")
 
 
-def test_bootstrap_accepts_x_OpenHome_auth_header(bus: MagicMock) -> None:
+def test_bootstrap_accepts_x_OriginAgent_auth_header(bus: MagicMock) -> None:
     channel = _ch(bus, host="0.0.0.0", tokenIssueSecret="s3cret")
     resp = channel._handle_webui_bootstrap(
-        _REMOTE, _FakeReq({"X-OpenHome-Auth": "s3cret"})
+        _REMOTE, _FakeReq({"X-OriginAgent-Auth": "s3cret"})
     )
     assert resp.status_code == 200
 

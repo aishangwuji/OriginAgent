@@ -1,21 +1,21 @@
 import json
 from datetime import datetime, timezone
 
-from OpenHome.agent.action_runtime import (
+from OriginAgent.agent.action_runtime import (
     ActionIntent,
     DryRunActionBackend,
     SafeActionExecutor,
     sanitize_action_payload,
 )
-from OpenHome.agent.action_safety import ActionDecision, ActionRequest, ActionSafetyGate
-from OpenHome.agent.audit import AuditLogger
-from OpenHome.agent.confirmation import ConfirmationManager
-from OpenHome.agent.device_actions import DeviceActionSchemaRegistry, TypedActionPlanner, TypedDeviceAction
-from OpenHome.agent.device_backends import DeviceActionExecutor, LowRiskDeviceBackend
-from OpenHome.agent.facts import FactStore
-from OpenHome.agent.permissions import HouseholdActor, PermissionResolver
-from OpenHome.agent.presence import PresenceStore
-from OpenHome.agent.presence_adapters import (
+from OriginAgent.agent.action_safety import ActionDecision, ActionRequest, ActionSafetyGate
+from OriginAgent.agent.audit import AuditLogger
+from OriginAgent.agent.confirmation import ConfirmationManager
+from OriginAgent.agent.device_actions import DeviceActionSchemaRegistry, TypedActionPlanner, TypedDeviceAction
+from OriginAgent.agent.device_backends import DeviceActionExecutor, LowRiskDeviceBackend
+from OriginAgent.agent.facts import FactStore
+from OriginAgent.agent.permissions import HouseholdActor, PermissionResolver
+from OriginAgent.agent.presence import PresenceStore
+from OriginAgent.agent.presence_adapters import (
     MotionAdapter,
     MotionEvent,
     PhoneGeofenceAdapter,
@@ -23,7 +23,7 @@ from OpenHome.agent.presence_adapters import (
     WifiDeviceEvent,
     WifiPresenceAdapter,
 )
-from OpenHome.agent.presence_signals import PresenceSignalIngestor
+from OriginAgent.agent.presence_signals import PresenceSignalIngestor
 
 NOW = datetime(2026, 5, 15, 12, 0, 0, tzinfo=timezone.utc)
 

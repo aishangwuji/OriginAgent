@@ -1,5 +1,5 @@
-from OpenHome.agent.presence import PresenceStore
-from OpenHome.agent.presence_adapters import (
+from OriginAgent.agent.presence import PresenceStore
+from OriginAgent.agent.presence_adapters import (
     DoorEvent,
     DoorSensorAdapter,
     ManualPresenceAdapter,
@@ -13,7 +13,7 @@ from OpenHome.agent.presence_adapters import (
     WifiDeviceEvent,
     WifiPresenceAdapter,
 )
-from OpenHome.agent.presence_signals import PresenceSignalIngestor
+from OriginAgent.agent.presence_signals import PresenceSignalIngestor
 
 
 def test_manual_presence_adapter_home_and_away_emit_trusted_person_signals():

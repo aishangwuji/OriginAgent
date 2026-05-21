@@ -1,7 +1,7 @@
 import pytest
 
-from OpenHome.agent.tools.message import MessageTool
-from OpenHome.bus.events import OutboundMessage
+from OriginAgent.agent.tools.message import MessageTool
+from OriginAgent.bus.events import OutboundMessage
 
 _PNG = (
     b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR"

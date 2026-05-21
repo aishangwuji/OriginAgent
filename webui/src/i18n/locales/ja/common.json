@@ -7,7 +7,7 @@
     },
     "error": {
       "title": "OriginAgent に接続できませんでした",
-      "gatewayHint": "gateway（`openhome gateway`）が起動しており、このページが同じマシン上で開かれていることを確認してください。"
+      "gatewayHint": "gateway（`originagent gateway`）が起動しており、このページが同じマシン上で開かれていることを確認してください。"
     },
     "system": {
       "section": "システム",

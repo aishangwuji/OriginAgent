@@ -4,8 +4,8 @@ import time
 
 import pytest
 
-from OpenHome.cron.service import CronService
-from OpenHome.cron.types import CronJob, CronPayload, CronSchedule
+from OriginAgent.cron.service import CronService
+from OriginAgent.cron.types import CronJob, CronPayload, CronSchedule
 
 
 async def _wait_until(predicate, *, timeout: float = 1.0, interval: float = 0.01) -> None:

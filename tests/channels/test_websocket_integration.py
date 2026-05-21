@@ -14,8 +14,8 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 import websockets
 
-from OpenHome.channels.websocket import WebSocketChannel
-from OpenHome.bus.events import OutboundMessage
+from OriginAgent.channels.websocket import WebSocketChannel
+from OriginAgent.bus.events import OutboundMessage
 from ws_test_client import WsTestClient, issue_token, issue_token_ok
 
 

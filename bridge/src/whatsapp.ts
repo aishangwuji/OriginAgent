@@ -90,7 +90,7 @@ export class WhatsAppClient {
       version,
       logger,
       printQRInTerminal: false,
-      browser: ['OpenHome', 'cli', VERSION],
+      browser: ['OriginAgent', 'cli', VERSION],
       syncFullHistory: false,
       markOnlineOnConnect: false,
     });

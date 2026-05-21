@@ -10,15 +10,15 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from OpenHome.agent.background_review import BackgroundReviewService, ReviewProposalStore
-from OpenHome.agent.loop import AgentLoop, TurnContext, TurnState
-from OpenHome.bus.events import InboundMessage
-from OpenHome.bus.queue import MessageBus
-from OpenHome.command.builtin import cmd_reviews
-from OpenHome.command.router import CommandContext
-from OpenHome.config.schema import BackgroundReviewConfig, CuratorConfig
-from OpenHome.providers.base import LLMProvider, LLMResponse
-from OpenHome.session.manager import Session
+from OriginAgent.agent.background_review import BackgroundReviewService, ReviewProposalStore
+from OriginAgent.agent.loop import AgentLoop, TurnContext, TurnState
+from OriginAgent.bus.events import InboundMessage
+from OriginAgent.bus.queue import MessageBus
+from OriginAgent.command.builtin import cmd_reviews
+from OriginAgent.command.router import CommandContext
+from OriginAgent.config.schema import BackgroundReviewConfig, CuratorConfig
+from OriginAgent.providers.base import LLMProvider, LLMResponse
+from OriginAgent.session.manager import Session
 
 
 class FakeProvider(LLMProvider):

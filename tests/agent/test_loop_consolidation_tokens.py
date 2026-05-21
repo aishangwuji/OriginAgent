@@ -2,10 +2,10 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-import OpenHome.agent.memory as memory_module
-from OpenHome.agent.loop import AgentLoop
-from OpenHome.bus.queue import MessageBus
-from OpenHome.providers.base import LLMResponse
+import OriginAgent.agent.memory as memory_module
+from OriginAgent.agent.loop import AgentLoop
+from OriginAgent.bus.queue import MessageBus
+from OriginAgent.providers.base import LLMResponse
 
 
 def _archive_result(summary: str = "summary", cursor: int = 1) -> memory_module.ArchiveResult:
@@ -13,7 +13,7 @@ def _archive_result(summary: str = "summary", cursor: int = 1) -> memory_module.
 
 
 def _make_loop(tmp_path, *, estimated_tokens: int, context_window_tokens: int) -> AgentLoop:
-    from OpenHome.providers.base import GenerationSettings
+    from OriginAgent.providers.base import GenerationSettings
     provider = MagicMock()
     provider.get_default_model.return_value = "test-model"
     provider.generation = GenerationSettings(max_tokens=0)

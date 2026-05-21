@@ -18,7 +18,7 @@ import {
   loadSavedSecret,
   saveSecret,
 } from "@/lib/bootstrap";
-import { OpenHomeClient } from "@/lib/OpenHome-client";
+import { OriginAgentClient } from "@/lib/OriginAgent-client";
 import { ClientProvider, useClient } from "@/providers/ClientProvider";
 import type { ChatSummary } from "@/lib/types";
 
@@ -28,14 +28,14 @@ type BootState =
   | { status: "auth"; failed?: boolean }
   | {
       status: "ready";
-      client: OpenHomeClient;
+      client: OriginAgentClient;
       token: string;
       modelName: string | null;
       refreshToken: () => Promise<string | null>;
     };
 
-const SIDEBAR_STORAGE_KEY = "OpenHome-webui.sidebar";
-const RESTART_STARTED_KEY = "OpenHome-webui.restartStartedAt";
+const SIDEBAR_STORAGE_KEY = "OriginAgent-webui.sidebar";
+const RESTART_STARTED_KEY = "OriginAgent-webui.restartStartedAt";
 const SIDEBAR_WIDTH = 272;
 type ShellView = "chat" | "settings" | "reviews";
 
@@ -83,7 +83,7 @@ function AuthForm({
         <div className="flex flex-col items-center gap-1 text-center">
           <div className="island-brand-orb mb-2">
             <picture>
-              <img src="/brand/OpenHome_mark_v2.svg" alt="OpenHome" draggable={false} />
+              <img src="/brand/OriginAgent_mark_v2.svg" alt="OriginAgent" draggable={false} />
             </picture>
           </div>
           <p className="text-lg font-black text-[#725d42]">{t("app.auth.title")}</p>
@@ -95,7 +95,7 @@ function AuthForm({
           </p>
         )}
         <IslandInput
-          name="openhome-secret"
+          name="originagent-secret"
           type="password"
           placeholder={t("app.auth.placeholder")}
           value={value}
@@ -145,7 +145,7 @@ export default function App() {
           if (cancelled) return;
           if (secret) saveSecret(secret);
           const url = deriveWsUrl(boot.ws_path, boot.token);
-          let client: OpenHomeClient;
+          let client: OriginAgentClient;
           const refreshToken = async (): Promise<string | null> => {
             try {
               const refreshed = await fetchBootstrap("", secret);
@@ -184,7 +184,7 @@ export default function App() {
               return null;
             }
           };
-          client = new OpenHomeClient({
+          client = new OriginAgentClient({
             url,
             onReauth: refreshWsUrl,
           });

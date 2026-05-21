@@ -3,15 +3,15 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from OpenHome.agent.facts import (
+from OriginAgent.agent.facts import (
     FactDeprecationProposal,
     FactProposal,
     parse_fact_proposal_response,
     validate_deprecation_proposal,
     validate_fact_proposal,
 )
-from OpenHome.agent.memory import Dream, MemoryStore
-from OpenHome.agent.runner import AgentRunResult
+from OriginAgent.agent.memory import Dream, MemoryStore
+from OriginAgent.agent.runner import AgentRunResult
 
 
 def _json(upserts=None, deprecations=None, hints=None):

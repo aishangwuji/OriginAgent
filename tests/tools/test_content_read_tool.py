@@ -5,12 +5,12 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from OpenHome.agent.loop import AgentLoop
-from OpenHome.agent.tools.content_read import ContentReadTool
-from OpenHome.bus.queue import MessageBus
-from OpenHome.config.schema import Config, ContentReadToolConfig
-from OpenHome.integrations.content_read.reader import ContentReader
-from OpenHome.integrations.content_read.types import ContentReadResult
+from OriginAgent.agent.loop import AgentLoop
+from OriginAgent.agent.tools.content_read import ContentReadTool
+from OriginAgent.bus.queue import MessageBus
+from OriginAgent.config.schema import Config, ContentReadToolConfig
+from OriginAgent.integrations.content_read.reader import ContentReader
+from OriginAgent.integrations.content_read.types import ContentReadResult
 
 
 def test_content_reader_detects_mvp_providers() -> None:

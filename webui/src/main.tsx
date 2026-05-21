@@ -24,5 +24,5 @@ if (typeof globalThis.crypto !== "undefined" && !("randomUUID" in globalThis.cry
 const root = document.getElementById("root");
 if (!root) throw new Error("root element missing");
 
-/* StrictMode disabled: dev double-invokes state updaters; delta accumulation must stay pure — see useOpenHomeStream. */
+/* StrictMode disabled: dev double-invokes state updaters; delta accumulation must stay pure — see useOriginAgentStream. */
 ReactDOM.createRoot(root).render(<App />);

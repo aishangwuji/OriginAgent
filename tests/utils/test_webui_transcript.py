@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from OpenHome.utils.webui_transcript import (
+from OriginAgent.utils.webui_transcript import (
     WEBUI_TRANSCRIPT_SCHEMA_VERSION,
     append_transcript_object,
     read_transcript_lines,
@@ -11,7 +11,7 @@ from OpenHome.utils.webui_transcript import (
 
 
 def test_append_and_read_roundtrip(tmp_path, monkeypatch) -> None:
-    monkeypatch.setattr("OpenHome.config.paths.get_data_dir", lambda: tmp_path)
+    monkeypatch.setattr("OriginAgent.config.paths.get_data_dir", lambda: tmp_path)
     key = "websocket:t1"
     append_transcript_object(key, {"event": "user", "chat_id": "t1", "text": "hello"})
     lines = read_transcript_lines(key)
@@ -20,7 +20,7 @@ def test_append_and_read_roundtrip(tmp_path, monkeypatch) -> None:
 
 
 def test_replay_delta_and_turn_end(tmp_path, monkeypatch) -> None:
-    monkeypatch.setattr("OpenHome.config.paths.get_data_dir", lambda: tmp_path)
+    monkeypatch.setattr("OriginAgent.config.paths.get_data_dir", lambda: tmp_path)
     key = "websocket:t2"
     for ev in (
         {"event": "user", "chat_id": "t2", "text": "q"},
@@ -43,7 +43,7 @@ def test_replay_delta_and_turn_end(tmp_path, monkeypatch) -> None:
 
 
 def test_replay_command_message_survives_turn_end(tmp_path, monkeypatch) -> None:
-    monkeypatch.setattr("OpenHome.config.paths.get_data_dir", lambda: tmp_path)
+    monkeypatch.setattr("OriginAgent.config.paths.get_data_dir", lambda: tmp_path)
     key = "websocket:t-cmd"
     for ev in (
         {"event": "user", "chat_id": "t-cmd", "text": "/mcp"},
@@ -62,9 +62,9 @@ def test_replay_command_message_survives_turn_end(tmp_path, monkeypatch) -> None
 
 
 def test_build_response_schema(monkeypatch, tmp_path) -> None:
-    from OpenHome.utils.webui_transcript import build_webui_thread_response
+    from OriginAgent.utils.webui_transcript import build_webui_thread_response
 
-    monkeypatch.setattr("OpenHome.config.paths.get_data_dir", lambda: tmp_path)
+    monkeypatch.setattr("OriginAgent.config.paths.get_data_dir", lambda: tmp_path)
     key = "websocket:t3"
     append_transcript_object(key, {"event": "user", "chat_id": "t3", "text": "x"})
     out = build_webui_thread_response(key, augment_user_media=None)

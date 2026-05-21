@@ -1,7 +1,7 @@
 import pytest
 
-from OpenHome.utils.evaluator import evaluate_response
-from OpenHome.providers.base import LLMProvider, LLMResponse, ToolCallRequest
+from OriginAgent.utils.evaluator import evaluate_response
+from OriginAgent.providers.base import LLMProvider, LLMResponse, ToolCallRequest
 
 
 class DummyProvider(LLMProvider):

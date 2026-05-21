@@ -7,9 +7,9 @@ from types import SimpleNamespace
 
 import pytest
 
-from OpenHome.agent.background_review import ReviewProposal, ReviewProposalStore
-from OpenHome.agent.curator import CURATOR_ORIGIN, CuratorService
-from OpenHome.agent.skills import SkillsLoader
+from OriginAgent.agent.background_review import ReviewProposal, ReviewProposalStore
+from OriginAgent.agent.curator import CURATOR_ORIGIN, CuratorService
+from OriginAgent.agent.skills import SkillsLoader
 
 
 def _review_proposal(proposal_id: str, *, origin: str = "background_review", proposal_type: str = "skill") -> ReviewProposal:
@@ -47,7 +47,7 @@ def _write_skill(
         f"description: {description}\n"
         "always: false\n"
         "metadata:\n"
-        "  OpenHome:\n"
+        "  OriginAgent:\n"
         "    proposal_status: proposed\n"
         f"    verification_status: {verification_status}\n"
         f"    lifecycle_status: {lifecycle_status}\n"

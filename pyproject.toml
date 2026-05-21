@@ -1,5 +1,5 @@
 [project]
-name = "openhome"
+name = "originagent"
 version = "0.1.5.post3"
 description = "A local AI agent runtime built for modular, extensible automation"
 readme = { file = "README.md", content-type = "text/markdown" }
@@ -109,9 +109,7 @@ dev = [
 ]
 
 [project.scripts]
-originagent = "OpenHome.cli.commands:app"
-openhome = "OpenHome.cli.commands:app"
-OpenHome = "OpenHome.cli.commands:app"
+originagent = "OriginAgent.cli.commands:app"
 
 [build-system]
 requires = ["hatchling"]
@@ -126,33 +124,30 @@ allow-direct-references = true
 [tool.hatch.build]
 include = [
     "OriginAgent/**/*.py",
-    "OpenHome/**/*.py",
-    "OpenHome/templates/**/*.md",
-    "OpenHome/skills/**/*.md",
-    "OpenHome/skills/**/*.sh",
-    "OpenHome/domain_packs/**/*.md",
-    "OpenHome/domain_packs/**/*.yaml",
-    "OpenHome/web/dist/**/*",
+    "OriginAgent/templates/**/*.md",
+    "OriginAgent/skills/**/*.md",
+    "OriginAgent/skills/**/*.sh",
+    "OriginAgent/domain_packs/**/*.md",
+    "OriginAgent/domain_packs/**/*.yaml",
+    "OriginAgent/web/dist/**/*",
 ]
 artifacts = [
-    "OpenHome/web/dist/**/*",
+    "OriginAgent/web/dist/**/*",
 ]
 
 [tool.hatch.build.targets.wheel]
-packages = ["OpenHome", "OriginAgent"]
+packages = ["OriginAgent"]
 
 [tool.hatch.build.targets.wheel.sources]
 "OriginAgent" = "OriginAgent"
-"OpenHome" = "OpenHome"
 
 [tool.hatch.build.targets.wheel.force-include]
-"bridge" = "OpenHome/bridge"
+"bridge" = "OriginAgent/bridge"
 
 [tool.hatch.build.targets.sdist]
 include = [
     "OriginAgent/",
-    "OpenHome/",
-    "OpenHome/web/dist/",
+    "OriginAgent/web/dist/",
     "bridge/",
     "hatch_build.py",
     "README.md",
@@ -174,7 +169,7 @@ asyncio_mode = "auto"
 testpaths = ["tests"]
 
 [tool.coverage.run]
-source = ["OpenHome"]
+source = ["OriginAgent"]
 omit = ["tests/*", "**/tests/*"]
 
 [tool.coverage.report]

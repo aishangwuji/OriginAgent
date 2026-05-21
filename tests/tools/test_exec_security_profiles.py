@@ -7,8 +7,8 @@ from unittest.mock import patch
 import pytest
 from pydantic import ValidationError
 
-from OpenHome.agent.tools.shell import ExecTool
-from OpenHome.config.schema import ExecToolConfig
+from OriginAgent.agent.tools.shell import ExecTool
+from OriginAgent.config.schema import ExecToolConfig
 
 
 class _FakeProcess:
@@ -161,8 +161,8 @@ async def test_local_dev_uses_sandbox_when_bwrap_available(tmp_path: Path) -> No
         allow_unsafe_exec=True,
     )
 
-    with patch("OpenHome.agent.tools.shell._IS_WINDOWS", False):
-        with patch("OpenHome.agent.tools.shell.shutil.which", lambda name: "/usr/bin/bwrap"):
+    with patch("OriginAgent.agent.tools.shell._IS_WINDOWS", False):
+        with patch("OriginAgent.agent.tools.shell.shutil.which", lambda name: "/usr/bin/bwrap"):
             with patch.object(tool, "_spawn") as spawn:
                 spawn.return_value = _FakeProcess()
                 result = await tool.execute(command="echo ok", working_dir=str(workspace))

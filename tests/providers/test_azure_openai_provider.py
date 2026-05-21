@@ -4,8 +4,8 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from OpenHome.providers.azure_openai_provider import AzureOpenAIProvider
-from OpenHome.providers.base import LLMResponse
+from OriginAgent.providers.azure_openai_provider import AzureOpenAIProvider
+from OriginAgent.providers.base import LLMResponse
 
 
 # ---------------------------------------------------------------------------

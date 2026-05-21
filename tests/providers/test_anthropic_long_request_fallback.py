@@ -13,8 +13,8 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from OpenHome.providers.anthropic_provider import AnthropicProvider
-from OpenHome.providers.base import LLMResponse
+from OriginAgent.providers.anthropic_provider import AnthropicProvider
+from OriginAgent.providers.base import LLMResponse
 
 _LONG_REQUEST_MESSAGE = (
     "Streaming is required for operations that may take longer than 10 minutes. "

@@ -4,7 +4,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from OpenHome.agent.tools.self import MyTool
+from OriginAgent.agent.tools.self import MyTool
 
 
 @pytest.mark.asyncio

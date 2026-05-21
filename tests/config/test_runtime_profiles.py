@@ -2,12 +2,12 @@ from __future__ import annotations
 
 import json
 
-from OpenHome.agent.tools.filesystem import ReadFileTool, WriteFileTool
-from OpenHome.agent.tools.base import Tool
-from OpenHome.agent.tools.registry import ToolRegistry
-from OpenHome.config.loader import load_config
-from OpenHome.config.profiles import apply_runtime_profile, build_runtime_profile_defaults
-from OpenHome.config.schema import Config, DeviceToolsConfig, ExecToolConfig, ToolAuditConfig
+from OriginAgent.agent.tools.filesystem import ReadFileTool, WriteFileTool
+from OriginAgent.agent.tools.base import Tool
+from OriginAgent.agent.tools.registry import ToolRegistry
+from OriginAgent.config.loader import load_config
+from OriginAgent.config.profiles import apply_runtime_profile, build_runtime_profile_defaults
+from OriginAgent.config.schema import Config, DeviceToolsConfig, ExecToolConfig, ToolAuditConfig
 
 
 class _NamedTool(Tool):
@@ -97,8 +97,8 @@ def test_loader_applies_profile_defaults_without_unsafe_exec(tmp_path) -> None:
 def test_agent_loop_from_config_applies_profile_defaults(tmp_path) -> None:
     from unittest.mock import MagicMock
 
-    from OpenHome.agent.loop import AgentLoop
-    from OpenHome.bus.queue import MessageBus
+    from OriginAgent.agent.loop import AgentLoop
+    from OriginAgent.bus.queue import MessageBus
 
     cfg = Config()
     cfg.agents.defaults.workspace = str(tmp_path)

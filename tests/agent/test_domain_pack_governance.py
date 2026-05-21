@@ -3,10 +3,10 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from OpenHome.agent.domain_pack_governance import DomainPackGovernanceService
-from OpenHome.agent.domain_packs import DomainPackManager
-from OpenHome.config.schema import DomainPacksConfig
-from OpenHome.config.schema import Config
+from OriginAgent.agent.domain_pack_governance import DomainPackGovernanceService
+from OriginAgent.agent.domain_packs import DomainPackManager
+from OriginAgent.config.schema import DomainPacksConfig
+from OriginAgent.config.schema import Config
 
 
 def _write_pack_source(root: Path, pack_id: str, *, version: str = "0.1.0", with_missing_skill: bool = False) -> Path:

@@ -7,19 +7,19 @@ from types import SimpleNamespace
 
 import pytest
 
-from OpenHome.agent.confirmation import ConfirmationRequest, PendingConfirmationStore
-from OpenHome.agent.domain_packs import DomainPackManager
-from OpenHome.agent.tools.filesystem import ReadFileTool
-from OpenHome.agent.tools.runtime_status import (
+from OriginAgent.agent.confirmation import ConfirmationRequest, PendingConfirmationStore
+from OriginAgent.agent.domain_packs import DomainPackManager
+from OriginAgent.agent.tools.filesystem import ReadFileTool
+from OriginAgent.agent.tools.runtime_status import (
     ConfirmationSummaryTool,
     CronSummaryTool,
     RuntimeStatusTool,
     ToolAuditSummaryTool,
 )
-from OpenHome.config.schema import DomainPacksConfig
-from OpenHome.cron.service import CronService
-from OpenHome.cron.types import CronSchedule
-from OpenHome.session.search_index import SessionSearchIndexService
+from OriginAgent.config.schema import DomainPacksConfig
+from OriginAgent.cron.service import CronService
+from OriginAgent.cron.types import CronSchedule
+from OriginAgent.session.search_index import SessionSearchIndexService
 
 RAW_COMMAND = "echo super-secret-command"
 RAW_PATH = "C:/secret/path/file.txt"
@@ -362,7 +362,7 @@ async def test_runtime_status_reports_skill_lifecycle_counts(tmp_path) -> None:
         "description: Candidate skill.\n"
         "always: false\n"
         "metadata:\n"
-        "  OpenHome:\n"
+        "  OriginAgent:\n"
         "    proposal_status: proposed\n"
         "    verification_status: unverified\n"
         "    review_proposal_id: review_candidate\n"
@@ -403,7 +403,7 @@ async def test_runtime_status_reports_workflow_artifact_counts(tmp_path) -> None
             "body: Review state manually.",
             "steps: []",
             "metadata:",
-            "  OpenHome:",
+            "  OriginAgent:",
             "    proposal_status: proposed",
             "    verification_status: unverified",
             "    review_proposal_id: review_manual",

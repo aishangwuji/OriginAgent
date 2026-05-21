@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 /**
- * OpenHome WhatsApp Bridge
+ * OriginAgent WhatsApp Bridge
  * 
- * This bridge connects WhatsApp Web to OpenHome's Python backend
+ * This bridge connects WhatsApp Web to OriginAgent's Python backend
  * via WebSocket. It handles authentication, message forwarding,
  * and reconnection logic.
  * 
@@ -10,7 +10,7 @@
  *   npm run build && npm start
  *   
  * Or with custom settings:
- *   BRIDGE_PORT=3001 AUTH_DIR=~/.openhome/whatsapp npm start
+ *   BRIDGE_PORT=3001 AUTH_DIR=~/.originagent/whatsapp npm start
  */
 
 // Polyfill crypto for Baileys in ESM
@@ -24,15 +24,15 @@ import { homedir } from 'os';
 import { join } from 'path';
 
 const PORT = parseInt(process.env.BRIDGE_PORT || '3001', 10);
-const AUTH_DIR = process.env.AUTH_DIR || join(homedir(), '.openhome', 'whatsapp-auth');
+const AUTH_DIR = process.env.AUTH_DIR || join(homedir(), '.originagent', 'whatsapp-auth');
 const TOKEN = process.env.BRIDGE_TOKEN?.trim();
 
 if (!TOKEN) {
-  console.error('BRIDGE_TOKEN is required. Start the bridge via OpenHome so it can provision a local secret automatically.');
+  console.error('BRIDGE_TOKEN is required. Start the bridge via OriginAgent so it can provision a local secret automatically.');
   process.exit(1);
 }
 
-console.log('OpenHome WhatsApp Bridge');
+console.log('OriginAgent WhatsApp Bridge');
 console.log('========================\n');
 
 const server = new BridgeServer(PORT, AUTH_DIR, TOKEN);

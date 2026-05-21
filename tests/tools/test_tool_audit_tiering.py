@@ -5,11 +5,11 @@ from typing import Any
 import pytest
 from pydantic import ValidationError
 
-from OpenHome.agent.tools.audit import InMemoryToolAuditSink, ToolAuditConfig
-from OpenHome.agent.tools.base import Tool
-from OpenHome.agent.tools.registry import ToolRegistry, _matches_security_tool
-from OpenHome.config.schema import ToolsConfig
-from OpenHome.security.capabilities import CapabilitySnapshot
+from OriginAgent.agent.tools.audit import InMemoryToolAuditSink, ToolAuditConfig
+from OriginAgent.agent.tools.base import Tool
+from OriginAgent.agent.tools.registry import ToolRegistry, _matches_security_tool
+from OriginAgent.config.schema import ToolsConfig
+from OriginAgent.security.capabilities import CapabilitySnapshot
 
 
 class _FakeTool(Tool):
@@ -50,7 +50,7 @@ def test_tool_audit_config_rejects_invalid_mode() -> None:
 def test_default_security_tools_are_narrow() -> None:
     patterns = ToolAuditConfig().security_tools
 
-    for name in ("exec", "message", "cron", "spawn", "openhome_device_lighting", "mcp_demo"):
+    for name in ("exec", "message", "cron", "spawn", "originagent_device_lighting", "mcp_demo"):
         assert _matches_security_tool(name, patterns)
     for name in ("read_file", "list_dir", "grep", "glob", "web_fetch", "web_search"):
         assert not _matches_security_tool(name, patterns)

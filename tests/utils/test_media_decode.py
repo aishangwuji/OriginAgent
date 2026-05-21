@@ -1,4 +1,4 @@
-"""Tests for ``OpenHome.utils.media_decode``."""
+"""Tests for ``OriginAgent.utils.media_decode``."""
 
 from __future__ import annotations
 
@@ -6,7 +6,7 @@ import base64
 
 import pytest
 
-from OpenHome.utils.media_decode import (
+from OriginAgent.utils.media_decode import (
     DEFAULT_MAX_BYTES,
     FileSizeExceeded,
     MAX_FILE_SIZE,
@@ -67,8 +67,8 @@ def test_saved_file_lives_under_media_dir(tmp_path) -> None:
 
 def test_legacy_symbols_reexported_from_api_server() -> None:
     """Existing tests import ``_save_base64_data_url`` / ``_FileSizeExceeded``
-    from ``OpenHome.api.server`` — keep the aliases working."""
-    from OpenHome.api import server
+    from ``OriginAgent.api.server`` — keep the aliases working."""
+    from OriginAgent.api import server
 
     assert server._save_base64_data_url is save_base64_data_url
     assert server._FileSizeExceeded is FileSizeExceeded

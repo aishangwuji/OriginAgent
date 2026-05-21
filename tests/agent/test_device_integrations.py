@@ -3,18 +3,18 @@ from datetime import datetime, timezone
 
 import pytest
 
-from OpenHome.agent.action_runtime import ActionIntent, SafeActionExecutor
-from OpenHome.agent.action_safety import ActionDecision
-from OpenHome.agent.audit import AuditLogger
-from OpenHome.agent.confirmation import ConfirmationManager
-from OpenHome.agent.device_actions import (
+from OriginAgent.agent.action_runtime import ActionIntent, SafeActionExecutor
+from OriginAgent.agent.action_safety import ActionDecision
+from OriginAgent.agent.audit import AuditLogger
+from OriginAgent.agent.confirmation import ConfirmationManager
+from OriginAgent.agent.device_actions import (
     DeviceActionSchemaRegistry,
     TypedActionPlanner,
     TypedDeviceAction,
 )
-from OpenHome.agent.device_backends import DeviceActionExecutor
-from OpenHome.agent.device_integrations import RealLightingBackend
-from OpenHome.agent.permissions import HouseholdActor, PermissionResolver
+from OriginAgent.agent.device_backends import DeviceActionExecutor
+from OriginAgent.agent.device_integrations import RealLightingBackend
+from OriginAgent.agent.permissions import HouseholdActor, PermissionResolver
 
 NOW = datetime(2026, 5, 16, 12, 0, 0, tzinfo=timezone.utc)
 

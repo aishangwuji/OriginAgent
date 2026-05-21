@@ -356,7 +356,7 @@ describe("webui API helpers", () => {
           },
           {
             command: "/restart",
-            title: "Restart OpenHome",
+            title: "Restart OriginAgent",
             description: "Restart the bot process.",
             icon: "rotate-cw",
           },
@@ -393,7 +393,7 @@ describe("webui API helpers", () => {
       },
       {
         command: "/restart",
-        title: "Restart OpenHome",
+        title: "Restart OriginAgent",
         description: "Restart the bot process.",
         icon: "rotate-cw",
         argHint: "",

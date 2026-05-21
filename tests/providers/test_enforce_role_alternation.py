@@ -1,6 +1,6 @@
 """Tests for LLMProvider._enforce_role_alternation."""
 
-from OpenHome.providers.base import LLMProvider, _SYNTHETIC_USER_CONTENT
+from OriginAgent.providers.base import LLMProvider, _SYNTHETIC_USER_CONTENT
 
 
 def test_sanitize_for_provider_removes_meta_without_mutating_original():

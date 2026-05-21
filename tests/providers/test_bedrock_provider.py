@@ -6,9 +6,9 @@ from typing import Any
 
 import pytest
 
-from OpenHome.config.schema import Config, ProvidersConfig
-from OpenHome.providers.bedrock_provider import BedrockProvider
-from OpenHome.providers.registry import find_by_name
+from OriginAgent.config.schema import Config, ProvidersConfig
+from OriginAgent.providers.bedrock_provider import BedrockProvider
+from OriginAgent.providers.registry import find_by_name
 
 
 class FakeClient:

@@ -6,17 +6,17 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from OpenHome.agent.domain_pack_governance import DomainPackGovernanceService
-from OpenHome.agent.domain_packs import DomainPackManager
-from OpenHome.agent.loop import UNIFIED_SESSION_KEY, AgentLoop
-from OpenHome.agent.skills import SkillsLoader
-from OpenHome.bus.events import InboundMessage
-from OpenHome.bus.queue import MessageBus
-from OpenHome.command.builtin import cmd_domain, cmd_mcp, cmd_self, cmd_skill
-from OpenHome.command.router import CommandContext
-from OpenHome.config.schema import Config, DomainPacksConfig
-from OpenHome.providers.base import LLMProvider, LLMResponse
-from OpenHome.utils.webui_transcript import read_transcript_lines, replay_transcript_to_ui_messages
+from OriginAgent.agent.domain_pack_governance import DomainPackGovernanceService
+from OriginAgent.agent.domain_packs import DomainPackManager
+from OriginAgent.agent.loop import UNIFIED_SESSION_KEY, AgentLoop
+from OriginAgent.agent.skills import SkillsLoader
+from OriginAgent.bus.events import InboundMessage
+from OriginAgent.bus.queue import MessageBus
+from OriginAgent.command.builtin import cmd_domain, cmd_mcp, cmd_self, cmd_skill
+from OriginAgent.command.router import CommandContext
+from OriginAgent.config.schema import Config, DomainPacksConfig
+from OriginAgent.providers.base import LLMProvider, LLMResponse
+from OriginAgent.utils.webui_transcript import read_transcript_lines, replay_transcript_to_ui_messages
 
 
 class _NoChatProvider(LLMProvider):
@@ -136,7 +136,7 @@ async def test_skill_command_verifies_and_activates_workspace_skill(tmp_path: Pa
         "description: Workspace skill.\n"
         "always: false\n"
         "metadata:\n"
-        "  OpenHome:\n"
+        "  OriginAgent:\n"
         "    proposal_status: proposed\n"
         "    verification_status: unverified\n"
         "    review_proposal_id: review_alpha\n"
@@ -298,7 +298,7 @@ async def test_domain_command_installs_workspace_pack_from_local_path(
     loop = MagicMock()
     loop.workspace = workspace
     loop.domain_packs = DomainPackManager(workspace, builtin_dir=tmp_path / "empty")
-    monkeypatch.setattr("OpenHome.command.builtin._domain_governance", lambda _loop: service)
+    monkeypatch.setattr("OriginAgent.command.builtin._domain_governance", lambda _loop: service)
 
     command_ctx = _ctx(loop, f"/domains install {source}")
     command_ctx.args = f"install {source}"
@@ -328,7 +328,7 @@ async def test_capability_commands_shortcut_full_agent_path(
     raw: str,
     expected: str,
 ) -> None:
-    monkeypatch.setattr("OpenHome.config.paths.get_data_dir", lambda: tmp_path / "data")
+    monkeypatch.setattr("OriginAgent.config.paths.get_data_dir", lambda: tmp_path / "data")
     loop = AgentLoop(
         bus=MessageBus(),
         provider=_NoChatProvider(),
@@ -370,7 +370,7 @@ async def test_priority_command_inline_persists_and_records_webui_transcript(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr("OpenHome.config.paths.get_data_dir", lambda: tmp_path / "data")
+    monkeypatch.setattr("OriginAgent.config.paths.get_data_dir", lambda: tmp_path / "data")
     loop = AgentLoop(
         bus=MessageBus(),
         provider=_NoChatProvider(),
@@ -394,7 +394,7 @@ async def test_priority_command_inline_persists_and_records_webui_transcript(
 
     outbound = await loop.bus.consume_outbound()
     turn_end = await loop.bus.consume_outbound()
-    assert "OpenHome v" in outbound.content
+    assert "OriginAgent v" in outbound.content
     assert outbound.metadata["_webui_transcript_recorded"] is True
     assert turn_end.content == ""
     assert turn_end.metadata["_turn_end"] is True

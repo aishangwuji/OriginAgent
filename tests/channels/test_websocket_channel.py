@@ -14,9 +14,9 @@ import websockets
 from websockets.exceptions import ConnectionClosed
 from websockets.frames import Close
 
-from OpenHome.agent.background_review import ReviewProposal, ReviewProposalStore
-from OpenHome.bus.events import OUTBOUND_META_AGENT_UI, OutboundMessage
-from OpenHome.channels.websocket import (
+from OriginAgent.agent.background_review import ReviewProposal, ReviewProposalStore
+from OriginAgent.bus.events import OUTBOUND_META_AGENT_UI, OutboundMessage
+from OriginAgent.channels.websocket import (
     WebSocketChannel,
     WebSocketConfig,
     _is_valid_chat_id,
@@ -28,8 +28,8 @@ from OpenHome.channels.websocket import (
     _parse_query,
     _parse_request_path,
 )
-from OpenHome.config.loader import load_config, save_config
-from OpenHome.config.schema import Config, MCPServerConfig
+from OriginAgent.config.loader import load_config, save_config
+from OriginAgent.config.schema import Config, MCPServerConfig
 
 # -- Shared helpers (aligned with test_websocket_integration.py) ---------------
 
@@ -155,7 +155,7 @@ def test_issue_route_secret_matches_bearer_and_header() -> None:
     secret = "my-secret"
     bearer_headers = Headers([("Authorization", "Bearer my-secret")])
     assert _issue_route_secret_matches(bearer_headers, secret) is True
-    x_headers = Headers([("X-OpenHome-Auth", "my-secret")])
+    x_headers = Headers([("X-OriginAgent-Auth", "my-secret")])
     assert _issue_route_secret_matches(x_headers, secret) is True
     wrong = Headers([("Authorization", "Bearer other")])
     assert _issue_route_secret_matches(wrong, secret) is False
@@ -243,7 +243,7 @@ async def test_send_stages_external_media_as_signed_url(monkeypatch, tmp_path) -
     def fake_media_dir(channel: str | None = None):
         return ws_media if channel == "websocket" else media_root
 
-    monkeypatch.setattr("OpenHome.channels.websocket.get_media_dir", fake_media_dir)
+    monkeypatch.setattr("OriginAgent.channels.websocket.get_media_dir", fake_media_dir)
     channel = WebSocketChannel({"enabled": True, "allowFrom": ["*"]}, bus)
     mock_ws = AsyncMock()
     channel._attach(mock_ws, "chat-1")
@@ -561,7 +561,7 @@ async def test_wrong_path_returns_404(bus: MagicMock) -> None:
 
 
 def test_registry_discovers_websocket_channel() -> None:
-    from OpenHome.channels.registry import load_channel_class
+    from OriginAgent.channels.registry import load_channel_class
 
     cls = load_channel_class("websocket")
     assert cls.name == "websocket"
@@ -634,7 +634,7 @@ async def test_settings_api_returns_safe_subset_and_updates_whitelist(
         enabled_tools=["search"],
     )
     save_config(config, config_path)
-    monkeypatch.setattr("OpenHome.config.loader._current_config_path", config_path)
+    monkeypatch.setattr("OriginAgent.config.loader._current_config_path", config_path)
 
     channel = _ch(bus, port=port)
     channel._api_tokens["tok"] = time.monotonic() + 300
@@ -747,7 +747,7 @@ async def test_settings_mcp_routes_manage_servers(
     config_path = tmp_path / "config.json"
     config = Config()
     save_config(config, config_path)
-    monkeypatch.setattr("OpenHome.config.loader._current_config_path", config_path)
+    monkeypatch.setattr("OriginAgent.config.loader._current_config_path", config_path)
 
     channel = _ch(bus, port=port)
     channel._api_tokens["tok"] = time.monotonic() + 300
@@ -870,7 +870,7 @@ async def test_settings_mcp_routes_validate_input(
     port = 29894
     config_path = tmp_path / "config.json"
     save_config(Config(), config_path)
-    monkeypatch.setattr("OpenHome.config.loader._current_config_path", config_path)
+    monkeypatch.setattr("OriginAgent.config.loader._current_config_path", config_path)
 
     channel = _ch(bus, port=port)
     channel._api_tokens["tok"] = time.monotonic() + 300
@@ -983,7 +983,7 @@ def test_settings_payload_normalizes_camel_case_provider(
     config = Config()
     config.agents.defaults.provider = "minimaxAnthropic"
     save_config(config, config_path)
-    monkeypatch.setattr("OpenHome.config.loader._current_config_path", config_path)
+    monkeypatch.setattr("OriginAgent.config.loader._current_config_path", config_path)
 
     body = _ch(bus)._settings_payload()
 
@@ -1428,9 +1428,9 @@ def test_handle_webui_thread_get_returns_json(tmp_path, monkeypatch) -> None:
     from websockets.datastructures import Headers
     from websockets.http11 import Request
 
-    from OpenHome.utils.webui_transcript import append_transcript_object
+    from OriginAgent.utils.webui_transcript import append_transcript_object
 
-    monkeypatch.setattr("OpenHome.config.paths.get_data_dir", lambda: tmp_path)
+    monkeypatch.setattr("OriginAgent.config.paths.get_data_dir", lambda: tmp_path)
     key = "websocket:c1"
     append_transcript_object(key, {"event": "user", "chat_id": "c1", "text": "hi"})
     bus = MagicMock()
@@ -1460,7 +1460,7 @@ def test_review_api_lists_details_and_applies_with_auth(
     config = Config()
     config.agents.defaults.workspace = str(workspace)
     save_config(config, config_path)
-    monkeypatch.setattr("OpenHome.config.loader._current_config_path", config_path)
+    monkeypatch.setattr("OriginAgent.config.loader._current_config_path", config_path)
 
     store = ReviewProposalStore(workspace)
     store.append_many([
@@ -1615,7 +1615,7 @@ def test_review_api_lists_details_and_applies_with_auth(
         "description: Lighting help.\n"
         "always: false\n"
         "metadata:\n"
-        "  OpenHome:\n"
+        "  OriginAgent:\n"
         "    proposal_status: proposed\n"
         "    verification_status: verified\n"
         "    lifecycle_status: proposed\n"
@@ -1665,7 +1665,7 @@ def test_webui_self_api_requires_token_and_returns_self_model(
     config = Config()
     config.agents.defaults.workspace = str(workspace)
     save_config(config, config_path)
-    monkeypatch.setattr("OpenHome.config.loader._current_config_path", config_path)
+    monkeypatch.setattr("OriginAgent.config.loader._current_config_path", config_path)
 
     channel = _ch(bus)
     channel._api_tokens["tok"] = time.monotonic() + 300
@@ -1695,7 +1695,7 @@ def test_webui_skill_lifecycle_api_requires_token_and_updates_workspace_skill(
     config = Config()
     config.agents.defaults.workspace = str(workspace)
     save_config(config, config_path)
-    monkeypatch.setattr("OpenHome.config.loader._current_config_path", config_path)
+    monkeypatch.setattr("OriginAgent.config.loader._current_config_path", config_path)
 
     skill_dir = workspace / "skills" / "lighting-troubleshooting"
     skill_dir.mkdir(parents=True)
@@ -1705,7 +1705,7 @@ def test_webui_skill_lifecycle_api_requires_token_and_updates_workspace_skill(
         "description: Lighting help.\n"
         "always: false\n"
         "metadata:\n"
-        "  OpenHome:\n"
+        "  OriginAgent:\n"
         "    proposal_status: proposed\n"
         "    verification_status: unverified\n"
         "    review_proposal_id: review_skill\n"
@@ -1779,7 +1779,7 @@ def test_domains_api_lists_details_and_actions_with_auth(
     config = Config()
     config.agents.defaults.workspace = str(workspace)
     save_config(config, config_path)
-    monkeypatch.setattr("OpenHome.config.loader._current_config_path", config_path)
+    monkeypatch.setattr("OriginAgent.config.loader._current_config_path", config_path)
 
     source = tmp_path / "research-pack"
     source.mkdir(parents=True)

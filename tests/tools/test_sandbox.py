@@ -1,10 +1,10 @@
-"""Tests for OpenHome.agent.tools.sandbox."""
+"""Tests for OriginAgent.agent.tools.sandbox."""
 
 import shlex
 
 import pytest
 
-from OpenHome.agent.tools.sandbox import wrap_command
+from OriginAgent.agent.tools.sandbox import wrap_command
 
 
 def _parse(cmd: str) -> list[str]:
@@ -97,7 +97,7 @@ class TestBwrapBackend:
         fake_media = tmp_path / "media"
         fake_media.mkdir()
         monkeypatch.setattr(
-            "OpenHome.agent.tools.sandbox.get_media_dir",
+            "OriginAgent.agent.tools.sandbox.get_media_dir",
             lambda: fake_media,
         )
         ws = str(tmp_path / "project")

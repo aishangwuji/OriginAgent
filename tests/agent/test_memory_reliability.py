@@ -8,8 +8,8 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from OpenHome.agent.memory import Dream, MemoryStore
-from OpenHome.agent.runner import AgentRunResult
+from OriginAgent.agent.memory import Dream, MemoryStore
+from OriginAgent.agent.runner import AgentRunResult
 
 
 EMPTY_FACT_PROPOSALS = json.dumps({

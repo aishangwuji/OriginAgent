@@ -12,9 +12,9 @@ try:
 except ImportError:
     pytest.skip("Slack dependencies not installed (slack-sdk)", allow_module_level=True)
 
-from OpenHome.bus.events import OutboundMessage
-from OpenHome.bus.queue import MessageBus
-from OpenHome.channels.slack import SLACK_MAX_MESSAGE_LEN, SlackChannel, SlackConfig
+from OriginAgent.bus.events import OutboundMessage
+from OriginAgent.bus.queue import MessageBus
+from OriginAgent.channels.slack import SLACK_MAX_MESSAGE_LEN, SlackChannel, SlackConfig
 
 
 class _FakeAsyncWebClient:
@@ -646,7 +646,7 @@ def test_slack_download_rejects_login_html() -> None:
 def test_slack_download_failure_marker_is_actionable() -> None:
     marker = SlackChannel._download_failure_marker("image", "screenshot.png", "download failed")
 
-    assert "not available to OpenHome" in marker
+    assert "not available to OriginAgent" in marker
     assert "files:read" in marker
     assert "reinstall the Slack app" in marker
 

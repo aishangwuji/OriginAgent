@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from OpenHome.agent.hook import AgentHook, AgentHookContext, CompositeHook
+from OriginAgent.agent.hook import AgentHook, AgentHookContext, CompositeHook
 
 
 def _ctx() -> AgentHookContext:
@@ -267,19 +267,19 @@ async def test_composite_can_wrap_another_composite():
 
 
 def _make_loop(tmp_path, hooks=None):
-    from OpenHome.agent.loop import AgentLoop
-    from OpenHome.bus.queue import MessageBus
+    from OriginAgent.agent.loop import AgentLoop
+    from OriginAgent.bus.queue import MessageBus
 
     bus = MessageBus()
     provider = MagicMock()
     provider.get_default_model.return_value = "test-model"
     provider.generation.max_tokens = 4096
 
-    with patch("OpenHome.agent.loop.ContextBuilder"), \
-         patch("OpenHome.agent.loop.SessionManager"), \
-         patch("OpenHome.agent.loop.SubagentManager") as mock_sub_mgr, \
-         patch("OpenHome.agent.loop.Consolidator"), \
-         patch("OpenHome.agent.loop.Dream"):
+    with patch("OriginAgent.agent.loop.ContextBuilder"), \
+         patch("OriginAgent.agent.loop.SessionManager"), \
+         patch("OriginAgent.agent.loop.SubagentManager") as mock_sub_mgr, \
+         patch("OriginAgent.agent.loop.Consolidator"), \
+         patch("OriginAgent.agent.loop.Dream"):
         mock_sub_mgr.return_value.cancel_by_session = AsyncMock(return_value=0)
         loop = AgentLoop(
             bus=bus, provider=provider, workspace=tmp_path, hooks=hooks,
@@ -290,7 +290,7 @@ def _make_loop(tmp_path, hooks=None):
 @pytest.mark.asyncio
 async def test_agent_loop_extra_hook_receives_calls(tmp_path):
     """Extra hook passed to AgentLoop is called alongside core LoopHook."""
-    from OpenHome.providers.base import LLMResponse
+    from OriginAgent.providers.base import LLMResponse
 
     events: list[str] = []
 
@@ -319,7 +319,7 @@ async def test_agent_loop_extra_hook_receives_calls(tmp_path):
 @pytest.mark.asyncio
 async def test_agent_loop_extra_hook_error_isolation(tmp_path):
     """A faulty extra hook does not crash the agent loop."""
-    from OpenHome.providers.base import LLMResponse
+    from OriginAgent.providers.base import LLMResponse
 
     class BadHook(AgentHook):
         async def before_iteration(self, context):
@@ -341,7 +341,7 @@ async def test_agent_loop_extra_hook_error_isolation(tmp_path):
 @pytest.mark.asyncio
 async def test_agent_loop_extra_hooks_do_not_swallow_loop_hook_errors(tmp_path):
     """Extra hooks must not change the core LoopHook failure behavior."""
-    from OpenHome.providers.base import LLMResponse, ToolCallRequest
+    from OriginAgent.providers.base import LLMResponse, ToolCallRequest
 
     loop = _make_loop(tmp_path, hooks=[AgentHook()])
     loop.provider.chat_with_retry = AsyncMock(return_value=LLMResponse(
@@ -362,7 +362,7 @@ async def test_agent_loop_extra_hooks_do_not_swallow_loop_hook_errors(tmp_path):
 @pytest.mark.asyncio
 async def test_agent_loop_no_hooks_backward_compat(tmp_path):
     """Without hooks param, behavior is identical to before."""
-    from OpenHome.providers.base import LLMResponse, ToolCallRequest
+    from OriginAgent.providers.base import LLMResponse, ToolCallRequest
 
     loop = _make_loop(tmp_path)
     loop.provider.chat_with_retry = AsyncMock(return_value=LLMResponse(

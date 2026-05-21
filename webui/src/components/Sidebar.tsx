@@ -90,7 +90,7 @@ export function Sidebar(props: SidebarProps) {
       <div className="flex min-h-[56px] items-center justify-between gap-2 px-3 pb-3 pt-3.5">
         <picture className="block min-w-0 flex-1">
           <img
-            src="/brand/OpenHome_logo_v2.svg"
+            src="/brand/OriginAgent_logo_v2.svg"
             alt="OriginAgent"
             className="h-11 max-w-[196px] select-none object-contain object-left opacity-95"
             draggable={false}

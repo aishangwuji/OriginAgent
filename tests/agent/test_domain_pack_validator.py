@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from OpenHome.agent.domain_packs import DomainPackRuntimeConfig, DomainPackValidator
+from OriginAgent.agent.domain_packs import DomainPackRuntimeConfig, DomainPackValidator
 
 
 def _write_pack(root: Path, pack_id: str) -> Path:

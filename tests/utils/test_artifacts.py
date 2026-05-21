@@ -6,8 +6,8 @@ from pathlib import Path
 
 import pytest
 
-from OpenHome.config.loader import set_config_path
-from OpenHome.utils.artifacts import (
+from OriginAgent.config.loader import set_config_path
+from OriginAgent.utils.artifacts import (
     ArtifactError,
     decode_image_data_url,
     generated_image_paths_from_messages,

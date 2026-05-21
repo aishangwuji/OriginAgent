@@ -2,10 +2,10 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
-from OpenHome.agent.auxiliary_llm import AuxiliaryTaskProvider
-from OpenHome.agent.loop import AgentLoop
-from OpenHome.bus.queue import MessageBus
-from OpenHome.providers.factory import ProviderSnapshot
+from OriginAgent.agent.auxiliary_llm import AuxiliaryTaskProvider
+from OriginAgent.agent.loop import AgentLoop
+from OriginAgent.bus.queue import MessageBus
+from OriginAgent.providers.factory import ProviderSnapshot
 
 
 def _provider(default_model: str, max_tokens: int = 123) -> MagicMock:

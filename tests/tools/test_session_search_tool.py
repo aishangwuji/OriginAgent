@@ -6,11 +6,11 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from OpenHome.agent.loop import AgentLoop
-from OpenHome.agent.tools.registry import ToolRegistry
-from OpenHome.agent.tools.session_search import SessionSearchTool
-from OpenHome.bus.queue import MessageBus
-from OpenHome.security.capabilities import CapabilitySnapshot
+from OriginAgent.agent.loop import AgentLoop
+from OriginAgent.agent.tools.registry import ToolRegistry
+from OriginAgent.agent.tools.session_search import SessionSearchTool
+from OriginAgent.bus.queue import MessageBus
+from OriginAgent.security.capabilities import CapabilitySnapshot
 
 
 def _write_session(path: Path) -> None:

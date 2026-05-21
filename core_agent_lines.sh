@@ -36,18 +36,18 @@ print_row() {
   printf "  %-16s %6s lines\n" "$label" "$count"
 }
 
-echo "OpenHome line count"
+echo "OriginAgent line count"
 echo "=================="
 echo ""
 
 echo "Core runtime"
 echo "------------"
-core_agent=$(count_top_level_py_lines "OpenHome/agent")
-core_bus=$(count_top_level_py_lines "OpenHome/bus")
-core_config=$(count_top_level_py_lines "OpenHome/config")
-core_cron=$(count_top_level_py_lines "OpenHome/cron")
-core_heartbeat=$(count_top_level_py_lines "OpenHome/heartbeat")
-core_session=$(count_top_level_py_lines "OpenHome/session")
+core_agent=$(count_top_level_py_lines "OriginAgent/agent")
+core_bus=$(count_top_level_py_lines "OriginAgent/bus")
+core_config=$(count_top_level_py_lines "OriginAgent/config")
+core_cron=$(count_top_level_py_lines "OriginAgent/cron")
+core_heartbeat=$(count_top_level_py_lines "OriginAgent/heartbeat")
+core_session=$(count_top_level_py_lines "OriginAgent/session")
 
 print_row "agent/" "$core_agent"
 print_row "bus/" "$core_bus"
@@ -61,12 +61,12 @@ core_total=$((core_agent + core_bus + core_config + core_cron + core_heartbeat +
 echo ""
 echo "Separate buckets"
 echo "----------------"
-extra_tools=$(count_recursive_py_lines "OpenHome/agent/tools")
-extra_skills=$(count_skill_lines "OpenHome/skills")
-extra_api=$(count_recursive_py_lines "OpenHome/api")
-extra_cli=$(count_recursive_py_lines "OpenHome/cli")
-extra_channels=$(count_recursive_py_lines "OpenHome/channels")
-extra_utils=$(count_recursive_py_lines "OpenHome/utils")
+extra_tools=$(count_recursive_py_lines "OriginAgent/agent/tools")
+extra_skills=$(count_skill_lines "OriginAgent/skills")
+extra_api=$(count_recursive_py_lines "OriginAgent/api")
+extra_cli=$(count_recursive_py_lines "OriginAgent/cli")
+extra_channels=$(count_recursive_py_lines "OriginAgent/channels")
+extra_utils=$(count_recursive_py_lines "OriginAgent/utils")
 
 print_row "tools/" "$extra_tools"
 print_row "skills/" "$extra_skills"
@@ -86,7 +86,7 @@ print_row "extra total" "$extra_total"
 echo ""
 echo "Notes"
 echo "-----"
-echo "  - agent/ only counts top-level Python files under OpenHome/agent"
-echo "  - tools/ is counted separately from OpenHome/agent/tools"
+echo "  - agent/ only counts top-level Python files under OriginAgent/agent"
+echo "  - tools/ is counted separately from OriginAgent/agent/tools"
 echo "  - skills/ counts .md, .py, and .sh files"
-echo "  - not included here: command/, providers/, security/, templates/, OpenHome.py, root files"
+echo "  - not included here: command/, providers/, security/, templates/, OriginAgent.py, root files"

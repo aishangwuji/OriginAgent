@@ -1,18 +1,18 @@
 import json
 from datetime import datetime, timezone
 
-from OpenHome.agent.action_runtime import SafeActionExecutor
-from OpenHome.agent.action_runtime import ActionExecutionResult, ActionIntent, _audit_scope
-from OpenHome.agent.action_safety import ActionSafetyGate
-from OpenHome.agent.audit import AuditLogger
-from OpenHome.agent.confirmation import ConfirmationManager
-from OpenHome.agent.device_actions import DeviceActionSchemaRegistry, TypedActionPlanner, TypedDeviceAction
-from OpenHome.agent.device_backends import DeviceActionExecutor
-from OpenHome.agent.device_integrations import RealLightingBackend
-from OpenHome.agent.devices import sanitize_device_scope
-from OpenHome.agent.facts import FactStore
-from OpenHome.agent.permissions import HouseholdActor, PermissionResolver
-from OpenHome.agent.presence import PresenceStore
+from OriginAgent.agent.action_runtime import SafeActionExecutor
+from OriginAgent.agent.action_runtime import ActionExecutionResult, ActionIntent, _audit_scope
+from OriginAgent.agent.action_safety import ActionSafetyGate
+from OriginAgent.agent.audit import AuditLogger
+from OriginAgent.agent.confirmation import ConfirmationManager
+from OriginAgent.agent.device_actions import DeviceActionSchemaRegistry, TypedActionPlanner, TypedDeviceAction
+from OriginAgent.agent.device_backends import DeviceActionExecutor
+from OriginAgent.agent.device_integrations import RealLightingBackend
+from OriginAgent.agent.devices import sanitize_device_scope
+from OriginAgent.agent.facts import FactStore
+from OriginAgent.agent.permissions import HouseholdActor, PermissionResolver
+from OriginAgent.agent.presence import PresenceStore
 
 NOW = datetime(2026, 5, 16, 12, 0, 0, tzinfo=timezone.utc)
 PRIVATE_DEVICE_ID = "private_device_7f3a9c"

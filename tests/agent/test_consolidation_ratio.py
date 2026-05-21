@@ -5,11 +5,11 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from pydantic import ValidationError
 
-import OpenHome.agent.memory as memory_module
-from OpenHome.agent.loop import AgentLoop
-from OpenHome.bus.queue import MessageBus
-from OpenHome.config.schema import AgentDefaults
-from OpenHome.providers.base import GenerationSettings, LLMResponse
+import OriginAgent.agent.memory as memory_module
+from OriginAgent.agent.loop import AgentLoop
+from OriginAgent.bus.queue import MessageBus
+from OriginAgent.config.schema import AgentDefaults
+from OriginAgent.providers.base import GenerationSettings, LLMResponse
 
 
 def _make_loop(

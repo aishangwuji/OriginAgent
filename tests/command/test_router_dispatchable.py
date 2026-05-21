@@ -6,8 +6,8 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from OpenHome.command.builtin import builtin_command_palette, register_builtin_commands
-from OpenHome.command.router import CommandContext, CommandRouter
+from OriginAgent.command.builtin import builtin_command_palette, register_builtin_commands
+from OriginAgent.command.router import CommandContext, CommandRouter
 
 
 class TestIsDispatchableCommand:

@@ -1,4 +1,4 @@
-"""Tests for OpenHome.agent.skills.SkillsLoader."""
+"""Tests for OriginAgent.agent.skills.SkillsLoader."""
 
 from __future__ import annotations
 
@@ -7,9 +7,9 @@ from pathlib import Path
 
 import pytest
 
-from OpenHome.agent.domain_packs import DomainPackManager
-from OpenHome.agent.skills import SkillsLoader
-from OpenHome.config.schema import DomainPacksConfig
+from OriginAgent.agent.domain_packs import DomainPackManager
+from OriginAgent.agent.skills import SkillsLoader
+from OriginAgent.config.schema import DomainPacksConfig
 
 
 def _write_skill(
@@ -19,12 +19,12 @@ def _write_skill(
     metadata_json: dict | None = None,
     body: str = "# Skill\n",
 ) -> Path:
-    """Create ``base / name / SKILL.md`` with optional OpenHome metadata JSON."""
+    """Create ``base / name / SKILL.md`` with optional OriginAgent metadata JSON."""
     skill_dir = base / name
     skill_dir.mkdir(parents=True)
     lines = ["---"]
     if metadata_json is not None:
-        payload = json.dumps({"OpenHome": metadata_json}, separators=(",", ":"))
+        payload = json.dumps({"OriginAgent": metadata_json}, separators=(",", ":"))
         lines.append(f'metadata: {payload}')
     lines.extend(["---", "", body])
     path = skill_dir / "SKILL.md"
@@ -135,17 +135,17 @@ def test_list_skills_filter_unavailable_excludes_unmet_bin_requirement(
     _write_skill(
         skills_root,
         "needs_bin",
-        metadata_json={"requires": {"bins": ["OpenHome_test_fake_binary"]}},
+        metadata_json={"requires": {"bins": ["OriginAgent_test_fake_binary"]}},
     )
     builtin = tmp_path / "builtin"
     builtin.mkdir()
 
     def fake_which(cmd: str) -> str | None:
-        if cmd == "OpenHome_test_fake_binary":
+        if cmd == "OriginAgent_test_fake_binary":
             return None
         return "/usr/bin/true"
 
-    monkeypatch.setattr("OpenHome.agent.skills.shutil.which", fake_which)
+    monkeypatch.setattr("OriginAgent.agent.skills.shutil.which", fake_which)
 
     loader = SkillsLoader(workspace, builtin_skills_dir=builtin)
     assert loader.list_skills(filter_unavailable=True) == []
@@ -160,17 +160,17 @@ def test_list_skills_filter_unavailable_includes_when_bin_requirement_met(
     skill_path = _write_skill(
         skills_root,
         "has_bin",
-        metadata_json={"requires": {"bins": ["OpenHome_test_fake_binary"]}},
+        metadata_json={"requires": {"bins": ["OriginAgent_test_fake_binary"]}},
     )
     builtin = tmp_path / "builtin"
     builtin.mkdir()
 
     def fake_which(cmd: str) -> str | None:
-        if cmd == "OpenHome_test_fake_binary":
-            return "/fake/OpenHome_test_fake_binary"
+        if cmd == "OriginAgent_test_fake_binary":
+            return "/fake/OriginAgent_test_fake_binary"
         return None
 
-    monkeypatch.setattr("OpenHome.agent.skills.shutil.which", fake_which)
+    monkeypatch.setattr("OriginAgent.agent.skills.shutil.which", fake_which)
 
     loader = SkillsLoader(workspace, builtin_skills_dir=builtin)
     entries = loader.list_skills(filter_unavailable=True)
@@ -188,12 +188,12 @@ def test_list_skills_filter_unavailable_false_keeps_unmet_requirements(
     skill_path = _write_skill(
         skills_root,
         "blocked",
-        metadata_json={"requires": {"bins": ["OpenHome_test_fake_binary"]}},
+        metadata_json={"requires": {"bins": ["OriginAgent_test_fake_binary"]}},
     )
     builtin = tmp_path / "builtin"
     builtin.mkdir()
 
-    monkeypatch.setattr("OpenHome.agent.skills.shutil.which", lambda _cmd: None)
+    monkeypatch.setattr("OriginAgent.agent.skills.shutil.which", lambda _cmd: None)
 
     loader = SkillsLoader(workspace, builtin_skills_dir=builtin)
     entries = loader.list_skills(filter_unavailable=False)
@@ -211,12 +211,12 @@ def test_list_skills_filter_unavailable_excludes_unmet_env_requirement(
     _write_skill(
         skills_root,
         "needs_env",
-        metadata_json={"requires": {"env": ["OPENHOME_SKILLS_TEST_ENV_VAR"]}},
+        metadata_json={"requires": {"env": ["ORIGINAGENT_SKILLS_TEST_ENV_VAR"]}},
     )
     builtin = tmp_path / "builtin"
     builtin.mkdir()
 
-    monkeypatch.delenv("OPENHOME_SKILLS_TEST_ENV_VAR", raising=False)
+    monkeypatch.delenv("ORIGINAGENT_SKILLS_TEST_ENV_VAR", raising=False)
 
     loader = SkillsLoader(workspace, builtin_skills_dir=builtin)
     assert loader.list_skills(filter_unavailable=True) == []
@@ -231,7 +231,7 @@ def test_list_skills_openclaw_metadata_parsed_for_requirements(
     skill_dir = skills_root / "openclaw_skill"
     skill_dir.mkdir(parents=True)
     skill_path = skill_dir / "SKILL.md"
-    oc_payload = json.dumps({"openclaw": {"requires": {"bins": ["OpenHome_oc_bin"]}}}, separators=(",", ":"))
+    oc_payload = json.dumps({"openclaw": {"requires": {"bins": ["OriginAgent_oc_bin"]}}}, separators=(",", ":"))
     skill_path.write_text(
         "\n".join(["---", f"metadata: {oc_payload}", "---", "", "# OC"]),
         encoding="utf-8",
@@ -239,14 +239,14 @@ def test_list_skills_openclaw_metadata_parsed_for_requirements(
     builtin = tmp_path / "builtin"
     builtin.mkdir()
 
-    monkeypatch.setattr("OpenHome.agent.skills.shutil.which", lambda _cmd: None)
+    monkeypatch.setattr("OriginAgent.agent.skills.shutil.which", lambda _cmd: None)
 
     loader = SkillsLoader(workspace, builtin_skills_dir=builtin)
     assert loader.list_skills(filter_unavailable=True) == []
 
     monkeypatch.setattr(
-        "OpenHome.agent.skills.shutil.which",
-        lambda cmd: "/x" if cmd == "OpenHome_oc_bin" else None,
+        "OriginAgent.agent.skills.shutil.which",
+        lambda cmd: "/x" if cmd == "OriginAgent_oc_bin" else None,
     )
     entries = loader.list_skills(filter_unavailable=True)
     assert entries == [
@@ -407,7 +407,7 @@ def test_get_skill_metadata_handles_yaml_types(tmp_path: Path) -> None:
     ws_skills.mkdir(parents=True)
     skill_dir = ws_skills / "typed"
     skill_dir.mkdir(parents=True)
-    payload = json.dumps({"OpenHome": {"requires": {"bins": ["gh"]}, "always": True}}, separators=(",", ":"))
+    payload = json.dumps({"OriginAgent": {"requires": {"bins": ["gh"]}, "always": True}}, separators=(",", ":"))
     skill_path = skill_dir / "SKILL.md"
     skill_path.write_text(
         "---\n"
@@ -496,15 +496,15 @@ def test_domain_pack_skill_requirements_and_always_apply_only_when_active(
         "---\n"
         "description: Domain skill.\n"
         "metadata:\n"
-        "  OpenHome:\n"
+        "  OriginAgent:\n"
         "    always: true\n"
         "    requires:\n"
         "      env:\n"
-        "        - OPENHOME_DOMAIN_SKILL_ENV\n"
+        "        - ORIGINAGENT_DOMAIN_SKILL_ENV\n"
         "---\n\n# Domain Skill\n",
         encoding="utf-8",
     )
-    monkeypatch.delenv("OPENHOME_DOMAIN_SKILL_ENV", raising=False)
+    monkeypatch.delenv("ORIGINAGENT_DOMAIN_SKILL_ENV", raising=False)
     inactive_manager = DomainPackManager(
         workspace,
         config=DomainPacksConfig(active=[]),
@@ -530,7 +530,7 @@ def test_domain_pack_skill_requirements_and_always_apply_only_when_active(
     assert active_loader.list_skills(filter_unavailable=True) == []
     assert active_loader.get_always_skills() == []
 
-    monkeypatch.setenv("OPENHOME_DOMAIN_SKILL_ENV", "1")
+    monkeypatch.setenv("ORIGINAGENT_DOMAIN_SKILL_ENV", "1")
     assert active_loader.get_always_skills() == ["domain:research/source-synthesis"]
 
 
@@ -550,11 +550,11 @@ def test_builtin_smart_home_domain_skills_load_with_exact_core_tool_names(
     lighting = loader.load_skill("domain:smart_home/lighting-control") or ""
     safety = loader.load_skill("domain:smart_home/safety-confirmation") or ""
 
-    assert "openhome_device_lighting_set_power" in lighting
-    assert "openhome_device_lighting_set_brightness" in lighting
-    assert "openhome_device_lighting_set_color_temperature" in lighting
+    assert "originagent_device_lighting_set_power" in lighting
+    assert "originagent_device_lighting_set_brightness" in lighting
+    assert "originagent_device_lighting_set_color_temperature" in lighting
     assert "`set_light_power`" not in lighting
     assert "`set_brightness`" not in lighting
-    assert "does not replace OpenHome's system safety layer" in safety
+    assert "does not replace OriginAgent's system safety layer" in safety
     assert "Final confirmation" in safety
     assert loader.load_skill("lighting-control") is None

@@ -4,7 +4,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from OpenHome.agent.memory import (
+from OriginAgent.agent.memory import (
     _ARCHIVE_SUMMARY_MAX_CHARS,
     ArchiveResult,
     Consolidator,
@@ -12,7 +12,7 @@ from OpenHome.agent.memory import (
     record_recent_summary,
     session_summary_text,
 )
-from OpenHome.session.manager import Session
+from OriginAgent.session.manager import Session
 
 
 def _archive_result(summary: str, cursor: int = 1) -> ArchiveResult:
@@ -83,7 +83,7 @@ class TestConsolidatorSummarize:
 class TestConsolidatorArchiveErrorHandling:
     """archive() must fall back to raw_archive when the LLM returns an error
     response (finish_reason == 'error'), e.g. overloaded / quota exceeded.
-    See https://github.com/HKUDS/OpenHome/issues/3244
+    See https://github.com/HKUDS/OriginAgent/issues/3244
     """
 
     async def test_archive_falls_back_on_error_finish_reason(self, consolidator, mock_provider, store):

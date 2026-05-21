@@ -2,9 +2,9 @@ from pathlib import Path
 
 import pytest
 
-from OpenHome.config import loader
-from OpenHome.config.loader import set_config_path
-from OpenHome.config.paths import (
+from OriginAgent.config import loader
+from OriginAgent.config.loader import set_config_path
+from OriginAgent.config.paths import (
     get_bridge_install_dir,
     get_cli_history_path,
     get_cron_dir,
@@ -31,30 +31,9 @@ def test_default_config_path_prefers_originagent_for_new_install(monkeypatch, tm
     assert loader.get_config_path() == tmp_path / ".originagent" / "config.json"
 
 
-def test_default_config_path_falls_back_to_legacy_when_present(monkeypatch, tmp_path: Path) -> None:
-    monkeypatch.setattr(Path, "home", lambda: tmp_path)
-    legacy_config = tmp_path / ".openhome" / "config.json"
-    legacy_config.parent.mkdir()
-    legacy_config.write_text("{}", encoding="utf-8")
-
-    assert loader.get_config_path() == legacy_config
-
-
-def test_default_config_path_prefers_originagent_when_both_exist(monkeypatch, tmp_path: Path) -> None:
-    monkeypatch.setattr(Path, "home", lambda: tmp_path)
-    legacy_config = tmp_path / ".openhome" / "config.json"
-    origin_config = tmp_path / ".originagent" / "config.json"
-    legacy_config.parent.mkdir()
-    origin_config.parent.mkdir()
-    legacy_config.write_text("{}", encoding="utf-8")
-    origin_config.write_text("{}", encoding="utf-8")
-
-    assert loader.get_config_path() == origin_config
-
-
 def test_runtime_dirs_follow_config_path(monkeypatch, tmp_path: Path) -> None:
     config_file = tmp_path / "instance-a" / "config.json"
-    monkeypatch.setattr("OpenHome.config.paths.get_config_path", lambda: config_file)
+    monkeypatch.setattr("OriginAgent.config.paths.get_config_path", lambda: config_file)
 
     assert get_data_dir() == config_file.parent
     assert get_runtime_subdir("cron") == config_file.parent / "cron"
@@ -64,7 +43,7 @@ def test_runtime_dirs_follow_config_path(monkeypatch, tmp_path: Path) -> None:
 
 def test_media_dir_supports_channel_namespace(monkeypatch, tmp_path: Path) -> None:
     config_file = tmp_path / "instance-b" / "config.json"
-    monkeypatch.setattr("OpenHome.config.paths.get_config_path", lambda: config_file)
+    monkeypatch.setattr("OriginAgent.config.paths.get_config_path", lambda: config_file)
 
     assert get_media_dir() == config_file.parent / "media"
     assert get_media_dir("telegram") == config_file.parent / "media" / "telegram"
@@ -75,19 +54,7 @@ def test_shared_paths_follow_originagent_default(monkeypatch, tmp_path: Path) ->
 
     assert get_cli_history_path() == tmp_path / ".originagent" / "history" / "cli_history"
     assert get_bridge_install_dir() == tmp_path / ".originagent" / "bridge"
-    assert get_legacy_sessions_dir() == Path.home() / ".OpenHome" / "sessions"
-
-
-def test_shared_paths_follow_legacy_default_when_legacy_config_exists(
-    monkeypatch, tmp_path: Path
-) -> None:
-    monkeypatch.setattr(Path, "home", lambda: tmp_path)
-    legacy_config = tmp_path / ".openhome" / "config.json"
-    legacy_config.parent.mkdir()
-    legacy_config.write_text("{}", encoding="utf-8")
-
-    assert get_cli_history_path() == tmp_path / ".openhome" / "history" / "cli_history"
-    assert get_bridge_install_dir() == tmp_path / ".openhome" / "bridge"
+    assert get_legacy_sessions_dir() == Path.home() / ".OriginAgent" / "sessions"
 
 
 def test_workspace_path_is_explicitly_resolved(monkeypatch, tmp_path: Path) -> None:

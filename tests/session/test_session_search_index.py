@@ -5,9 +5,9 @@ import sqlite3
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from OpenHome.agent.facts import FactStore
-from OpenHome.session.search import SessionSearchService
-from OpenHome.session.search_index import SearchTextNormalizer, SessionSearchIndexService
+from OriginAgent.agent.facts import FactStore
+from OriginAgent.session.search import SessionSearchService
+from OriginAgent.session.search_index import SearchTextNormalizer, SessionSearchIndexService
 
 RAW_SECRET = "supersecret12345"
 

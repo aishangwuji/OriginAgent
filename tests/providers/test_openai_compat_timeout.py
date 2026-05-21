@@ -1,7 +1,7 @@
 from unittest.mock import patch, sentinel
 
-from OpenHome.providers.openai_compat_provider import OpenAICompatProvider
-from OpenHome.providers.registry import ProviderSpec
+from OriginAgent.providers.openai_compat_provider import OpenAICompatProvider
+from OriginAgent.providers.registry import ProviderSpec
 
 
 def _assert_openai_compat_timeout(timeout) -> None:
@@ -9,7 +9,7 @@ def _assert_openai_compat_timeout(timeout) -> None:
 
 
 def test_openai_compat_provider_sets_sdk_timeout() -> None:
-    with patch("OpenHome.providers.openai_compat_provider.AsyncOpenAI") as mock_async_openai:
+    with patch("OriginAgent.providers.openai_compat_provider.AsyncOpenAI") as mock_async_openai:
         OpenAICompatProvider(api_key="test-key", api_base="https://example.com/v1")
 
     kwargs = mock_async_openai.call_args.kwargs
@@ -27,9 +27,9 @@ def test_openai_compat_provider_sets_timeout_on_local_http_client() -> None:
     )
 
     with (
-        patch("OpenHome.providers.openai_compat_provider.AsyncOpenAI") as mock_async_openai,
+        patch("OriginAgent.providers.openai_compat_provider.AsyncOpenAI") as mock_async_openai,
         patch(
-            "OpenHome.providers.openai_compat_provider.httpx.AsyncClient",
+            "OriginAgent.providers.openai_compat_provider.httpx.AsyncClient",
             return_value=sentinel.http_client,
         ) as mock_http_client,
     ):
@@ -45,9 +45,9 @@ def test_openai_compat_provider_sets_timeout_on_local_http_client() -> None:
 
 
 def test_openai_compat_provider_timeout_can_be_overridden_by_env(monkeypatch) -> None:
-    monkeypatch.setenv("OPENHOME_OPENAI_COMPAT_TIMEOUT_S", "45")
+    monkeypatch.setenv("ORIGINAGENT_OPENAI_COMPAT_TIMEOUT_S", "45")
 
-    with patch("OpenHome.providers.openai_compat_provider.AsyncOpenAI") as mock_async_openai:
+    with patch("OriginAgent.providers.openai_compat_provider.AsyncOpenAI") as mock_async_openai:
         OpenAICompatProvider(api_key="test-key", api_base="https://example.com/v1")
 
     assert mock_async_openai.call_args.kwargs["timeout"] == 45.0

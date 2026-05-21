@@ -4,10 +4,10 @@ from types import SimpleNamespace
 
 import pytest
 
-from OpenHome.bus.events import InboundMessage
-from OpenHome.command.builtin import cmd_dream_log, cmd_dream_restore
-from OpenHome.command.router import CommandContext
-from OpenHome.utils.gitstore import CommitInfo
+from OriginAgent.bus.events import InboundMessage
+from OriginAgent.command.builtin import cmd_dream_log, cmd_dream_restore
+from OriginAgent.command.router import CommandContext
+from OriginAgent.utils.gitstore import CommitInfo
 
 
 class _FakeStore:

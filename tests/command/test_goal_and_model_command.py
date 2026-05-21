@@ -1,13 +1,13 @@
 import pytest
 from unittest.mock import MagicMock
 
-from OpenHome.agent.loop import AgentLoop
-from OpenHome.bus.events import InboundMessage
-from OpenHome.bus.queue import MessageBus
-from OpenHome.command.builtin import build_help_text, cmd_goal, cmd_model
-from OpenHome.command.router import CommandContext
-from OpenHome.config.schema import Config, ModelPresetConfig
-from OpenHome.providers.base import GenerationSettings
+from OriginAgent.agent.loop import AgentLoop
+from OriginAgent.bus.events import InboundMessage
+from OriginAgent.bus.queue import MessageBus
+from OriginAgent.command.builtin import build_help_text, cmd_goal, cmd_model
+from OriginAgent.command.router import CommandContext
+from OriginAgent.config.schema import Config, ModelPresetConfig
+from OriginAgent.providers.base import GenerationSettings
 
 
 def _provider():

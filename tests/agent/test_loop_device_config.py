@@ -1,11 +1,11 @@
 from pathlib import Path
 from unittest.mock import MagicMock
 
-from OpenHome.agent.domain_packs import DomainPackManager
-from OpenHome.agent.action_runtime import ActionExecutionResult
-from OpenHome.agent.loop import AgentLoop
-from OpenHome.bus.queue import MessageBus
-from OpenHome.config.schema import Config, DeviceToolsConfig, DomainPacksConfig
+from OriginAgent.agent.domain_packs import DomainPackManager
+from OriginAgent.agent.action_runtime import ActionExecutionResult
+from OriginAgent.agent.loop import AgentLoop
+from OriginAgent.bus.queue import MessageBus
+from OriginAgent.config.schema import Config, DeviceToolsConfig, DomainPacksConfig
 
 
 class _FakeExecutor:
@@ -32,7 +32,7 @@ def _provider():
 
 
 def _lighting_names(loop: AgentLoop) -> list[str]:
-    return [name for name in loop.tools.tool_names if name.startswith("openhome_device_lighting_")]
+    return [name for name in loop.tools.tool_names if name.startswith("originagent_device_lighting_")]
 
 
 def test_from_config_default_does_not_register_device_tools(tmp_path):
@@ -54,9 +54,9 @@ def test_from_config_dry_run_registers_exactly_three_lighting_tools(tmp_path):
     loop = AgentLoop.from_config(cfg, bus=MessageBus(), provider=_provider())
 
     assert _lighting_names(loop) == [
-        "openhome_device_lighting_set_power",
-        "openhome_device_lighting_set_brightness",
-        "openhome_device_lighting_set_color_temperature",
+        "originagent_device_lighting_set_power",
+        "originagent_device_lighting_set_brightness",
+        "originagent_device_lighting_set_color_temperature",
     ]
 
 
@@ -73,9 +73,9 @@ def test_active_smart_home_pack_does_not_duplicate_lighting_tools(tmp_path):
     loop = AgentLoop.from_config(cfg, bus=MessageBus(), provider=_provider())
 
     assert _lighting_names(loop) == [
-        "openhome_device_lighting_set_power",
-        "openhome_device_lighting_set_brightness",
-        "openhome_device_lighting_set_color_temperature",
+        "originagent_device_lighting_set_power",
+        "originagent_device_lighting_set_brightness",
+        "originagent_device_lighting_set_color_temperature",
     ]
     assert loop.domain_packs.domain_tool_runtime_counts() == {"registered": 3, "skipped": 0}
 
@@ -108,7 +108,7 @@ def test_from_config_real_mode_lighting_client_does_not_register_tools(tmp_path)
 
     loop = AgentLoop.from_config(cfg, bus=MessageBus(), provider=_provider())
 
-    assert "openhome_device_lighting_set_power" not in loop.tools.tool_names
+    assert "originagent_device_lighting_set_power" not in loop.tools.tool_names
     assert _lighting_names(loop) == []
 
 
@@ -128,5 +128,5 @@ def test_from_config_real_mode_with_registry_still_does_not_register_tools(tmp_p
         device_registry=object(),
     )
 
-    assert "openhome_device_lighting_set_power" not in loop.tools.tool_names
+    assert "originagent_device_lighting_set_power" not in loop.tools.tool_names
     assert _lighting_names(loop) == []

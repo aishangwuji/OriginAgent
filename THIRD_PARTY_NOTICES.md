@@ -2,7 +2,7 @@
 
 ## feedgrab
 
-Portions of `OpenHome.integrations.content_read` are adapted from feedgrab 0.22.0.
+Portions of `OriginAgent.integrations.content_read` are adapted from feedgrab 0.22.0.
 
 - Source: https://github.com/iBigQiang/feedgrab
 - License: MIT

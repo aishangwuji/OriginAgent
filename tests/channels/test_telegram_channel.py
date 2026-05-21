@@ -10,9 +10,9 @@ try:
 except ImportError:
     pytest.skip("Telegram dependencies not installed (python-telegram-bot)", allow_module_level=True)
 
-from OpenHome.bus.events import OutboundMessage
-from OpenHome.bus.queue import MessageBus
-from OpenHome.channels.telegram import (
+from OriginAgent.bus.events import OutboundMessage
+from OriginAgent.bus.queue import MessageBus
+from OriginAgent.channels.telegram import (
     TELEGRAM_REPLY_CONTEXT_MAX_LEN,
     TelegramChannel,
     TelegramConfig,
@@ -50,7 +50,7 @@ class _FakeBot:
 
     async def get_me(self):
         self.get_me_calls += 1
-        return SimpleNamespace(id=999, username="OpenHome_test")
+        return SimpleNamespace(id=999, username="OriginAgent_test")
 
     async def set_my_commands(self, commands) -> None:
         self.commands = commands
@@ -178,9 +178,9 @@ async def test_start_creates_separate_pools_with_proxy(monkeypatch) -> None:
     app = _FakeApp(lambda: setattr(channel, "_running", False))
     builder = _FakeBuilder(app)
 
-    monkeypatch.setattr("OpenHome.channels.telegram.HTTPXRequest", _FakeHTTPXRequest)
+    monkeypatch.setattr("OriginAgent.channels.telegram.HTTPXRequest", _FakeHTTPXRequest)
     monkeypatch.setattr(
-        "OpenHome.channels.telegram.Application",
+        "OriginAgent.channels.telegram.Application",
         SimpleNamespace(builder=lambda: builder),
     )
 
@@ -217,9 +217,9 @@ async def test_start_respects_custom_pool_config(monkeypatch) -> None:
     app = _FakeApp(lambda: setattr(channel, "_running", False))
     builder = _FakeBuilder(app)
 
-    monkeypatch.setattr("OpenHome.channels.telegram.HTTPXRequest", _FakeHTTPXRequest)
+    monkeypatch.setattr("OriginAgent.channels.telegram.HTTPXRequest", _FakeHTTPXRequest)
     monkeypatch.setattr(
-        "OpenHome.channels.telegram.Application",
+        "OriginAgent.channels.telegram.Application",
         SimpleNamespace(builder=lambda: builder),
     )
 
@@ -255,7 +255,7 @@ async def test_send_text_retries_on_timeout() -> None:
 
     channel._app.bot.send_message = flaky_send
 
-    import OpenHome.channels.telegram as tg_mod
+    import OriginAgent.channels.telegram as tg_mod
     orig_delay = tg_mod._SEND_RETRY_BASE_DELAY
     tg_mod._SEND_RETRY_BASE_DELAY = 0.01
     try:
@@ -283,7 +283,7 @@ async def test_send_text_gives_up_after_max_retries() -> None:
 
     channel._app.bot.send_message = always_timeout
 
-    import OpenHome.channels.telegram as tg_mod
+    import OriginAgent.channels.telegram as tg_mod
     orig_delay = tg_mod._SEND_RETRY_BASE_DELAY
     tg_mod._SEND_RETRY_BASE_DELAY = 0.01
     try:
@@ -518,7 +518,7 @@ async def test_send_delta_stream_end_html_expansion_does_not_overflow() -> None:
     could become 4800+ chars after HTML conversion, exceeding 4096 limit.
     The fix converts to HTML first, THEN splits by 4096.
     """
-    from OpenHome.channels.telegram import _markdown_to_telegram_html
+    from OriginAgent.channels.telegram import _markdown_to_telegram_html
 
     channel = TelegramChannel(
         TelegramConfig(enabled=True, token="123:abc", allow_from=["*"]),
@@ -592,7 +592,7 @@ async def test_send_delta_incremental_edit_splits_oversized_buffer() -> None:
     """Mid-stream overflow: once buf.text exceeds Telegram's limit, split into
     chunks, edit the current message with the first chunk, and re-anchor the
     buffer to a new message for the tail so further deltas keep streaming."""
-    from OpenHome.channels.telegram import TELEGRAM_MAX_MESSAGE_LEN
+    from OriginAgent.channels.telegram import TELEGRAM_MAX_MESSAGE_LEN
 
     channel = TelegramChannel(
         TelegramConfig(enabled=True, token="123:abc", allow_from=["*"]),
@@ -739,7 +739,7 @@ async def test_send_remote_media_url_after_security_validation(monkeypatch) -> N
         MessageBus(),
     )
     channel._app = _FakeApp(lambda: None)
-    monkeypatch.setattr("OpenHome.channels.telegram.validate_url_target", lambda url: (True, ""))
+    monkeypatch.setattr("OriginAgent.channels.telegram.validate_url_target", lambda url: (True, ""))
 
     await channel.send(
         OutboundMessage(
@@ -798,7 +798,7 @@ async def test_send_blocks_unsafe_remote_media_url(monkeypatch) -> None:
     )
     channel._app = _FakeApp(lambda: None)
     monkeypatch.setattr(
-        "OpenHome.channels.telegram.validate_url_target",
+        "OriginAgent.channels.telegram.validate_url_target",
         lambda url: (False, "Blocked: example.com resolves to private/internal address 127.0.0.1"),
     )
 
@@ -860,8 +860,8 @@ async def test_group_policy_mention_accepts_text_mention_and_caches_bot_identity
     channel._start_typing = lambda _chat_id: None
 
     mention = SimpleNamespace(type="mention", offset=0, length=13)
-    await channel._on_message(_make_telegram_update(text="@OpenHome_test hi", entities=[mention]), None)
-    await channel._on_message(_make_telegram_update(text="@OpenHome_test again", entities=[mention]), None)
+    await channel._on_message(_make_telegram_update(text="@OriginAgent_test hi", entities=[mention]), None)
+    await channel._on_message(_make_telegram_update(text="@OriginAgent_test again", entities=[mention]), None)
 
     assert len(handled) == 2
     assert channel._app.bot.get_me_calls == 1
@@ -885,12 +885,12 @@ async def test_group_policy_mention_accepts_caption_mention() -> None:
 
     mention = SimpleNamespace(type="mention", offset=0, length=13)
     await channel._on_message(
-        _make_telegram_update(caption="@OpenHome_test photo", caption_entities=[mention]),
+        _make_telegram_update(caption="@OriginAgent_test photo", caption_entities=[mention]),
         None,
     )
 
     assert len(handled) == 1
-    assert handled[0]["content"] == "@OpenHome_test photo"
+    assert handled[0]["content"] == "@OriginAgent_test photo"
 
 
 @pytest.mark.asyncio
@@ -1020,7 +1020,7 @@ async def test_download_message_media_returns_path_when_download_succeeds(
     media_dir = tmp_path / "media" / "telegram"
     media_dir.mkdir(parents=True)
     monkeypatch.setattr(
-        "OpenHome.channels.telegram.get_media_dir",
+        "OriginAgent.channels.telegram.get_media_dir",
         lambda channel=None: media_dir if channel else tmp_path / "media",
     )
 
@@ -1056,7 +1056,7 @@ async def test_download_message_media_uses_file_unique_id_when_available(
     media_dir = tmp_path / "media" / "telegram"
     media_dir.mkdir(parents=True)
     monkeypatch.setattr(
-        "OpenHome.channels.telegram.get_media_dir",
+        "OriginAgent.channels.telegram.get_media_dir",
         lambda channel=None: media_dir if channel else tmp_path / "media",
     )
 
@@ -1105,7 +1105,7 @@ async def test_on_message_attaches_reply_to_media_when_available(monkeypatch, tm
     media_dir = tmp_path / "media" / "telegram"
     media_dir.mkdir(parents=True)
     monkeypatch.setattr(
-        "OpenHome.channels.telegram.get_media_dir",
+        "OriginAgent.channels.telegram.get_media_dir",
         lambda channel=None: media_dir if channel else tmp_path / "media",
     )
 
@@ -1188,7 +1188,7 @@ async def test_on_message_reply_to_caption_and_media(monkeypatch, tmp_path) -> N
     media_dir = tmp_path / "media" / "telegram"
     media_dir.mkdir(parents=True)
     monkeypatch.setattr(
-        "OpenHome.channels.telegram.get_media_dir",
+        "OriginAgent.channels.telegram.get_media_dir",
         lambda channel=None: media_dir if channel else tmp_path / "media",
     )
 
@@ -1265,7 +1265,7 @@ async def test_forward_command_preserves_dream_log_args_and_strips_bot_suffix() 
         handled.append(kwargs)
 
     channel._handle_message = capture_handle
-    update = _make_telegram_update(text="/dream-log@OpenHome_test deadbeef", reply_to_message=None)
+    update = _make_telegram_update(text="/dream-log@OriginAgent_test deadbeef", reply_to_message=None)
 
     await channel._forward_command(update, None)
 
@@ -1286,7 +1286,7 @@ async def test_forward_command_normalizes_telegram_safe_dream_aliases() -> None:
         handled.append(kwargs)
 
     channel._handle_message = capture_handle
-    update = _make_telegram_update(text="/dream_restore@OpenHome_test deadbeef", reply_to_message=None)
+    update = _make_telegram_update(text="/dream_restore@OriginAgent_test deadbeef", reply_to_message=None)
 
     await channel._forward_command(update, None)
 
@@ -1440,7 +1440,7 @@ async def test_send_text_does_not_fallback_on_network_timeout() -> None:
 
     channel._app.bot.send_message = always_timeout
 
-    import OpenHome.channels.telegram as tg_mod
+    import OriginAgent.channels.telegram as tg_mod
     orig_delay = tg_mod._SEND_RETRY_BASE_DELAY
     tg_mod._SEND_RETRY_BASE_DELAY = 0.01
     try:
@@ -1477,7 +1477,7 @@ async def test_send_text_does_not_fallback_on_network_error() -> None:
 
     channel._app.bot.send_message = always_network_error
 
-    import OpenHome.channels.telegram as tg_mod
+    import OriginAgent.channels.telegram as tg_mod
     orig_delay = tg_mod._SEND_RETRY_BASE_DELAY
     tg_mod._SEND_RETRY_BASE_DELAY = 0.01
     try:
@@ -1517,7 +1517,7 @@ async def test_send_text_falls_back_on_bad_request() -> None:
 
     channel._app.bot.send_message = html_fails
 
-    import OpenHome.channels.telegram as tg_mod
+    import OriginAgent.channels.telegram as tg_mod
     orig_delay = tg_mod._SEND_RETRY_BASE_DELAY
     tg_mod._SEND_RETRY_BASE_DELAY = 0.01
     try:
@@ -1552,7 +1552,7 @@ async def test_send_text_bad_request_plain_fallback_exhausted() -> None:
 
     channel._app.bot.send_message = always_bad_request
 
-    import OpenHome.channels.telegram as tg_mod
+    import OriginAgent.channels.telegram as tg_mod
     orig_delay = tg_mod._SEND_RETRY_BASE_DELAY
     tg_mod._SEND_RETRY_BASE_DELAY = 0.01
     try:
@@ -1572,7 +1572,7 @@ async def test_send_text_bad_request_plain_fallback_exhausted() -> None:
 # ---------------------------------------------------------------------------
 
 def test_markdown_to_html_headers_become_bold() -> None:
-    from OpenHome.channels.telegram import _markdown_to_telegram_html
+    from OriginAgent.channels.telegram import _markdown_to_telegram_html
 
     assert _markdown_to_telegram_html("# Title") == "<b>Title</b>"
     assert _markdown_to_telegram_html("## Subtitle") == "<b>Subtitle</b>"
@@ -1580,7 +1580,7 @@ def test_markdown_to_html_headers_become_bold() -> None:
 
 
 def test_markdown_to_html_numbered_lists_preserved() -> None:
-    from OpenHome.channels.telegram import _markdown_to_telegram_html
+    from OriginAgent.channels.telegram import _markdown_to_telegram_html
 
     text = "1. First\n2. Second\n3. Third"
     result = _markdown_to_telegram_html(text)
@@ -1590,7 +1590,7 @@ def test_markdown_to_html_numbered_lists_preserved() -> None:
 
 
 def test_markdown_to_html_numbered_list_normalizes_whitespace() -> None:
-    from OpenHome.channels.telegram import _markdown_to_telegram_html
+    from OriginAgent.channels.telegram import _markdown_to_telegram_html
 
     # Extra spaces after dot should be normalized
     text = "1.   Lots of space\n2.  Two spaces"
@@ -1601,7 +1601,7 @@ def test_markdown_to_html_numbered_list_normalizes_whitespace() -> None:
 
 def test_markdown_to_html_headers_survive_html_escaping() -> None:
     """Headers containing special HTML chars should still render as bold."""
-    from OpenHome.channels.telegram import _markdown_to_telegram_html
+    from OriginAgent.channels.telegram import _markdown_to_telegram_html
 
     result = _markdown_to_telegram_html("# A < B & C > D")
     assert "<b>A &lt; B &amp; C &gt; D</b>" == result
@@ -1609,7 +1609,7 @@ def test_markdown_to_html_headers_survive_html_escaping() -> None:
 
 def test_markdown_to_html_mixed_formatting() -> None:
     """Headers, bullets, numbered lists, and bold coexist correctly."""
-    from OpenHome.channels.telegram import _markdown_to_telegram_html
+    from OriginAgent.channels.telegram import _markdown_to_telegram_html
 
     text = "# Overview\n\n- bullet one\n- bullet two\n\n1. step one\n2. step two\n\n**bold text**"
     result = _markdown_to_telegram_html(text)
@@ -1624,7 +1624,7 @@ def test_markdown_to_html_mixed_formatting() -> None:
 # ---------------------------------------------------------------------------
 
 def test_strip_md_block_removes_inline_formatting() -> None:
-    from OpenHome.channels.telegram import _strip_md_block
+    from OriginAgent.channels.telegram import _strip_md_block
 
     text = "**bold** and _italic_ and ~~struck~~"
     result = _strip_md_block(text)
@@ -1632,13 +1632,13 @@ def test_strip_md_block_removes_inline_formatting() -> None:
 
 
 def test_strip_md_block_strips_headers() -> None:
-    from OpenHome.channels.telegram import _strip_md_block
+    from OriginAgent.channels.telegram import _strip_md_block
 
     assert _strip_md_block("## Title\nBody") == "Title\nBody"
 
 
 def test_strip_md_block_converts_bullets_and_numbers() -> None:
-    from OpenHome.channels.telegram import _strip_md_block
+    from OriginAgent.channels.telegram import _strip_md_block
 
     text = "- item a\n1. item b\n2. item c"
     result = _strip_md_block(text)
@@ -1648,7 +1648,7 @@ def test_strip_md_block_converts_bullets_and_numbers() -> None:
 
 
 def test_strip_md_block_strips_links() -> None:
-    from OpenHome.channels.telegram import _strip_md_block
+    from OriginAgent.channels.telegram import _strip_md_block
 
     assert _strip_md_block("[click here](https://example.com)") == "click here"
 

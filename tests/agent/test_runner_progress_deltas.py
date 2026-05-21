@@ -4,9 +4,9 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from OpenHome.agent.runner import AgentRunner, AgentRunSpec
-from OpenHome.config.schema import AgentDefaults
-from OpenHome.providers.base import LLMResponse
+from OriginAgent.agent.runner import AgentRunner, AgentRunSpec
+from OriginAgent.config.schema import AgentDefaults
+from OriginAgent.providers.base import LLMResponse
 
 _MAX_TOOL_RESULT_CHARS = AgentDefaults().max_tool_result_chars
 

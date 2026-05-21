@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from pathlib import Path
-from OpenHome.session.manager import Session, SessionManager
+from OriginAgent.session.manager import Session, SessionManager
 
 # Test constants
 MEMORY_WINDOW = 50
@@ -485,9 +485,9 @@ class TestNewCommandArchival:
 
     @staticmethod
     def _make_loop(tmp_path: Path):
-        from OpenHome.agent.loop import AgentLoop
-        from OpenHome.bus.queue import MessageBus
-        from OpenHome.providers.base import LLMResponse
+        from OriginAgent.agent.loop import AgentLoop
+        from OriginAgent.bus.queue import MessageBus
+        from OriginAgent.providers.base import LLMResponse
 
         bus = MessageBus()
         provider = MagicMock()
@@ -507,7 +507,7 @@ class TestNewCommandArchival:
     @pytest.mark.asyncio
     async def test_new_clears_session_immediately_even_if_archive_fails(self, tmp_path: Path) -> None:
         """/new clears session immediately; archive is fire-and-forget."""
-        from OpenHome.bus.events import InboundMessage
+        from OriginAgent.bus.events import InboundMessage
 
         loop = self._make_loop(tmp_path)
         session = loop.sessions.get_or_create("cli:test")
@@ -539,7 +539,7 @@ class TestNewCommandArchival:
 
     @pytest.mark.asyncio
     async def test_new_archives_only_unconsolidated_messages(self, tmp_path: Path) -> None:
-        from OpenHome.bus.events import InboundMessage
+        from OriginAgent.bus.events import InboundMessage
 
         loop = self._make_loop(tmp_path)
         session = loop.sessions.get_or_create("cli:test")
@@ -569,7 +569,7 @@ class TestNewCommandArchival:
 
     @pytest.mark.asyncio
     async def test_new_clears_session_and_responds(self, tmp_path: Path) -> None:
-        from OpenHome.bus.events import InboundMessage
+        from OriginAgent.bus.events import InboundMessage
 
         loop = self._make_loop(tmp_path)
         session = loop.sessions.get_or_create("cli:test")
@@ -593,7 +593,7 @@ class TestNewCommandArchival:
     @pytest.mark.asyncio
     async def test_close_mcp_drains_background_tasks(self, tmp_path: Path) -> None:
         """close_mcp waits for background tasks to complete."""
-        from OpenHome.bus.events import InboundMessage
+        from OriginAgent.bus.events import InboundMessage
 
         loop = self._make_loop(tmp_path)
         session = loop.sessions.get_or_create("cli:test")

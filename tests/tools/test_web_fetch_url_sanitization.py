@@ -7,7 +7,7 @@ from unittest.mock import patch
 
 import pytest
 
-from OpenHome.agent.tools.web import WebFetchTool, _validate_url
+from OriginAgent.agent.tools.web import WebFetchTool, _validate_url
 
 
 def _fake_resolve_public(hostname, port, family=0, type_=0, proto=0, flags=0):
@@ -36,8 +36,8 @@ class FakeClient:
 
 
 def _patch_env():
-    return patch("OpenHome.security.network.socket.getaddrinfo", _fake_resolve_public), \
-           patch("OpenHome.agent.tools.web.httpx.AsyncClient", FakeClient)
+    return patch("OriginAgent.security.network.socket.getaddrinfo", _fake_resolve_public), \
+           patch("OriginAgent.agent.tools.web.httpx.AsyncClient", FakeClient)
 
 
 # --- urlparse / _validate_url level tests ---

@@ -10,14 +10,14 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from OpenHome.agent.loop import AgentLoop
-from OpenHome.agent.subagent import SubagentManager, SubagentStatus
-from OpenHome.agent.tools.search import GlobTool, GrepTool
-from OpenHome.agent.tools.limits import ToolLimits
-from OpenHome.agent.tools.web import WebSearchTool
-from OpenHome.bus.queue import MessageBus
-from OpenHome.config.schema import WebSearchConfig
-from OpenHome.security.capabilities import CapabilitySnapshot
+from OriginAgent.agent.loop import AgentLoop
+from OriginAgent.agent.subagent import SubagentManager, SubagentStatus
+from OriginAgent.agent.tools.search import GlobTool, GrepTool
+from OriginAgent.agent.tools.limits import ToolLimits
+from OriginAgent.agent.tools.web import WebSearchTool
+from OriginAgent.bus.queue import MessageBus
+from OriginAgent.config.schema import WebSearchConfig
+from OriginAgent.security.capabilities import CapabilitySnapshot
 
 
 @pytest.mark.asyncio
@@ -32,7 +32,7 @@ async def test_web_search_tool_refreshes_dynamic_config_loader(monkeypatch) -> N
 
     monkeypatch.setattr(WebSearchTool, "_search_duckduckgo", fake_duckduckgo)
 
-    assert await tool.execute("OpenHome") == "duckduckgo:OpenHome:3"
+    assert await tool.execute("OriginAgent") == "duckduckgo:OriginAgent:3"
 
 
 @pytest.mark.asyncio

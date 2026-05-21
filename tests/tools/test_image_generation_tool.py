@@ -6,10 +6,10 @@ from typing import Any
 
 import pytest
 
-from OpenHome.agent.tools.image_generation import ImageGenerationTool
-from OpenHome.config.loader import set_config_path
-from OpenHome.config.schema import ImageGenerationToolConfig, ProviderConfig
-from OpenHome.providers.image_generation import GeneratedImageResponse
+from OriginAgent.agent.tools.image_generation import ImageGenerationTool
+from OriginAgent.config.loader import set_config_path
+from OriginAgent.config.schema import ImageGenerationToolConfig, ProviderConfig
+from OriginAgent.providers.image_generation import GeneratedImageResponse
 
 PNG_BYTES = (
     b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01"
@@ -44,7 +44,7 @@ async def test_generate_image_tool_stores_artifact_and_source_images(
     set_config_path(tmp_path / "config.json")
     FakeImageClient.instances = []
     monkeypatch.setattr(
-        "OpenHome.agent.tools.image_generation.OpenRouterImageGenerationClient",
+        "OriginAgent.agent.tools.image_generation.OpenRouterImageGenerationClient",
         FakeImageClient,
     )
     ref = tmp_path / "ref.png"
@@ -98,7 +98,7 @@ async def test_generate_image_tool_selects_aihubmix_provider(
     set_config_path(tmp_path / "config.json")
     FakeImageClient.instances = []
     monkeypatch.setattr(
-        "OpenHome.agent.tools.image_generation.AIHubMixImageGenerationClient",
+        "OriginAgent.agent.tools.image_generation.AIHubMixImageGenerationClient",
         FakeImageClient,
     )
     tool = ImageGenerationTool(

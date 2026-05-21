@@ -3,18 +3,18 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from OpenHome.agent.domain_packs import DomainPackManager
-from OpenHome.agent.action_runtime import ActionExecutionResult
-from OpenHome.agent.identity import ActorResolver, RuntimeContext
-from OpenHome.agent.loop import AgentLoop
-from OpenHome.agent.tools.audit import InMemoryToolAuditSink, ToolAuditConfig
-from OpenHome.agent.tools.base import Tool, tool_parameters
-from OpenHome.agent.tools.registry import _safe_hash
-from OpenHome.agent.tools.schema import StringSchema, tool_parameters_schema
-from OpenHome.bus.events import InboundMessage
-from OpenHome.bus.queue import MessageBus
-from OpenHome.config.schema import DomainPacksConfig, ToolsConfig, DeviceToolsConfig
-from OpenHome.security.capabilities import CapabilitySnapshot
+from OriginAgent.agent.domain_packs import DomainPackManager
+from OriginAgent.agent.action_runtime import ActionExecutionResult
+from OriginAgent.agent.identity import ActorResolver, RuntimeContext
+from OriginAgent.agent.loop import AgentLoop
+from OriginAgent.agent.tools.audit import InMemoryToolAuditSink, ToolAuditConfig
+from OriginAgent.agent.tools.base import Tool, tool_parameters
+from OriginAgent.agent.tools.registry import _safe_hash
+from OriginAgent.agent.tools.schema import StringSchema, tool_parameters_schema
+from OriginAgent.bus.events import InboundMessage
+from OriginAgent.bus.queue import MessageBus
+from OriginAgent.config.schema import DomainPacksConfig, ToolsConfig, DeviceToolsConfig
+from OriginAgent.security.capabilities import CapabilitySnapshot
 
 
 class RecordingResolver(ActorResolver):
@@ -169,7 +169,7 @@ async def test_loop_runtime_context_feeds_device_actor_and_trigger(tmp_path: Pat
         capability_snapshot=CapabilitySnapshot.user_turn(),
         runtime_context=context,
     )
-    tool = loop.tools.get("openhome_device_lighting_set_power")
+    tool = loop.tools.get("originagent_device_lighting_set_power")
     await tool.execute(device_id="lamp", power="on")
 
     assert executor.actions[0].requested_by == "resolved_actor"

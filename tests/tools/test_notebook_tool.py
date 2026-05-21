@@ -4,7 +4,7 @@ import json
 
 import pytest
 
-from OpenHome.agent.tools.notebook import NotebookEditTool
+from OriginAgent.agent.tools.notebook import NotebookEditTool
 
 
 def _make_notebook(cells: list[dict] | None = None, nbformat: int = 4, nbformat_minor: int = 5) -> dict:

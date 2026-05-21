@@ -1,9 +1,9 @@
 import pytest
 
-from OpenHome.agent.tools.long_task import CompleteGoalTool, LongTaskTool
-from OpenHome.bus.queue import MessageBus
-from OpenHome.session.goal_state import GOAL_STATE_KEY
-from OpenHome.session.manager import SessionManager
+from OriginAgent.agent.tools.long_task import CompleteGoalTool, LongTaskTool
+from OriginAgent.bus.queue import MessageBus
+from OriginAgent.session.goal_state import GOAL_STATE_KEY
+from OriginAgent.session.manager import SessionManager
 
 
 def _tools(tmp_path):

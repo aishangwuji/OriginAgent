@@ -2,17 +2,17 @@
 
 <div align="center">
   <p>
-    <a href="https://pypi.org/project/OpenHome/"><img src="https://img.shields.io/pypi/v/OpenHome" alt="PyPI"></a>
-    <a href="https://pepy.tech/project/OpenHome"><img src="https://static.pepy.tech/badge/OpenHome" alt="Downloads"></a>
+    <a href="https://pypi.org/project/OriginAgent/"><img src="https://img.shields.io/pypi/v/OriginAgent" alt="PyPI"></a>
+    <a href="https://pepy.tech/project/OriginAgent"><img src="https://static.pepy.tech/badge/OriginAgent" alt="Downloads"></a>
     <img src="https://img.shields.io/badge/python-≥3.11-blue" alt="Python">
     <img src="https://img.shields.io/badge/license-MIT-green" alt="License">
-    <a href="https://github.com/HKUDS/OpenHome/graphs/commit-activity" target="_blank">
-        <img alt="Commits last month" src="https://img.shields.io/github/commit-activity/m/HKUDS/OpenHome?labelColor=%20%2332b583&color=%20%2312b76a"></a>
-    <a href="https://github.com/HKUDS/OpenHome/issues?q=is%3Aissue%20is%3Aclosed" target="_blank">
-        <img alt="Issues closed" src="https://img.shields.io/github/issues-search?query=repo%3AHKUDS%2FOpenHome%20is%3Aissue%20is%3Aclosed&label=issues%20closed&labelColor=%20%237d89b0&color=%20%235d6b98"></a>
-    <a href="https://twitter.com/intent/follow?screen_name=OpenHome_project" target="_blank">
-        <img src="https://img.shields.io/twitter/follow/OpenHome_project?logo=X&color=%20%23f5f5f5" alt="follow on X(Twitter)"></a>
-    <a href="https://OpenHome.wiki/docs/latest/getting-started/OpenHome-overview"><img src="https://img.shields.io/badge/Docs-OpenHome.wiki-blue?style=flat&logo=readthedocs&logoColor=white" alt="Docs"></a>
+    <a href="https://github.com/HKUDS/OriginAgent/graphs/commit-activity" target="_blank">
+        <img alt="Commits last month" src="https://img.shields.io/github/commit-activity/m/HKUDS/OriginAgent?labelColor=%20%2332b583&color=%20%2312b76a"></a>
+    <a href="https://github.com/HKUDS/OriginAgent/issues?q=is%3Aissue%20is%3Aclosed" target="_blank">
+        <img alt="Issues closed" src="https://img.shields.io/github/issues-search?query=repo%3AHKUDS%2FOriginAgent%20is%3Aissue%20is%3Aclosed&label=issues%20closed&labelColor=%20%237d89b0&color=%20%235d6b98"></a>
+    <a href="https://twitter.com/intent/follow?screen_name=OriginAgent_project" target="_blank">
+        <img src="https://img.shields.io/twitter/follow/OriginAgent_project?logo=X&color=%20%23f5f5f5" alt="follow on X(Twitter)"></a>
+    <a href="https://OriginAgent.wiki/docs/latest/getting-started/OriginAgent-overview"><img src="https://img.shields.io/badge/Docs-OriginAgent.wiki-blue?style=flat&logo=readthedocs&logoColor=white" alt="Docs"></a>
     <a href="./COMMUNICATION.md"><img src="https://img.shields.io/badge/Feishu-Group-E9DBFC?style=flat&logo=feishu&logoColor=white" alt="Feishu"></a>
     <a href="./COMMUNICATION.md"><img src="https://img.shields.io/badge/WeChat-Group-C5EAB4?style=flat&logo=wechat&logoColor=white" alt="WeChat"></a>
     <a href="https://discord.gg/MnCvHqpUGB"><img src="https://img.shields.io/badge/Discord-Community-5865F2?style=flat&logo=discord&logoColor=white" alt="Discord"></a>
@@ -23,7 +23,7 @@
 
 ## 📢 News
 
-- **2026-04-29** 🚀 Released **v0.1.5.post3** — Smarter threads on Feishu, Discord, Slack, and Teams; **DeepSeek-V4**; Hugging Face & Olostep; choices, `/history`, and steadier long chats. Please see [release notes](https://github.com/HKUDS/OpenHome/releases/tag/v0.1.5.post3) for details.
+- **2026-04-29** 🚀 Released **v0.1.5.post3** — Smarter threads on Feishu, Discord, Slack, and Teams; **DeepSeek-V4**; Hugging Face & Olostep; choices, `/history`, and steadier long chats. Please see [release notes](https://github.com/HKUDS/OriginAgent/releases/tag/v0.1.5.post3) for details.
 - **2026-04-28** 🌐 Olostep web search, Hugging Face provider, safer workspace-tool interruptions.
 - **2026-04-27** 💬 `/history` command, smarter session replay caps, smoother Discord / Slack threads.
 - **2026-04-26** 🧭 Natural cron reminders, thread-aware restarts, safer local provider and shell behavior.
@@ -31,14 +31,14 @@
 - **2026-04-24** 🎥 Video attachments for channels, DeepSeek thinking control, faster document startup.
 - **2026-04-23** 🧵 Discord thread sessions, Telegram inline buttons, structured tool progress updates.
 - **2026-04-22** 🔎 GitHub Copilot GPT-5 / o-series support, configurable web fetch, WebUI image uploads.
-- **2026-04-21** 🚀 Released **v0.1.5.post2** — Windows & Python 3.14 support, Office document reading, SSE streaming for the OpenAI-compatible API, and stronger reliability across sessions, memory, and channels. Please see [release notes](https://github.com/HKUDS/OpenHome/releases/tag/v0.1.5.post2) for details.
+- **2026-04-21** 🚀 Released **v0.1.5.post2** — Windows & Python 3.14 support, Office document reading, SSE streaming for the OpenAI-compatible API, and stronger reliability across sessions, memory, and channels. Please see [release notes](https://github.com/HKUDS/OriginAgent/releases/tag/v0.1.5.post2) for details.
 - **2026-04-20** 🎨 Kimi K2.6 support, Telegram long-message split, WebUI typography & dark-mode polish.
 - **2026-04-19** 🌐 WebUI i18n locale switcher, atomic session writes with auto-repair.
 - **2026-04-18** 🧪 Initial WebUI chat, smarter setup wizard menus, WebSocket multi-chat multiplexing.
 - **2026-04-17** 🪟 Windows & Python 3.14 CI, Dream line-age memory, email self-loop guard.
 - **2026-04-16** 📡 SSE streaming for OpenAI-compatible API, Discord channel allow-list.
 - **2026-04-15** 🎛️ LM Studio & nullable API keys, MiniMax thinking endpoint, runtime SelfTool.
-- **2026-04-14** 🚀 Released **v0.1.5.post1** — Dream skill discovery, mid-turn follow-up injection, WebSocket channel, and deeper channel integrations. Please see [release notes](https://github.com/HKUDS/OpenHome/releases/tag/v0.1.5.post1) for details.
+- **2026-04-14** 🚀 Released **v0.1.5.post1** — Dream skill discovery, mid-turn follow-up injection, WebSocket channel, and deeper channel integrations. Please see [release notes](https://github.com/HKUDS/OriginAgent/releases/tag/v0.1.5.post1) for details.
 - **2026-04-13** 🛡️ Agent turn hardened — user messages persisted early, auto-compact skips active tasks.
 - **2026-04-12** 🔒 Lark global domain support, Dream learns discovered skills, shell sandbox tightened.
 - **2026-04-11** ⚡ Context compact shrinks sessions on the fly; Kagi web search; QQ & WeCom full media.
@@ -51,7 +51,7 @@
 - **2026-04-08** 📤 API file uploads, OpenAI reasoning auto-routing with Responses fallback.
 - **2026-04-07** 🧠 Anthropic adaptive thinking, MCP resources & prompts exposed as tools.
 - **2026-04-06** 🛰️ Langfuse observability, unified Whisper transcription, email attachments.
-- **2026-04-05** 🚀 Released **v0.1.5** — sturdier long-running tasks, Dream two-stage memory, production-ready sandboxing and programming Agent SDK. Please see [release notes](https://github.com/HKUDS/OpenHome/releases/tag/v0.1.5) for details.
+- **2026-04-05** 🚀 Released **v0.1.5** — sturdier long-running tasks, Dream two-stage memory, production-ready sandboxing and programming Agent SDK. Please see [release notes](https://github.com/HKUDS/OriginAgent/releases/tag/v0.1.5) for details.
 - **2026-04-04** 🚀 Jinja2 response templates, Dream memory hardened, smarter retry handling.
 - **2026-04-03** 🧠 Xiaomi MiMo provider, chain-of-thought reasoning visible, Telegram UX polish.
 - **2026-04-02** 🧱 Long-running tasks run more reliably — core runtime hardening.
@@ -60,18 +60,18 @@
 - **2026-03-30** 🧩 OpenAI-compatible API tightened; composable agent lifecycle hooks.
 - **2026-03-29** 💬 WeChat voice, typing, QR/media resilience; fixed-session OpenAI-compatible API.
 - **2026-03-28** 📚 Provider docs refresh; skill template wording fix.
-- **2026-03-27** 🚀 Released **v0.1.4.post6** — architecture decoupling, litellm removal, end-to-end streaming, WeChat channel, and a security fix. Please see [release notes](https://github.com/HKUDS/OpenHome/releases/tag/v0.1.4.post6) for details.
+- **2026-03-27** 🚀 Released **v0.1.4.post6** — architecture decoupling, litellm removal, end-to-end streaming, WeChat channel, and a security fix. Please see [release notes](https://github.com/HKUDS/OriginAgent/releases/tag/v0.1.4.post6) for details.
 - **2026-03-26** 🏗️ Agent runner extracted and lifecycle hooks unified; stream delta coalescing at boundaries.
 - **2026-03-25** 🌏 StepFun provider, configurable timezone, Gemini thought signatures.
 - **2026-03-24** 🔧 WeChat compatibility, Feishu CardKit streaming, test suite restructured.
 - **2026-03-23** 🔧 Command routing refactored for plugins, WhatsApp/WeChat media, unified channel login CLI.
 - **2026-03-22** ⚡ End-to-end streaming, WeChat channel, Anthropic cache optimization, `/status` command.
-- **2026-03-21** 🔒 Replace `litellm` with native `openai` + `anthropic` SDKs. Please see [commit](https://github.com/HKUDS/OpenHome/commit/3dfdab7).
+- **2026-03-21** 🔒 Replace `litellm` with native `openai` + `anthropic` SDKs. Please see [commit](https://github.com/HKUDS/OriginAgent/commit/3dfdab7).
 - **2026-03-20** 🧙 Interactive setup wizard — pick your provider, model autocomplete, and you're good to go.
 - **2026-03-19** 💬 Telegram gets more resilient under load; Feishu now renders code blocks properly.
 - **2026-03-18** 📷 Telegram can now send media via URL. Cron schedules show human-readable details.
 - **2026-03-17** ✨ Feishu formatting glow-up, Slack reacts when done, custom endpoints support extra headers, and image handling is more reliable.
-- **2026-03-16** 🚀 Released **v0.1.4.post5** — a refinement-focused release with stronger reliability and channel support, and a more dependable day-to-day experience. Please see [release notes](https://github.com/HKUDS/OpenHome/releases/tag/v0.1.4.post5) for details.
+- **2026-03-16** 🚀 Released **v0.1.4.post5** — a refinement-focused release with stronger reliability and channel support, and a more dependable day-to-day experience. Please see [release notes](https://github.com/HKUDS/OriginAgent/releases/tag/v0.1.4.post5) for details.
 - **2026-03-15** 🧩 DingTalk rich media, smarter built-in skills, and cleaner model compatibility.
 - **2026-03-14** 💬 Channel plugins, Feishu replies, and steadier MCP, QQ, and media handling.
 - **2026-03-13** 🌐 Multi-provider web search, LangSmith, and broader reliability improvements.
@@ -79,7 +79,7 @@
 - **2026-03-11** 🔌 WeCom, Ollama, cleaner discovery, and safer tool behavior.
 - **2026-03-10** 🧠 Token-based memory, shared retries, and cleaner gateway and Telegram behavior.
 - **2026-03-09** 💬 Slack thread polish and better Feishu audio compatibility.
-- **2026-03-08** 🚀 Released **v0.1.4.post4** — a reliability-packed release with safer defaults, better multi-instance support, sturdier MCP, and major channel and provider improvements. Please see [release notes](https://github.com/HKUDS/OpenHome/releases/tag/v0.1.4.post4) for details.
+- **2026-03-08** 🚀 Released **v0.1.4.post4** — a reliability-packed release with safer defaults, better multi-instance support, sturdier MCP, and major channel and provider improvements. Please see [release notes](https://github.com/HKUDS/OriginAgent/releases/tag/v0.1.4.post4) for details.
 - **2026-03-07** 🚀 Azure OpenAI provider, WhatsApp media, QQ group chats, and more Telegram/Feishu polish.
 - **2026-03-06** 🪄 Lighter providers, smarter media handling, and sturdier memory and CLI compatibility.
 - **2026-03-05** ⚡️ Telegram draft streaming, MCP SSE support, and broader channel reliability fixes.
@@ -87,33 +87,33 @@
 - **2026-03-03** 🧠 Cleaner user-message merging, safer multimodal saves, and stronger Cron guards.
 - **2026-03-02** 🛡️ Safer default access control, sturdier Cron reloads, and cleaner Matrix media handling.
 - **2026-03-01** 🌐 Web proxy support, smarter Cron reminders, and Feishu rich-text parsing improvements.
-- **2026-02-28** 🚀 Released **v0.1.4.post3** — cleaner context, hardened session history, and smarter agent. Please see [release notes](https://github.com/HKUDS/OpenHome/releases/tag/v0.1.4.post3) for details.
+- **2026-02-28** 🚀 Released **v0.1.4.post3** — cleaner context, hardened session history, and smarter agent. Please see [release notes](https://github.com/HKUDS/OriginAgent/releases/tag/v0.1.4.post3) for details.
 - **2026-02-27** 🧠 Experimental thinking mode support, DingTalk media messages, Feishu and QQ channel fixes.
 - **2026-02-26** 🛡️ Session poisoning fix, WhatsApp dedup, Windows path guard, Mistral compatibility.
 - **2026-02-25** 🧹 New Matrix channel, cleaner session context, auto workspace template sync.
-- **2026-02-24** 🚀 Released **v0.1.4.post2** — a reliability-focused release with a redesigned heartbeat, prompt cache optimization, and hardened provider & channel stability. See [release notes](https://github.com/HKUDS/OpenHome/releases/tag/v0.1.4.post2) for details.
+- **2026-02-24** 🚀 Released **v0.1.4.post2** — a reliability-focused release with a redesigned heartbeat, prompt cache optimization, and hardened provider & channel stability. See [release notes](https://github.com/HKUDS/OriginAgent/releases/tag/v0.1.4.post2) for details.
 - **2026-02-23** 🔧 Virtual tool-call heartbeat, prompt cache optimization, Slack mrkdwn fixes.
 - **2026-02-22** 🛡️ Slack thread isolation, Discord typing fix, agent reliability improvements.
-- **2026-02-21** 🎉 Released **v0.1.4.post1** — new providers, media support across channels, and major stability improvements. See [release notes](https://github.com/HKUDS/OpenHome/releases/tag/v0.1.4.post1) for details.
+- **2026-02-21** 🎉 Released **v0.1.4.post1** — new providers, media support across channels, and major stability improvements. See [release notes](https://github.com/HKUDS/OriginAgent/releases/tag/v0.1.4.post1) for details.
 - **2026-02-20** 🐦 Feishu now receives multimodal files from users. More reliable memory under the hood.
 - **2026-02-19** ✨ Slack now sends files, Discord splits long messages, and subagents work in CLI mode.
-- **2026-02-18** ⚡️ OpenHome now supports VolcEngine, MCP custom auth headers, and Anthropic prompt caching.
-- **2026-02-17** 🎉 Released **v0.1.4** — MCP support, progress streaming, new providers, and multiple channel improvements. Please see [release notes](https://github.com/HKUDS/OpenHome/releases/tag/v0.1.4) for details.
-- **2026-02-16** 🦞 OpenHome now integrates a [ClawHub](https://clawhub.ai) skill — search and install public agent skills.
-- **2026-02-15** 🔑 OpenHome now supports OpenAI Codex provider with OAuth login support.
-- **2026-02-14** 🔌 OpenHome now supports MCP! See [MCP section](#mcp-model-context-protocol) for details.
-- **2026-02-13** 🎉 Released **v0.1.3.post7** — includes security hardening and multiple improvements. **Please upgrade to the latest version to address security issues**. See [release notes](https://github.com/HKUDS/OpenHome/releases/tag/v0.1.3.post7) for more details.
-- **2026-02-12** 🧠 Redesigned memory system — Less code, more reliable. Join the [discussion](https://github.com/HKUDS/OpenHome/discussions/566) about it!
+- **2026-02-18** ⚡️ OriginAgent now supports VolcEngine, MCP custom auth headers, and Anthropic prompt caching.
+- **2026-02-17** 🎉 Released **v0.1.4** — MCP support, progress streaming, new providers, and multiple channel improvements. Please see [release notes](https://github.com/HKUDS/OriginAgent/releases/tag/v0.1.4) for details.
+- **2026-02-16** 🦞 OriginAgent now integrates a [ClawHub](https://clawhub.ai) skill — search and install public agent skills.
+- **2026-02-15** 🔑 OriginAgent now supports OpenAI Codex provider with OAuth login support.
+- **2026-02-14** 🔌 OriginAgent now supports MCP! See [MCP section](#mcp-model-context-protocol) for details.
+- **2026-02-13** 🎉 Released **v0.1.3.post7** — includes security hardening and multiple improvements. **Please upgrade to the latest version to address security issues**. See [release notes](https://github.com/HKUDS/OriginAgent/releases/tag/v0.1.3.post7) for more details.
+- **2026-02-12** 🧠 Redesigned memory system — Less code, more reliable. Join the [discussion](https://github.com/HKUDS/OriginAgent/discussions/566) about it!
 - **2026-02-11** ✨ Enhanced CLI experience and added MiniMax support!
-- **2026-02-10** 🎉 Released **v0.1.3.post6** with improvements! Check the updates [notes](https://github.com/HKUDS/OpenHome/releases/tag/v0.1.3.post6) and our [roadmap](https://github.com/HKUDS/OpenHome/discussions/431).
-- **2026-02-09** 💬 Added Slack, Email, and QQ support — OpenHome now supports multiple chat platforms!
+- **2026-02-10** 🎉 Released **v0.1.3.post6** with improvements! Check the updates [notes](https://github.com/HKUDS/OriginAgent/releases/tag/v0.1.3.post6) and our [roadmap](https://github.com/HKUDS/OriginAgent/discussions/431).
+- **2026-02-09** 💬 Added Slack, Email, and QQ support — OriginAgent now supports multiple chat platforms!
 - **2026-02-08** 🔧 Refactored Providers—adding a new LLM provider now takes just 2 simple steps! Check [here](#providers).
-- **2026-02-07** 🚀 Released **v0.1.3.post5** with Qwen support & several key improvements! Check [here](https://github.com/HKUDS/OpenHome/releases/tag/v0.1.3.post5) for details.
+- **2026-02-07** 🚀 Released **v0.1.3.post5** with Qwen support & several key improvements! Check [here](https://github.com/HKUDS/OriginAgent/releases/tag/v0.1.3.post5) for details.
 - **2026-02-06** ✨ Added Moonshot/Kimi provider, Discord integration, and enhanced security hardening!
 - **2026-02-05** ✨ Added Feishu channel, DeepSeek provider, and enhanced scheduled tasks support!
-- **2026-02-04** 🚀 Released **v0.1.3.post4** with multi-provider & Docker support! Check [here](https://github.com/HKUDS/OpenHome/releases/tag/v0.1.3.post4) for details.
+- **2026-02-04** 🚀 Released **v0.1.3.post4** with multi-provider & Docker support! Check [here](https://github.com/HKUDS/OriginAgent/releases/tag/v0.1.3.post4) for details.
 - **2026-02-03** ⚡ Integrated vLLM for local LLM support and improved natural language task scheduling!
-- **2026-02-02** 🎉 OpenHome officially launched.
+- **2026-02-02** 🎉 OriginAgent officially launched.
 
 </details>
 
@@ -135,21 +135,21 @@
 **Install from source**
 
 ```bash
-git clone https://github.com/HKUDS/OpenHome.git
-cd OpenHome
+git clone https://github.com/HKUDS/OriginAgent.git
+cd OriginAgent
 pip install -e .
 ```
 
 **Install with `uv`**
 
 ```bash
-uv tool install openhome
+uv tool install originagent
 ```
 
 **Install from PyPI**
 
 ```bash
-pip install openhome
+pip install originagent
 ```
 
 ## 🚀 Quick Start
@@ -157,13 +157,10 @@ pip install openhome
 **1. Initialize**
 
 ```bash
-openhome onboard
+originagent onboard
 ```
 
-> [!NOTE]
-> OriginAgent is in a staged rename. During the compatibility period, both `originagent` and the legacy `openhome` command are supported. New installs default to `~/.originagent`; existing `~/.openhome/config.json` installs continue using the legacy directory.
-
-**2. Configure** (`~/.originagent/config.json`, or existing `~/.openhome/config.json`)
+**2. Configure** (`~/.originagent/config.json`)
 
 Configure these **two parts** in your config (other options have defaults). Add or merge the following blocks into your existing config instead of replacing the whole file.
 
@@ -195,11 +192,11 @@ Configure these **two parts** in your config (other options have defaults). Add 
 **3. Chat**
 
 ```bash
-openhome agent
+originagent agent
 ```
 
 
-- OriginAgent docs are being rebuilt around the general-purpose agent runtime direction. The existing OpenHome v1 planning docs are retained as historical migration notes.
+- OriginAgent docs are being rebuilt around the general-purpose agent runtime direction.
 
 ## 🧪 WebUI (Development)
 
@@ -207,7 +204,7 @@ openhome agent
 > The WebUI development workflow currently requires a source checkout and is not yet shipped together with the official packaged release. See [WebUI Document](./webui/README.md) for full WebUI development docs and build steps.
 
 <p align="center">
-  <img src="images/OpenHome_webui.png" alt="OriginAgent webui preview" width="900">
+  <img src="images/OriginAgent_webui.png" alt="OriginAgent webui preview" width="900">
 </p>
 
 **1. Enable the WebSocket channel in your active config file**
@@ -219,7 +216,7 @@ openhome agent
 **2. Start the gateway**
 
 ```bash
-openhome gateway
+originagent gateway
 ```
 
 **3. Start the webui dev server**
@@ -233,7 +230,7 @@ bun run dev
 ## 🏗️ Architecture
 
 <p align="center">
-  <img src="images/OpenHome_arch.png" alt="OriginAgent architecture" width="800">
+  <img src="images/OriginAgent_arch.png" alt="OriginAgent architecture" width="800">
 </p>
 
 OriginAgent stays lightweight by centering everything around a small agent loop: messages come in from chat apps, the LLM decides when tools are needed, and memory or skills are pulled in only as context instead of becoming a heavy orchestration layer. That keeps the core path readable and easy to extend, while still letting you add channels, tools, memory, and deployment options without turning the system into a monolith.
@@ -263,10 +260,10 @@ OriginAgent stays lightweight by centering everything around a small agent loop:
 
 ## 📚 Docs
 
-The inherited framework docs are being rebuilt while OpenHome is renamed into OriginAgent and repositioned as a general-purpose agent runtime. Current planning docs live in [docs/README.md](./docs/README.md):
+The inherited framework docs are being rebuilt around OriginAgent as a general-purpose agent runtime. Current planning docs live in [docs/README.md](./docs/README.md):
 
-- [Plan 1](./docs/plan1.md): historical OpenHome productization plan.
-- [OpenHome v1 development plan](./docs/openhome-v1-development-plan.md): historical v1 task breakdown and delivery boundary.
+- [Plan 1](./docs/plan1.md): historical OriginAgent productization plan.
+- [OriginAgent v1 development plan](./docs/originagent-v1-development-plan.md): historical v1 task breakdown and delivery boundary.
 
 ## 🤝 Contribute & Roadmap
 
@@ -281,7 +278,7 @@ PRs welcome! The codebase is intentionally small and readable. 🤗
 
 **Unsure which branch to target?** See [CONTRIBUTING.md](./CONTRIBUTING.md) for details.
 
-**Roadmap** — Pick an item and [open a PR](https://github.com/HKUDS/OpenHome/pulls)!
+**Roadmap** — Pick an item and [open a PR](https://github.com/HKUDS/OriginAgent/pulls)!
 
 - **Multi-modal** — See and hear (images, voice, video)
 - **Long-term memory** — Never forget important context
@@ -295,24 +292,24 @@ This project was started by [Xubin Ren](https://github.com/re-bin) as a personal
 
 ### Contributors
 
-<a href="https://github.com/HKUDS/OpenHome/graphs/contributors">
-  <img src="https://contrib.rocks/image?repo=HKUDS/OpenHome&max=100&columns=12&updated=20260210" alt="Contributors" />
+<a href="https://github.com/HKUDS/OriginAgent/graphs/contributors">
+  <img src="https://contrib.rocks/image?repo=HKUDS/OriginAgent&max=100&columns=12&updated=20260210" alt="Contributors" />
 </a>
 
 
 ## ⭐ Star History
 
 <div align="center">
-  <a href="https://star-history.com/#HKUDS/OpenHome&Date">
+  <a href="https://star-history.com/#HKUDS/OriginAgent&Date">
     <picture>
-      <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=HKUDS/OpenHome&type=Date&theme=dark" />
-      <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=HKUDS/OpenHome&type=Date" />
-      <img alt="Star History Chart" src="https://api.star-history.com/svg?repos=HKUDS/OpenHome&type=Date" style="border-radius: 15px; box-shadow: 0 0 30px rgba(0, 217, 255, 0.3);" />
+      <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=HKUDS/OriginAgent&type=Date&theme=dark" />
+      <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=HKUDS/OriginAgent&type=Date" />
+      <img alt="Star History Chart" src="https://api.star-history.com/svg?repos=HKUDS/OriginAgent&type=Date" style="border-radius: 15px; box-shadow: 0 0 30px rgba(0, 217, 255, 0.3);" />
     </picture>
   </a>
 </div>
 
 <p align="center">
   <em> Thanks for visiting ✨ OriginAgent!</em><br><br>
-  <img src="https://visitor-badge.laobi.icu/badge?page_id=HKUDS.OpenHome&style=for-the-badge&color=00d4ff" alt="Views">
+  <img src="https://visitor-badge.laobi.icu/badge?page_id=HKUDS.OriginAgent&style=for-the-badge&color=00d4ff" alt="Views">
 </p>

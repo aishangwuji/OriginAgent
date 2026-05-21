@@ -10,14 +10,14 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from OpenHome.bus.events import InboundMessage
-from OpenHome.providers.base import LLMResponse
+from OriginAgent.bus.events import InboundMessage
+from OriginAgent.providers.base import LLMResponse
 
 
 def _make_loop():
     """Create a minimal AgentLoop with mocked dependencies."""
-    from OpenHome.agent.loop import AgentLoop
-    from OpenHome.bus.queue import MessageBus
+    from OriginAgent.agent.loop import AgentLoop
+    from OriginAgent.bus.queue import MessageBus
 
     bus = MessageBus()
     provider = MagicMock()
@@ -25,9 +25,9 @@ def _make_loop():
     workspace = MagicMock()
     workspace.__truediv__ = MagicMock(return_value=MagicMock())
 
-    with patch("OpenHome.agent.loop.ContextBuilder"), \
-         patch("OpenHome.agent.loop.SessionManager"), \
-         patch("OpenHome.agent.loop.SubagentManager"):
+    with patch("OriginAgent.agent.loop.ContextBuilder"), \
+         patch("OriginAgent.agent.loop.SessionManager"), \
+         patch("OriginAgent.agent.loop.SubagentManager"):
         loop = AgentLoop(bus=bus, provider=provider, workspace=workspace)
     return loop, bus
 
@@ -45,9 +45,9 @@ class TestRestartCommand:
 
     @pytest.mark.asyncio
     async def test_restart_sends_message_and_calls_execv(self):
-        from OpenHome.command.builtin import cmd_restart
-        from OpenHome.command.router import CommandContext
-        from OpenHome.utils.restart import (
+        from OriginAgent.command.builtin import cmd_restart
+        from OriginAgent.command.router import CommandContext
+        from OriginAgent.utils.restart import (
             RESTART_NOTIFY_CHANNEL_ENV,
             RESTART_NOTIFY_CHAT_ID_ENV,
             RESTART_STARTED_AT_ENV,
@@ -73,8 +73,8 @@ class TestRestartCommand:
         )
 
         with patch.dict(os.environ, {}, clear=False), \
-             patch("OpenHome.command.builtin.asyncio", new=fake_asyncio), \
-             patch("OpenHome.command.builtin.os.execv") as mock_execv:
+             patch("OriginAgent.command.builtin.asyncio", new=fake_asyncio), \
+             patch("OriginAgent.command.builtin.os.execv") as mock_execv:
             out = await cmd_restart(ctx)
             assert "Restarting" in out.content
             assert os.environ.get(RESTART_NOTIFY_CHANNEL_ENV) == "cli"
@@ -92,7 +92,7 @@ class TestRestartCommand:
         msg = InboundMessage(channel="telegram", sender_id="u1", chat_id="c1", content="/restart")
 
         with patch.object(loop, "_dispatch", new_callable=AsyncMock) as mock_dispatch, \
-             patch("OpenHome.command.builtin.os.execv"):
+             patch("OriginAgent.command.builtin.os.execv"):
             await bus.publish_inbound(msg)
 
             loop._running = True
@@ -130,7 +130,7 @@ class TestRestartCommand:
 
             mock_dispatch.assert_not_called()
             out = await asyncio.wait_for(bus.consume_outbound(), timeout=1.0)
-            assert "OpenHome" in out.content.lower() or "Model" in out.content
+            assert "OriginAgent" in out.content.lower() or "Model" in out.content
 
     @pytest.mark.asyncio
     async def test_run_propagates_external_cancellation(self):

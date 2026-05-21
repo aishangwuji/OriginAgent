@@ -1,8 +1,8 @@
 import json
 from datetime import datetime, timezone
 
-from OpenHome.agent.audit import AUDIT_REASON_MAX_CHARS, AuditEvent, AuditLogger
-from OpenHome.agent.memory import MemoryStore, MemoryWorkspaceSnapshot
+from OriginAgent.agent.audit import AUDIT_REASON_MAX_CHARS, AuditEvent, AuditLogger
+from OriginAgent.agent.memory import MemoryStore, MemoryWorkspaceSnapshot
 
 NOW = datetime(2026, 5, 16, 12, 0, 0, tzinfo=timezone.utc)
 
@@ -47,7 +47,7 @@ def test_append_uses_memory_lock_and_fsync(tmp_path, monkeypatch):
         def __exit__(self, exc_type, exc, tb):
             events.append("exit")
 
-    monkeypatch.setattr("OpenHome.agent.audit.os.fsync", lambda fd: events.append(("fsync", fd)))
+    monkeypatch.setattr("OriginAgent.agent.audit.os.fsync", lambda fd: events.append(("fsync", fd)))
     audit = AuditLogger(tmp_path, lock_factory=lambda: FakeLock())
 
     audit.log_action_decision(

@@ -1013,7 +1013,7 @@ function SelfSettings() {
         <SettingsSectionTitle>{t("settings.self.sections.identity")}</SettingsSectionTitle>
         <SettingsGroup>
           <div className="grid gap-3 px-4 py-4 text-[12px] text-muted-foreground sm:grid-cols-2 sm:px-5">
-            <SkillMeta label={t("settings.self.fields.agent")} value={selfModel?.identity.agent_name || "OpenHome"} />
+            <SkillMeta label={t("settings.self.fields.agent")} value={selfModel?.identity.agent_name || "OriginAgent"} />
             <SkillMeta label={t("settings.self.fields.workspace")} value={selfModel?.identity.workspace_name || "workspace"} />
             <SkillMeta label={t("settings.self.fields.runtimeProfile")} value={selfModel?.identity.runtime_profile || "default"} />
             <SkillMeta label={t("settings.self.fields.auditMode")} value={selfModel?.identity.audit_mode || "minimal"} />

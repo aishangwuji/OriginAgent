@@ -3,15 +3,15 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from OpenHome.agent.loop import AgentLoop
-from OpenHome.agent.runner import AgentRunner, AgentRunSpec
-from OpenHome.agent.tools.ask import AskUserInterrupt, AskUserTool
-from OpenHome.agent.tools.base import Tool, tool_parameters
-from OpenHome.agent.tools.registry import ToolRegistry
-from OpenHome.agent.tools.schema import tool_parameters_schema
-from OpenHome.bus.events import InboundMessage
-from OpenHome.bus.queue import MessageBus
-from OpenHome.providers.base import GenerationSettings, LLMResponse, ToolCallRequest
+from OriginAgent.agent.loop import AgentLoop
+from OriginAgent.agent.runner import AgentRunner, AgentRunSpec
+from OriginAgent.agent.tools.ask import AskUserInterrupt, AskUserTool
+from OriginAgent.agent.tools.base import Tool, tool_parameters
+from OriginAgent.agent.tools.registry import ToolRegistry
+from OriginAgent.agent.tools.schema import tool_parameters_schema
+from OriginAgent.bus.events import InboundMessage
+from OriginAgent.bus.queue import MessageBus
+from OriginAgent.providers.base import GenerationSettings, LLMResponse, ToolCallRequest
 
 
 def _make_provider(chat_with_retry):

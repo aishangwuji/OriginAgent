@@ -6,7 +6,7 @@ from typing import Any
 import httpx
 import pytest
 
-from OpenHome.providers.image_generation import (
+from OriginAgent.providers.image_generation import (
     AIHubMixImageGenerationClient,
     GeneratedImageResponse,
     ImageGenerationError,
@@ -135,7 +135,7 @@ async def test_aihubmix_image_generation_payload_and_response() -> None:
     client = AIHubMixImageGenerationClient(
         api_key="sk-ahm-test",
         api_base="https://aihubmix.com/v1/",
-        extra_headers={"APP-Code": "OpenHome"},
+        extra_headers={"APP-Code": "OriginAgent"},
         extra_body={"quality": "low"},
         client=fake,  # type: ignore[arg-type]
     )
@@ -151,7 +151,7 @@ async def test_aihubmix_image_generation_payload_and_response() -> None:
     call = fake.calls[0]
     assert call["url"] == "https://aihubmix.com/v1/models/openai/gpt-image-2-free/predictions"
     assert call["headers"]["Authorization"] == "Bearer sk-ahm-test"
-    assert call["headers"]["APP-Code"] == "OpenHome"
+    assert call["headers"]["APP-Code"] == "OriginAgent"
     assert call["json"] == {
         "input": {
             "prompt": "draw a logo",

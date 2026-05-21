@@ -8,8 +8,8 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from OpenHome.bus.events import OutboundMessage
-from OpenHome.channels.whatsapp import (
+from OriginAgent.bus.events import OutboundMessage
+from OriginAgent.channels.whatsapp import (
     WhatsAppChannel,
     _load_or_create_bridge_token,
 )
@@ -301,7 +301,7 @@ def test_load_or_create_bridge_token_persists_generated_secret(tmp_path):
 
 def test_configured_bridge_token_skips_local_token_file(monkeypatch, tmp_path):
     token_path = tmp_path / "whatsapp-auth" / "bridge-token"
-    monkeypatch.setattr("OpenHome.channels.whatsapp._bridge_token_path", lambda: token_path)
+    monkeypatch.setattr("OriginAgent.channels.whatsapp._bridge_token_path", lambda: token_path)
     ch = WhatsAppChannel({"enabled": True, "bridgeToken": "manual-secret"}, MagicMock())
 
     assert ch._effective_bridge_token() == "manual-secret"
@@ -315,15 +315,15 @@ async def test_login_exports_effective_bridge_token(monkeypatch, tmp_path):
     bridge_dir.mkdir()
     calls = []
 
-    monkeypatch.setattr("OpenHome.channels.whatsapp._bridge_token_path", lambda: token_path)
-    monkeypatch.setattr("OpenHome.channels.whatsapp._ensure_bridge_setup", lambda: bridge_dir)
-    monkeypatch.setattr("OpenHome.channels.whatsapp.shutil.which", lambda _: "/usr/bin/npm")
+    monkeypatch.setattr("OriginAgent.channels.whatsapp._bridge_token_path", lambda: token_path)
+    monkeypatch.setattr("OriginAgent.channels.whatsapp._ensure_bridge_setup", lambda: bridge_dir)
+    monkeypatch.setattr("OriginAgent.channels.whatsapp.shutil.which", lambda _: "/usr/bin/npm")
 
     def fake_run(*args, **kwargs):
         calls.append((args, kwargs))
         return MagicMock()
 
-    monkeypatch.setattr("OpenHome.channels.whatsapp.subprocess.run", fake_run)
+    monkeypatch.setattr("OriginAgent.channels.whatsapp.subprocess.run", fake_run)
     ch = WhatsAppChannel({"enabled": True}, MagicMock())
 
     assert await ch.login() is True
@@ -364,7 +364,7 @@ async def test_start_sends_auth_message_with_generated_token(monkeypatch, tmp_pa
         async def __aexit__(self, exc_type, exc, tb):
             return False
 
-    monkeypatch.setattr("OpenHome.channels.whatsapp._bridge_token_path", lambda: token_path)
+    monkeypatch.setattr("OriginAgent.channels.whatsapp._bridge_token_path", lambda: token_path)
     monkeypatch.setitem(
         sys.modules,
         "websockets",

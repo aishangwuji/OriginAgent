@@ -7,10 +7,10 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from OpenHome.config.schema import AgentDefaults
-from OpenHome.security.capabilities import CapabilitySnapshot
-from OpenHome.security.grants import CapabilityGrantStore
-from OpenHome.security.policy import PolicyDeniedError
+from OriginAgent.config.schema import AgentDefaults
+from OriginAgent.security.capabilities import CapabilitySnapshot
+from OriginAgent.security.grants import CapabilityGrantStore
+from OriginAgent.security.policy import PolicyDeniedError
 
 _MAX_TOOL_RESULT_CHARS = AgentDefaults().max_tool_result_chars
 
@@ -18,9 +18,9 @@ _MAX_TOOL_RESULT_CHARS = AgentDefaults().max_tool_result_chars
 @pytest.mark.asyncio
 async def test_subagent_exec_tool_receives_allowed_env_keys(tmp_path):
     """allowed_env_keys from ExecToolConfig must be forwarded to the subagent's ExecTool."""
-    from OpenHome.agent.subagent import SubagentManager, SubagentStatus
-    from OpenHome.bus.queue import MessageBus
-    from OpenHome.config.schema import ExecToolConfig
+    from OriginAgent.agent.subagent import SubagentManager, SubagentStatus
+    from OriginAgent.bus.queue import MessageBus
+    from OriginAgent.config.schema import ExecToolConfig
 
     bus = MessageBus()
     provider = MagicMock()
@@ -60,8 +60,8 @@ async def test_subagent_exec_tool_receives_allowed_env_keys(tmp_path):
 @pytest.mark.asyncio
 async def test_subagent_uses_configured_max_iterations(tmp_path):
     """Subagents should honor the configured tool-iteration limit."""
-    from OpenHome.agent.subagent import SubagentManager, SubagentStatus
-    from OpenHome.bus.queue import MessageBus
+    from OriginAgent.agent.subagent import SubagentManager, SubagentStatus
+    from OriginAgent.bus.queue import MessageBus
 
     bus = MessageBus()
     provider = MagicMock()
@@ -99,9 +99,9 @@ async def test_subagent_uses_configured_max_iterations(tmp_path):
 @pytest.mark.asyncio
 async def test_spawn_tool_rejects_when_at_concurrency_limit(tmp_path):
     """SpawnTool should return an error string when the concurrency limit is reached."""
-    from OpenHome.agent.subagent import SubagentManager
-    from OpenHome.agent.tools.spawn import SpawnTool
-    from OpenHome.bus.queue import MessageBus
+    from OriginAgent.agent.subagent import SubagentManager
+    from OriginAgent.agent.tools.spawn import SpawnTool
+    from OriginAgent.bus.queue import MessageBus
 
     bus = MessageBus()
     provider = MagicMock()
@@ -149,9 +149,9 @@ async def test_spawn_tool_rejects_when_at_concurrency_limit(tmp_path):
 
 @pytest.mark.asyncio
 async def test_spawn_tool_missing_snapshot_fails_closed(tmp_path):
-    from OpenHome.agent.subagent import SubagentManager
-    from OpenHome.agent.tools.spawn import SpawnTool
-    from OpenHome.bus.queue import MessageBus
+    from OriginAgent.agent.subagent import SubagentManager
+    from OriginAgent.agent.tools.spawn import SpawnTool
+    from OriginAgent.bus.queue import MessageBus
 
     provider = MagicMock()
     provider.get_default_model.return_value = "test-model"
@@ -181,8 +181,8 @@ def test_subagent_snapshot_downgrades_write_cron_device() -> None:
 
 def test_subagent_default_max_concurrent_matches_agent_defaults(tmp_path):
     """Direct SubagentManager construction should use the agent default concurrency limit."""
-    from OpenHome.agent.subagent import SubagentManager
-    from OpenHome.bus.queue import MessageBus
+    from OriginAgent.agent.subagent import SubagentManager
+    from OriginAgent.bus.queue import MessageBus
 
     bus = MessageBus()
     provider = MagicMock()
@@ -200,8 +200,8 @@ def test_subagent_default_max_concurrent_matches_agent_defaults(tmp_path):
 
 def test_subagent_default_max_iterations_matches_agent_defaults(tmp_path):
     """Direct SubagentManager construction should use the agent default limit."""
-    from OpenHome.agent.subagent import SubagentManager
-    from OpenHome.bus.queue import MessageBus
+    from OriginAgent.agent.subagent import SubagentManager
+    from OriginAgent.bus.queue import MessageBus
 
     bus = MessageBus()
     provider = MagicMock()
@@ -219,8 +219,8 @@ def test_subagent_default_max_iterations_matches_agent_defaults(tmp_path):
 
 def test_agent_loop_passes_max_iterations_to_subagents(tmp_path):
     """AgentLoop's configured limit should be shared with spawned subagents."""
-    from OpenHome.agent.loop import AgentLoop
-    from OpenHome.bus.queue import MessageBus
+    from OriginAgent.agent.loop import AgentLoop
+    from OriginAgent.bus.queue import MessageBus
 
     bus = MessageBus()
     provider = MagicMock()
@@ -239,8 +239,8 @@ def test_agent_loop_passes_max_iterations_to_subagents(tmp_path):
 
 def test_agent_loop_passes_grant_store_to_subagents(tmp_path):
     """AgentLoop should provide the workspace-backed grant store to subagents."""
-    from OpenHome.agent.loop import AgentLoop
-    from OpenHome.bus.queue import MessageBus
+    from OriginAgent.agent.loop import AgentLoop
+    from OriginAgent.bus.queue import MessageBus
 
     bus = MessageBus()
     provider = MagicMock()
@@ -255,8 +255,8 @@ def test_agent_loop_passes_grant_store_to_subagents(tmp_path):
 @pytest.mark.asyncio
 async def test_agent_loop_syncs_updated_max_iterations_before_run(tmp_path):
     """Runtime max_iterations changes should be reflected before tool execution."""
-    from OpenHome.agent.loop import AgentLoop
-    from OpenHome.bus.queue import MessageBus
+    from OriginAgent.agent.loop import AgentLoop
+    from OriginAgent.bus.queue import MessageBus
 
     bus = MessageBus()
     provider = MagicMock()
@@ -296,10 +296,10 @@ async def test_agent_loop_syncs_updated_max_iterations_before_run(tmp_path):
 @pytest.mark.asyncio
 async def test_drain_pending_blocks_while_subagents_running(tmp_path):
     """_drain_pending should block when no messages are available but sub-agents are still running."""
-    from OpenHome.agent.loop import AgentLoop
-    from OpenHome.bus.events import InboundMessage
-    from OpenHome.bus.queue import MessageBus
-    from OpenHome.session.manager import Session
+    from OriginAgent.agent.loop import AgentLoop
+    from OriginAgent.bus.events import InboundMessage
+    from OriginAgent.bus.queue import MessageBus
+    from OriginAgent.session.manager import Session
 
     bus = MessageBus()
     provider = MagicMock()
@@ -388,8 +388,8 @@ async def test_drain_pending_blocks_while_subagents_running(tmp_path):
 @pytest.mark.asyncio
 async def test_drain_pending_no_block_when_no_subagents(tmp_path):
     """_drain_pending should not block when no sub-agents are running."""
-    from OpenHome.agent.loop import AgentLoop
-    from OpenHome.bus.queue import MessageBus
+    from OriginAgent.agent.loop import AgentLoop
+    from OriginAgent.bus.queue import MessageBus
 
     bus = MessageBus()
     provider = MagicMock()
@@ -434,9 +434,9 @@ async def test_drain_pending_no_block_when_no_subagents(tmp_path):
 @pytest.mark.asyncio
 async def test_drain_pending_timeout(tmp_path):
     """_drain_pending should return empty after timeout when sub-agents hang."""
-    from OpenHome.agent.loop import AgentLoop
-    from OpenHome.bus.queue import MessageBus
-    from OpenHome.session.manager import Session
+    from OriginAgent.agent.loop import AgentLoop
+    from OriginAgent.bus.queue import MessageBus
+    from OriginAgent.session.manager import Session
 
     bus = MessageBus()
     provider = MagicMock()
@@ -483,7 +483,7 @@ async def test_drain_pending_timeout(tmp_path):
     assert injection_callback is not None
 
     # Patch the timeout to be very short for testing
-    with patch("OpenHome.agent.loop.asyncio.wait_for") as mock_wait:
+    with patch("OriginAgent.agent.loop.asyncio.wait_for") as mock_wait:
         mock_wait.side_effect = asyncio.TimeoutError
         results = await injection_callback()
         assert results == []

@@ -7,8 +7,8 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from OpenHome.agent.loop import AgentLoop
-from OpenHome.bus.queue import MessageBus
+from OriginAgent.agent.loop import AgentLoop
+from OriginAgent.bus.queue import MessageBus
 
 
 class _OwnerRecordingStack:
@@ -48,7 +48,7 @@ async def test_connect_mcp_retries_when_no_servers_connect(tmp_path, monkeypatch
             snapshot_out.clear()
         return {}
 
-    monkeypatch.setattr("OpenHome.agent.tools.mcp.connect_mcp_servers", _fake_connect)
+    monkeypatch.setattr("OriginAgent.agent.tools.mcp.connect_mcp_servers", _fake_connect)
 
     await loop._connect_mcp()
     await loop._connect_mcp()
@@ -74,7 +74,7 @@ async def test_close_mcp_from_different_task_uses_same_owner_task_cleanup(
             snapshot_out["test"] = {"status": "connected"}
         return {"test": stack}
 
-    monkeypatch.setattr("OpenHome.agent.tools.mcp.connect_mcp_servers", _fake_connect)
+    monkeypatch.setattr("OriginAgent.agent.tools.mcp.connect_mcp_servers", _fake_connect)
 
     connect_caller = asyncio.current_task()
     await loop._connect_mcp()
@@ -113,7 +113,7 @@ async def test_close_mcp_is_idempotent_while_runtime_task_exists(
             snapshot_out["test"] = {"status": "connected"}
         return {"test": stack}
 
-    monkeypatch.setattr("OpenHome.agent.tools.mcp.connect_mcp_servers", _fake_connect)
+    monkeypatch.setattr("OriginAgent.agent.tools.mcp.connect_mcp_servers", _fake_connect)
 
     await loop._connect_mcp()
     await asyncio.gather(loop.close_mcp(), loop.close_mcp())
@@ -143,7 +143,7 @@ async def test_failed_mcp_runtime_startup_allows_retry(
             snapshot_out["test"] = {"status": "skipped"}
         return {}
 
-    monkeypatch.setattr("OpenHome.agent.tools.mcp.connect_mcp_servers", _fake_connect)
+    monkeypatch.setattr("OriginAgent.agent.tools.mcp.connect_mcp_servers", _fake_connect)
 
     await loop._connect_mcp()
     assert attempts == 1

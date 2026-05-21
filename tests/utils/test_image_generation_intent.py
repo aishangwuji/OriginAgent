@@ -1,4 +1,4 @@
-from OpenHome.utils.image_generation_intent import image_generation_prompt
+from OriginAgent.utils.image_generation_intent import image_generation_prompt
 
 
 def test_image_generation_prompt_ignores_plain_messages() -> None:

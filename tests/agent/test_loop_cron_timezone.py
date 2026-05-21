@@ -1,10 +1,10 @@
 from pathlib import Path
 from unittest.mock import MagicMock
 
-from OpenHome.agent.loop import AgentLoop
-from OpenHome.agent.tools.cron import CronTool
-from OpenHome.bus.queue import MessageBus
-from OpenHome.cron.service import CronService
+from OriginAgent.agent.loop import AgentLoop
+from OriginAgent.agent.tools.cron import CronTool
+from OriginAgent.bus.queue import MessageBus
+from OriginAgent.cron.service import CronService
 
 
 def test_agent_loop_registers_cron_tool_with_configured_timezone(tmp_path: Path) -> None:

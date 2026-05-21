@@ -3,7 +3,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Composer } from "@/components/Composer";
 import { MessageList } from "@/components/MessageList";
 import { useClient } from "@/providers/ClientProvider";
-import { useOpenHomeStream } from "@/hooks/useOpenHomeStream";
+import { useOriginAgentStream } from "@/hooks/useOriginAgentStream";
 import { useSessionHistory } from "@/hooks/useSessions";
 import type { ChatSummary } from "@/lib/types";
 
@@ -28,7 +28,7 @@ export function ChatPane({ session, onNewChat }: ChatPaneProps) {
   const pendingFirstRef = useRef<string | null>(null);
 
   const initial = useMemo(() => historical, [historical]);
-  const { messages, isStreaming, send, setMessages } = useOpenHomeStream(
+  const { messages, isStreaming, send, setMessages } = useOriginAgentStream(
     chatId,
     initial,
     hasPendingToolCalls,
@@ -83,7 +83,7 @@ export function ChatPane({ session, onNewChat }: ChatPaneProps) {
               What can I do for you?
             </h1>
             <p className="max-w-md text-center text-sm text-muted-foreground">
-              Your conversations are persisted locally under the OpenHome
+              Your conversations are persisted locally under the OriginAgent
               workspace. Start typing and I'll open a new chat.
             </p>
           </div>

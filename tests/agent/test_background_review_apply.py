@@ -7,20 +7,20 @@ from types import SimpleNamespace
 import pytest
 import yaml
 
-from OpenHome.agent.background_review import (
+from OriginAgent.agent.background_review import (
     PROPOSAL_EVENT_STORE_RELATIVE,
     BackgroundReviewService,
     ReviewProposal,
     ReviewProposalStore,
 )
-from OpenHome.agent.skills import SkillsLoader
-from OpenHome.agent.workflow_artifacts import (
+from OriginAgent.agent.skills import SkillsLoader
+from OriginAgent.agent.workflow_artifacts import (
     validate_workflow_artifact_content,
     validate_workflow_artifact_dir,
 )
-from OpenHome.bus.events import InboundMessage
-from OpenHome.command.builtin import cmd_reviews
-from OpenHome.command.router import CommandContext
+from OriginAgent.bus.events import InboundMessage
+from OriginAgent.command.builtin import cmd_reviews
+from OriginAgent.command.router import CommandContext
 
 
 def _proposal(
@@ -119,7 +119,7 @@ def test_apply_fact_without_payload_uses_conservative_note_fallback(tmp_path: Pa
         _proposal(
             "review_fact",
             proposal_type="fact",
-            content="The project uses OpenHome local workspace settings.",
+            content="The project uses OriginAgent local workspace settings.",
         )
     ])
 
@@ -187,11 +187,11 @@ def test_apply_skill_proposal_writes_proposed_workspace_skill(tmp_path: Path) ->
     frontmatter = yaml.safe_load(content.split("---", 2)[1])
     assert frontmatter["name"] == "lighting-troubleshooting"
     assert frontmatter["always"] is False
-    assert frontmatter["metadata"]["OpenHome"]["review_proposal_id"] == "review_skill"
-    assert frontmatter["metadata"]["OpenHome"]["domain_id"] == "core"
-    assert frontmatter["metadata"]["OpenHome"]["created_by"] == "background_review"
-    assert frontmatter["metadata"]["OpenHome"]["proposal_status"] == "proposed"
-    assert frontmatter["metadata"]["OpenHome"]["verification_status"] == "unverified"
+    assert frontmatter["metadata"]["OriginAgent"]["review_proposal_id"] == "review_skill"
+    assert frontmatter["metadata"]["OriginAgent"]["domain_id"] == "core"
+    assert frontmatter["metadata"]["OriginAgent"]["created_by"] == "background_review"
+    assert frontmatter["metadata"]["OriginAgent"]["proposal_status"] == "proposed"
+    assert frontmatter["metadata"]["OriginAgent"]["verification_status"] == "unverified"
     record = store.get("review_skill")
     assert record["applied_skill_name"] == "lighting-troubleshooting"
     assert record["applied_skill_path"] == "skills/lighting-troubleshooting/SKILL.md"
@@ -409,7 +409,7 @@ def test_apply_workflow_proposal_writes_proposed_workspace_workflow(tmp_path: Pa
             "confirmation_required": False,
         }
     ]
-    metadata = data["metadata"]["OpenHome"]
+    metadata = data["metadata"]["OriginAgent"]
     assert metadata["review_proposal_id"] == "review_workflow"
     assert metadata["domain_id"] == "core"
     assert metadata["created_by"] == "background_review"
@@ -532,7 +532,7 @@ def test_workflow_artifact_validator_rejects_executable_or_extra_content(tmp_pat
             "body": "Review the state manually.",
             "steps": [],
             "metadata": {
-                "OpenHome": {
+                "OriginAgent": {
                     "proposal_status": "proposed",
                     "verification_status": "unverified",
                     "review_proposal_id": "review_manual",
@@ -706,7 +706,7 @@ def test_move_to_domain_apply_moves_workspace_skill_into_workspace_pack(tmp_path
         "description: Lighting help.\n"
         "always: true\n"
         "metadata:\n"
-        "  OpenHome:\n"
+        "  OriginAgent:\n"
         "    proposal_status: proposed\n"
         "    verification_status: verified\n"
         "    lifecycle_status: active\n"
@@ -757,7 +757,7 @@ def test_move_to_domain_apply_moves_workspace_skill_into_workspace_pack(tmp_path
     assert manifest["skills"] == ["lighting-troubleshooting"]
     frontmatter = yaml.safe_load(moved_file.read_text(encoding="utf-8").split("---", 2)[1])
     assert frontmatter["always"] is False
-    metadata = frontmatter["metadata"]["OpenHome"]
+    metadata = frontmatter["metadata"]["OriginAgent"]
     assert metadata["verification_status"] == "verified"
     assert metadata["lifecycle_status"] == "active"
     assert metadata["migrated_from_workspace"] is True

@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-OpenHome is a lightweight, open-source AI agent framework (Python 3.11+, asyncio) with a React/TypeScript WebUI. It centers around a small agent loop that receives messages from chat channels, invokes an LLM provider, executes tools, and manages session memory.
+OriginAgent is a lightweight, open-source AI agent framework (Python 3.11+, asyncio) with a React/TypeScript WebUI. It centers around a small agent loop that receives messages from chat channels, invokes an LLM provider, executes tools, and manages session memory.
 
 ## Development Commands
 
@@ -19,15 +19,15 @@ pip install -e ".[discord,wecom,matrix]"
 # Python: run full suite / single test / coverage / lint
 pytest
 pytest tests/test_openai_api.py::test_function -v
-pytest --cov=OpenHome --cov-report=term
-ruff check OpenHome/
+pytest --cov=OriginAgent --cov-report=term
+ruff check OriginAgent/
 
 # NEVER run `ruff format` — it destroys git blame. Use `ruff check` only.
 
 # WebUI: dev server (proxies API/WS to gateway), build, test
-# Build output: ../OpenHome/web/dist (bundled into the Python wheel)
+# Build output: ../OriginAgent/web/dist (bundled into the Python wheel)
 cd webui && bun install
-cd webui && bun run dev      # or OPENHOME_API_URL=http://... bun run dev
+cd webui && bun run dev      # or ORIGINAGENT_API_URL=http://... bun run dev
 cd webui && bun run build
 cd webui && bun run test
 
@@ -35,18 +35,18 @@ cd webui && bun run test
 cd bridge && npm install && npm run build
 
 # Gateway (required for WebSocket channel, API, and WebUI)
-openhome gateway
+originagent gateway
 ```
 
 ## High-Level Architecture
 
 ### Core Data Flow
 
-Messages flow through an async `MessageBus` (`OpenHome/bus/queue.py`) that decouples chat channels from the agent core:
+Messages flow through an async `MessageBus` (`OriginAgent/bus/queue.py`) that decouples chat channels from the agent core:
 
-1. **Channels** (`OpenHome/channels/`) receive messages from external platforms and publish `InboundMessage` events to the bus.
-2. **`AgentLoop`** (`OpenHome/agent/loop.py`) consumes inbound messages, builds context, and coordinates each turn.
-3. **`AgentRunner`** (`OpenHome/agent/runner.py`) handles the LLM conversation loop: sends messages to the provider, receives tool calls, executes tools, and streams responses.
+1. **Channels** (`OriginAgent/channels/`) receive messages from external platforms and publish `InboundMessage` events to the bus.
+2. **`AgentLoop`** (`OriginAgent/agent/loop.py`) consumes inbound messages, builds context, and coordinates each turn.
+3. **`AgentRunner`** (`OriginAgent/agent/runner.py`) handles the LLM conversation loop: sends messages to the provider, receives tool calls, executes tools, and streams responses.
 4. Responses are published as `OutboundMessage` events back to the appropriate channel.
 
 ### Key Subsystems
@@ -57,17 +57,17 @@ Messages flow through an async `MessageBus` (`OpenHome/bus/queue.py`) that decou
 - **Tools** (`agent/tools/`): Agent capabilities registered in `ToolRegistry` (`registry.py`): filesystem (read/write/edit/list), shell execution with sandbox support, web search/fetch, MCP servers, cron scheduling, notebook editing, subagent spawning, image generation, and `MyTool` for self-inspection.
 - **Memory** (`agent/memory.py`): Dream two-phase memory consolidation with atomic writes (temp-file + fsync + rename + dir-fsync) for crash-safe durability.
 - **Session Management** (`session/manager.py`): Per-session history persistence in `history.jsonl`, context compaction, TTL-based auto-compaction.
-- **Config** (`config/schema.py`, `loader.py`): Pydantic-based configuration loaded from `~/.openhome/config.json`. Supports `${ENV_VAR}` placeholder interpolation and `OPENHOME__` env var overrides with `__` delimiter (e.g. `OPENHOME__PROVIDERS__OPENROUTER__API_KEY`).
+- **Config** (`config/schema.py`, `loader.py`): Pydantic-based configuration loaded from `~/.originagent/config.json`. Supports `${ENV_VAR}` placeholder interpolation and `ORIGINAGENT__` env var overrides with `__` delimiter (e.g. `ORIGINAGENT__PROVIDERS__OPENROUTER__API_KEY`).
 - **API** (`api/server.py`): OpenAI-compatible `/v1/chat/completions` and `/v1/models` endpoints served via aiohttp.
 - **Gateway** (`web/`, channels `websocket.py`): Bundled HTTP server on port 18790 that serves the WebUI SPA, a WebSocket multiplex protocol, REST endpoints under `/api` and `/webui`, and token-based auth under `/auth`.
 - **Templates** (`templates/`): Jinja2 Markdown files for agent system prompts (identity, heartbeat, soul, tool descriptions). Changes to templates affect agent behavior identically to Python code changes.
 - **Bridge** (`bridge/`): TypeScript WhatsApp bridge using Baileys, bundled into the Python wheel.
-- **WebUI** (`webui/`): Vite + React 18 + TypeScript + Tailwind 3 + shadcn/ui SPA. Talks to the gateway over WebSocket multiplex. The dev server proxies `/api`, `/webui`, `/auth`, and WebSocket traffic to the gateway. Build output goes to `OpenHome/web/dist/`.
+- **WebUI** (`webui/`): Vite + React 18 + TypeScript + Tailwind 3 + shadcn/ui SPA. Talks to the gateway over WebSocket multiplex. The dev server proxies `/api`, `/webui`, `/auth`, and WebSocket traffic to the gateway. Build output goes to `OriginAgent/web/dist/`.
 
 ### Entry Points
 
-- **CLI**: `OpenHome/cli/commands.py` (typer app, command: `OpenHome`)
-- **Python SDK**: `OpenHome/OpenHome.py` (`OpenHome` class with `RunResult`)
+- **CLI**: `OriginAgent/cli/commands.py` (typer app, command: `OriginAgent`)
+- **Python SDK**: `OriginAgent/OriginAgent.py` (`OriginAgent` class with `RunResult`)
 
 ## Design Rules
 
@@ -81,7 +81,7 @@ These are from `.agent/design.md`, `.agent/security.md`, and `.agent/gotchas.md`
 - **Heartbeat uses virtual tool calls**: The heartbeat injects a virtual `heartbeat` tool with `action: skip | run` rather than parsing free-text output. New periodic background checks follow this pattern.
 - **Workspace restriction**: All filesystem tools must resolve paths through `_resolve_path` in `agent/tools/filesystem.py`, enforcing workspace boundaries.
 - **SSRF protection**: All outbound HTTP from tools must pass through `validate_url_target` in `security/network.py` (blocks private IPs, link-local, cloud metadata).
-- **Skills as extension point**: Built-in skills in `OpenHome/skills/` use Markdown + YAML frontmatter. Agent capabilities that are knowledge-based (not code logic) should extend via skills, not hardcoded into the agent loop.
+- **Skills as extension point**: Built-in skills in `OriginAgent/skills/` use Markdown + YAML frontmatter. Agent capabilities that are knowledge-based (not code logic) should extend via skills, not hardcoded into the agent loop.
 
 ## Branching Strategy
 
@@ -113,15 +113,15 @@ Stable features are cherry-picked from `nightly` into `main` (~weekly), not merg
 
 ## Key File Locations
 
-- Config schema: `OpenHome/config/schema.py`
-- Provider base / registry: `OpenHome/providers/base.py` / `registry.py`
-- Channel base / manager: `OpenHome/channels/base.py` / `manager.py`
-- Tool registry: `OpenHome/agent/tools/registry.py`
-- Agent loop core: `OpenHome/agent/loop.py` / `runner.py`
-- Memory / Dream: `OpenHome/agent/memory.py`
-- Session manager: `OpenHome/session/manager.py`
-- SSRF / security: `OpenHome/security/network.py`
-- Sandbox: `OpenHome/agent/tools/sandbox.py`
+- Config schema: `OriginAgent/config/schema.py`
+- Provider base / registry: `OriginAgent/providers/base.py` / `registry.py`
+- Channel base / manager: `OriginAgent/channels/base.py` / `manager.py`
+- Tool registry: `OriginAgent/agent/tools/registry.py`
+- Agent loop core: `OriginAgent/agent/loop.py` / `runner.py`
+- Memory / Dream: `OriginAgent/agent/memory.py`
+- Session manager: `OriginAgent/session/manager.py`
+- SSRF / security: `OriginAgent/security/network.py`
+- Sandbox: `OriginAgent/agent/tools/sandbox.py`
 - WebUI dev proxy config: `webui/vite.config.ts`
 - Skills manifest: `skills-lock.json`
 

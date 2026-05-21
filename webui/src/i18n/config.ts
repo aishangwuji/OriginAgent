@@ -1,4 +1,4 @@
-export const LOCALE_STORAGE_KEY = "OpenHome.locale";
+export const LOCALE_STORAGE_KEY = "OriginAgent.locale";
 
 export const supportedLocales = [
   { code: "en", label: "English", nativeLabel: "English" },

@@ -3,8 +3,8 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from OpenHome.bus.queue import MessageBus
-from OpenHome.channels.feishu import FeishuChannel, FeishuConfig
+from OriginAgent.bus.queue import MessageBus
+from OriginAgent.channels.feishu import FeishuChannel, FeishuConfig
 
 
 def _make_channel(domain: str = "feishu") -> FeishuChannel:

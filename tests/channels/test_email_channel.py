@@ -5,9 +5,9 @@ from pathlib import Path
 
 import pytest
 
-from OpenHome.bus.events import OutboundMessage
-from OpenHome.bus.queue import MessageBus
-from OpenHome.channels.email import EmailChannel, EmailConfig
+from OriginAgent.bus.events import OutboundMessage
+from OriginAgent.bus.queue import MessageBus
+from OriginAgent.channels.email import EmailChannel, EmailConfig
 
 
 def _make_config(**overrides) -> EmailConfig:
@@ -76,7 +76,7 @@ def test_fetch_new_messages_parses_unseen_and_marks_seen(monkeypatch) -> None:
             return "BYE", [b""]
 
     fake = FakeIMAP()
-    monkeypatch.setattr("OpenHome.channels.email.imaplib.IMAP4_SSL", lambda _h, _p: fake)
+    monkeypatch.setattr("OriginAgent.channels.email.imaplib.IMAP4_SSL", lambda _h, _p: fake)
 
     channel = EmailChannel(_make_config(), MessageBus())
     items = channel._fetch_new_messages()
@@ -93,7 +93,7 @@ def test_fetch_new_messages_parses_unseen_and_marks_seen(monkeypatch) -> None:
 
 
 def test_fetch_new_messages_skips_self_sent_email_and_marks_seen(monkeypatch) -> None:
-    raw = _make_raw_email(from_addr="OpenHome <bot@example.com>", subject="Loop test")
+    raw = _make_raw_email(from_addr="OriginAgent <bot@example.com>", subject="Loop test")
 
     class FakeIMAP:
         def __init__(self) -> None:
@@ -119,7 +119,7 @@ def test_fetch_new_messages_skips_self_sent_email_and_marks_seen(monkeypatch) ->
             return "BYE", [b""]
 
     fake = FakeIMAP()
-    monkeypatch.setattr("OpenHome.channels.email.imaplib.IMAP4_SSL", lambda _h, _p: fake)
+    monkeypatch.setattr("OriginAgent.channels.email.imaplib.IMAP4_SSL", lambda _h, _p: fake)
 
     channel = EmailChannel(_make_config(from_address="bot@example.com"), MessageBus())
     items = channel._fetch_new_messages()
@@ -186,7 +186,7 @@ def test_fetch_new_messages_skips_self_sent_across_identity_sources(
             return "BYE", [b""]
 
     fake = FakeIMAP()
-    monkeypatch.setattr("OpenHome.channels.email.imaplib.IMAP4_SSL", lambda _h, _p: fake)
+    monkeypatch.setattr("OriginAgent.channels.email.imaplib.IMAP4_SSL", lambda _h, _p: fake)
 
     channel = EmailChannel(_make_config(**config_override), MessageBus())
     items = channel._fetch_new_messages()
@@ -234,7 +234,7 @@ def test_fetch_new_messages_retries_once_when_imap_connection_goes_stale(monkeyp
         fake_instances.append(instance)
         return instance
 
-    monkeypatch.setattr("OpenHome.channels.email.imaplib.IMAP4_SSL", _factory)
+    monkeypatch.setattr("OriginAgent.channels.email.imaplib.IMAP4_SSL", _factory)
 
     channel = EmailChannel(_make_config(), MessageBus())
     items = channel._fetch_new_messages()
@@ -280,7 +280,7 @@ def test_fetch_new_messages_keeps_messages_collected_before_stale_retry(monkeypa
         def logout(self):
             return "BYE", [b""]
 
-    monkeypatch.setattr("OpenHome.channels.email.imaplib.IMAP4_SSL", lambda _h, _p: FlakyIMAP())
+    monkeypatch.setattr("OriginAgent.channels.email.imaplib.IMAP4_SSL", lambda _h, _p: FlakyIMAP())
 
     channel = EmailChannel(_make_config(), MessageBus())
     items = channel._fetch_new_messages()
@@ -300,7 +300,7 @@ def test_fetch_new_messages_skips_missing_mailbox(monkeypatch) -> None:
             return "BYE", [b""]
 
     monkeypatch.setattr(
-        "OpenHome.channels.email.imaplib.IMAP4_SSL",
+        "OriginAgent.channels.email.imaplib.IMAP4_SSL",
         lambda _h, _p: MissingMailboxIMAP(),
     )
 
@@ -370,7 +370,7 @@ async def test_send_uses_smtp_and_reply_subject(monkeypatch) -> None:
         fake_instances.append(instance)
         return instance
 
-    monkeypatch.setattr("OpenHome.channels.email.smtplib.SMTP", _smtp_factory)
+    monkeypatch.setattr("OriginAgent.channels.email.smtplib.SMTP", _smtp_factory)
 
     channel = EmailChannel(_make_config(), MessageBus())
     channel._last_subject_by_chat["alice@example.com"] = "Invoice #42"
@@ -424,7 +424,7 @@ async def test_send_skips_reply_when_auto_reply_disabled(monkeypatch) -> None:
         fake_instances.append(instance)
         return instance
 
-    monkeypatch.setattr("OpenHome.channels.email.smtplib.SMTP", _smtp_factory)
+    monkeypatch.setattr("OriginAgent.channels.email.smtplib.SMTP", _smtp_factory)
 
     cfg = _make_config()
     cfg.auto_reply_enabled = False
@@ -485,7 +485,7 @@ async def test_send_proactive_email_when_auto_reply_disabled(monkeypatch) -> Non
         fake_instances.append(instance)
         return instance
 
-    monkeypatch.setattr("OpenHome.channels.email.smtplib.SMTP", _smtp_factory)
+    monkeypatch.setattr("OriginAgent.channels.email.smtplib.SMTP", _smtp_factory)
 
     cfg = _make_config()
     cfg.auto_reply_enabled = False
@@ -533,7 +533,7 @@ async def test_send_skips_when_consent_not_granted(monkeypatch) -> None:
         called["smtp"] = True
         return FakeSMTP(host, port, timeout=timeout)
 
-    monkeypatch.setattr("OpenHome.channels.email.smtplib.SMTP", _smtp_factory)
+    monkeypatch.setattr("OriginAgent.channels.email.smtplib.SMTP", _smtp_factory)
 
     cfg = _make_config()
     cfg.consent_granted = False
@@ -578,7 +578,7 @@ def test_fetch_messages_between_dates_uses_imap_since_before_without_mark_seen(m
             return "BYE", [b""]
 
     fake = FakeIMAP()
-    monkeypatch.setattr("OpenHome.channels.email.imaplib.IMAP4_SSL", lambda _h, _p: fake)
+    monkeypatch.setattr("OriginAgent.channels.email.imaplib.IMAP4_SSL", lambda _h, _p: fake)
 
     channel = EmailChannel(_make_config(), MessageBus())
     items = channel.fetch_messages_between_dates(
@@ -631,7 +631,7 @@ def test_spoofed_email_rejected_when_verify_enabled(monkeypatch) -> None:
     """An email without Authentication-Results should be rejected when verify_dkim=True."""
     raw = _make_raw_email(subject="Spoofed", body="Malicious payload")
     fake = _make_fake_imap(raw)
-    monkeypatch.setattr("OpenHome.channels.email.imaplib.IMAP4_SSL", lambda _h, _p: fake)
+    monkeypatch.setattr("OriginAgent.channels.email.imaplib.IMAP4_SSL", lambda _h, _p: fake)
 
     cfg = _make_config(verify_dkim=True, verify_spf=True)
     channel = EmailChannel(cfg, MessageBus())
@@ -648,7 +648,7 @@ def test_email_with_valid_auth_results_accepted(monkeypatch) -> None:
         auth_results="mx.example.com; spf=pass smtp.mailfrom=alice@example.com; dkim=pass header.d=example.com",
     )
     fake = _make_fake_imap(raw)
-    monkeypatch.setattr("OpenHome.channels.email.imaplib.IMAP4_SSL", lambda _h, _p: fake)
+    monkeypatch.setattr("OriginAgent.channels.email.imaplib.IMAP4_SSL", lambda _h, _p: fake)
 
     cfg = _make_config(verify_dkim=True, verify_spf=True)
     channel = EmailChannel(cfg, MessageBus())
@@ -667,7 +667,7 @@ def test_email_with_partial_auth_rejected(monkeypatch) -> None:
         auth_results="mx.example.com; spf=pass smtp.mailfrom=alice@example.com; dkim=fail",
     )
     fake = _make_fake_imap(raw)
-    monkeypatch.setattr("OpenHome.channels.email.imaplib.IMAP4_SSL", lambda _h, _p: fake)
+    monkeypatch.setattr("OriginAgent.channels.email.imaplib.IMAP4_SSL", lambda _h, _p: fake)
 
     cfg = _make_config(verify_dkim=True, verify_spf=True)
     channel = EmailChannel(cfg, MessageBus())
@@ -680,7 +680,7 @@ def test_backward_compat_verify_disabled(monkeypatch) -> None:
     """When verify_dkim=False and verify_spf=False, emails without auth headers are accepted."""
     raw = _make_raw_email(subject="NoAuth", body="No auth headers present")
     fake = _make_fake_imap(raw)
-    monkeypatch.setattr("OpenHome.channels.email.imaplib.IMAP4_SSL", lambda _h, _p: fake)
+    monkeypatch.setattr("OriginAgent.channels.email.imaplib.IMAP4_SSL", lambda _h, _p: fake)
 
     cfg = _make_config(verify_dkim=False, verify_spf=False)
     channel = EmailChannel(cfg, MessageBus())
@@ -693,7 +693,7 @@ def test_email_content_tagged_with_email_context(monkeypatch) -> None:
     """Email content should be prefixed with [EMAIL-CONTEXT] for LLM isolation."""
     raw = _make_raw_email(subject="Tagged", body="Check the tag")
     fake = _make_fake_imap(raw)
-    monkeypatch.setattr("OpenHome.channels.email.imaplib.IMAP4_SSL", lambda _h, _p: fake)
+    monkeypatch.setattr("OriginAgent.channels.email.imaplib.IMAP4_SSL", lambda _h, _p: fake)
 
     cfg = _make_config(verify_dkim=False, verify_spf=False)
     channel = EmailChannel(cfg, MessageBus())
@@ -791,7 +791,7 @@ def _make_raw_email_with_attachment(
 def test_fetch_new_messages_ignores_unauthorized_sender_before_attachments(monkeypatch) -> None:
     raw = _make_raw_email_with_attachment(from_addr="blocked@example.com")
     fake = _make_fake_imap(raw)
-    monkeypatch.setattr("OpenHome.channels.email.imaplib.IMAP4_SSL", lambda _h, _p: fake)
+    monkeypatch.setattr("OriginAgent.channels.email.imaplib.IMAP4_SSL", lambda _h, _p: fake)
 
     called = {"attachments": False}
 
@@ -816,11 +816,11 @@ def test_fetch_new_messages_ignores_unauthorized_sender_before_attachments(monke
 
 def test_extract_attachments_saves_pdf(tmp_path, monkeypatch) -> None:
     """PDF attachment is saved to media dir and path returned in media list."""
-    monkeypatch.setattr("OpenHome.channels.email.get_media_dir", lambda ch: tmp_path)
+    monkeypatch.setattr("OriginAgent.channels.email.get_media_dir", lambda ch: tmp_path)
 
     raw = _make_raw_email_with_attachment()
     fake = _make_fake_imap(raw)
-    monkeypatch.setattr("OpenHome.channels.email.imaplib.IMAP4_SSL", lambda _h, _p: fake)
+    monkeypatch.setattr("OriginAgent.channels.email.imaplib.IMAP4_SSL", lambda _h, _p: fake)
 
     cfg = _make_config(allowed_attachment_types=["application/pdf"], verify_dkim=False, verify_spf=False)
     channel = EmailChannel(cfg, MessageBus())
@@ -839,7 +839,7 @@ def test_extract_attachments_disabled_by_default(monkeypatch) -> None:
     """With no allowed_attachment_types (default), no attachments are extracted."""
     raw = _make_raw_email_with_attachment()
     fake = _make_fake_imap(raw)
-    monkeypatch.setattr("OpenHome.channels.email.imaplib.IMAP4_SSL", lambda _h, _p: fake)
+    monkeypatch.setattr("OriginAgent.channels.email.imaplib.IMAP4_SSL", lambda _h, _p: fake)
 
     cfg = _make_config(verify_dkim=False, verify_spf=False)
     assert cfg.allowed_attachment_types == []
@@ -853,7 +853,7 @@ def test_extract_attachments_disabled_by_default(monkeypatch) -> None:
 
 def test_extract_attachments_mime_type_filter(tmp_path, monkeypatch) -> None:
     """Non-allowed MIME types are skipped."""
-    monkeypatch.setattr("OpenHome.channels.email.get_media_dir", lambda ch: tmp_path)
+    monkeypatch.setattr("OriginAgent.channels.email.get_media_dir", lambda ch: tmp_path)
 
     raw = _make_raw_email_with_attachment(
         attachment_name="image.png",
@@ -861,7 +861,7 @@ def test_extract_attachments_mime_type_filter(tmp_path, monkeypatch) -> None:
         attachment_mime="image/png",
     )
     fake = _make_fake_imap(raw)
-    monkeypatch.setattr("OpenHome.channels.email.imaplib.IMAP4_SSL", lambda _h, _p: fake)
+    monkeypatch.setattr("OriginAgent.channels.email.imaplib.IMAP4_SSL", lambda _h, _p: fake)
 
     cfg = _make_config(
         allowed_attachment_types=["application/pdf"],
@@ -877,7 +877,7 @@ def test_extract_attachments_mime_type_filter(tmp_path, monkeypatch) -> None:
 
 def test_extract_attachments_empty_allowed_types_rejects_all(tmp_path, monkeypatch) -> None:
     """Empty allowed_attachment_types means no types are accepted."""
-    monkeypatch.setattr("OpenHome.channels.email.get_media_dir", lambda ch: tmp_path)
+    monkeypatch.setattr("OriginAgent.channels.email.get_media_dir", lambda ch: tmp_path)
 
     raw = _make_raw_email_with_attachment(
         attachment_name="image.png",
@@ -885,7 +885,7 @@ def test_extract_attachments_empty_allowed_types_rejects_all(tmp_path, monkeypat
         attachment_mime="image/png",
     )
     fake = _make_fake_imap(raw)
-    monkeypatch.setattr("OpenHome.channels.email.imaplib.IMAP4_SSL", lambda _h, _p: fake)
+    monkeypatch.setattr("OriginAgent.channels.email.imaplib.IMAP4_SSL", lambda _h, _p: fake)
 
     cfg = _make_config(
         allowed_attachment_types=[],
@@ -901,7 +901,7 @@ def test_extract_attachments_empty_allowed_types_rejects_all(tmp_path, monkeypat
 
 def test_extract_attachments_wildcard_pattern(tmp_path, monkeypatch) -> None:
     """Glob patterns like 'image/*' match attachment MIME types."""
-    monkeypatch.setattr("OpenHome.channels.email.get_media_dir", lambda ch: tmp_path)
+    monkeypatch.setattr("OriginAgent.channels.email.get_media_dir", lambda ch: tmp_path)
 
     raw = _make_raw_email_with_attachment(
         attachment_name="photo.jpg",
@@ -909,7 +909,7 @@ def test_extract_attachments_wildcard_pattern(tmp_path, monkeypatch) -> None:
         attachment_mime="image/jpeg",
     )
     fake = _make_fake_imap(raw)
-    monkeypatch.setattr("OpenHome.channels.email.imaplib.IMAP4_SSL", lambda _h, _p: fake)
+    monkeypatch.setattr("OriginAgent.channels.email.imaplib.IMAP4_SSL", lambda _h, _p: fake)
 
     cfg = _make_config(
         allowed_attachment_types=["image/*"],
@@ -925,13 +925,13 @@ def test_extract_attachments_wildcard_pattern(tmp_path, monkeypatch) -> None:
 
 def test_extract_attachments_size_limit(tmp_path, monkeypatch) -> None:
     """Attachments exceeding max_attachment_size are skipped."""
-    monkeypatch.setattr("OpenHome.channels.email.get_media_dir", lambda ch: tmp_path)
+    monkeypatch.setattr("OriginAgent.channels.email.get_media_dir", lambda ch: tmp_path)
 
     raw = _make_raw_email_with_attachment(
         attachment_content=b"x" * 1000,
     )
     fake = _make_fake_imap(raw)
-    monkeypatch.setattr("OpenHome.channels.email.imaplib.IMAP4_SSL", lambda _h, _p: fake)
+    monkeypatch.setattr("OriginAgent.channels.email.imaplib.IMAP4_SSL", lambda _h, _p: fake)
 
     cfg = _make_config(
         allowed_attachment_types=["*"],
@@ -948,7 +948,7 @@ def test_extract_attachments_size_limit(tmp_path, monkeypatch) -> None:
 
 def test_extract_attachments_max_count(tmp_path, monkeypatch) -> None:
     """Only max_attachments_per_email are saved."""
-    monkeypatch.setattr("OpenHome.channels.email.get_media_dir", lambda ch: tmp_path)
+    monkeypatch.setattr("OriginAgent.channels.email.get_media_dir", lambda ch: tmp_path)
 
     # Build email with 3 attachments
     msg = EmailMessage()
@@ -967,7 +967,7 @@ def test_extract_attachments_max_count(tmp_path, monkeypatch) -> None:
     raw = msg.as_bytes()
 
     fake = _make_fake_imap(raw)
-    monkeypatch.setattr("OpenHome.channels.email.imaplib.IMAP4_SSL", lambda _h, _p: fake)
+    monkeypatch.setattr("OriginAgent.channels.email.imaplib.IMAP4_SSL", lambda _h, _p: fake)
 
     cfg = _make_config(
         allowed_attachment_types=["*"],
@@ -984,13 +984,13 @@ def test_extract_attachments_max_count(tmp_path, monkeypatch) -> None:
 
 def test_extract_attachments_sanitizes_filename(tmp_path, monkeypatch) -> None:
     """Path traversal in filenames is neutralized."""
-    monkeypatch.setattr("OpenHome.channels.email.get_media_dir", lambda ch: tmp_path)
+    monkeypatch.setattr("OriginAgent.channels.email.get_media_dir", lambda ch: tmp_path)
 
     raw = _make_raw_email_with_attachment(
         attachment_name="../../../etc/passwd",
     )
     fake = _make_fake_imap(raw)
-    monkeypatch.setattr("OpenHome.channels.email.imaplib.IMAP4_SSL", lambda _h, _p: fake)
+    monkeypatch.setattr("OriginAgent.channels.email.imaplib.IMAP4_SSL", lambda _h, _p: fake)
 
     cfg = _make_config(allowed_attachment_types=["*"], verify_dkim=False, verify_spf=False)
     channel = EmailChannel(cfg, MessageBus())

@@ -19,6 +19,6 @@ if (!("randomUUID" in globalThis.crypto)) {
 beforeEach(async () => {
   await i18n.changeLanguage("en");
   document.documentElement.lang = "en";
-  document.title = "OpenHome";
-  localStorage.setItem("OpenHome.locale", "en");
+  document.title = "OriginAgent";
+  localStorage.setItem("OriginAgent.locale", "en");
 });

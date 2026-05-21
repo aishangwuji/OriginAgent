@@ -1,6 +1,6 @@
 """Tests for AnthropicProvider._merge_consecutive."""
 
-from OpenHome.providers.anthropic_provider import AnthropicProvider
+from OriginAgent.providers.anthropic_provider import AnthropicProvider
 
 
 class TestMergeConsecutive:

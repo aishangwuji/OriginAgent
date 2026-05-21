@@ -5,11 +5,11 @@ import tempfile
 from pathlib import Path
 from unittest.mock import MagicMock
 
-from OpenHome.agent.loop import AgentLoop
-from OpenHome.agent.tools.device_messages import DRY_RUN_ACCEPTED
-from OpenHome.bus.queue import MessageBus
-from OpenHome.config.schema import Config, DeviceToolsConfig
-from OpenHome.security.capabilities import CapabilitySnapshot
+from OriginAgent.agent.loop import AgentLoop
+from OriginAgent.agent.tools.device_messages import DRY_RUN_ACCEPTED
+from OriginAgent.bus.queue import MessageBus
+from OriginAgent.config.schema import Config, DeviceToolsConfig
+from OriginAgent.security.capabilities import CapabilitySnapshot
 
 
 def _provider() -> MagicMock:
@@ -28,12 +28,12 @@ def _config(workspace: Path, device: DeviceToolsConfig | None = None) -> Config:
 
 
 def _lighting_tool_names(loop: AgentLoop) -> list[str]:
-    return [name for name in loop.tools.tool_names if name.startswith("openhome_device_lighting_")]
+    return [name for name in loop.tools.tool_names if name.startswith("originagent_device_lighting_")]
 
 
 async def _run_dry_run_tool(loop: AgentLoop) -> dict:
     loop.tools.set_capability_snapshot(CapabilitySnapshot.user_turn())
-    tool = loop.tools.get("openhome_device_lighting_set_power")
+    tool = loop.tools.get("originagent_device_lighting_set_power")
     assert tool is not None
     if hasattr(tool, "set_context"):
         tool.set_context("admin_user", "user_initiated")
@@ -53,7 +53,7 @@ def _audit_text(workspace: Path) -> str:
 def main() -> None:
     import asyncio
 
-    root = Path(tempfile.mkdtemp(prefix="openhome-device-config-demo-"))
+    root = Path(tempfile.mkdtemp(prefix="originagent-device-config-demo-"))
     default_loop = AgentLoop.from_config(
         _config(root / "default"),
         bus=MessageBus(),
@@ -78,9 +78,9 @@ def main() -> None:
     )
     names = _lighting_tool_names(dry_run_loop)
     assert names == [
-        "openhome_device_lighting_set_power",
-        "openhome_device_lighting_set_brightness",
-        "openhome_device_lighting_set_color_temperature",
+        "originagent_device_lighting_set_power",
+        "originagent_device_lighting_set_brightness",
+        "originagent_device_lighting_set_color_temperature",
     ]
     print("[PASS] dry-run fake config registers exactly 3 lighting tools")
 

@@ -1,4 +1,4 @@
-"""Persistence tests for ``OpenHome.cron.service.CronService``.
+"""Persistence tests for ``OriginAgent.cron.service.CronService``.
 
 These tests target the specific failure mode where a corrupt or partially
 written ``jobs.json`` would silently turn into an empty job list on the next
@@ -13,8 +13,8 @@ from pathlib import Path
 
 import pytest
 
-from OpenHome.cron.service import CronService
-from OpenHome.cron.types import CronSchedule
+from OriginAgent.cron.service import CronService
+from OriginAgent.cron.types import CronSchedule
 
 
 def _seeded_store(tmp_path: Path) -> tuple[CronService, Path]:

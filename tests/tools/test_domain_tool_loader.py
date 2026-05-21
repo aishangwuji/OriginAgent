@@ -3,10 +3,10 @@ from __future__ import annotations
 from pathlib import Path
 from types import SimpleNamespace
 
-from OpenHome.agent.domain_packs import DomainPackManager
-from OpenHome.agent.tools.domain_loader import DomainToolLoader
-from OpenHome.agent.tools.registry import ToolRegistry
-from OpenHome.config.schema import DomainPacksConfig
+from OriginAgent.agent.domain_packs import DomainPackManager
+from OriginAgent.agent.tools.domain_loader import DomainToolLoader
+from OriginAgent.agent.tools.registry import ToolRegistry
+from OriginAgent.config.schema import DomainPacksConfig
 
 
 def _write_pack(
@@ -35,7 +35,7 @@ def _write_pack(
 
 
 _READ_ONLY_TOOL = """
-from OpenHome.agent.tools.base import Tool
+from OriginAgent.agent.tools.base import Tool
 
 class ResearchSearchTool(Tool):
     name = "research_search"
@@ -58,7 +58,7 @@ class ResearchSearchTool(Tool):
 
 
 _WRITE_TOOL = """
-from OpenHome.agent.tools.base import Tool
+from OriginAgent.agent.tools.base import Tool
 
 class ResearchSearchTool(Tool):
     name = "research_search"

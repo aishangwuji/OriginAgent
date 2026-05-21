@@ -7,13 +7,13 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from OpenHome.agent.loop import AgentLoop
-from OpenHome.agent.memory import ArchiveResult, session_summary_text
-from OpenHome.bus.events import InboundMessage
-from OpenHome.bus.queue import MessageBus
-from OpenHome.command import CommandContext
-from OpenHome.config.schema import AgentDefaults
-from OpenHome.providers.base import LLMResponse
+from OriginAgent.agent.loop import AgentLoop
+from OriginAgent.agent.memory import ArchiveResult, session_summary_text
+from OriginAgent.bus.events import InboundMessage
+from OriginAgent.bus.queue import MessageBus
+from OriginAgent.command import CommandContext
+from OriginAgent.config.schema import AgentDefaults
+from OriginAgent.providers.base import LLMResponse
 
 
 def _archive_result(summary: str, cursor: int = 1) -> ArchiveResult:
@@ -82,7 +82,7 @@ class TestSessionTTLConfig:
 
     def test_session_file_cap_is_internal_constant(self):
         """Session file cap should remain an internal constant, not a config field."""
-        from OpenHome.session.manager import FILE_MAX_MESSAGES
+        from OriginAgent.session.manager import FILE_MAX_MESSAGES
         assert FILE_MAX_MESSAGES == 2000
 
 
@@ -137,11 +137,11 @@ class TestAgentLoopTTLParam:
             await loop._process_message(msg)
 
         session = loop.sessions.get_or_create("cli:direct")
-        from OpenHome.session.manager import FILE_MAX_MESSAGES
+        from OriginAgent.session.manager import FILE_MAX_MESSAGES
         assert len(session.messages) <= FILE_MAX_MESSAGES
 
     def test_session_enforce_file_cap_skips_archive_when_dropped_prefix_already_consolidated(self, tmp_path):
-        from OpenHome.session.manager import Session
+        from OriginAgent.session.manager import Session
         archive_fn = MagicMock()
         session = Session(key="cli:direct")
         for i in range(8):
@@ -154,7 +154,7 @@ class TestAgentLoopTTLParam:
         archive_fn.assert_not_called()
 
     def test_session_enforce_file_cap_archives_only_unconsolidated_dropped_prefix(self, tmp_path):
-        from OpenHome.session.manager import Session
+        from OriginAgent.session.manager import Session
         archive_fn = MagicMock()
         session = Session(key="cli:direct")
         for i in range(8):

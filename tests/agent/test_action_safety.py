@@ -1,9 +1,9 @@
 import pytest
 
-from OpenHome.agent.action_safety import ActionRequest, ActionSafetyGate
-from OpenHome.agent.facts import FactStore
-from OpenHome.agent.presence import PresenceStore
-from OpenHome.agent.presence_adapters import (
+from OriginAgent.agent.action_safety import ActionRequest, ActionSafetyGate
+from OriginAgent.agent.facts import FactStore
+from OriginAgent.agent.presence import PresenceStore
+from OriginAgent.agent.presence_adapters import (
     MotionAdapter,
     MotionEvent,
     PhoneGeofenceAdapter,
@@ -11,7 +11,7 @@ from OpenHome.agent.presence_adapters import (
     WifiDeviceEvent,
     WifiPresenceAdapter,
 )
-from OpenHome.agent.presence_signals import PresenceSignalIngestor
+from OriginAgent.agent.presence_signals import PresenceSignalIngestor
 
 
 @pytest.fixture

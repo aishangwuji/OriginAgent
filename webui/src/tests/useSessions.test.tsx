@@ -48,7 +48,7 @@ function wrap(
   return function Wrapper({ children }: { children: ReactNode }) {
     return (
       <ClientProvider
-        client={client as unknown as import("@/lib/OpenHome-client").OpenHomeClient}
+        client={client as unknown as import("@/lib/OriginAgent-client").OriginAgentClient}
         token="tok"
         refreshToken={refreshToken}
       >

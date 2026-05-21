@@ -11,9 +11,9 @@ from typing import Any, cast
 import pytest
 from pydantic import BaseModel, Field
 
-from OpenHome.cli import onboard as onboard_wizard
-from OpenHome.cli.commands import _merge_missing_defaults
-from OpenHome.cli.onboard import (
+from OriginAgent.cli import onboard as onboard_wizard
+from OriginAgent.cli.commands import _merge_missing_defaults
+from OriginAgent.cli.onboard import (
     _BACK_PRESSED,
     _configure_pydantic_model,
     _format_value,
@@ -23,8 +23,8 @@ from OpenHome.cli.onboard import (
     _input_text,
     run_onboard,
 )
-from OpenHome.config.schema import Config
-from OpenHome.utils.helpers import _LEGACY_DEFAULT_TEMPLATES, sync_workspace_templates
+from OriginAgent.config.schema import Config
+from OriginAgent.utils.helpers import _LEGACY_DEFAULT_TEMPLATES, sync_workspace_templates
 
 
 class TestMergeMissingDefaults:
@@ -219,7 +219,7 @@ class TestGetFieldTypeInfo:
 
     def test_real_provider_retry_mode_field(self):
         """Validate against actual AgentDefaults.provider_retry_mode field."""
-        from OpenHome.config.schema import AgentDefaults
+        from OriginAgent.config.schema import AgentDefaults
 
         type_name, inner = _get_field_type_info(AgentDefaults.model_fields["provider_retry_mode"])
         assert type_name == "literal"
@@ -423,7 +423,7 @@ class TestProviderChannelInfo:
     """Tests for provider and channel info retrieval."""
 
     def test_get_provider_names_returns_dict(self):
-        from OpenHome.cli.onboard import _get_provider_names
+        from OriginAgent.cli.onboard import _get_provider_names
 
         names = _get_provider_names()
         assert isinstance(names, dict)
@@ -434,7 +434,7 @@ class TestProviderChannelInfo:
         assert "github_copilot" not in names
 
     def test_get_channel_names_returns_dict(self):
-        from OpenHome.cli.onboard import _get_channel_names
+        from OriginAgent.cli.onboard import _get_channel_names
 
         names = _get_channel_names()
         assert isinstance(names, dict)
@@ -442,7 +442,7 @@ class TestProviderChannelInfo:
         assert len(names) >= 0
 
     def test_get_provider_info_returns_valid_structure(self):
-        from OpenHome.cli.onboard import _get_provider_info
+        from OriginAgent.cli.onboard import _get_provider_info
 
         info = _get_provider_info()
         assert isinstance(info, dict)
@@ -577,7 +577,7 @@ class TestValidateFieldConstraint:
             name: str = "hello"
 
         field_info = M.model_fields["name"]
-        from OpenHome.cli.onboard import _validate_field_constraint
+        from OriginAgent.cli.onboard import _validate_field_constraint
 
         assert _validate_field_constraint("anything", field_info) is None
 
@@ -589,7 +589,7 @@ class TestValidateFieldConstraint:
             count: int = Field(default=3, ge=0)
 
         field_info = M.model_fields["count"]
-        from OpenHome.cli.onboard import _validate_field_constraint
+        from OriginAgent.cli.onboard import _validate_field_constraint
 
         result = _validate_field_constraint(-1, field_info)
         assert result is not None
@@ -603,7 +603,7 @@ class TestValidateFieldConstraint:
             count: int = Field(default=3, ge=0)
 
         field_info = M.model_fields["count"]
-        from OpenHome.cli.onboard import _validate_field_constraint
+        from OriginAgent.cli.onboard import _validate_field_constraint
 
         assert _validate_field_constraint(0, field_info) is None
 
@@ -615,7 +615,7 @@ class TestValidateFieldConstraint:
             retries: int = Field(default=3, le=10)
 
         field_info = M.model_fields["retries"]
-        from OpenHome.cli.onboard import _validate_field_constraint
+        from OriginAgent.cli.onboard import _validate_field_constraint
 
         result = _validate_field_constraint(11, field_info)
         assert result is not None
@@ -629,7 +629,7 @@ class TestValidateFieldConstraint:
             retries: int = Field(default=3, le=10)
 
         field_info = M.model_fields["retries"]
-        from OpenHome.cli.onboard import _validate_field_constraint
+        from OriginAgent.cli.onboard import _validate_field_constraint
 
         assert _validate_field_constraint(10, field_info) is None
 
@@ -641,7 +641,7 @@ class TestValidateFieldConstraint:
             retries: int = Field(default=3, ge=0, le=10)
 
         field_info = M.model_fields["retries"]
-        from OpenHome.cli.onboard import _validate_field_constraint
+        from OriginAgent.cli.onboard import _validate_field_constraint
 
         assert _validate_field_constraint(5, field_info) is None
         assert _validate_field_constraint(-1, field_info) is not None
@@ -655,7 +655,7 @@ class TestValidateFieldConstraint:
             ratio: float = Field(default=0.5, gt=0.0, lt=1.0)
 
         field_info = M.model_fields["ratio"]
-        from OpenHome.cli.onboard import _validate_field_constraint
+        from OriginAgent.cli.onboard import _validate_field_constraint
 
         assert _validate_field_constraint(0.5, field_info) is None
         assert _validate_field_constraint(0.0, field_info) is not None
@@ -669,7 +669,7 @@ class TestValidateFieldConstraint:
             name: str = Field(default="x", min_length=1)
 
         field_info = M.model_fields["name"]
-        from OpenHome.cli.onboard import _validate_field_constraint
+        from OriginAgent.cli.onboard import _validate_field_constraint
 
         assert _validate_field_constraint("a", field_info) is None
         assert _validate_field_constraint("", field_info) is not None
@@ -682,15 +682,15 @@ class TestValidateFieldConstraint:
             tag: str = Field(default="x", max_length=5)
 
         field_info = M.model_fields["tag"]
-        from OpenHome.cli.onboard import _validate_field_constraint
+        from OriginAgent.cli.onboard import _validate_field_constraint
 
         assert _validate_field_constraint("abc", field_info) is None
         assert _validate_field_constraint("abcdef", field_info) is not None
 
     def test_real_send_max_retries_field(self):
         """Validate against the actual ChannelsConfig.send_max_retries field."""
-        from OpenHome.config.schema import ChannelsConfig
-        from OpenHome.cli.onboard import _validate_field_constraint
+        from OriginAgent.config.schema import ChannelsConfig
+        from OriginAgent.cli.onboard import _validate_field_constraint
 
         field_info = ChannelsConfig.model_fields["send_max_retries"]
         assert _validate_field_constraint(3, field_info) is None
@@ -751,7 +751,7 @@ class TestGetConstraintHint:
 
     def test_real_send_max_retries_hint(self):
         """Actual ChannelsConfig.send_max_retries should show '(0-10)'."""
-        from OpenHome.config.schema import ChannelsConfig
+        from OriginAgent.config.schema import ChannelsConfig
 
         field_info = ChannelsConfig.model_fields["send_max_retries"]
         hint = _get_constraint_hint(field_info)
@@ -813,13 +813,13 @@ class TestChannelCommonRegistration:
 
     def test_channel_common_in_settings_sections(self):
         """Channel Common should be registered in _SETTINGS_SECTIONS."""
-        from OpenHome.cli.onboard import _SETTINGS_SECTIONS
+        from OriginAgent.cli.onboard import _SETTINGS_SECTIONS
 
         assert "Channel Common" in _SETTINGS_SECTIONS
 
     def test_channel_common_getter_returns_channels(self):
         """Channel Common getter should return config.channels."""
-        from OpenHome.cli.onboard import _SETTINGS_GETTER
+        from OriginAgent.cli.onboard import _SETTINGS_GETTER
 
         config = Config()
         result = _SETTINGS_GETTER["Channel Common"](config)
@@ -827,7 +827,7 @@ class TestChannelCommonRegistration:
 
     def test_channel_common_setter_writes_channels(self):
         """Channel Common setter should update config.channels."""
-        from OpenHome.cli.onboard import _SETTINGS_SETTER
+        from OriginAgent.cli.onboard import _SETTINGS_SETTER
 
         config = Config()
         original = config.channels
@@ -852,13 +852,13 @@ class TestApiServerRegistration:
 
     def test_api_server_in_settings_sections(self):
         """API Server should be registered in _SETTINGS_SECTIONS."""
-        from OpenHome.cli.onboard import _SETTINGS_SECTIONS
+        from OriginAgent.cli.onboard import _SETTINGS_SECTIONS
 
         assert "API Server" in _SETTINGS_SECTIONS
 
     def test_api_server_getter_returns_api(self):
         """API Server getter should return config.api."""
-        from OpenHome.cli.onboard import _SETTINGS_GETTER
+        from OriginAgent.cli.onboard import _SETTINGS_GETTER
 
         config = Config()
         result = _SETTINGS_GETTER["API Server"](config)
@@ -866,10 +866,10 @@ class TestApiServerRegistration:
 
     def test_api_server_setter_writes_api(self):
         """API Server setter should update config.api."""
-        from OpenHome.cli.onboard import _SETTINGS_SETTER
+        from OriginAgent.cli.onboard import _SETTINGS_SETTER
 
         config = Config()
-        from OpenHome.config.schema import ApiConfig
+        from OriginAgent.config.schema import ApiConfig
 
         new_api = ApiConfig(host="0.0.0.0", port=9999)
         _SETTINGS_SETTER["API Server"](config, new_api)
@@ -882,12 +882,12 @@ class TestMainMenuUpdate:
 
     def test_main_menu_dispatch_includes_channel_common(self):
         """Main menu dispatch should route [H] to Channel Common."""
-        from OpenHome.cli.onboard import run_onboard
+        from OriginAgent.cli.onboard import run_onboard
 
         # We verify by checking the dispatch table is set up correctly
         # The menu items are defined inline in run_onboard, so we test
         # that _configure_general_settings handles the new sections.
-        from OpenHome.cli.onboard import _SETTINGS_SECTIONS, _SETTINGS_GETTER, _SETTINGS_SETTER
+        from OriginAgent.cli.onboard import _SETTINGS_SECTIONS, _SETTINGS_GETTER, _SETTINGS_SETTER
 
         assert "Channel Common" in _SETTINGS_SECTIONS
         assert "Channel Common" in _SETTINGS_GETTER
@@ -895,7 +895,7 @@ class TestMainMenuUpdate:
 
     def test_main_menu_dispatch_includes_api_server(self):
         """Main menu dispatch should route [I] to API Server."""
-        from OpenHome.cli.onboard import _SETTINGS_SECTIONS, _SETTINGS_GETTER, _SETTINGS_SETTER
+        from OriginAgent.cli.onboard import _SETTINGS_SECTIONS, _SETTINGS_GETTER, _SETTINGS_SETTER
 
         assert "API Server" in _SETTINGS_SECTIONS
         assert "API Server" in _SETTINGS_GETTER
@@ -1041,23 +1041,23 @@ class TestIsStrOrNone:
     """Tests for _is_str_or_none helper."""
 
     def test_str_or_none_true(self):
-        from OpenHome.cli.onboard import _is_str_or_none
+        from OriginAgent.cli.onboard import _is_str_or_none
 
         assert _is_str_or_none(str | None) is True
 
     def test_optional_str_true(self):
         from typing import Optional
-        from OpenHome.cli.onboard import _is_str_or_none
+        from OriginAgent.cli.onboard import _is_str_or_none
 
         assert _is_str_or_none(Optional[str]) is True
 
     def test_str_only_false(self):
-        from OpenHome.cli.onboard import _is_str_or_none
+        from OriginAgent.cli.onboard import _is_str_or_none
 
         assert _is_str_or_none(str) is False
 
     def test_int_or_none_false(self):
-        from OpenHome.cli.onboard import _is_str_or_none
+        from OriginAgent.cli.onboard import _is_str_or_none
 
         assert _is_str_or_none(int | None) is False
 
@@ -1068,7 +1068,7 @@ class TestConfigurePydanticModelEmptyString:
     def test_optional_str_empty_string_becomes_none(self, monkeypatch):
         """Entering '' for an optional str field should set it to None."""
         from pydantic import BaseModel
-        from OpenHome.cli.onboard import _is_str_or_none
+        from OriginAgent.cli.onboard import _is_str_or_none
 
         class M(BaseModel):
             api_key: str | None = None

@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from OpenHome.cli.stream import StreamRenderer, ThinkingSpinner
-from OpenHome.config.schema import AgentDefaults, Config
+from OriginAgent.cli.stream import StreamRenderer, ThinkingSpinner
+from OriginAgent.config.schema import AgentDefaults, Config
 
 
 def test_bot_name_and_icon_defaults_preserve_current_branding() -> None:

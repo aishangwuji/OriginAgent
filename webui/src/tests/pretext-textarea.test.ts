@@ -26,7 +26,7 @@ describe("pretext textarea measurement", () => {
     pretextMock.prepare.mockClear();
     pretextMock.layout.mockClear();
     const el = makeTextarea(
-      "OpenHome can use Pretext to estimate textarea wrapping without forcing DOM scrollHeight reads.",
+      "OriginAgent can use Pretext to estimate textarea wrapping without forcing DOM scrollHeight reads.",
       170,
     );
     el.style.font = '400 16px / 20px "Arial"';

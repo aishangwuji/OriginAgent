@@ -1,7 +1,7 @@
 import pytest
 
-from OpenHome.agent.action_runtime import ActionIntent
-from OpenHome.agent.device_actions import (
+from OriginAgent.agent.action_runtime import ActionIntent
+from OriginAgent.agent.device_actions import (
     DeviceActionSchemaRegistry,
     InvalidActionParameterError,
     TypedActionPlanner,

@@ -7,19 +7,19 @@ from pathlib import Path
 
 import pytest
 
-from OpenHome.agent.tools.audit import InMemoryToolAuditSink, ToolAuditConfig
-from OpenHome.agent.tools.cron import CronTool
-from OpenHome.agent.tools.filesystem import ReadFileTool, WriteFileTool
-from OpenHome.agent.tools.registry import ToolRegistry
-from OpenHome.cron.service import CronService
-from OpenHome.cron.types import CronPayload, CronSchedule
-from OpenHome.security.capabilities import CapabilitySnapshot
-from OpenHome.security.grants import (
+from OriginAgent.agent.tools.audit import InMemoryToolAuditSink, ToolAuditConfig
+from OriginAgent.agent.tools.cron import CronTool
+from OriginAgent.agent.tools.filesystem import ReadFileTool, WriteFileTool
+from OriginAgent.agent.tools.registry import ToolRegistry
+from OriginAgent.cron.service import CronService
+from OriginAgent.cron.types import CronPayload, CronSchedule
+from OriginAgent.security.capabilities import CapabilitySnapshot
+from OriginAgent.security.grants import (
     CapabilityGrant,
     CapabilityGrantStore,
     snapshot_for_cron_payload,
 )
-from OpenHome.security.policy import PolicyDeniedError
+from OriginAgent.security.policy import PolicyDeniedError
 
 
 def _future() -> str:

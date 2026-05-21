@@ -4,10 +4,10 @@ import pytest
 from unittest.mock import AsyncMock
 from unittest.mock import patch
 
-from OpenHome.agent.tools.filesystem import ReadFileTool
-from OpenHome.agent.tools.limits import ToolLimits
-from OpenHome.agent.tools.shell import ExecTool
-from OpenHome.agent.tools.web import WebFetchTool
+from OriginAgent.agent.tools.filesystem import ReadFileTool
+from OriginAgent.agent.tools.limits import ToolLimits
+from OriginAgent.agent.tools.shell import ExecTool
+from OriginAgent.agent.tools.web import WebFetchTool
 
 
 @pytest.mark.asyncio
@@ -23,8 +23,8 @@ async def test_exec_output_limit_is_injectable(tmp_path):
     mock_proc.returncode = 0
 
     with (
-        patch("OpenHome.agent.tools.shell._IS_WINDOWS", False),
-        patch("OpenHome.agent.tools.shell.shutil.which", lambda name: "/usr/bin/bwrap"),
+        patch("OriginAgent.agent.tools.shell._IS_WINDOWS", False),
+        patch("OriginAgent.agent.tools.shell.shutil.which", lambda name: "/usr/bin/bwrap"),
         patch.object(tool, "_spawn", return_value=mock_proc),
     ):
         result = await tool.execute("python -c \"print('x' * 300)\"")

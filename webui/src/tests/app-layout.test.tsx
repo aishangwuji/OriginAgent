@@ -54,7 +54,7 @@ vi.mock("@/lib/bootstrap", () => ({
   clearSavedSecret: vi.fn(),
 }));
 
-vi.mock("@/lib/OpenHome-client", () => {
+vi.mock("@/lib/OriginAgent-client", () => {
   class MockClient {
     status = "idle" as const;
     defaultChatId: string | null = null;
@@ -73,7 +73,7 @@ vi.mock("@/lib/OpenHome-client", () => {
     getGoalState = vi.fn(() => undefined);
   }
 
-  return { OpenHomeClient: MockClient };
+  return { OriginAgentClient: MockClient };
 });
 
 import App from "@/App";
@@ -367,8 +367,8 @@ describe("App layout", () => {
                 schema_version: 1,
                 generated_at: "2026-05-20T12:00:00+00:00",
                 identity: {
-                  agent_name: "OpenHome",
-                  workspace_name: "OpenHome",
+                  agent_name: "OriginAgent",
+                  workspace_name: "OriginAgent",
                   runtime_profile: "default",
                   audit_mode: "minimal",
                 },
@@ -555,7 +555,7 @@ describe("App layout", () => {
     fireEvent.click(within(sidebar).getByRole("button", { name: "Settings" }));
 
     expect(await screen.findByRole("heading", { name: "General" })).toBeInTheDocument();
-    expect(document.title).toBe("Settings · OpenHome");
+    expect(document.title).toBe("Settings · OriginAgent");
     expect(screen.queryByRole("navigation", { name: "Sidebar navigation" })).not.toBeInTheDocument();
     const settingsNav = screen.getByRole("navigation", { name: "Settings sections" });
     expect(within(settingsNav).getByRole("button", { name: "General" })).toHaveAttribute(
@@ -693,7 +693,7 @@ describe("App layout", () => {
     expect(await screen.findByRole("heading", { name: "Learning Reviews" })).toBeInTheDocument();
     expect(await screen.findByText("Remember concise answers")).toBeInTheDocument();
     expect(screen.getAllByText("User prefers concise answers.").length).toBeGreaterThan(0);
-    expect(document.title).toBe("Learning Reviews · OpenHome");
+    expect(document.title).toBe("Learning Reviews · OriginAgent");
 
     fireEvent.click(screen.getByRole("button", { name: "Apply" }));
     expect(screen.getByText("Apply this proposal?")).toBeInTheDocument();
@@ -1083,7 +1083,7 @@ describe("App layout", () => {
 
     await waitFor(() => expect(screen.getAllByText("新对话").length).toBeGreaterThanOrEqual(2));
     expect(screen.queryByText(/对话 123456/)).not.toBeInTheDocument();
-    expect(document.title).toBe("新对话 · OpenHome");
+    expect(document.title).toBe("新对话 · OriginAgent");
   });
 
   it("keeps settings in a loading state during transient API failures", async () => {
@@ -1342,13 +1342,13 @@ describe("App layout", () => {
     await waitFor(() => expect(connectSpy).toHaveBeenCalled());
     const sidebar = screen.getByRole("navigation", { name: "Sidebar navigation" });
     fireEvent.click(within(sidebar).getByRole("button", { name: "New chat" }));
-    await waitFor(() => expect(document.title).toBe("OpenHome"));
+    await waitFor(() => expect(document.title).toBe("OriginAgent"));
 
     fireEvent.click(within(sidebar).getByRole("button", { name: "Settings" }));
     expect(await screen.findByRole("heading", { name: "General" })).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Back to chat" }));
 
-    await waitFor(() => expect(document.title).toBe("OpenHome"));
+    await waitFor(() => expect(document.title).toBe("OriginAgent"));
     expect(screen.getByText("What can I do for you?")).toBeInTheDocument();
   });
 

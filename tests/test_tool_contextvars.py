@@ -4,11 +4,11 @@ import asyncio
 
 import pytest
 
-from OpenHome.agent.tools.cron import CronTool
-from OpenHome.agent.tools.message import MessageTool
-from OpenHome.agent.tools.spawn import SpawnTool
-from OpenHome.cron.service import CronService
-from OpenHome.security.capabilities import CapabilitySnapshot
+from OriginAgent.agent.tools.cron import CronTool
+from OriginAgent.agent.tools.message import MessageTool
+from OriginAgent.agent.tools.spawn import SpawnTool
+from OriginAgent.cron.service import CronService
+from OriginAgent.security.capabilities import CapabilitySnapshot
 
 
 @pytest.mark.asyncio

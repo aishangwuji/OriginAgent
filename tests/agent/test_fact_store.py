@@ -2,8 +2,8 @@ import json
 
 import pytest
 
-from OpenHome.agent.facts import FactRecord, FactStore
-from OpenHome.agent.memory import MemoryStore, MemoryWorkspaceSnapshot, redact_memory_text
+from OriginAgent.agent.facts import FactRecord, FactStore
+from OriginAgent.agent.memory import MemoryStore, MemoryWorkspaceSnapshot, redact_memory_text
 
 
 @pytest.fixture

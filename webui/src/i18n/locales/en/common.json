@@ -7,7 +7,7 @@
     },
     "error": {
       "title": "Couldn't reach OriginAgent",
-      "gatewayHint": "Make sure the gateway is running (`openhome gateway`) and that this page is open on the same machine."
+      "gatewayHint": "Make sure the gateway is running (`originagent gateway`) and that this page is open on the same machine."
     },
     "auth": {
       "title": "Authentication required",

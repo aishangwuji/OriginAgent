@@ -2,19 +2,19 @@
 set -euo pipefail
 cd "$(dirname "$0")/.." || exit 1
 
-IMAGE_NAME="openhome-test"
+IMAGE_NAME="originagent-test"
 
 echo "=== Building Docker image ==="
 docker build -t "$IMAGE_NAME" .
 
 echo ""
-echo "=== Running 'openhome onboard' ==="
-docker run --name openhome-test-run "$IMAGE_NAME" onboard
+echo "=== Running 'originagent onboard' ==="
+docker run --name originagent-test-run "$IMAGE_NAME" onboard
 
 echo ""
-echo "=== Running 'openhome status' ==="
-STATUS_OUTPUT=$(docker commit openhome-test-run openhome-test-onboarded > /dev/null && \
-    docker run --rm openhome-test-onboarded status 2>&1) || true
+echo "=== Running 'originagent status' ==="
+STATUS_OUTPUT=$(docker commit originagent-test-run originagent-test-onboarded > /dev/null && \
+    docker run --rm originagent-test-onboarded status 2>&1) || true
 
 echo "$STATUS_OUTPUT"
 
@@ -31,7 +31,7 @@ check() {
     fi
 }
 
-check "OpenHome Status"
+check "OriginAgent Status"
 check "Config:"
 check "Workspace:"
 check "Model:"
@@ -50,7 +50,7 @@ fi
 # Cleanup
 echo ""
 echo "=== Cleanup ==="
-docker rm -f openhome-test-run 2>/dev/null || true
-docker rmi -f openhome-test-onboarded 2>/dev/null || true
+docker rm -f originagent-test-run 2>/dev/null || true
+docker rmi -f originagent-test-onboarded 2>/dev/null || true
 docker rmi -f "$IMAGE_NAME" 2>/dev/null || true
 echo "Done."

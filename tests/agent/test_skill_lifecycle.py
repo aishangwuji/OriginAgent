@@ -5,8 +5,8 @@ from pathlib import Path
 
 import yaml
 
-from OpenHome.agent.skill_lifecycle import SkillLifecycleStore
-from OpenHome.agent.skills import SkillsLoader
+from OriginAgent.agent.skill_lifecycle import SkillLifecycleStore
+from OriginAgent.agent.skills import SkillsLoader
 
 
 def _write_workspace_skill(
@@ -19,7 +19,7 @@ def _write_workspace_skill(
 ) -> Path:
     skill_dir = workspace / "skills" / name
     skill_dir.mkdir(parents=True)
-    openhome = {
+    originagent = {
         "proposal_status": "proposed",
         "verification_status": verification_status,
         "review_proposal_id": f"review_{name}",
@@ -27,12 +27,12 @@ def _write_workspace_skill(
         "created_by": "background_review",
     }
     if lifecycle_status is not None:
-        openhome["lifecycle_status"] = lifecycle_status
+        originagent["lifecycle_status"] = lifecycle_status
     content = {
         "name": name,
         "description": f"{name} description",
         "always": always,
-        "metadata": {"OpenHome": openhome},
+        "metadata": {"OriginAgent": originagent},
     }
     path = skill_dir / "SKILL.md"
     path.write_text(
@@ -80,7 +80,7 @@ def test_verify_activate_and_always_write_events_and_frontmatter(tmp_path: Path)
     verified = store.transition("lighting-troubleshooting", action="verify", reason="looks right")
     assert verified.ok is True
     assert verified.status == "proposed"
-    metadata = _frontmatter(skill_path)["metadata"]["OpenHome"]
+    metadata = _frontmatter(skill_path)["metadata"]["OriginAgent"]
     assert metadata["verification_status"] == "verified"
     assert metadata["lifecycle_status"] == "proposed"
     assert metadata["reviewed_by"] == "user"

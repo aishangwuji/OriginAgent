@@ -6,9 +6,9 @@ import pytest
 
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from OpenHome.agent.memory import Dream, MemoryStore
-from OpenHome.agent.runner import AgentRunResult
-from OpenHome.utils.gitstore import LineAge
+from OriginAgent.agent.memory import Dream, MemoryStore
+from OriginAgent.agent.runner import AgentRunResult
+from OriginAgent.utils.gitstore import LineAge
 
 
 EMPTY_FACT_PROPOSALS = json.dumps({
@@ -297,7 +297,7 @@ class TestDreamPromptCaps:
         must not explode the Phase 1 prompt — each entry is capped in the
         preview, even though the JSONL record itself stays full-size."""
         # Bypass the append_history cap by writing directly, simulating a
-        # record that was written by an older OpenHome build before any caps.
+        # record that was written by an older OriginAgent build before any caps.
         store.history_file.write_text(
             json.dumps({
                 "cursor": 1,

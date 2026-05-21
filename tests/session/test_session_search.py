@@ -5,7 +5,7 @@ import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from OpenHome.session.search import SessionSearchService
+from OriginAgent.session.search import SessionSearchService
 
 
 def _write_jsonl(path: Path, rows: list[dict]) -> None:

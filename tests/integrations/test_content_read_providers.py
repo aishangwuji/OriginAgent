@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from OpenHome.integrations.content_read.providers.github import parse_github_url
-from OpenHome.integrations.content_read.providers.rss import is_rss_like_url
+from OriginAgent.integrations.content_read.providers.github import parse_github_url
+from OriginAgent.integrations.content_read.providers.rss import is_rss_like_url
 
 
 def test_parse_github_url_supports_repo_and_blob() -> None:

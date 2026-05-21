@@ -7,7 +7,7 @@ from unittest.mock import patch
 
 import pytest
 
-from OpenHome.utils.gitstore import GitStore
+from OriginAgent.utils.gitstore import GitStore
 
 
 @pytest.fixture
@@ -55,7 +55,7 @@ class TestLineAges:
         git.auto_commit("initial")
 
         future_now = datetime.now(tz=timezone.utc) + timedelta(days=30)
-        with patch("OpenHome.utils.gitstore.datetime") as mock_dt:
+        with patch("OriginAgent.utils.gitstore.datetime") as mock_dt:
             mock_dt.now.return_value = future_now
             mock_dt.fromtimestamp = datetime.fromtimestamp
             ages = git.line_ages("MEMORY.md")

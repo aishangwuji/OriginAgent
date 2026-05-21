@@ -6,11 +6,11 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from OpenHome.agent.loop import AgentLoop
-from OpenHome.agent.tools.message import MessageTool
-from OpenHome.bus.events import InboundMessage, OutboundMessage
-from OpenHome.bus.queue import MessageBus
-from OpenHome.providers.base import LLMResponse, ToolCallRequest
+from OriginAgent.agent.loop import AgentLoop
+from OriginAgent.agent.tools.message import MessageTool
+from OriginAgent.bus.events import InboundMessage, OutboundMessage
+from OriginAgent.bus.queue import MessageBus
+from OriginAgent.providers.base import LLMResponse, ToolCallRequest
 
 
 def _make_loop(tmp_path: Path) -> AgentLoop:

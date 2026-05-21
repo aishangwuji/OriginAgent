@@ -2,14 +2,14 @@
 
 import pytest
 
-from OpenHome.agent.tools.filesystem import (
+from OriginAgent.agent.tools.filesystem import (
     EditFileTool,
     ListDirTool,
     ReadFileTool,
     WriteFileTool,
     _find_match,
 )
-from OpenHome.agent.tools.limits import ToolLimits
+from OriginAgent.agent.tools.limits import ToolLimits
 
 
 # ---------------------------------------------------------------------------
@@ -265,8 +265,8 @@ class TestWriteFileTool:
 
     @pytest.mark.asyncio
     async def test_write_rejects_media_root_by_default(self, tmp_path, monkeypatch):
-        from OpenHome.config import paths as config_paths
-        from OpenHome.security import paths as security_paths
+        from OriginAgent.config import paths as config_paths
+        from OriginAgent.security import paths as security_paths
 
         media = tmp_path / "media"
         media.mkdir()
@@ -431,7 +431,7 @@ class TestWorkspaceRestriction:
         media_file = media_dir / "photo.txt"
         media_file.write_text("shared media", encoding="utf-8")
 
-        monkeypatch.setattr("OpenHome.agent.tools.filesystem.get_media_dir", lambda: media_dir)
+        monkeypatch.setattr("OriginAgent.agent.tools.filesystem.get_media_dir", lambda: media_dir)
 
         tool = ReadFileTool(workspace=workspace, allowed_dir=workspace)
         result = await tool.execute(path=str(media_file))
@@ -440,7 +440,7 @@ class TestWorkspaceRestriction:
 
     @pytest.mark.asyncio
     async def test_extra_dirs_does_not_widen_write(self, tmp_path):
-        from OpenHome.agent.tools.filesystem import WriteFileTool
+        from OriginAgent.agent.tools.filesystem import WriteFileTool
 
         workspace = tmp_path / "ws"
         workspace.mkdir()

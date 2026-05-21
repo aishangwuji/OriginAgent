@@ -1,6 +1,6 @@
-from OpenHome.agent.device_factory import build_device_action_executor
-from OpenHome.agent.device_actions import TypedDeviceAction
-from OpenHome.config.schema import DeviceToolsConfig
+from OriginAgent.agent.device_factory import build_device_action_executor
+from OriginAgent.agent.device_actions import TypedDeviceAction
+from OriginAgent.config.schema import DeviceToolsConfig
 
 
 def test_default_device_config_returns_none(tmp_path):

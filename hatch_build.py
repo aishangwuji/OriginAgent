@@ -1,4 +1,4 @@
-"""Hatch build hook that bundles the WebUI into OpenHome/web/dist."""
+"""Hatch build hook that bundles the WebUI into OriginAgent/web/dist."""
 
 from __future__ import annotations
 
@@ -17,7 +17,7 @@ class CustomBuildHook(BuildHookInterface):
         root = Path(self.root)
         webui_dir = root / "webui"
         package_json = webui_dir / "package.json"
-        dist_dir = root / "OpenHome" / "web" / "dist"
+        dist_dir = root / "OriginAgent" / "web" / "dist"
         index_html = dist_dir / "index.html"
 
         if self.target_name == "wheel" and version == "editable":
@@ -25,20 +25,20 @@ class CustomBuildHook(BuildHookInterface):
                 "[webui-build] skipped for editable install; run `cd webui && bun run build` manually"
             )
             return
-        if os.environ.get("OPENHOME_SKIP_WEBUI_BUILD") == "1":
-            self.app.display_info("[webui-build] skipped via OPENHOME_SKIP_WEBUI_BUILD=1")
+        if os.environ.get("ORIGINAGENT_SKIP_WEBUI_BUILD") == "1":
+            self.app.display_info("[webui-build] skipped via ORIGINAGENT_SKIP_WEBUI_BUILD=1")
             return
         if not package_json.exists():
-            self.app.display_info("[webui-build] no webui source tree, assuming prebuilt OpenHome/web/dist")
+            self.app.display_info("[webui-build] no webui source tree, assuming prebuilt OriginAgent/web/dist")
             return
-        if index_html.exists() and os.environ.get("OPENHOME_FORCE_WEBUI_BUILD") != "1":
+        if index_html.exists() and os.environ.get("ORIGINAGENT_FORCE_WEBUI_BUILD") != "1":
             self.app.display_info(f"[webui-build] reusing existing build at {dist_dir}")
             return
 
         runner = "bun" if shutil.which("bun") else "npm" if shutil.which("npm") else None
         if runner is None:
             raise RuntimeError(
-                "[webui-build] neither `bun` nor `npm` is available; set OPENHOME_SKIP_WEBUI_BUILD=1 to skip"
+                "[webui-build] neither `bun` nor `npm` is available; set ORIGINAGENT_SKIP_WEBUI_BUILD=1 to skip"
             )
 
         self.app.display_info(f"[webui-build] using {runner} to build webui")

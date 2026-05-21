@@ -5,14 +5,14 @@ from typing import Any
 
 import pytest
 
-from OpenHome.agent.tools.audit import InMemoryToolAuditSink
-from OpenHome.agent.tools.base import Tool
-from OpenHome.agent.tools.registry import (
+from OriginAgent.agent.tools.audit import InMemoryToolAuditSink
+from OriginAgent.agent.tools.base import Tool
+from OriginAgent.agent.tools.registry import (
     DuplicateToolError,
     PolicyDeniedError,
     ToolRegistry,
 )
-from OpenHome.security.capabilities import CapabilitySnapshot
+from OriginAgent.security.capabilities import CapabilitySnapshot
 
 
 class _FakeTool(Tool):
@@ -303,12 +303,12 @@ async def test_scheduled_snapshot_denies_exec_spawn_and_device_tools() -> None:
     registry = ToolRegistry(capability_snapshot=CapabilitySnapshot.scheduled_default())
     registry.register(_FakeTool("exec", result="ok"))
     registry.register(_FakeTool("spawn", result="ok"))
-    registry.register(_FakeTool("openhome_device_lighting_set_power", result="ok"))
+    registry.register(_FakeTool("originagent_device_lighting_set_power", result="ok"))
 
     assert "not allowed by the current capability snapshot" in await registry.execute("exec", {"command": "id"})
     assert "not allowed by the current capability snapshot" in await registry.execute("spawn", {"task": "x"})
     assert "Device tools are not allowed" in await registry.execute(
-        "openhome_device_lighting_set_power",
+        "originagent_device_lighting_set_power",
         {"device_id": "lamp", "power": "on"},
     )
 

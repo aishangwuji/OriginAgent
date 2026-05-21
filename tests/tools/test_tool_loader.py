@@ -1,8 +1,8 @@
 from types import SimpleNamespace
 
-from OpenHome.agent.tools.base import Tool
-from OpenHome.agent.tools.loader import ToolLoader
-from OpenHome.agent.tools.registry import ToolRegistry
+from OriginAgent.agent.tools.base import Tool
+from OriginAgent.agent.tools.loader import ToolLoader
+from OriginAgent.agent.tools.registry import ToolRegistry
 
 
 class _NamedTool(Tool):

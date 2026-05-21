@@ -1,11 +1,11 @@
 # Device Gateway
 
-Device tools are disabled by default. In this release, OpenHome exposes only
+Device tools are disabled by default. In this release, OriginAgent exposes only
 dry-run lighting tools when explicitly configured with the fake backend:
 
-- `openhome_device_lighting_set_power`
-- `openhome_device_lighting_set_brightness`
-- `openhome_device_lighting_set_color_temperature`
+- `originagent_device_lighting_set_power`
+- `originagent_device_lighting_set_brightness`
+- `originagent_device_lighting_set_color_temperature`
 
 Explicitly not enabled: locks, security systems, cameras, gas, presence,
 appliances, group actions, natural-language device discovery, and autonomous

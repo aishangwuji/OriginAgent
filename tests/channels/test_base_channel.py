@@ -2,12 +2,12 @@ from types import SimpleNamespace
 
 import pytest
 
-from OpenHome.bus.events import OutboundMessage
-from OpenHome.bus.queue import MessageBus
-from OpenHome.channels.base import BaseChannel
-from OpenHome.config.loader import get_config_path, set_config_path
-from OpenHome.config.schema import PairingConfig
-from OpenHome.pairing import approve_code
+from OriginAgent.bus.events import OutboundMessage
+from OriginAgent.bus.queue import MessageBus
+from OriginAgent.channels.base import BaseChannel
+from OriginAgent.config.loader import get_config_path, set_config_path
+from OriginAgent.config.schema import PairingConfig
+from OriginAgent.pairing import approve_code
 
 
 class _DummyChannel(BaseChannel):

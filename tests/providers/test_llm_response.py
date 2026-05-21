@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import pytest
 
-from OpenHome.providers.base import LLMResponse, ToolCallRequest
+from OriginAgent.providers.base import LLMResponse, ToolCallRequest
 
 
 def _response(finish_reason: str, *, with_tool_call: bool = True) -> LLMResponse:
