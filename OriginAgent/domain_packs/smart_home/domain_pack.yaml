@@ -35,6 +35,10 @@ tools:
       - device:lighting
     audit: security
 
+runtime:
+  module: runtime.contribution
+  factory: build_runtime_contribution
+
 activation:
   # Metadata only in P3. OriginAgent does not auto-activate domain packs from
   # triggers yet; activation is still controlled by agents.defaults.domainPacks.

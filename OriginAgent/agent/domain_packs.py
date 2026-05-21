@@ -5,6 +5,8 @@ from __future__ import annotations
 import os
 import re
 import shutil
+import importlib.util
+import sys
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Literal
@@ -130,6 +132,35 @@ class DomainToolRuntimeRecord:
 
 
 @dataclass(frozen=True)
+class DomainRuntimeDeclaration:
+    module: str
+    factory: str = "build_runtime_contribution"
+    module_path: Path | None = None
+    status: DomainDeclarationStatus = "available"
+    unavailable_reason: str = ""
+
+    @property
+    def available(self) -> bool:
+        return self.status == "available"
+
+
+@dataclass(frozen=True)
+class DomainRuntimeBuildContext:
+    pack: "DomainPack"
+    workspace: Path
+    config: Any
+    overrides: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class DomainRuntimeContribution:
+    tool_context: dict[str, Any] = field(default_factory=dict)
+    safety_gates: tuple[Any, ...] = ()
+    permission_resolvers: tuple[Any, ...] = ()
+    context_fragments: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
 class DomainPack:
     id: str
     name: str
@@ -154,6 +185,7 @@ class DomainPack:
     policies: tuple[DomainFileDeclaration, ...] = ()
     schemas: tuple[DomainFileDeclaration, ...] = ()
     tools: tuple[DomainToolDeclaration, ...] = ()
+    runtime: DomainRuntimeDeclaration | None = None
     evals: tuple[DomainEvalDeclaration, ...] = ()
     manifest: dict[str, Any] = field(default_factory=dict)
     verification_status: str = "unknown"
@@ -249,6 +281,7 @@ class DomainPackValidator:
         policies, policy_errors = self._parse_file_section(raw.get("policies"), pack_dir, "policies")
         schemas, schema_errors = self._parse_file_section(raw.get("schemas"), pack_dir, "schemas")
         tools, tool_errors = self._parse_tools(raw.get("tools"), pack_dir)
+        runtime, runtime_errors = self._parse_runtime(raw.get("runtime"), pack_dir)
         evals, eval_errors = self._parse_evals(
             raw.get("evals"),
             skills=skills,
@@ -261,6 +294,7 @@ class DomainPackValidator:
         errors.extend(policy_errors)
         errors.extend(schema_errors)
         errors.extend(tool_errors)
+        errors.extend(runtime_errors)
         errors.extend(eval_errors)
 
         if raw.get("enabled") is False:
@@ -309,6 +343,7 @@ class DomainPackValidator:
             policies=tuple(policies),
             schemas=tuple(schemas),
             tools=tuple(tools),
+            runtime=runtime,
             evals=tuple(evals),
             manifest=raw,
             verification_status=verification_status,
@@ -665,6 +700,54 @@ class DomainPackValidator:
             module_path=module_path,
         )
 
+    def _parse_runtime(
+        self,
+        raw: Any,
+        pack_dir: Path,
+    ) -> tuple[DomainRuntimeDeclaration | None, list[str]]:
+        if raw is None:
+            return None, []
+        if not isinstance(raw, dict):
+            return (
+                DomainRuntimeDeclaration(
+                    module="",
+                    status="skipped",
+                    unavailable_reason="runtime must be a mapping",
+                ),
+                ["runtime must be a mapping"],
+            )
+        module = str(raw.get("module") or "").strip()
+        factory = str(raw.get("factory") or "build_runtime_contribution").strip()
+        module_path = _domain_runtime_module_path(pack_dir, module)
+        reason = ""
+        if not module:
+            reason = "missing required field: module"
+        elif not _valid_domain_runtime_module(module):
+            reason = "module must be a dotted path under runtime"
+        elif module_path is None or not module_path.exists():
+            reason = "missing runtime module file"
+        elif not _CLASS_RE.fullmatch(factory):
+            reason = "factory must be a valid Python identifier"
+        if reason:
+            return (
+                DomainRuntimeDeclaration(
+                    module=module,
+                    factory=factory,
+                    module_path=module_path,
+                    status="skipped",
+                    unavailable_reason=reason,
+                ),
+                [f"runtime: {reason}"],
+            )
+        return (
+            DomainRuntimeDeclaration(
+                module=module,
+                factory=factory,
+                module_path=module_path,
+            ),
+            [],
+        )
+
     def _parse_evals(
         self,
         raw: Any,
@@ -866,6 +949,30 @@ class DomainPackManager:
             pairs.extend((pack, tool) for tool in pack.tools)
         return pairs
 
+    def active_runtime_contributions(
+        self,
+        *,
+        workspace: Path,
+        config: Any,
+        overrides: dict[str, Any] | None = None,
+    ) -> list[DomainRuntimeContribution]:
+        contributions: list[DomainRuntimeContribution] = []
+        for pack in self.list_packs():
+            if not pack.active or pack.runtime is None or not pack.runtime.available:
+                continue
+            contribution = self._load_runtime_contribution(
+                pack,
+                DomainRuntimeBuildContext(
+                    pack=pack,
+                    workspace=Path(workspace),
+                    config=config,
+                    overrides=dict(overrides or {}),
+                ),
+            )
+            if contribution is not None:
+                contributions.append(contribution)
+        return contributions
+
     def clear_domain_tool_runtime(self) -> None:
         self._domain_tool_runtime.clear()
 
@@ -908,6 +1015,40 @@ class DomainPackManager:
                 pack = replace(pack, overrides_builtin=True)
             packs[pack.id] = pack
         return packs
+
+    def _load_runtime_contribution(
+        self,
+        pack: DomainPack,
+        context: DomainRuntimeBuildContext,
+    ) -> DomainRuntimeContribution | None:
+        declaration = pack.runtime
+        if declaration is None or declaration.module_path is None:
+            return None
+        try:
+            module_file = declaration.module_path.resolve()
+            module_file.relative_to(pack.path.resolve())
+            spec = importlib.util.spec_from_file_location(
+                _runtime_module_name(pack.id, declaration),
+                module_file,
+            )
+            if spec is None or spec.loader is None:
+                return None
+            module = importlib.util.module_from_spec(spec)
+            sys.modules[spec.name] = module
+            spec.loader.exec_module(module)
+            factory = getattr(module, declaration.factory, None)
+            if not callable(factory):
+                return None
+            raw = factory(context)
+        except Exception:
+            return None
+        if raw is None:
+            return None
+        if isinstance(raw, DomainRuntimeContribution):
+            return raw
+        if isinstance(raw, dict):
+            return DomainRuntimeContribution(**raw)
+        return None
 
     @staticmethod
     def _pack_dirs(root: Path | None) -> list[Path]:
@@ -971,6 +1112,14 @@ def _valid_domain_tool_module(module: str) -> bool:
     return bool(_MODULE_RE.fullmatch(module))
 
 
+def _valid_domain_runtime_module(module: str) -> bool:
+    if not module.startswith("runtime."):
+        return False
+    if any(part in module for part in ("/", "\\", "..")):
+        return False
+    return bool(_MODULE_RE.fullmatch(module))
+
+
 def _domain_tool_module_path(pack_dir: Path, module: str) -> Path | None:
     if not _valid_domain_tool_module(module):
         return None
@@ -985,6 +1134,28 @@ def _domain_tool_module_path(pack_dir: Path, module: str) -> Path | None:
     except ValueError:
         return None
     return candidate
+
+
+def _domain_runtime_module_path(pack_dir: Path, module: str) -> Path | None:
+    if not _valid_domain_runtime_module(module):
+        return None
+    candidate = pack_dir / Path(*module.split(".")).with_suffix(".py")
+    try:
+        resolved_candidate = candidate.resolve()
+        resolved_pack = pack_dir.resolve()
+    except OSError:
+        return None
+    try:
+        resolved_candidate.relative_to(resolved_pack)
+    except ValueError:
+        return None
+    return candidate
+
+
+def _runtime_module_name(pack_id: str, declaration: DomainRuntimeDeclaration) -> str:
+    safe_pack = pack_id.replace("-", "_")
+    safe_runtime = declaration.module.replace(".", "_")
+    return f"_originagent_domain_pack_{safe_pack}_{safe_runtime}"
 
 
 def _pack_relative_path(pack_dir: Path, relative_path: str) -> Path | None:

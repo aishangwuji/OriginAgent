@@ -343,6 +343,42 @@ def test_manifest_parses_domain_skills_and_tools_without_raising(tmp_path: Path)
     assert "missing permissions" in tools["research_missing_permissions"].unavailable_reason
 
 
+def test_manifest_parses_domain_runtime_contribution(tmp_path: Path) -> None:
+    pack = _write_pack(
+        tmp_path / "domain_packs",
+        "research",
+        pack_id="research",
+        name="Research",
+        capabilities_text="# Research",
+    )
+    runtime_dir = pack / "runtime"
+    runtime_dir.mkdir()
+    (runtime_dir / "contribution.py").write_text(
+        "from OriginAgent.agent.domain_packs import DomainRuntimeContribution\n"
+        "def build_runtime_contribution(context):\n"
+        "    return DomainRuntimeContribution(tool_context={'demo': context.pack.id})\n",
+        encoding="utf-8",
+    )
+    manifest = pack / "domain_pack.yaml"
+    manifest.write_text(
+        manifest.read_text(encoding="utf-8")
+        + "\nruntime:\n  module: runtime.contribution\n  factory: build_runtime_contribution\n",
+        encoding="utf-8",
+    )
+
+    manager = DomainPackManager(tmp_path, config=DomainPacksConfig(active=["research"]))
+    pack_state = manager.get_pack("research")
+    contributions = manager.active_runtime_contributions(
+        workspace=tmp_path,
+        config=object(),
+    )
+
+    assert pack_state is not None
+    assert pack_state.runtime is not None
+    assert pack_state.runtime.status == "available"
+    assert [contribution.tool_context for contribution in contributions] == [{"demo": "research"}]
+
+
 def test_inactive_domain_pack_does_not_expose_skill_entries_or_tools(tmp_path: Path) -> None:
     pack = _write_pack(
         tmp_path / "domain_packs",

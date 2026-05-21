@@ -53,9 +53,10 @@ def build_tool_context(
     audit_config: Any,
     device_action_executor: Any,
     device_registry: Any,
+    context_extras: dict[str, Any] | None = None,
 ) -> ToolContext:
     """Build the shared tool construction context."""
-    return ToolContext(
+    ctx = ToolContext(
         config=config,
         workspace=str(workspace),
         bus=bus,
@@ -70,6 +71,29 @@ def build_tool_context(
         device_action_executor=device_action_executor,
         device_registry=device_registry,
     )
+    for name, value in (context_extras or {}).items():
+        setattr(ctx, name, value)
+    return ctx
+
+
+def build_domain_tool_context_extras(
+    *,
+    domain_pack_manager: Any,
+    workspace: Path,
+    config: Any,
+    overrides: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Collect ToolContext attributes contributed by active domain packs."""
+    extras: dict[str, Any] = {}
+    if not hasattr(domain_pack_manager, "active_runtime_contributions"):
+        return extras
+    for contribution in domain_pack_manager.active_runtime_contributions(
+        workspace=workspace,
+        config=config,
+        overrides=overrides or {},
+    ):
+        extras.update(getattr(contribution, "tool_context", {}) or {})
+    return extras
 
 
 def register_domain_tools(
@@ -240,6 +264,15 @@ def register_default_tools(
     if cron_service:
         registry.register(CronTool(cron_service, default_timezone=timezone or "UTC"))
 
+    domain_context_extras = build_domain_tool_context_extras(
+        domain_pack_manager=domain_pack_manager,
+        workspace=workspace,
+        config=config,
+        overrides={
+            "device_action_executor": device_action_executor,
+            "device_registry": device_registry,
+        },
+    )
     context = build_tool_context(
         config=config,
         workspace=workspace,
@@ -252,8 +285,12 @@ def register_default_tools(
         image_generation_provider_configs=image_generation_provider_configs,
         timezone=timezone,
         audit_config=audit_config,
-        device_action_executor=device_action_executor,
-        device_registry=device_registry,
+        device_action_executor=domain_context_extras.get(
+            "device_action_executor",
+            device_action_executor,
+        ),
+        device_registry=domain_context_extras.get("device_registry", device_registry),
+        context_extras=domain_context_extras,
     )
     register_domain_tools(registry, domain_pack_manager=domain_pack_manager, context=context)
     register_plugin_tools(registry, context=context)
