@@ -71,18 +71,7 @@ class ActionSafetyGate:
         gates: list[SafetyGate] = [DefaultSafetyGate()]
         gates.extend(extra_gates or [])
         if presence_store is not None or fact_store is not None:
-            if presence_store is None or fact_store is None:
-                raise ValueError("presence_store and fact_store must be provided together")
-            from OriginAgent.domain_packs.smart_home.runtime.action_safety import (
-                SmartHomeActionSafetyGate,
-            )
-
-            gates.append(
-                SmartHomeActionSafetyGate(
-                    presence_store=presence_store,
-                    fact_store=fact_store,
-                )
-            )
+            raise ValueError("domain-specific safety gates must be passed through extra_gates")
         self._composite = CompositeSafetyGate(gates)
 
     def evaluate(self, request: ActionRequest) -> ActionDecision:

@@ -1,9 +1,10 @@
 import json
+from OriginAgent.domain_packs.smart_home.runtime.action_safety import SmartHomeActionSafetyGate
 from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from OriginAgent.agent.action_safety import ActionDecision, ActionRequest, ActionSafetyGate
+from OriginAgent.agent.action_safety import ActionDecision, ActionRequest
 from OriginAgent.agent.audit import AuditLogger
 from OriginAgent.agent.confirmation import (
     PROMPT_MAX_CHARS,
@@ -14,7 +15,7 @@ from OriginAgent.agent.confirmation import (
 )
 from OriginAgent.agent.facts import FactStore
 from OriginAgent.agent.memory import MemoryWorkspaceSnapshot
-from OriginAgent.agent.presence import PresenceStore
+from OriginAgent.domain_packs.smart_home.runtime.presence import PresenceStore
 
 NOW = datetime(2026, 5, 15, 12, 0, 0, tzinfo=timezone.utc)
 
@@ -493,7 +494,7 @@ def test_memory_workspace_snapshot_does_not_track_pending_confirmations(tmp_path
 def test_high_risk_unknown_presence_gate_creates_confirmation(tmp_path):
     presence = PresenceStore(tmp_path)
     facts = FactStore(tmp_path)
-    gate = ActionSafetyGate(presence, facts)
+    gate = SmartHomeActionSafetyGate(presence, facts)
     manager = ConfirmationManager(tmp_path)
     action_request = request(risk="high", trigger="user_initiated")
     action_decision = gate.evaluate(action_request)
@@ -512,7 +513,7 @@ def test_high_risk_unknown_presence_gate_creates_confirmation(tmp_path):
 def test_medium_scheduled_unknown_gate_deny_creates_no_confirmation(tmp_path):
     presence = PresenceStore(tmp_path)
     facts = FactStore(tmp_path)
-    gate = ActionSafetyGate(presence, facts)
+    gate = SmartHomeActionSafetyGate(presence, facts)
     manager = ConfirmationManager(tmp_path)
     action_request = request(
         action="set_temperature",
@@ -531,3 +532,4 @@ def test_medium_scheduled_unknown_gate_deny_creates_no_confirmation(tmp_path):
     assert action_decision.decision == "deny"
     assert confirmation is None
     assert manager.store.read_all() == []
+

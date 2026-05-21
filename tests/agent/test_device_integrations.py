@@ -7,14 +7,14 @@ from OriginAgent.agent.action_runtime import ActionIntent, SafeActionExecutor
 from OriginAgent.agent.action_safety import ActionDecision
 from OriginAgent.agent.audit import AuditLogger
 from OriginAgent.agent.confirmation import ConfirmationManager
-from OriginAgent.agent.device_actions import (
+from OriginAgent.domain_packs.smart_home.runtime.device_actions import (
     DeviceActionSchemaRegistry,
     TypedActionPlanner,
     TypedDeviceAction,
 )
-from OriginAgent.agent.device_backends import DeviceActionExecutor
-from OriginAgent.agent.device_integrations import RealLightingBackend
-from OriginAgent.agent.permissions import HouseholdActor, PermissionResolver
+from OriginAgent.domain_packs.smart_home.runtime.device_backends import DeviceActionExecutor
+from OriginAgent.domain_packs.smart_home.runtime.device_integrations import RealLightingBackend
+from OriginAgent.domain_packs.smart_home.runtime.permissions import HouseholdActor, PermissionResolver
 
 NOW = datetime(2026, 5, 16, 12, 0, 0, tzinfo=timezone.utc)
 

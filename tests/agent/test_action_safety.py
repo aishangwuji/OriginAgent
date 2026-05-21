@@ -1,9 +1,10 @@
 import pytest
 
-from OriginAgent.agent.action_safety import ActionRequest, ActionSafetyGate
+from OriginAgent.agent.action_safety import ActionRequest
+from OriginAgent.domain_packs.smart_home.runtime.action_safety import SmartHomeActionSafetyGate
 from OriginAgent.agent.facts import FactStore
-from OriginAgent.agent.presence import PresenceStore
-from OriginAgent.agent.presence_adapters import (
+from OriginAgent.domain_packs.smart_home.runtime.presence import PresenceStore
+from OriginAgent.domain_packs.smart_home.runtime.presence_adapters import (
     MotionAdapter,
     MotionEvent,
     PhoneGeofenceAdapter,
@@ -11,7 +12,7 @@ from OriginAgent.agent.presence_adapters import (
     WifiDeviceEvent,
     WifiPresenceAdapter,
 )
-from OriginAgent.agent.presence_signals import PresenceSignalIngestor
+from OriginAgent.domain_packs.smart_home.runtime.presence_signals import PresenceSignalIngestor
 
 
 @pytest.fixture
@@ -23,7 +24,7 @@ def stores(tmp_path):
 
 def gate(stores):
     presence, facts = stores
-    return ActionSafetyGate(presence, facts)
+    return SmartHomeActionSafetyGate(presence, facts)
 
 
 def request(**kwargs):
@@ -375,3 +376,4 @@ def test_phone_geofence_away_signals_can_drive_low_risk_scheduled_allow(stores):
     assert presence.resolve_occupancy().status == "empty"
     assert decision.decision == "allow"
     assert decision.presence_status == "empty"
+

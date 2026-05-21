@@ -23,6 +23,7 @@ from OriginAgent.agent.agent_runtime_context import (
     snapshot_for_trigger,
 )
 from OriginAgent.agent.agent_tool_setup import (
+    build_domain_tool_context_extras,
     build_tool_context,
     register_default_tools,
     register_domain_tools,
@@ -35,7 +36,6 @@ from OriginAgent.agent.auxiliary_llm import AuxiliaryLLMRouter
 from OriginAgent.agent.background_review import BackgroundReviewService
 from OriginAgent.agent.context import ContextBuilder
 from OriginAgent.agent.curator import CuratorService
-from OriginAgent.agent.device_factory import build_device_action_executor
 from OriginAgent.agent.domain_packs import DomainPackManager
 from OriginAgent.agent.hook import AgentHook, CompositeHook
 from OriginAgent.agent.identity import ActorResolver, RuntimeContext
@@ -75,7 +75,6 @@ from OriginAgent.utils.webui_transcript import append_transcript_object, delete_
 from OriginAgent.utils.webui_turn_helpers import publish_turn_run_status, websocket_turn_latency_ms
 
 if TYPE_CHECKING:
-    from OriginAgent.agent.device_backends import DeviceActionExecutor
     from OriginAgent.config.schema import (
         AuxiliaryConfig,
         ChannelsConfig,
@@ -233,9 +232,10 @@ class AgentLoop:
         model_preset: str | None = None,
         preset_snapshot_loader: preset_helpers.PresetSnapshotLoader | None = None,
         runtime_model_publisher: Callable[[str, str | None], None] | None = None,
-        device_action_executor: DeviceActionExecutor | None = None,
+        device_action_executor: Any | None = None,
         device_tools_real_mode: bool = False,
         device_registry: Any | None = None,
+        domain_runtime_overrides: dict[str, Any] | None = None,
         actor_resolver: ActorResolver | None = None,
         tool_audit_config: ToolAuditConfig | None = None,
         pairing_config: Any | None = None,
@@ -344,9 +344,11 @@ class AgentLoop:
             audit_sink=JsonlToolAuditSink(workspace),
             audit_config=self._tool_audit_config,
         )
-        self.device_action_executor = device_action_executor
-        self._device_tools_real_mode = device_tools_real_mode
-        self._device_registry = device_registry
+        self._domain_runtime_overrides = dict(domain_runtime_overrides or {})
+        if device_action_executor is not None:
+            self._domain_runtime_overrides.setdefault("device_action_executor", device_action_executor)
+        if device_registry is not None:
+            self._domain_runtime_overrides.setdefault("device_registry", device_registry)
         self.actor_resolver = actor_resolver or ActorResolver()
         # One file-read/write tracker per logical session. The tool registry is
         # shared by this loop, so tools resolve the active state via contextvars.
@@ -478,19 +480,14 @@ class AgentLoop:
             config=defaults.domain_packs,
         )
         extra["domain_pack_manager"] = domain_pack_manager
-        explicit_device_executor = extra.pop("device_action_executor", None)
-        device_action_executor = explicit_device_executor
-        smart_home_pack = domain_pack_manager.get_pack("smart_home")
-        if (
-            device_action_executor is None
-            and smart_home_pack is not None
-            and smart_home_pack.active
-            and config.tools.device.enabled
-        ):
-            device_action_executor = build_device_action_executor(
-                workspace=config.workspace_path,
-                config=config.tools.device,
+        domain_runtime_overrides = dict(extra.pop("domain_runtime_overrides", {}) or {})
+        if "device_action_executor" in extra:
+            domain_runtime_overrides.setdefault(
+                "device_action_executor",
+                extra.pop("device_action_executor"),
             )
+        if "device_registry" in extra:
+            domain_runtime_overrides.setdefault("device_registry", extra.pop("device_registry"))
 
         def _background_review_config_loader():
             from OriginAgent.config.loader import load_config
@@ -529,8 +526,7 @@ class AgentLoop:
             model_presets=model_presets,
             model_preset=defaults.model_preset or "default",
             preset_snapshot_loader=preset_snapshot_loader,
-            device_action_executor=device_action_executor,
-            device_tools_real_mode=config.tools.device.mode == "real",
+            domain_runtime_overrides=domain_runtime_overrides,
             tool_audit_config=config.tools.audit,
             pairing_config=config.security.pairing,
             auxiliary_config=defaults.auxiliary,
@@ -635,9 +631,7 @@ class AgentLoop:
             image_generation_provider_configs=self._image_generation_provider_configs,
             timezone=self.context.timezone or "UTC",
             runtime_profile=self._runtime_profile,
-            device_action_executor=self.device_action_executor,
-            device_tools_real_mode=self._device_tools_real_mode,
-            device_registry=self._device_registry,
+            domain_runtime_overrides=self._domain_runtime_overrides,
         )
 
     def _build_tool_context(self):
@@ -653,8 +647,12 @@ class AgentLoop:
             image_generation_provider_configs=self._image_generation_provider_configs,
             timezone=self.context.timezone or "UTC",
             audit_config=self._tool_audit_config,
-            device_action_executor=self.device_action_executor,
-            device_registry=self._device_registry,
+            context_extras=build_domain_tool_context_extras(
+                domain_pack_manager=self.domain_packs,
+                workspace=self.workspace,
+                config=self.tools_config,
+                overrides=self._domain_runtime_overrides,
+            ),
         )
 
     def _register_domain_tools(self) -> None:

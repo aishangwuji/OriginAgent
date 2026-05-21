@@ -5,8 +5,8 @@ from types import SimpleNamespace
 import pytest
 
 from OriginAgent.agent.action_runtime import ActionExecutionResult
-from OriginAgent.agent.device_actions import TypedDeviceAction
-from OriginAgent.agent.tools.device import (
+from OriginAgent.domain_packs.smart_home.runtime.device_actions import TypedDeviceAction
+from OriginAgent.domain_packs.smart_home.tools.device import (
     LightingSetBrightnessTool,
     LightingSetColorTemperatureTool,
     LightingSetPowerTool,

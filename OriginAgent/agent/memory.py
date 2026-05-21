@@ -49,7 +49,6 @@ from OriginAgent.utils.prompt_templates import render_template
 
 if TYPE_CHECKING:
     from OriginAgent.agent.auxiliary_llm import AuxiliaryLLMRouter
-    from OriginAgent.domain_packs.smart_home.runtime.presence import PresenceStore as SmartHomePresenceStore
     from OriginAgent.providers.base import LLMProvider
     from OriginAgent.session.manager import SessionManager
 
@@ -115,7 +114,6 @@ class MemoryStore:
         self._lock_file = self.memory_dir / ".lock"
         self.memory_file = self.memory_dir / "MEMORY.md"
         self.facts_file = self.memory_dir / "facts.jsonl"
-        self.presence_file = self.memory_dir / "presence.json"
         self.history_file = self.memory_dir / "history.jsonl"
         self.legacy_history_file = self.memory_dir / "HISTORY.md"
         self.soul_file = workspace / "SOUL.md"
@@ -130,7 +128,6 @@ class MemoryStore:
             lock_factory=self._locked,
             redactor=redact_memory_text,
         )
-        self._presence_store: SmartHomePresenceStore | None = None
         self._git = GitStore(workspace, tracked_files=[
             "SOUL.md", "USER.md", "memory/MEMORY.md",
             "memory/facts.jsonl", "memory/.dream_cursor",
@@ -140,18 +137,6 @@ class MemoryStore:
     @property
     def git(self) -> GitStore:
         return self._git
-
-    @property
-    def presence_store(self) -> "SmartHomePresenceStore":
-        if self._presence_store is None:
-            from OriginAgent.domain_packs.smart_home.runtime.presence import PresenceStore
-
-            self._presence_store = PresenceStore(
-                workspace=self.workspace,
-                presence_file=self.presence_file,
-                lock_factory=self._locked,
-            )
-        return self._presence_store
 
     # -- generic helpers -----------------------------------------------------
 

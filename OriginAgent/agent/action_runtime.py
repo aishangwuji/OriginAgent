@@ -28,9 +28,8 @@ from OriginAgent.agent.permissions import (
     PermissionDecision,
     PermissionRequest,
     PermissionResolver,
-    infer_device_domain,
 )
-from OriginAgent.agent.presence_signals import FORBIDDEN_METADATA_KEYS
+from OriginAgent.agent.action_privacy import FORBIDDEN_METADATA_KEYS
 from OriginAgent.utils.helpers import ensure_dir
 
 ACTION_FORBIDDEN_PAYLOAD_KEYS = {
@@ -942,7 +941,7 @@ def _permission_attributes(intent: ActionIntent) -> dict[str, str]:
     if isinstance(domain, str) and domain.strip():
         normalized_domain = domain.strip().lower()
     else:
-        normalized_domain = infer_device_domain(intent.scope, intent.action)
+        normalized_domain = "general"
     if normalized_domain and normalized_domain != "general":
         attributes["device_domain"] = normalized_domain
     if intent.payload.get("device_id"):
@@ -958,7 +957,7 @@ def _default_scope_redactor(scope: str | None) -> str | None:
         return None
     normalized = normalized.replace(" ", ".")
     parts = [part for part in normalized.split(".") if part]
-    if parts and parts[0] == "home" and len(parts) >= 3:
-        return ".".join([*parts[:-1], "<device>"])
+    if len(parts) >= 3:
+        return ".".join([*parts[:-1], "<target>"])
     normalized = ".".join(parts)
     return normalized or None

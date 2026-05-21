@@ -1,4 +1,5 @@
 import json
+from OriginAgent.domain_packs.smart_home.runtime.action_safety import SmartHomeActionSafetyGate
 from datetime import datetime, timezone
 
 from OriginAgent.agent.action_runtime import (
@@ -7,15 +8,15 @@ from OriginAgent.agent.action_runtime import (
     SafeActionExecutor,
     sanitize_action_payload,
 )
-from OriginAgent.agent.action_safety import ActionDecision, ActionRequest, ActionSafetyGate
+from OriginAgent.agent.action_safety import ActionDecision, ActionRequest
 from OriginAgent.agent.audit import AuditLogger
 from OriginAgent.agent.confirmation import ConfirmationManager
-from OriginAgent.agent.device_actions import DeviceActionSchemaRegistry, TypedActionPlanner, TypedDeviceAction
-from OriginAgent.agent.device_backends import DeviceActionExecutor, LowRiskDeviceBackend
+from OriginAgent.domain_packs.smart_home.runtime.device_actions import DeviceActionSchemaRegistry, TypedActionPlanner, TypedDeviceAction
+from OriginAgent.domain_packs.smart_home.runtime.device_backends import DeviceActionExecutor, LowRiskDeviceBackend
 from OriginAgent.agent.facts import FactStore
-from OriginAgent.agent.permissions import HouseholdActor, PermissionResolver
-from OriginAgent.agent.presence import PresenceStore
-from OriginAgent.agent.presence_adapters import (
+from OriginAgent.domain_packs.smart_home.runtime.permissions import HouseholdActor, PermissionResolver
+from OriginAgent.domain_packs.smart_home.runtime.presence import PresenceStore
+from OriginAgent.domain_packs.smart_home.runtime.presence_adapters import (
     MotionAdapter,
     MotionEvent,
     PhoneGeofenceAdapter,
@@ -23,7 +24,7 @@ from OriginAgent.agent.presence_adapters import (
     WifiDeviceEvent,
     WifiPresenceAdapter,
 )
-from OriginAgent.agent.presence_signals import PresenceSignalIngestor
+from OriginAgent.domain_packs.smart_home.runtime.presence_signals import PresenceSignalIngestor
 
 NOW = datetime(2026, 5, 15, 12, 0, 0, tzinfo=timezone.utc)
 
@@ -94,6 +95,8 @@ def intent(**kwargs):
         "requested_by": "alice",
     }
     defaults.update(kwargs)
+    if "payload" not in defaults and str(defaults.get("scope", "")).endswith(".lock"):
+        defaults["payload"] = {"domain": "lock"}
     return ActionIntent(**defaults)
 
 
@@ -108,7 +111,7 @@ def real_executor(tmp_path, backend=None, permission_resolver=None):
     facts = FactStore(tmp_path)
     return (
         SafeActionExecutor(
-            gate=ActionSafetyGate(presence, facts),
+            gate=SmartHomeActionSafetyGate(presence, facts),
             confirmation_manager=ConfirmationManager(tmp_path),
             backend=backend or DryRunActionBackend(),
             permission_resolver=permission_resolver or permissions(),
@@ -785,3 +788,4 @@ def test_high_risk_user_unknown_presence_creates_pending_confirmation(tmp_path):
     assert result.status == "pending_confirmation"
     assert result.confirmation_id is not None
     assert backend.calls == 0
+

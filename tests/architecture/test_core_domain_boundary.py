@@ -12,26 +12,7 @@ CORE_ROOTS = (
 )
 FORBIDDEN_IMPORT_PREFIX = "OriginAgent.domain_packs.smart_home"
 
-# Existing smart-home bridge debt scheduled for migration into
-# OriginAgent/domain_packs/smart_home. This allowlist should only shrink.
-SMART_HOME_BRIDGE_DEBT = {
-    Path("OriginAgent/agent/action_safety.py"),
-    Path("OriginAgent/agent/device_actions.py"),
-    Path("OriginAgent/agent/device_backends.py"),
-    Path("OriginAgent/agent/device_factory.py"),
-    Path("OriginAgent/agent/device_integrations.py"),
-    Path("OriginAgent/agent/devices.py"),
-    Path("OriginAgent/agent/memory.py"),
-    Path("OriginAgent/agent/permissions.py"),
-    Path("OriginAgent/agent/presence.py"),
-    Path("OriginAgent/agent/presence_adapters.py"),
-    Path("OriginAgent/agent/presence_signals.py"),
-    Path("OriginAgent/agent/tools/device.py"),
-    Path("OriginAgent/agent/tools/device_messages.py"),
-}
-
-
-def test_core_smart_home_imports_are_limited_to_known_bridge_debt() -> None:
+def test_core_does_not_import_smart_home_domain_pack() -> None:
     offenders: dict[Path, list[str]] = {}
     for root in CORE_ROOTS:
         for path in root.rglob("*.py"):
@@ -39,12 +20,7 @@ def test_core_smart_home_imports_are_limited_to_known_bridge_debt() -> None:
             if imports:
                 offenders[path] = imports
 
-    unexpected = {
-        path: imports
-        for path, imports in offenders.items()
-        if path not in SMART_HOME_BRIDGE_DEBT
-    }
-    assert unexpected == {}
+    assert offenders == {}
 
 
 def _smart_home_imports(path: Path) -> list[str]:

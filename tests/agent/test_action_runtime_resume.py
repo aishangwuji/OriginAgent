@@ -5,7 +5,7 @@ from OriginAgent.agent.action_runtime import ActionIntent, SafeActionExecutor
 from OriginAgent.agent.action_safety import ActionDecision, ActionRequest
 from OriginAgent.agent.audit import AuditLogger
 from OriginAgent.agent.confirmation import ConfirmationManager
-from OriginAgent.agent.permissions import HouseholdActor, PermissionResolver
+from OriginAgent.domain_packs.smart_home.runtime.permissions import HouseholdActor, PermissionResolver
 
 NOW = datetime(2030, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
 
@@ -74,6 +74,7 @@ def intent(**kwargs):
         "trigger": "user_initiated",
         "risk": "high",
         "requested_by": "alice",
+        "payload": {"domain": "lock"},
     }
     defaults.update(kwargs)
     return ActionIntent(**defaults)

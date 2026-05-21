@@ -1,5 +1,5 @@
-from OriginAgent.agent.device_factory import build_device_action_executor
-from OriginAgent.agent.device_actions import TypedDeviceAction
+from OriginAgent.domain_packs.smart_home.runtime.device_factory import build_device_action_executor
+from OriginAgent.domain_packs.smart_home.runtime.device_actions import TypedDeviceAction
 from OriginAgent.config.schema import DeviceToolsConfig
 
 

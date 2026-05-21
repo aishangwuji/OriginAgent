@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from OriginAgent.agent.action_safety import ActionDecision, ActionRequest
+from OriginAgent.agent.action_safety import ActionDecision, ActionRequest, DefaultSafetyGate
 from OriginAgent.agent.facts import FactRecord, FactStore
 
 from .presence import PresenceStore
@@ -15,8 +15,13 @@ class SmartHomeActionSafetyGate:
     def __init__(self, presence_store: PresenceStore, fact_store: FactStore):
         self.presence_store = presence_store
         self.fact_store = fact_store
+        self.default_gate = DefaultSafetyGate()
 
     def evaluate(self, request: ActionRequest) -> ActionDecision:
+        default_decision = self.default_gate.evaluate(request)
+        if default_decision.decision != "allow":
+            return default_decision
+
         occupancy = self.presence_store.resolve_occupancy()
         presence_status = occupancy.status
 

@@ -17,7 +17,7 @@ from loguru import logger
 
 from OriginAgent.agent.action_safety import ActionDecision, ActionRequest
 from OriginAgent.agent.audit import AuditLogger
-from OriginAgent.agent.presence_signals import sanitize_presence_metadata
+from OriginAgent.agent.action_privacy import sanitize_metadata
 from OriginAgent.utils.helpers import ensure_dir, truncate_text
 
 VALID_KINDS = {"action_confirmation", "fact_confirmation", "notify_only"}
@@ -806,7 +806,7 @@ def _contains_boundary_phrase(text: str, phrases: set[str]) -> bool:
 
 
 def _sanitize_confirmation_metadata(metadata: dict[str, Any]) -> dict[str, str]:
-    sanitized = sanitize_presence_metadata(metadata)
+    sanitized = sanitize_metadata(metadata)
     return {
         key: _sanitize_text(value, REASON_MAX_CHARS)
         for key, value in sanitized.items()

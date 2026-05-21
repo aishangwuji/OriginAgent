@@ -1,7 +1,7 @@
 import pytest
 
 from OriginAgent.agent.action_runtime import ActionIntent
-from OriginAgent.agent.device_actions import (
+from OriginAgent.domain_packs.smart_home.runtime.device_actions import (
     DeviceActionSchemaRegistry,
     InvalidActionParameterError,
     TypedActionPlanner,

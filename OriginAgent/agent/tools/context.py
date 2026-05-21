@@ -40,6 +40,4 @@ class ToolContext:
     trigger: str | None = None
     capability_snapshot: Any | None = None
     audit_config: Any | None = None
-    device_action_executor: Any | None = None
-    device_registry: Any | None = None
     confirmation_store: Any | None = None

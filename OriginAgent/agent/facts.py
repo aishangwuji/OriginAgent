@@ -23,7 +23,6 @@ from typing import Any, Callable
 from filelock import FileLock
 from loguru import logger
 
-from OriginAgent.agent.permissions import infer_device_domain
 from OriginAgent.utils.helpers import ensure_dir
 
 
@@ -1052,15 +1051,24 @@ def _contains_any(text: str, needles: tuple[str, ...]) -> bool:
 
 
 def _requires_high_risk_confirmation(*, scope: str, content: str) -> bool:
-    return infer_device_domain(scope, content) in HIGH_RISK_DEVICE_DOMAINS
+    return _infer_domain_key(scope, content) in HIGH_RISK_DEVICE_DOMAINS
 
 
 def _fact_domain_key(record: FactRecord) -> str:
-    domain = infer_device_domain(record.scope, record.content)
+    domain = _infer_domain_key(record.scope, record.content)
     if domain and domain != "general":
         return domain
     scope_head = record.scope.split(".", 1)[0].strip().lower()
     return scope_head or "general"
+
+
+def _infer_domain_key(scope: str, content: str) -> str:
+    text = f"{scope or ''} {content or ''}".casefold()
+    for domain in HIGH_RISK_DEVICE_DOMAINS:
+        if domain in text:
+            return domain
+    parts = [part for part in str(scope or "").strip().lower().split(".") if part]
+    return parts[0] if parts else "general"
 
 
 def _issue(code: str, severity: str, message: str) -> ValidationIssue:

@@ -1,17 +1,18 @@
 import json
+from OriginAgent.domain_packs.smart_home.runtime.action_safety import SmartHomeActionSafetyGate
 from datetime import datetime, timezone
 
 import pytest
 
 from OriginAgent.agent.action_runtime import ActionIntent, SafeActionExecutor
-from OriginAgent.agent.action_safety import ActionDecision, ActionSafetyGate
+from OriginAgent.agent.action_safety import ActionDecision
 from OriginAgent.agent.audit import AuditLogger
 from OriginAgent.agent.confirmation import ConfirmationManager
-from OriginAgent.agent.device_actions import DeviceActionSchemaRegistry, TypedActionPlanner, TypedDeviceAction
-from OriginAgent.agent.device_backends import DeviceActionExecutor, LowRiskDeviceBackend
+from OriginAgent.domain_packs.smart_home.runtime.device_actions import DeviceActionSchemaRegistry, TypedActionPlanner, TypedDeviceAction
+from OriginAgent.domain_packs.smart_home.runtime.device_backends import DeviceActionExecutor, LowRiskDeviceBackend
 from OriginAgent.agent.facts import FactStore
-from OriginAgent.agent.permissions import HouseholdActor, PermissionResolver
-from OriginAgent.agent.presence import PresenceStore
+from OriginAgent.domain_packs.smart_home.runtime.permissions import HouseholdActor, PermissionResolver
+from OriginAgent.domain_packs.smart_home.runtime.presence import PresenceStore
 
 NOW = datetime(2026, 5, 16, 12, 0, 0, tzinfo=timezone.utc)
 
@@ -328,7 +329,7 @@ def test_medium_climate_action_follows_existing_gate_and_permission_path(tmp_pat
     facts = FactStore(tmp_path)
     backend = LowRiskDeviceBackend()
     safe_executor = SafeActionExecutor(
-        gate=ActionSafetyGate(presence, facts),
+        gate=SmartHomeActionSafetyGate(presence, facts),
         confirmation_manager=ConfirmationManager(tmp_path),
         backend=backend,
         permission_resolver=permissions(),
@@ -354,3 +355,4 @@ def test_medium_climate_action_follows_existing_gate_and_permission_path(tmp_pat
     assert result.decision.decision == "allow"
     assert result.permission_status == "allow"
     assert result.backend_result["domain"] == "climate"
+

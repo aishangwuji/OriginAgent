@@ -1,6 +1,6 @@
 import pytest
 
-from OriginAgent.agent.permissions import (
+from OriginAgent.domain_packs.smart_home.runtime.permissions import (
     HouseholdActor,
     PermissionRequest,
     PermissionResolver,

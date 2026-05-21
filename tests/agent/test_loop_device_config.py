@@ -94,7 +94,9 @@ def test_from_config_explicit_executor_takes_precedence(tmp_path):
     )
 
     assert len(_lighting_names(loop)) == 3
-    assert loop.device_action_executor is executor
+    tool = loop.tools.get("originagent_device_lighting_set_power")
+    assert tool is not None
+    assert tool._executor is executor
 
 
 def test_from_config_real_mode_lighting_client_does_not_register_tools(tmp_path):

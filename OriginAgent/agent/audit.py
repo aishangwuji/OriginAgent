@@ -19,7 +19,7 @@ from typing import Any, Callable
 
 from filelock import FileLock
 
-from OriginAgent.agent.presence_signals import FORBIDDEN_METADATA_KEYS
+from OriginAgent.agent.action_privacy import FORBIDDEN_METADATA_KEYS
 from OriginAgent.utils.helpers import ensure_dir, truncate_text
 
 AUDIT_REASON_MAX_CHARS = 2000

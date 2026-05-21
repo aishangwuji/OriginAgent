@@ -30,7 +30,6 @@ from OriginAgent.agent.facts import (
     FactRecord,
 )
 from OriginAgent.agent.memory import MemoryStore, redact_memory_text
-from OriginAgent.agent.permissions import infer_device_domain
 from OriginAgent.agent.skill_artifacts import write_skill_artifact
 from OriginAgent.agent.workflow_artifacts import write_workflow_artifact
 from OriginAgent.providers.base import LLMProvider
@@ -1279,10 +1278,19 @@ def _pending_confirmation_required(*, category: str, scope: str, content: str, e
     return (
         category in HIGH_RISK_CATEGORIES
         or _contains_any(combined, HIGH_RISK_KEYWORDS)
-        or infer_device_domain(scope, combined) in _HIGH_RISK_DEVICE_DOMAINS
+        or _infer_domain_key(scope, combined) in _HIGH_RISK_DEVICE_DOMAINS
         or _contains_any(combined, TEMPORARY_LANGUAGE)
         or _contains_any(combined, UNCERTAIN_LANGUAGE)
     )
+
+
+def _infer_domain_key(scope: str, content: str) -> str:
+    text = f"{scope or ''} {content or ''}".casefold()
+    for domain in _HIGH_RISK_DEVICE_DOMAINS:
+        if domain in text:
+            return domain
+    parts = [part for part in str(scope or "").strip().lower().split(".") if part]
+    return parts[0] if parts else "general"
 
 
 def _review_confidence(record: dict[str, Any], payload: dict[str, Any]) -> float:

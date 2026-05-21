@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from OriginAgent.agent.domain_packs import DomainRuntimeContribution
 
-from .device_factory import build_device_action_executor
+from OriginAgent.domain_packs.smart_home.runtime.device_factory import build_device_action_executor
 
 
 def build_runtime_contribution(context) -> DomainRuntimeContribution:

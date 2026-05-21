@@ -3,7 +3,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from OriginAgent.agent.presence import PresenceStore, _format_timestamp, _is_expired, _timestamp
+from OriginAgent.domain_packs.smart_home.runtime.presence import PresenceStore, _format_timestamp, _is_expired, _timestamp
 
 NOW = datetime(2026, 5, 15, 12, 0, 0, tzinfo=timezone.utc)
 PAST = "2026-05-15T11:00:00+00:00"
@@ -275,7 +275,7 @@ def test_presence_writes_use_lock_and_atomic_writer(tmp_path, monkeypatch):
         events.append(("write", path, json.loads(content)))
 
     monkeypatch.setattr(store, "_locked", lambda: FakeLock())
-    monkeypatch.setattr("OriginAgent.agent.presence._write_text_atomic", fake_write)
+    monkeypatch.setattr("OriginAgent.domain_packs.smart_home.runtime.presence._write_text_atomic", fake_write)
 
     store.upsert_presence(
         "alice",

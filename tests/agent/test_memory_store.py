@@ -6,6 +6,7 @@ from datetime import datetime
 import pytest
 
 from OriginAgent.agent.memory import _HISTORY_ENTRY_HARD_CAP, MemoryStore
+from OriginAgent.domain_packs.smart_home.runtime.presence import PresenceStore
 
 
 @pytest.fixture
@@ -44,11 +45,11 @@ class TestMemoryStoreBasicIO:
         assert "Long-term Memory" in ctx
         assert "important fact" in ctx
 
-    def test_presence_store_is_current_state_file_not_memory_context(self, store):
-        assert store.presence_file == store.memory_dir / "presence.json"
-        assert store.presence_store.presence_file == store.presence_file
+    def test_smart_home_presence_state_is_not_memory_context(self, store):
+        presence_store = PresenceStore(store.workspace)
+        assert presence_store.presence_file == store.memory_dir / "presence.json"
 
-        store.presence_store.upsert_presence(
+        presence_store.upsert_presence(
             "alice",
             role="resident",
             status="home",
@@ -56,7 +57,7 @@ class TestMemoryStoreBasicIO:
             confidence=0.9,
         )
 
-        assert store.presence_file.exists()
+        assert presence_store.presence_file.exists()
         assert "alice" not in store.get_memory_context()
 
     @pytest.mark.parametrize(

@@ -51,8 +51,6 @@ def build_tool_context(
     image_generation_provider_configs: dict[str, Any],
     timezone: str,
     audit_config: Any,
-    device_action_executor: Any,
-    device_registry: Any,
     context_extras: dict[str, Any] | None = None,
 ) -> ToolContext:
     """Build the shared tool construction context."""
@@ -68,8 +66,6 @@ def build_tool_context(
         image_generation_provider_configs=image_generation_provider_configs,
         timezone=timezone,
         audit_config=audit_config,
-        device_action_executor=device_action_executor,
-        device_registry=device_registry,
     )
     for name, value in (context_extras or {}).items():
         setattr(ctx, name, value)
@@ -142,9 +138,7 @@ def register_default_tools(
     image_generation_provider_configs: dict[str, Any],
     timezone: str,
     runtime_profile: str,
-    device_action_executor: Any,
-    device_tools_real_mode: bool,
-    device_registry: Any,
+    domain_runtime_overrides: dict[str, Any] | None = None,
 ) -> None:
     """Register all default tools with the registry."""
     allowed_dir = workspace if (restrict_to_workspace or exec_config.sandbox) else None
@@ -268,10 +262,7 @@ def register_default_tools(
         domain_pack_manager=domain_pack_manager,
         workspace=workspace,
         config=config,
-        overrides={
-            "device_action_executor": device_action_executor,
-            "device_registry": device_registry,
-        },
+        overrides=domain_runtime_overrides or {},
     )
     context = build_tool_context(
         config=config,
@@ -285,11 +276,6 @@ def register_default_tools(
         image_generation_provider_configs=image_generation_provider_configs,
         timezone=timezone,
         audit_config=audit_config,
-        device_action_executor=domain_context_extras.get(
-            "device_action_executor",
-            device_action_executor,
-        ),
-        device_registry=domain_context_extras.get("device_registry", device_registry),
         context_extras=domain_context_extras,
     )
     register_domain_tools(registry, domain_pack_manager=domain_pack_manager, context=context)

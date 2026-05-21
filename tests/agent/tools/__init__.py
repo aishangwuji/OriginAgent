@@ -1,22 +1,23 @@
 import json
+from OriginAgent.domain_packs.smart_home.runtime.action_safety import SmartHomeActionSafetyGate
 from datetime import datetime, timezone
 
 import pytest
 
 from OriginAgent.agent.action_runtime import ActionIntent, SafeActionExecutor
-from OriginAgent.agent.action_safety import ActionSafetyGate
+
 from OriginAgent.agent.audit import AuditLogger
 from OriginAgent.agent.confirmation import ConfirmationManager
-from OriginAgent.agent.device_actions import (
+from OriginAgent.domain_packs.smart_home.runtime.device_actions import (
     DeviceActionSchemaRegistry,
     TypedActionPlanner,
     TypedDeviceAction,
 )
-from OriginAgent.agent.device_backends import DeviceActionExecutor
-from OriginAgent.agent.device_integrations import RealLightingBackend
+from OriginAgent.domain_packs.smart_home.runtime.device_backends import DeviceActionExecutor
+from OriginAgent.domain_packs.smart_home.runtime.device_integrations import RealLightingBackend
 from OriginAgent.agent.facts import FactStore
-from OriginAgent.agent.permissions import HouseholdActor, PermissionResolver
-from OriginAgent.agent.presence import PresenceStore
+from OriginAgent.domain_packs.smart_home.runtime.permissions import HouseholdActor, PermissionResolver
+from OriginAgent.domain_packs.smart_home.runtime.presence import PresenceStore
 
 NOW = datetime(2026, 5, 16, 12, 0, 0, tzinfo=timezone.utc)
 PRIVATE_DEVICE_ID = "private_device_7f3a9c"
@@ -44,7 +45,7 @@ def build_chain(tmp_path, *, real_mode: bool):
     client = FakeLightingClient()
     backend = RealLightingBackend(client, real_mode=real_mode)
     safe_executor = SafeActionExecutor(
-        gate=ActionSafetyGate(PresenceStore(tmp_path), FactStore(tmp_path)),
+        gate=SmartHomeActionSafetyGate(PresenceStore(tmp_path), FactStore(tmp_path)),
         confirmation_manager=ConfirmationManager(tmp_path, audit_logger=audit),
         backend=backend,
         permission_resolver=PermissionResolver(
@@ -230,3 +231,4 @@ def test_guest_low_risk_lighting_action_is_allowed_and_explainable(tmp_path):
         "action_decision",
         "permission_decision",
     }
+

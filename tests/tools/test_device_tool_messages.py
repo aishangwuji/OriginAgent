@@ -5,8 +5,8 @@ import json
 import pytest
 
 from OriginAgent.agent.action_runtime import ActionExecutionResult
-from OriginAgent.agent.tools.device import LightingSetPowerTool
-from OriginAgent.agent.tools.device_messages import (
+from OriginAgent.domain_packs.smart_home.tools.device import LightingSetPowerTool
+from OriginAgent.domain_packs.smart_home.tools.device_messages import (
     BACKEND_FAILED,
     CONFIRMATION_REQUIRED,
     DRY_RUN_ACCEPTED,
