@@ -14,19 +14,40 @@ from OpenHome.config.schema import Config
 
 # Global variable to store current config path (for multi-instance support)
 _current_config_path: Path | None = None
+APP_DATA_DIR_NAME = ".originagent"
+LEGACY_APP_DATA_DIR_NAME = ".openhome"
+CONFIG_FILE_NAME = "config.json"
 
 
-def set_config_path(path: Path) -> None:
+def set_config_path(path: Path | None) -> None:
     """Set the current config path (used to derive data directory)."""
     global _current_config_path
     _current_config_path = path
+
+
+def _origin_config_path() -> Path:
+    return Path.home() / APP_DATA_DIR_NAME / CONFIG_FILE_NAME
+
+
+def _legacy_config_path() -> Path:
+    return Path.home() / LEGACY_APP_DATA_DIR_NAME / CONFIG_FILE_NAME
+
+
+def _is_legacy_default_config_path(path: Path) -> bool:
+    return path.expanduser().resolve(strict=False) == _legacy_config_path().resolve(strict=False)
 
 
 def get_config_path() -> Path:
     """Get the configuration file path."""
     if _current_config_path:
         return _current_config_path
-    return Path.home() / ".openhome" / "config.json"
+    origin_path = _origin_config_path()
+    legacy_path = _legacy_config_path()
+    if origin_path.exists():
+        return origin_path
+    if legacy_path.exists():
+        return legacy_path
+    return origin_path
 
 
 def load_config(config_path: Path | None = None) -> Config:
@@ -46,7 +67,7 @@ def load_config(config_path: Path | None = None) -> Config:
         try:
             with open(path, encoding="utf-8") as f:
                 data = json.load(f)
-            data = _migrate_config(data)
+            data = _migrate_config(data, path)
             config = Config.model_validate(data)
         except (json.JSONDecodeError, ValueError, pydantic.ValidationError) as e:
             logger.warning("Failed to load config from {}: {}", path, e)
@@ -150,8 +171,13 @@ def _env_replace(match: re.Match[str]) -> str:
     return value
 
 
-def _migrate_config(data: dict) -> dict:
+def _migrate_config(data: dict, path: Path | None = None) -> dict:
     """Migrate old config formats to current."""
+    if path is not None and _is_legacy_default_config_path(path):
+        agents = data.setdefault("agents", {})
+        defaults = agents.setdefault("defaults", {})
+        defaults.setdefault("workspace", f"~/{LEGACY_APP_DATA_DIR_NAME}/workspace")
+
     # Move tools.exec.restrictToWorkspace → tools.restrictToWorkspace
     tools = data.get("tools", {})
     exec_cfg = tools.get("exec", {})

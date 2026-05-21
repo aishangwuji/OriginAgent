@@ -109,6 +109,7 @@ dev = [
 ]
 
 [project.scripts]
+originagent = "OpenHome.cli.commands:app"
 openhome = "OpenHome.cli.commands:app"
 OpenHome = "OpenHome.cli.commands:app"
 

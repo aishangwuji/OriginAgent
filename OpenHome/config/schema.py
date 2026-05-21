@@ -216,7 +216,7 @@ class LearningConfig(Base):
 class AgentDefaults(Base):
     """Default agent configuration."""
 
-    workspace: str = "~/.openhome/workspace"
+    workspace: str = "~/.originagent/workspace"
     model: str = "deepseek-chat"
     model_preset: str | None = Field(
         default=None,

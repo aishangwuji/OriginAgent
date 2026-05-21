@@ -39,3 +39,13 @@ def test_source_checkout_import_uses_pyproject_version_without_metadata() -> Non
 
     assert proc.returncode == 0, proc.stderr
     assert proc.stdout.strip() == expected
+
+
+def test_pyproject_exposes_originagent_console_script() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    scripts = tomllib.loads((repo_root / "pyproject.toml").read_text(encoding="utf-8"))[
+        "project"
+    ]["scripts"]
+
+    assert scripts["originagent"] == "OpenHome.cli.commands:app"
+    assert scripts["openhome"] == "OpenHome.cli.commands:app"

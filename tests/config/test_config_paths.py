@@ -1,5 +1,9 @@
 from pathlib import Path
 
+import pytest
+
+from OpenHome.config import loader
+from OpenHome.config.loader import set_config_path
 from OpenHome.config.paths import (
     get_bridge_install_dir,
     get_cli_history_path,
@@ -12,6 +16,40 @@ from OpenHome.config.paths import (
     get_workspace_path,
     is_default_workspace,
 )
+
+
+@pytest.fixture(autouse=True)
+def reset_config_path():
+    set_config_path(None)
+    yield
+    set_config_path(None)
+
+
+def test_default_config_path_prefers_originagent_for_new_install(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+
+    assert loader.get_config_path() == tmp_path / ".originagent" / "config.json"
+
+
+def test_default_config_path_falls_back_to_legacy_when_present(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    legacy_config = tmp_path / ".openhome" / "config.json"
+    legacy_config.parent.mkdir()
+    legacy_config.write_text("{}", encoding="utf-8")
+
+    assert loader.get_config_path() == legacy_config
+
+
+def test_default_config_path_prefers_originagent_when_both_exist(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    legacy_config = tmp_path / ".openhome" / "config.json"
+    origin_config = tmp_path / ".originagent" / "config.json"
+    legacy_config.parent.mkdir()
+    origin_config.parent.mkdir()
+    legacy_config.write_text("{}", encoding="utf-8")
+    origin_config.write_text("{}", encoding="utf-8")
+
+    assert loader.get_config_path() == origin_config
 
 
 def test_runtime_dirs_follow_config_path(monkeypatch, tmp_path: Path) -> None:
@@ -32,18 +70,39 @@ def test_media_dir_supports_channel_namespace(monkeypatch, tmp_path: Path) -> No
     assert get_media_dir("telegram") == config_file.parent / "media" / "telegram"
 
 
-def test_shared_and_legacy_paths_remain_global() -> None:
-    assert get_cli_history_path() == Path.home() / ".openhome" / "history" / "cli_history"
-    assert get_bridge_install_dir() == Path.home() / ".openhome" / "bridge"
+def test_shared_paths_follow_originagent_default(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+
+    assert get_cli_history_path() == tmp_path / ".originagent" / "history" / "cli_history"
+    assert get_bridge_install_dir() == tmp_path / ".originagent" / "bridge"
     assert get_legacy_sessions_dir() == Path.home() / ".OpenHome" / "sessions"
 
 
-def test_workspace_path_is_explicitly_resolved() -> None:
-    assert get_workspace_path() == Path.home() / ".openhome" / "workspace"
-    assert get_workspace_path("~/custom-workspace") == Path.home() / "custom-workspace"
+def test_shared_paths_follow_legacy_default_when_legacy_config_exists(
+    monkeypatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    legacy_config = tmp_path / ".openhome" / "config.json"
+    legacy_config.parent.mkdir()
+    legacy_config.write_text("{}", encoding="utf-8")
+
+    assert get_cli_history_path() == tmp_path / ".openhome" / "history" / "cli_history"
+    assert get_bridge_install_dir() == tmp_path / ".openhome" / "bridge"
 
 
-def test_is_default_workspace_distinguishes_default_and_custom_paths() -> None:
+def test_workspace_path_is_explicitly_resolved(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    custom_workspace = tmp_path / "custom-workspace"
+
+    assert get_workspace_path() == tmp_path / ".originagent" / "workspace"
+    assert get_workspace_path(str(custom_workspace)) == custom_workspace
+
+
+def test_is_default_workspace_distinguishes_default_and_custom_paths(
+    monkeypatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+
     assert is_default_workspace(None) is True
-    assert is_default_workspace(Path.home() / ".openhome" / "workspace") is True
+    assert is_default_workspace(tmp_path / ".originagent" / "workspace") is True
     assert is_default_workspace("~/custom-workspace") is False

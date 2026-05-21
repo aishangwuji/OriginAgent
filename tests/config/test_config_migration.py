@@ -1,5 +1,6 @@
 import json
 import socket
+from pathlib import Path
 from unittest.mock import patch
 
 from OpenHome.config.loader import load_config, save_config
@@ -158,6 +159,17 @@ def test_load_config_migrates_legacy_my_tool_keys(tmp_path) -> None:
 
     assert config.tools.my.enable is False
     assert config.tools.my.allow_set is True
+
+
+def test_legacy_default_config_keeps_legacy_workspace(monkeypatch, tmp_path) -> None:
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    config_path = tmp_path / ".openhome" / "config.json"
+    config_path.parent.mkdir()
+    config_path.write_text("{}", encoding="utf-8")
+
+    config = load_config(config_path)
+
+    assert config.agents.defaults.workspace == "~/.openhome/workspace"
 
 
 def test_save_config_rewrites_legacy_my_tool_keys(tmp_path) -> None:

@@ -161,9 +161,9 @@ openhome onboard
 ```
 
 > [!NOTE]
-> OriginAgent is in a staged rename. During the compatibility period, the Python package, CLI command, and default config directory still use the legacy `openhome` / `~/.openhome` names.
+> OriginAgent is in a staged rename. During the compatibility period, both `originagent` and the legacy `openhome` command are supported. New installs default to `~/.originagent`; existing `~/.openhome/config.json` installs continue using the legacy directory.
 
-**2. Configure** (`~/.openhome/config.json`)
+**2. Configure** (`~/.originagent/config.json`, or existing `~/.openhome/config.json`)
 
 Configure these **two parts** in your config (other options have defaults). Add or merge the following blocks into your existing config instead of replacing the whole file.
 
@@ -210,7 +210,7 @@ openhome agent
   <img src="images/OpenHome_webui.png" alt="OriginAgent webui preview" width="900">
 </p>
 
-**1. Enable the WebSocket channel in `~/.openhome/config.json`**
+**1. Enable the WebSocket channel in your active config file**
 
 ```json
 { "channels": { "websocket": { "enabled": true } } }
