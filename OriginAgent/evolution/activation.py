@@ -202,10 +202,16 @@ class EvolutionModuleActivator:
                     error=failed,
                 )
                 events.append(event)
+                dirty = self._record_dirty_rollback(
+                    actor=actor,
+                    metadata=metadata,
+                    reason=failed,
+                )
+                events.append(dirty)
                 return _result_from_metadata(
                     metadata,
                     ok=False,
-                    status="rollback_failed",
+                    status="dirty_rollback",
                     events=tuple(events),
                     error=failed,
                 )
@@ -417,6 +423,38 @@ class EvolutionModuleActivator:
         if not uninstalled.ok:
             return uninstalled.error or uninstalled.message
         return ""
+
+    def _record_dirty_rollback(
+        self,
+        *,
+        actor: str,
+        metadata: dict[str, Any],
+        reason: str,
+    ) -> EvolutionEvent:
+        now = datetime.now(timezone.utc).isoformat()
+        target_paths = list(_target_paths(metadata))
+        metadata["status"] = "dirty_rollback"
+        metadata["dirty_rollback_at"] = now
+        metadata["dirty_reason"] = reason
+        metadata["residual_resources"] = target_paths
+        metadata.setdefault("teardown_attempts", [])
+        metadata.setdefault("force_cleaned_at", "")
+        _write_json_atomic(self._activation_metadata_path(str(metadata.get("artifact_digest") or "")), metadata)
+        return self.ledger.append(
+            EvolutionEvent.new(
+                EventType.DIRTY_ROLLBACK,
+                actor=actor,
+                module_id=str(metadata.get("module_id") or ""),
+                module_version=str(metadata.get("version") or ""),
+                module_type=str(metadata.get("module_type") or ""),
+                artifact_digest=str(metadata.get("artifact_digest") or ""),
+                result={
+                    "status": "dirty_rollback",
+                    "reason": reason,
+                    "residual_resources": target_paths,
+                },
+            )
+        )
 
     def _write_activation_success(
         self,

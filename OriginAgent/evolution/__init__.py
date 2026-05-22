@@ -3,13 +3,15 @@
 from OriginAgent.evolution.activation import EvolutionActivationResult, EvolutionModuleActivator
 from OriginAgent.evolution.capability_gate import EvolutionCapabilityGate, EvolutionCapabilityResult
 from OriginAgent.evolution.events import EventType, EvolutionEvent
-from OriginAgent.evolution.ledger import EvolutionLedger
+from OriginAgent.evolution.identity import EvolutionIdentityStore
+from OriginAgent.evolution.ledger import EvolutionLedger, LedgerStatus
 from OriginAgent.evolution.manager import (
     EvolutionModuleManager,
     EvolutionStageResult,
     EvolutionVerificationResult,
 )
 from OriginAgent.evolution.manifest import EvolutionManifest, validate_manifest
+from OriginAgent.evolution.recovery import EvolutionRecoveryManager, EvolutionRecoveryResult
 from OriginAgent.evolution.state_branch import (
     EvolutionMergeConflict,
     EvolutionMergePreview,
@@ -30,6 +32,7 @@ __all__ = [
     "EvolutionCapabilityGate",
     "EvolutionCapabilityResult",
     "EvolutionEvent",
+    "EvolutionIdentityStore",
     "EvolutionLedger",
     "EvolutionModuleActivator",
     "EvolutionModuleManager",
@@ -38,6 +41,8 @@ __all__ = [
     "EvolutionMergeConflict",
     "EvolutionMergePreview",
     "EvolutionProofBundleResult",
+    "EvolutionRecoveryManager",
+    "EvolutionRecoveryResult",
     "EvolutionStageResult",
     "EvolutionStateBranchResult",
     "EvolutionStateBranchStore",
@@ -46,5 +51,6 @@ __all__ = [
     "EvolutionTokenBudgetResult",
     "EvolutionVerificationReport",
     "EvolutionVerificationResult",
+    "LedgerStatus",
     "validate_manifest",
 ]

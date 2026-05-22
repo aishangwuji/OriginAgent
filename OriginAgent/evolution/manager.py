@@ -15,12 +15,13 @@ from filelock import FileLock
 from OriginAgent.evolution.activation import EvolutionActivationResult, EvolutionModuleActivator
 from OriginAgent.evolution.capability_gate import EvolutionCapabilityGate, EvolutionCapabilityResult
 from OriginAgent.evolution.events import EventType, EvolutionEvent
-from OriginAgent.evolution.ledger import EvolutionLedger, canonical_dump
+from OriginAgent.evolution.ledger import EvolutionLedger, LedgerStatus, canonical_dump
 from OriginAgent.evolution.package import (
     EvolutionPackage,
     copy_artifact,
     load_package,
 )
+from OriginAgent.evolution.recovery import EvolutionRecoveryManager, EvolutionRecoveryResult
 from OriginAgent.evolution.state_branch import (
     EvolutionStateBranchResult,
     EvolutionStateBranchStore,
@@ -35,7 +36,7 @@ from OriginAgent.evolution.verifier import EvolutionModuleVerifier, EvolutionVer
 from OriginAgent.security.capabilities import CapabilitySnapshot
 
 STAGING_SCHEMA_VERSION = "originagent.evolution.staging.v1"
-StageStatus = Literal["staged", "already_staged", "failed"]
+StageStatus = Literal["staged", "already_staged", "failed", "dirty_rollback_blocked"]
 VerificationStatus = Literal["verified", "failed"]
 
 
@@ -112,6 +113,33 @@ class EvolutionModuleManager:
                     "module_type": manifest.module_type,
                     "artifact_digest": package.artifact_digest,
                 }
+                dirty_activation = self._dirty_activation_for_module_id_unlocked(manifest.module_id)
+                if dirty_activation is not None:
+                    error = "module_id is blocked by dirty rollback"
+                    failed = self.ledger.append(
+                        EvolutionEvent.new(
+                            EventType.MODULE_FAILED,
+                            **common,
+                            result={
+                                **result_base,
+                                "status": "dirty_rollback_blocked",
+                                "error": error,
+                                "dirty_artifact_digest": str(dirty_activation.get("artifact_digest") or ""),
+                            },
+                        )
+                    )
+                    events.append(failed)
+                    return EvolutionStageResult(
+                        ok=False,
+                        status="dirty_rollback_blocked",
+                        module_id=manifest.module_id,
+                        module_type=manifest.module_type,
+                        module_version=manifest.version,
+                        artifact_digest=package.artifact_digest,
+                        staging_path=relative_staging_path,
+                        events=tuple(events),
+                        error=error,
+                    )
                 proposed = self.ledger.append(
                     EvolutionEvent.new(
                         EventType.MODULE_PROPOSED,
@@ -374,6 +402,39 @@ class EvolutionModuleManager:
             actor=actor,
         )
 
+    def record_teardown(
+        self,
+        artifact_digest: str,
+        *,
+        succeeded: bool,
+        reason: str = "",
+        residual_resources: Iterable[str] = (),
+        actor: str = "user",
+    ) -> EvolutionRecoveryResult:
+        return EvolutionRecoveryManager(self.workspace, ledger=self.ledger).record_teardown(
+            artifact_digest,
+            succeeded=succeeded,
+            reason=reason,
+            residual_resources=residual_resources,
+            actor=actor,
+        )
+
+    def force_clean_module(
+        self,
+        artifact_digest: str,
+        *,
+        reason: str,
+        actor: str = "user",
+    ) -> EvolutionRecoveryResult:
+        return EvolutionRecoveryManager(self.workspace, ledger=self.ledger).force_clean(
+            artifact_digest,
+            reason=reason,
+            actor=actor,
+        )
+
+    def runtime_status(self, verify_signatures: bool = False) -> LedgerStatus:
+        return self.ledger.status(verify_signatures=verify_signatures)
+
     def _locked(self) -> FileLock:
         self.staging_root.parent.mkdir(parents=True, exist_ok=True)
         return FileLock(str(self._lock_path))
@@ -405,6 +466,23 @@ class EvolutionModuleManager:
             _cleanup_path(target_dir)
             return False
         return True
+
+    def _dirty_activation_for_module_id_unlocked(self, module_id: str) -> dict[str, Any] | None:
+        activation_root = self.workspace / "memory" / "evolution_activations"
+        if not activation_root.exists():
+            return None
+        for activation_json in activation_root.glob("*/activation.json"):
+            try:
+                data = json.loads(activation_json.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                continue
+            if (
+                isinstance(data, dict)
+                and data.get("module_id") == module_id
+                and data.get("status") == "dirty_rollback"
+            ):
+                return data
+        return None
 
     def _stage_package_unlocked(
         self,
