@@ -8,7 +8,7 @@ import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable, Literal
+from typing import Any, Callable, Iterable, Literal, Mapping
 
 from filelock import FileLock
 
@@ -24,6 +24,12 @@ from OriginAgent.evolution.package import (
 from OriginAgent.evolution.state_branch import (
     EvolutionStateBranchResult,
     EvolutionStateBranchStore,
+)
+from OriginAgent.evolution.telemetry import (
+    EvolutionProofBundleResult,
+    EvolutionTelemetryRecorder,
+    EvolutionTelemetryResult,
+    EvolutionTokenBudgetResult,
 )
 from OriginAgent.evolution.verifier import EvolutionModuleVerifier, EvolutionVerificationReport
 from OriginAgent.security.capabilities import CapabilitySnapshot
@@ -308,6 +314,64 @@ class EvolutionModuleManager:
         return EvolutionCapabilityGate(self.workspace, ledger=self.ledger).snapshot_for_artifact(
             artifact_digest,
             base_snapshot=base_snapshot,
+        )
+
+    def record_telemetry(
+        self,
+        artifact_digest: str,
+        *,
+        event_kind: str,
+        status: str,
+        actor: str = "user",
+        **kwargs: Any,
+    ) -> EvolutionTelemetryResult:
+        return EvolutionTelemetryRecorder(self.workspace, ledger=self.ledger).record(
+            artifact_digest,
+            event_kind=event_kind,
+            status=status,
+            actor=actor,
+            **kwargs,
+        )
+
+    def preflight_token_budget(
+        self,
+        artifact_digest: str,
+        *,
+        payload_texts: Iterable[str] = (),
+        estimated_tokens: int | None = None,
+        actor: str = "user",
+    ) -> EvolutionTokenBudgetResult:
+        return EvolutionTelemetryRecorder(self.workspace, ledger=self.ledger).preflight_token_budget(
+            artifact_digest,
+            payload_texts=payload_texts,
+            estimated_tokens=estimated_tokens,
+            actor=actor,
+        )
+
+    def record_postflight_usage(
+        self,
+        artifact_digest: str,
+        *,
+        budget_token: str,
+        usage: Mapping[str, Any],
+        actor: str = "user",
+    ) -> EvolutionTokenBudgetResult:
+        return EvolutionTelemetryRecorder(self.workspace, ledger=self.ledger).record_postflight_usage(
+            artifact_digest,
+            budget_token=budget_token,
+            usage=usage,
+            actor=actor,
+        )
+
+    def build_proof_bundle(
+        self,
+        artifact_digest: str,
+        *,
+        actor: str = "user",
+    ) -> EvolutionProofBundleResult:
+        return EvolutionTelemetryRecorder(self.workspace, ledger=self.ledger).build_proof_bundle(
+            artifact_digest,
+            actor=actor,
         )
 
     def _locked(self) -> FileLock:

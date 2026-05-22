@@ -16,6 +16,12 @@ from OriginAgent.evolution.state_branch import (
     EvolutionStateBranchResult,
     EvolutionStateBranchStore,
 )
+from OriginAgent.evolution.telemetry import (
+    EvolutionProofBundleResult,
+    EvolutionTelemetryRecorder,
+    EvolutionTelemetryResult,
+    EvolutionTokenBudgetResult,
+)
 from OriginAgent.evolution.verifier import EvolutionModuleVerifier, EvolutionVerificationReport
 
 __all__ = [
@@ -31,9 +37,13 @@ __all__ = [
     "EvolutionManifest",
     "EvolutionMergeConflict",
     "EvolutionMergePreview",
+    "EvolutionProofBundleResult",
     "EvolutionStageResult",
     "EvolutionStateBranchResult",
     "EvolutionStateBranchStore",
+    "EvolutionTelemetryRecorder",
+    "EvolutionTelemetryResult",
+    "EvolutionTokenBudgetResult",
     "EvolutionVerificationReport",
     "EvolutionVerificationResult",
     "validate_manifest",
