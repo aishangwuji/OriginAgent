@@ -8,10 +8,11 @@ import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Literal
+from typing import Any, Callable, Literal
 
 from filelock import FileLock
 
+from OriginAgent.evolution.activation import EvolutionActivationResult, EvolutionModuleActivator
 from OriginAgent.evolution.events import EventType, EvolutionEvent
 from OriginAgent.evolution.ledger import EvolutionLedger, canonical_dump
 from OriginAgent.evolution.package import (
@@ -65,9 +66,13 @@ class EvolutionModuleManager:
         workspace: Path,
         ledger: EvolutionLedger | None = None,
         lock_path: Path | None = None,
+        config_loader: Callable[[], Any] | None = None,
+        config_saver: Callable[[Any], None] | None = None,
     ) -> None:
         self.workspace = Path(workspace)
         self.ledger = ledger or EvolutionLedger(self.workspace)
+        self._config_loader = config_loader
+        self._config_saver = config_saver
         memory_dir = self.workspace / "memory"
         self.staging_root = memory_dir / "evolution_staging"
         self._lock_path = Path(lock_path) if lock_path is not None else memory_dir / ".evolution_manager.lock"
@@ -265,6 +270,32 @@ class EvolutionModuleManager:
             branch_id,
             actor=actor,
         )
+
+    def activate_module(
+        self,
+        artifact_digest: str,
+        *,
+        actor: str = "user",
+    ) -> EvolutionActivationResult:
+        return EvolutionModuleActivator(
+            self.workspace,
+            ledger=self.ledger,
+            config_loader=self._config_loader,
+            config_saver=self._config_saver,
+        ).activate(artifact_digest, actor=actor)
+
+    def rollback_module(
+        self,
+        artifact_digest: str,
+        *,
+        actor: str = "user",
+    ) -> EvolutionActivationResult:
+        return EvolutionModuleActivator(
+            self.workspace,
+            ledger=self.ledger,
+            config_loader=self._config_loader,
+            config_saver=self._config_saver,
+        ).rollback(artifact_digest, actor=actor)
 
     def _locked(self) -> FileLock:
         self.staging_root.parent.mkdir(parents=True, exist_ok=True)
