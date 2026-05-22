@@ -346,3 +346,72 @@ def test_repeated_verify_appends_events(tmp_path: Path) -> None:
         "module_permission_checked",
         "module_verified",
     ]
+
+
+def test_manager_create_state_branch_after_verify(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    source = _write_skill_package(tmp_path / "source-skill")
+    manager = EvolutionModuleManager(workspace)
+    staged = manager.stage(source)
+    assert staged.ok
+    assert manager.verify(staged.artifact_digest).ok
+
+    result = manager.create_state_branch(staged.artifact_digest)
+
+    assert result.ok is True
+    assert result.status == "created"
+    assert result.branch_id.startswith("branch_")
+    assert _event_rows(workspace)[-1]["event_type"] == "state_branch_created"
+
+
+def test_manager_create_state_branch_requires_verify(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    source = _write_skill_package(tmp_path / "source-skill")
+    manager = EvolutionModuleManager(workspace)
+    staged = manager.stage(source)
+    assert staged.ok
+
+    result = manager.create_state_branch(staged.artifact_digest)
+
+    assert result.ok is False
+    assert "verified" in result.error
+
+
+def test_manager_merge_and_discard_state_branch_events(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    source = _write_skill_package(tmp_path / "source-skill")
+    manager = EvolutionModuleManager(workspace)
+    staged = manager.stage(source)
+    assert staged.ok
+    assert manager.verify(staged.artifact_digest).ok
+
+    merge_branch = manager.create_state_branch(staged.artifact_digest)
+    assert merge_branch.ok
+    merged = manager.merge_state_branch(merge_branch.branch_id)
+    discard_branch = manager.create_state_branch(staged.artifact_digest)
+    assert discard_branch.ok
+    discarded = manager.discard_state_branch(discard_branch.branch_id)
+
+    assert merged.ok is True
+    assert discarded.ok is True
+    rows = _event_rows(workspace)
+    assert "state_branch_merged" in [row["event_type"] for row in rows]
+    assert "state_branch_discarded" in [row["event_type"] for row in rows]
+
+
+def test_manager_state_branch_events_do_not_record_absolute_paths(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    source = _write_skill_package(tmp_path / "source-skill")
+    manager = EvolutionModuleManager(workspace)
+    staged = manager.stage(source)
+    assert staged.ok
+    assert manager.verify(staged.artifact_digest).ok
+
+    branch = manager.create_state_branch(staged.artifact_digest)
+    assert branch.ok
+    manager.discard_state_branch(branch.branch_id)
+
+    event_text = (workspace / "memory" / "evolution_events.jsonl").read_text(encoding="utf-8")
+    assert str(source.resolve()) not in event_text
+    assert str((workspace / "memory" / "evolution_branches" / branch.branch_id).resolve()) not in event_text
+    assert branch.branch_id in event_text

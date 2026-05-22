@@ -19,6 +19,10 @@ from OriginAgent.evolution.package import (
     copy_artifact,
     load_package,
 )
+from OriginAgent.evolution.state_branch import (
+    EvolutionStateBranchResult,
+    EvolutionStateBranchStore,
+)
 from OriginAgent.evolution.verifier import EvolutionModuleVerifier, EvolutionVerificationReport
 
 STAGING_SCHEMA_VERSION = "originagent.evolution.staging.v1"
@@ -228,6 +232,39 @@ class EvolutionModuleManager:
             )
             events.append(terminal)
             return _verification_result(report, events)
+
+    def create_state_branch(
+        self,
+        artifact_digest: str,
+        *,
+        actor: str = "user",
+    ) -> EvolutionStateBranchResult:
+        return EvolutionStateBranchStore(self.workspace, ledger=self.ledger).create_branch(
+            artifact_digest,
+            actor=actor,
+        )
+
+    def merge_state_branch(
+        self,
+        branch_id: str,
+        *,
+        actor: str = "user",
+    ) -> EvolutionStateBranchResult:
+        return EvolutionStateBranchStore(self.workspace, ledger=self.ledger).merge_branch(
+            branch_id,
+            actor=actor,
+        )
+
+    def discard_state_branch(
+        self,
+        branch_id: str,
+        *,
+        actor: str = "user",
+    ) -> EvolutionStateBranchResult:
+        return EvolutionStateBranchStore(self.workspace, ledger=self.ledger).discard_branch(
+            branch_id,
+            actor=actor,
+        )
 
     def _locked(self) -> FileLock:
         self.staging_root.parent.mkdir(parents=True, exist_ok=True)

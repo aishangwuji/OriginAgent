@@ -8,6 +8,12 @@ from OriginAgent.evolution.manager import (
     EvolutionVerificationResult,
 )
 from OriginAgent.evolution.manifest import EvolutionManifest, validate_manifest
+from OriginAgent.evolution.state_branch import (
+    EvolutionMergeConflict,
+    EvolutionMergePreview,
+    EvolutionStateBranchResult,
+    EvolutionStateBranchStore,
+)
 from OriginAgent.evolution.verifier import EvolutionModuleVerifier, EvolutionVerificationReport
 
 __all__ = [
@@ -17,7 +23,11 @@ __all__ = [
     "EvolutionModuleManager",
     "EvolutionModuleVerifier",
     "EvolutionManifest",
+    "EvolutionMergeConflict",
+    "EvolutionMergePreview",
     "EvolutionStageResult",
+    "EvolutionStateBranchResult",
+    "EvolutionStateBranchStore",
     "EvolutionVerificationReport",
     "EvolutionVerificationResult",
     "validate_manifest",
