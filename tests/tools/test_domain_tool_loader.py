@@ -7,6 +7,7 @@ from OriginAgent.agent.domain_packs import DomainPackManager
 from OriginAgent.agent.tools.domain_loader import DomainToolLoader
 from OriginAgent.agent.tools.registry import ToolRegistry
 from OriginAgent.config.schema import DomainPacksConfig
+from OriginAgent.security.capabilities import CapabilitySnapshot
 
 
 def _write_pack(
@@ -183,3 +184,98 @@ def test_domain_tool_loader_records_import_and_class_failures(tmp_path: Path) ->
     records = manager.domain_tool_runtime_records("research")
     assert records[0].status == "skipped"
     assert "is not a Tool" in records[0].reason
+
+
+def test_domain_tool_loader_attaches_evolution_capability_snapshot(tmp_path: Path) -> None:
+    manager = _write_pack(
+        tmp_path,
+        tool_source=_READ_ONLY_TOOL,
+        tool_manifest=(
+            "  - id: research_search\n"
+            "    module: tools.search\n"
+            "    class: ResearchSearchTool\n"
+            "    permissions: [read_files]\n"
+        ),
+    )
+    registry = ToolRegistry(capability_snapshot=CapabilitySnapshot.user_turn())
+    module_snapshot = CapabilitySnapshot(
+        version=1,
+        source="system",
+        trigger="system",
+        can_exec=False,
+        can_read_files=True,
+        can_write_files=False,
+        can_send_cross_target=False,
+        can_create_cron=False,
+        can_spawn=False,
+        allowed_device_domains=(),
+        allowed_mcp_scopes=(),
+    )
+
+    registered = DomainToolLoader(
+        manager,
+        evolution_capability_resolver=lambda pack_id: module_snapshot if pack_id == "research" else None,
+    ).load(SimpleNamespace(), registry)
+
+    assert registered == ["research_search"]
+    tool = registry.get("research_search")
+    assert tool is not None
+    assert getattr(tool, "_evolution_capability_snapshot") == module_snapshot
+    assert registry.prepare_call("research_search", {})[2] is None
+
+
+def test_domain_tool_loader_evolution_snapshot_can_deny_domain_permission(tmp_path: Path) -> None:
+    manager = _write_pack(
+        tmp_path,
+        tool_source=_READ_ONLY_TOOL,
+        tool_manifest=(
+            "  - id: research_search\n"
+            "    module: tools.search\n"
+            "    class: ResearchSearchTool\n"
+            "    permissions: [read_files]\n"
+        ),
+    )
+    registry = ToolRegistry(capability_snapshot=CapabilitySnapshot.user_turn())
+    module_snapshot = CapabilitySnapshot(
+        version=1,
+        source="system",
+        trigger="system",
+        can_exec=False,
+        can_read_files=False,
+        can_write_files=False,
+        can_send_cross_target=False,
+        can_create_cron=False,
+        can_spawn=False,
+        allowed_device_domains=(),
+        allowed_mcp_scopes=(),
+    )
+
+    DomainToolLoader(
+        manager,
+        evolution_capability_resolver=lambda _pack_id: module_snapshot,
+    ).load(SimpleNamespace(), registry)
+
+    error = registry.prepare_call("research_search", {})[2]
+    assert error is not None
+    assert "capability_domain_read_files_denied" in error
+
+
+def test_domain_tool_loader_without_evolution_resolver_keeps_existing_behavior(tmp_path: Path) -> None:
+    manager = _write_pack(
+        tmp_path,
+        tool_source=_READ_ONLY_TOOL,
+        tool_manifest=(
+            "  - id: research_search\n"
+            "    module: tools.search\n"
+            "    class: ResearchSearchTool\n"
+            "    permissions: [read_files]\n"
+        ),
+    )
+    registry = ToolRegistry(capability_snapshot=CapabilitySnapshot.user_turn())
+
+    DomainToolLoader(manager).load(SimpleNamespace(), registry)
+
+    tool = registry.get("research_search")
+    assert tool is not None
+    assert not hasattr(tool, "_evolution_capability_snapshot")
+    assert registry.prepare_call("research_search", {})[2] is None

@@ -13,6 +13,7 @@ from typing import Any, Callable, Literal
 from filelock import FileLock
 
 from OriginAgent.evolution.activation import EvolutionActivationResult, EvolutionModuleActivator
+from OriginAgent.evolution.capability_gate import EvolutionCapabilityGate, EvolutionCapabilityResult
 from OriginAgent.evolution.events import EventType, EvolutionEvent
 from OriginAgent.evolution.ledger import EvolutionLedger, canonical_dump
 from OriginAgent.evolution.package import (
@@ -25,6 +26,7 @@ from OriginAgent.evolution.state_branch import (
     EvolutionStateBranchStore,
 )
 from OriginAgent.evolution.verifier import EvolutionModuleVerifier, EvolutionVerificationReport
+from OriginAgent.security.capabilities import CapabilitySnapshot
 
 STAGING_SCHEMA_VERSION = "originagent.evolution.staging.v1"
 StageStatus = Literal["staged", "already_staged", "failed"]
@@ -296,6 +298,17 @@ class EvolutionModuleManager:
             config_loader=self._config_loader,
             config_saver=self._config_saver,
         ).rollback(artifact_digest, actor=actor)
+
+    def capability_snapshot(
+        self,
+        artifact_digest: str,
+        *,
+        base_snapshot: CapabilitySnapshot | None = None,
+    ) -> EvolutionCapabilityResult:
+        return EvolutionCapabilityGate(self.workspace, ledger=self.ledger).snapshot_for_artifact(
+            artifact_digest,
+            base_snapshot=base_snapshot,
+        )
 
     def _locked(self) -> FileLock:
         self.staging_root.parent.mkdir(parents=True, exist_ok=True)

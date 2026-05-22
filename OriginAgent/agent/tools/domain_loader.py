@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import importlib.util
 import sys
-from typing import Any
+from typing import Any, Callable
 
 from loguru import logger
 
@@ -15,13 +15,20 @@ from OriginAgent.agent.domain_packs import (
 )
 from OriginAgent.agent.tools.base import Tool
 from OriginAgent.agent.tools.registry import ToolRegistry
+from OriginAgent.security.capabilities import CapabilitySnapshot
 
 
 class DomainToolLoader:
     """Load explicitly declared tools from active domain packs."""
 
-    def __init__(self, manager: DomainPackManager):
+    def __init__(
+        self,
+        manager: DomainPackManager,
+        *,
+        evolution_capability_resolver: Callable[[str], CapabilitySnapshot | None] | None = None,
+    ):
         self.manager = manager
+        self._evolution_capability_resolver = evolution_capability_resolver
 
     def load(self, ctx: Any, registry: ToolRegistry) -> list[str]:
         registered: list[str] = []
@@ -87,6 +94,10 @@ class DomainToolLoader:
         setattr(tool, "_domain_pack_id", pack.id)
         setattr(tool, "_domain_tool_permissions", declaration.permissions)
         setattr(tool, "_domain_tool_audit", declaration.audit)
+        if self._evolution_capability_resolver is not None:
+            snapshot = self._evolution_capability_resolver(pack.id)
+            if snapshot is not None:
+                setattr(tool, "_evolution_capability_snapshot", snapshot)
         registry.register(tool)
         self.manager.record_domain_tool_runtime(pack.id, declaration.id, "registered")
         return declaration.id

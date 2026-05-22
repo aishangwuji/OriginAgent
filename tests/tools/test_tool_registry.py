@@ -342,6 +342,93 @@ async def test_domain_tool_permissions_require_snapshot_and_matching_capability(
 
 
 @pytest.mark.asyncio
+async def test_domain_tool_evolution_snapshot_intersects_runtime_snapshot() -> None:
+    registry = ToolRegistry(capability_snapshot=CapabilitySnapshot.user_turn())
+    tool = _FakeTool("research_index_workspace", result="ok")
+    setattr(tool, "_domain_tool_permissions", ("read_files",))
+    setattr(
+        tool,
+        "_evolution_capability_snapshot",
+        CapabilitySnapshot(
+            version=1,
+            source="system",
+            trigger="system",
+            can_exec=False,
+            can_read_files=False,
+            can_write_files=False,
+            can_send_cross_target=False,
+            can_create_cron=False,
+            can_spawn=False,
+            allowed_device_domains=(),
+            allowed_mcp_scopes=(),
+        ),
+    )
+    registry.register(tool)
+
+    result = await registry.execute("research_index_workspace", {})
+
+    assert "capability_domain_read_files_denied" in result
+
+
+@pytest.mark.asyncio
+async def test_domain_tool_evolution_snapshot_cannot_expand_base_snapshot() -> None:
+    registry = ToolRegistry(capability_snapshot=CapabilitySnapshot.scheduled_default())
+    tool = _FakeTool("research_index_workspace", result="ok")
+    setattr(tool, "_domain_tool_permissions", ("read_files",))
+    setattr(
+        tool,
+        "_evolution_capability_snapshot",
+        CapabilitySnapshot(
+            version=1,
+            source="system",
+            trigger="system",
+            can_exec=False,
+            can_read_files=True,
+            can_write_files=False,
+            can_send_cross_target=False,
+            can_create_cron=False,
+            can_spawn=False,
+            allowed_device_domains=(),
+            allowed_mcp_scopes=(),
+        ),
+    )
+    registry.register(tool)
+
+    result = await registry.execute("research_index_workspace", {})
+
+    assert "capability_domain_read_files_denied" in result
+
+
+@pytest.mark.asyncio
+async def test_domain_tool_evolution_snapshot_denies_exec_permission() -> None:
+    registry = ToolRegistry(capability_snapshot=CapabilitySnapshot.user_turn())
+    tool = _FakeTool("research_exec_workspace", result="ok")
+    setattr(tool, "_domain_tool_permissions", ("exec",))
+    setattr(
+        tool,
+        "_evolution_capability_snapshot",
+        CapabilitySnapshot(
+            version=1,
+            source="system",
+            trigger="system",
+            can_exec=False,
+            can_read_files=True,
+            can_write_files=False,
+            can_send_cross_target=False,
+            can_create_cron=False,
+            can_spawn=False,
+            allowed_device_domains=(),
+            allowed_mcp_scopes=(),
+        ),
+    )
+    registry.register(tool)
+
+    result = await registry.execute("research_exec_workspace", {})
+
+    assert "capability_domain_exec_denied" in result
+
+
+@pytest.mark.asyncio
 async def test_domain_tool_security_audit_uses_security_tier() -> None:
     sink = InMemoryToolAuditSink()
     registry = ToolRegistry(

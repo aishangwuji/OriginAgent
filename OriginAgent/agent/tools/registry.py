@@ -10,7 +10,7 @@ from urllib.parse import urlparse
 
 from OriginAgent.agent.tools.audit import ToolAuditConfig, ToolAuditSink, ToolCallAuditEvent
 from OriginAgent.agent.tools.base import Tool
-from OriginAgent.security.capabilities import CapabilitySnapshot
+from OriginAgent.security.capabilities import CapabilitySnapshot, intersect_capability_snapshots
 from OriginAgent.security.policy import PolicyDeniedError
 
 
@@ -505,6 +505,14 @@ def _requires_capability_snapshot(name: str) -> bool:
 
 
 def _assert_domain_tool_capability(tool: Tool, snapshot: CapabilitySnapshot) -> None:
+    evolution_snapshot = getattr(tool, "_evolution_capability_snapshot", None)
+    if isinstance(evolution_snapshot, CapabilitySnapshot):
+        snapshot = intersect_capability_snapshots(
+            snapshot,
+            evolution_snapshot,
+            source=snapshot.source,
+            trigger=snapshot.trigger,
+        )
     permissions = tuple(getattr(tool, "_domain_tool_permissions", ()) or ())
     if not permissions:
         return

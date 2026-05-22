@@ -1,6 +1,7 @@
 """Local OriginAgent evolution runtime primitives."""
 
 from OriginAgent.evolution.activation import EvolutionActivationResult, EvolutionModuleActivator
+from OriginAgent.evolution.capability_gate import EvolutionCapabilityGate, EvolutionCapabilityResult
 from OriginAgent.evolution.events import EventType, EvolutionEvent
 from OriginAgent.evolution.ledger import EvolutionLedger
 from OriginAgent.evolution.manager import (
@@ -20,6 +21,8 @@ from OriginAgent.evolution.verifier import EvolutionModuleVerifier, EvolutionVer
 __all__ = [
     "EventType",
     "EvolutionActivationResult",
+    "EvolutionCapabilityGate",
+    "EvolutionCapabilityResult",
     "EvolutionEvent",
     "EvolutionLedger",
     "EvolutionModuleActivator",
