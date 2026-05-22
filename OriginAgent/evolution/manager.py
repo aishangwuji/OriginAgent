@@ -19,9 +19,11 @@ from OriginAgent.evolution.package import (
     copy_artifact,
     load_package,
 )
+from OriginAgent.evolution.verifier import EvolutionModuleVerifier, EvolutionVerificationReport
 
 STAGING_SCHEMA_VERSION = "originagent.evolution.staging.v1"
 StageStatus = Literal["staged", "already_staged", "failed"]
+VerificationStatus = Literal["verified", "failed"]
 
 
 @dataclass(frozen=True)
@@ -33,6 +35,20 @@ class EvolutionStageResult:
     module_version: str = ""
     artifact_digest: str = ""
     staging_path: str = ""
+    events: tuple[EvolutionEvent, ...] = ()
+    error: str = ""
+
+
+@dataclass(frozen=True)
+class EvolutionVerificationResult:
+    ok: bool
+    status: VerificationStatus
+    module_id: str = ""
+    module_type: str = ""
+    module_version: str = ""
+    artifact_digest: str = ""
+    staging_path: str = ""
+    checks: tuple[dict[str, object], ...] = ()
     events: tuple[EvolutionEvent, ...] = ()
     error: str = ""
 
@@ -165,6 +181,54 @@ class EvolutionModuleManager:
                 error=public_error,
             )
 
+    def verify(self, artifact_digest: str, *, actor: str = "user") -> EvolutionVerificationResult:
+        """Run static verification against a staged module artifact."""
+
+        with self._locked():
+            report = EvolutionModuleVerifier(
+                self.workspace,
+                staging_root=self.staging_root,
+            ).verify(artifact_digest)
+            common = {
+                "actor": actor,
+                "module_id": report.module_id,
+                "module_version": report.module_version,
+                "module_type": report.module_type,
+                "artifact_digest": artifact_digest,
+            }
+            events: list[EvolutionEvent] = []
+            permission_checked = self.ledger.append(
+                EvolutionEvent.new(
+                    EventType.MODULE_PERMISSION_CHECKED,
+                    **common,
+                    result={
+                        "status": "permission_check_completed",
+                        "staging_path": report.staging_path,
+                        "permissions_evaluated": report.permissions_evaluated or {},
+                        "permissions_denied": list(report.permissions_denied),
+                        "unknown_keys_rejected": list(report.unknown_keys_rejected),
+                        "checks": list(report.checks),
+                    },
+                )
+            )
+            events.append(permission_checked)
+            terminal_event_type = EventType.MODULE_VERIFIED if report.ok else EventType.MODULE_FAILED
+            terminal_status = "verified" if report.ok else "failed"
+            terminal = self.ledger.append(
+                EvolutionEvent.new(
+                    terminal_event_type,
+                    **common,
+                    result={
+                        "status": terminal_status,
+                        "staging_path": report.staging_path,
+                        "checks": list(report.checks),
+                        "error": report.error,
+                    },
+                )
+            )
+            events.append(terminal)
+            return _verification_result(report, events)
+
     def _locked(self) -> FileLock:
         self.staging_root.parent.mkdir(parents=True, exist_ok=True)
         return FileLock(str(self._lock_path))
@@ -242,6 +306,24 @@ def _stage_result(
         artifact_digest=package.artifact_digest,
         staging_path=staging_path,
         events=tuple(events),
+    )
+
+
+def _verification_result(
+    report: EvolutionVerificationReport,
+    events: list[EvolutionEvent],
+) -> EvolutionVerificationResult:
+    return EvolutionVerificationResult(
+        ok=report.ok,
+        status=report.status,
+        module_id=report.module_id,
+        module_type=report.module_type,
+        module_version=report.module_version,
+        artifact_digest=report.artifact_digest,
+        staging_path=report.staging_path,
+        checks=report.checks,
+        events=tuple(events),
+        error=report.error,
     )
 
 

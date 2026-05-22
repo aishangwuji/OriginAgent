@@ -2,29 +2,37 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import Any
+
+import yaml
 
 from OriginAgent.evolution import EvolutionModuleManager
 from OriginAgent.evolution.manifest import MODULE_SCHEMA_VERSION
 
 
-def _write_evolution_manifest(root: Path, *, module_type: str = "skill", module_id: str = "calendar-helper") -> None:
+def _write_evolution_manifest(
+    root: Path,
+    *,
+    module_type: str = "skill",
+    module_id: str = "calendar-helper",
+    manifest_updates: dict[str, Any] | None = None,
+) -> None:
     root.mkdir(parents=True, exist_ok=True)
+    manifest: dict[str, Any] = {
+        "schema_version": MODULE_SCHEMA_VERSION,
+        "module_id": module_id,
+        "module_type": module_type,
+        "version": "1.0.0",
+    }
+    manifest.update(manifest_updates or {})
     (root / "evolution_manifest.yaml").write_text(
-        "\n".join(
-            [
-                f"schema_version: {MODULE_SCHEMA_VERSION}",
-                f"module_id: {module_id}",
-                f"module_type: {module_type}",
-                "version: 1.0.0",
-            ]
-        )
-        + "\n",
+        yaml.safe_dump(manifest, sort_keys=False),
         encoding="utf-8",
     )
 
 
-def _write_skill_package(root: Path) -> Path:
-    _write_evolution_manifest(root)
+def _write_skill_package(root: Path, manifest_updates: dict[str, Any] | None = None) -> Path:
+    _write_evolution_manifest(root, manifest_updates=manifest_updates)
     (root / "SKILL.md").write_text("# Calendar Helper\n", encoding="utf-8")
     return root
 
@@ -229,3 +237,112 @@ def test_stage_unavailable_domain_pack_is_still_staged(tmp_path: Path) -> None:
     assert result.status == "staged"
     assert result.module_type == "domain_pack"
     assert not (workspace / "domain_packs").exists()
+
+
+def test_verify_staged_package_writes_permission_checked_and_verified(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    source = _write_skill_package(tmp_path / "source-skill")
+    manager = EvolutionModuleManager(workspace)
+    staged = manager.stage(source)
+
+    result = manager.verify(staged.artifact_digest)
+
+    assert result.ok is True
+    assert result.status == "verified"
+    assert result.artifact_digest == staged.artifact_digest
+    assert [event.event_type for event in result.events] == [
+        "module_permission_checked",
+        "module_verified",
+    ]
+    rows = _event_rows(workspace)
+    assert [row["event_type"] for row in rows[-2:]] == [
+        "module_permission_checked",
+        "module_verified",
+    ]
+
+
+def test_verify_permission_failure_writes_failed_without_verified(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    source = _write_skill_package(
+        tmp_path / "source-skill",
+        manifest_updates={"permissions": {"write_files": True}},
+    )
+    manager = EvolutionModuleManager(workspace)
+    staged = manager.stage(source)
+
+    result = manager.verify(staged.artifact_digest)
+
+    assert result.ok is False
+    assert result.status == "failed"
+    assert [event.event_type for event in result.events] == [
+        "module_permission_checked",
+        "module_failed",
+    ]
+    assert "module_verified" not in [row["event_type"] for row in _event_rows(workspace)[-2:]]
+
+
+def test_permission_checked_event_records_structured_result(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    source = _write_skill_package(
+        tmp_path / "source-skill",
+        manifest_updates={"permissions": {"read_files": True, "unknown": True}},
+    )
+    manager = EvolutionModuleManager(workspace)
+    staged = manager.stage(source)
+
+    result = manager.verify(staged.artifact_digest)
+
+    permission_result = result.events[0].result
+    assert permission_result["status"] == "permission_check_completed"
+    assert permission_result["permissions_evaluated"] == {"read_files": True}
+    assert permission_result["unknown_keys_rejected"] == ["unknown"]
+    assert "permissions_denied" in permission_result
+    assert "checks" in permission_result
+
+
+def test_verify_events_do_not_record_absolute_paths(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    source = _write_skill_package(tmp_path / "source-skill")
+    manager = EvolutionModuleManager(workspace)
+    staged = manager.stage(source)
+
+    manager.verify(staged.artifact_digest)
+
+    event_text = (workspace / "memory" / "evolution_events.jsonl").read_text(encoding="utf-8")
+    assert str(source.resolve()) not in event_text
+    assert str((workspace / staged.staging_path).resolve()) not in event_text
+    assert staged.staging_path in event_text
+
+
+def test_verify_does_not_create_stable_module_directories(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    source = _write_skill_package(tmp_path / "source-skill")
+    manager = EvolutionModuleManager(workspace)
+    staged = manager.stage(source)
+
+    manager.verify(staged.artifact_digest)
+
+    assert not (workspace / "skills").exists()
+    assert not (workspace / "domain_packs").exists()
+    assert not (workspace / "workflows").exists()
+
+
+def test_repeated_verify_appends_events(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    source = _write_skill_package(tmp_path / "source-skill")
+    manager = EvolutionModuleManager(workspace)
+    staged = manager.stage(source)
+
+    first = manager.verify(staged.artifact_digest)
+    second = manager.verify(staged.artifact_digest)
+
+    assert first.ok is True
+    assert second.ok is True
+    rows = _event_rows(workspace)
+    assert len(rows) == 7
+    assert [row["event_type"] for row in rows[-4:]] == [
+        "module_permission_checked",
+        "module_verified",
+        "module_permission_checked",
+        "module_verified",
+    ]
