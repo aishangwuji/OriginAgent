@@ -11,6 +11,15 @@ from OriginAgent.evolution.manager import (
     EvolutionVerificationResult,
 )
 from OriginAgent.evolution.manifest import EvolutionManifest, validate_manifest
+from OriginAgent.evolution.memory_vault import (
+    MemoryVaultError,
+    MemoryVaultImportResult,
+    export_memory_vault,
+    import_memory_vault,
+    inspect_memory_vault,
+    read_memory_vault,
+    verify_memory_vault,
+)
 from OriginAgent.evolution.recovery import EvolutionRecoveryManager, EvolutionRecoveryResult
 from OriginAgent.evolution.state_branch import (
     EvolutionMergeConflict,
@@ -52,5 +61,12 @@ __all__ = [
     "EvolutionVerificationReport",
     "EvolutionVerificationResult",
     "LedgerStatus",
+    "MemoryVaultError",
+    "MemoryVaultImportResult",
+    "export_memory_vault",
+    "import_memory_vault",
+    "inspect_memory_vault",
+    "read_memory_vault",
     "validate_manifest",
+    "verify_memory_vault",
 ]

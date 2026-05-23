@@ -39,6 +39,8 @@ class EventType(str, Enum):
     MODULE_FORCE_CLEAN_SUCCEEDED = "module_force_clean_succeeded"
     EXTERNAL_SIDE_EFFECT_ABANDONED = "external_side_effect_abandoned"
     TELEMETRY_RECORDED = "telemetry_recorded"
+    MEMORY_VAULT_EXPORTED = "memory_vault_exported"
+    MEMORY_VAULT_IMPORTED = "memory_vault_imported"
     SCORE_COMMITTED = "score_committed"
     SCORE_REVEALED = "score_revealed"
     UNMAPPED = "unmapped"

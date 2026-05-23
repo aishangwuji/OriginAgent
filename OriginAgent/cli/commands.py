@@ -1531,6 +1531,101 @@ def status():
 
 
 # ============================================================================
+# Evolution Memory Vault Commands
+# ============================================================================
+
+evolution_vault_app = typer.Typer(help="Manage encrypted evolution memory vaults")
+app.add_typer(evolution_vault_app, name="evolution-vault")
+
+
+def _print_json(data: Any) -> None:
+    console.print_json(data=data)
+
+
+def _exit_memory_vault_error(exc: Exception) -> None:
+    console.print(f"[red]Error:[/red] {exc}")
+    raise typer.Exit(1)
+
+
+@evolution_vault_app.command("export")
+def evolution_vault_export(
+    workspace: Path = typer.Option(..., "--workspace", help="Source OriginAgent workspace"),
+    passport_id: str = typer.Option(..., "--passport-id", help="0x-prefixed Agent Passport ID"),
+    agent_key_hash: str = typer.Option(..., "--agent-key-hash", help="0x-prefixed Agent key hash"),
+    key_file: Path = typer.Option(..., "--key-file", help="32-byte vault key file"),
+    out: Path = typer.Option(..., "--out", help="Output memory vault JSON file"),
+):
+    """Export allowlisted memory files into an encrypted vault."""
+    from OriginAgent.evolution.memory_vault import MemoryVaultError, export_memory_vault
+
+    try:
+        _print_json(
+            export_memory_vault(
+                workspace,
+                passport_id=passport_id,
+                agent_key_hash=agent_key_hash,
+                key_file=key_file,
+                out=out,
+            )
+        )
+    except MemoryVaultError as exc:
+        _exit_memory_vault_error(exc)
+
+
+@evolution_vault_app.command("inspect")
+def evolution_vault_inspect(
+    vault: Path = typer.Option(..., "--vault", help="Memory vault JSON file"),
+):
+    """Inspect public vault metadata without decrypting the payload."""
+    from OriginAgent.evolution.memory_vault import MemoryVaultError, inspect_memory_vault
+
+    try:
+        _print_json(inspect_memory_vault(vault))
+    except MemoryVaultError as exc:
+        _exit_memory_vault_error(exc)
+
+
+@evolution_vault_app.command("verify")
+def evolution_vault_verify(
+    vault: Path = typer.Option(..., "--vault", help="Memory vault JSON file"),
+    key_file: Path | None = typer.Option(None, "--key-file", help="Optional vault key for payload verification"),
+):
+    """Verify vault integrity; with --key-file also decrypt and validate payload."""
+    from OriginAgent.evolution.memory_vault import verify_memory_vault
+
+    result = verify_memory_vault(vault, key_file)
+    _print_json(result)
+    if not result["ok"]:
+        raise typer.Exit(1)
+
+
+@evolution_vault_app.command("import")
+def evolution_vault_import(
+    vault: Path = typer.Option(..., "--vault", help="Memory vault JSON file"),
+    key_file: Path = typer.Option(..., "--key-file", help="32-byte vault key file"),
+    target_workspace: Path = typer.Option(..., "--target-workspace", help="Target OriginAgent workspace"),
+    dry_run: bool = typer.Option(True, "--dry-run/--apply", help="Preview by default; use --apply to write files"),
+    replace: bool = typer.Option(False, "--replace", help="Overwrite conflicting vault files only"),
+):
+    """Import a vault into a target workspace; dry-run is the default."""
+    from dataclasses import asdict
+
+    from OriginAgent.evolution.memory_vault import MemoryVaultError, import_memory_vault
+
+    try:
+        result = import_memory_vault(
+            vault,
+            key_file=key_file,
+            target_workspace=target_workspace,
+            apply=not dry_run,
+            replace=replace,
+        )
+        _print_json(asdict(result))
+    except MemoryVaultError as exc:
+        _exit_memory_vault_error(exc)
+
+
+# ============================================================================
 # OAuth Login
 # ============================================================================
 
