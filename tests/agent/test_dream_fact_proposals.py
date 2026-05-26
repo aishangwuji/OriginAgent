@@ -371,7 +371,7 @@ def test_apply_active_pending_rejected_and_rebuilds_memory(tmp_path):
     assert "Missing source" not in store.facts_file.read_text(encoding="utf-8")
 
 
-def test_apply_active_auto_limit_excess_goes_pending(tmp_path):
+def test_apply_active_confidence_budget_excess_goes_pending(tmp_path):
     store = MemoryStore(tmp_path)
     upserts = [
         _proposal(
@@ -393,6 +393,53 @@ def test_apply_active_auto_limit_excess_goes_pending(tmp_path):
     assert len(result.accepted) == 5
     assert len(result.pending) == 1
     assert result.pending[0].status == "pending_confirmation"
+
+
+def test_apply_low_confidence_fact_goes_pending(tmp_path):
+    store = MemoryStore(tmp_path)
+    batch = parse_fact_proposal_response(_json([
+        _proposal(
+            content="User prefers compact summaries",
+            scope="user.response_style",
+            source_excerpt="please keep summaries compact",
+            confidence=0.79,
+        )
+    ]))
+
+    result = store.apply_fact_proposals_and_rebuild_memory(
+        batch,
+        history_entries=_history(content="please keep summaries compact"),
+    )
+
+    assert len(result.accepted) == 0
+    assert len(result.pending) == 1
+    assert result.pending[0].status == "pending_confirmation"
+    assert result.pending[0].confidence == 0.79
+
+
+def test_apply_calibrated_confidence_controls_activation(tmp_path):
+    store = MemoryStore(tmp_path)
+    store.fact_store.calibration_file.write_text(
+        json.dumps({"fact:user": {"bias": -0.2, "count": 20}}),
+        encoding="utf-8",
+    )
+    batch = parse_fact_proposal_response(_json([
+        _proposal(
+            content="User prefers direct answers",
+            scope="user.response_style",
+            source_excerpt="please answer directly",
+            confidence=0.9,
+        )
+    ]))
+
+    result = store.apply_fact_proposals_and_rebuild_memory(
+        batch,
+        history_entries=_history(content="please answer directly"),
+    )
+
+    assert len(result.accepted) == 0
+    assert len(result.pending) == 1
+    assert result.pending[0].confidence == pytest.approx(0.7)
 
 
 def test_apply_deprecation_validates_and_limits(tmp_path):

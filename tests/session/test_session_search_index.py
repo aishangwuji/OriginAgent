@@ -6,6 +6,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 from OriginAgent.agent.facts import FactStore
+from OriginAgent.session.cold_archive import SessionColdArchiveStore
 from OriginAgent.session.search import SessionSearchService
 from OriginAgent.session.search_index import SearchTextNormalizer, SessionSearchIndexService
 
@@ -115,6 +116,69 @@ def test_facts_are_indexed_only_when_explicit_source_requested(tmp_path: Path) -
     assert row["source"] == "facts"
     assert row["record_status"] == "active"
     assert row["locator"]["fact_id"] == fact.fact_id
+
+
+def test_cold_archive_indexed_only_when_explicit_source_requested(tmp_path: Path) -> None:
+    archive = SessionColdArchiveStore(tmp_path).archive(
+        "cli:direct",
+        [
+            {
+                "role": "user",
+                "content": "cold indexed phrase for recall",
+                "timestamp": "2026-05-20T11:00:00",
+            },
+            {
+                "role": "assistant",
+                "content": "assistant-only archived detail",
+                "timestamp": "2026-05-20T11:01:00",
+            },
+        ],
+        reason="session_file_cap",
+    )
+    assert archive is not None
+    index = SessionSearchIndexService(tmp_path, webui_dir=tmp_path / "webui")
+    status = index.refresh_incremental(sources=["cold"])
+    service = SessionSearchService(tmp_path, webui_dir=tmp_path / "webui", index_service=index)
+
+    default_result = service.search(query="cold indexed phrase", mode="semantic")
+    explicit_result = service.search(
+        query="cold indexed phrase",
+        sources=["cold"],
+        mode="semantic",
+    )
+
+    assert status["session_search_indexed_source_counts"]["cold"] == 2
+    assert default_result["total_matches"] == 0
+    assert explicit_result["total_matches"] == 1
+    row = explicit_result["results"][0]
+    assert row["source"] == "cold"
+    assert row["record_status"] == "session_file_cap"
+    assert row["locator"]["archive_id"] == archive.archive_id
+    assert row["locator"]["message_index"] == 0
+
+
+def test_deleted_cold_archive_file_removes_index_rows(tmp_path: Path) -> None:
+    archive = SessionColdArchiveStore(tmp_path).archive(
+        "cli:direct",
+        [{"role": "user", "content": "temporary cold searchable"}],
+        reason="auto_compact",
+    )
+    assert archive is not None
+    index = SessionSearchIndexService(tmp_path, webui_dir=tmp_path / "webui")
+
+    first = index.refresh_incremental(sources=["cold"])
+    assert first["session_search_indexed_source_counts"]["cold"] == 1
+
+    archive.path.unlink()
+    second = index.refresh_incremental(sources=["cold"])
+
+    assert second["session_search_indexed_doc_count"] == 0
+    result = SessionSearchService(
+        tmp_path,
+        webui_dir=tmp_path / "webui",
+        index_service=index,
+    ).search(query="temporary cold searchable", sources=["cold"], mode="semantic")
+    assert result["total_matches"] == 0
 
 
 def test_semantic_disabled_falls_back_to_literal(tmp_path: Path) -> None:

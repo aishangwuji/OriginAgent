@@ -10,6 +10,7 @@ from typing import Any
 
 import yaml
 
+from OriginAgent.agent.metadata import ORIGINAGENT_METADATA_KEY, originagent_metadata
 from OriginAgent.agent.memory import redact_memory_text
 from OriginAgent.utils.helpers import truncate_text
 
@@ -147,8 +148,8 @@ def build_workflow_artifact(record: dict[str, Any], workspace: Path) -> Workflow
         "execution": dict(_EXECUTION_FLAGS),
         "body": body,
         "steps": steps,
-        "metadata": {
-            "OriginAgent": {
+        "metadata": originagent_metadata(
+            {
                 "proposal_status": "proposed",
                 "verification_status": "unverified",
                 "review_proposal_id": _clean_metadata(record.get("id")),
@@ -157,7 +158,7 @@ def build_workflow_artifact(record: dict[str, Any], workspace: Path) -> Workflow
                 "source_session": _clean_metadata(record.get("session_key")),
                 "source_turn_id": _clean_metadata(record.get("turn_id")),
             }
-        },
+        ),
     }
     content = yaml.safe_dump(data, allow_unicode=True, sort_keys=False)
     validate_workflow_artifact_content(
@@ -280,7 +281,7 @@ def validate_workflow_artifact_content(
     metadata = data.get("metadata")
     if not isinstance(metadata, dict):
         raise ValueError("workflow metadata is required")
-    originagent_meta = metadata.get("OriginAgent")
+    originagent_meta = metadata.get(ORIGINAGENT_METADATA_KEY)
     if not isinstance(originagent_meta, dict):
         raise ValueError("metadata.OriginAgent is required")
     required = {
@@ -380,7 +381,7 @@ def _workflow_artifact_record(workflow_dir: Path, workspace: Path) -> dict[str, 
         }
 
     metadata = data.get("metadata", {}) if isinstance(data, dict) else {}
-    originagent = metadata.get("OriginAgent", {}) if isinstance(metadata, dict) else {}
+    originagent = metadata.get(ORIGINAGENT_METADATA_KEY, {}) if isinstance(metadata, dict) else {}
     managed_by_domain_pack = bool(originagent.get("managed_by_domain_pack")) or bool(
         originagent.get("migrated_from_workspace")
     )

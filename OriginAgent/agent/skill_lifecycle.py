@@ -14,6 +14,7 @@ import yaml
 from filelock import FileLock
 from loguru import logger
 
+from OriginAgent.agent.metadata import read_originagent_metadata, set_originagent_metadata
 from OriginAgent.agent.memory import redact_memory_text
 from OriginAgent.utils.helpers import truncate_text
 
@@ -482,24 +483,11 @@ def _write_skill_markdown(path: Path, frontmatter: dict[str, Any], body: str) ->
 
 
 def _metadata_originagent(frontmatter: dict[str, Any]) -> dict[str, Any]:
-    raw = frontmatter.get("metadata")
-    if isinstance(raw, dict):
-        data = raw
-    elif isinstance(raw, str):
-        try:
-            data = json.loads(raw)
-        except (json.JSONDecodeError, TypeError):
-            return {}
-    else:
-        return {}
-    value = data.get("OriginAgent", data.get("openclaw", {}))
-    return dict(value) if isinstance(value, dict) else {}
+    return read_originagent_metadata(frontmatter.get("metadata"))
 
 
 def _set_metadata_originagent(raw: Any, originagent: dict[str, Any]) -> dict[str, Any]:
-    metadata = dict(raw) if isinstance(raw, dict) else {}
-    metadata["OriginAgent"] = originagent
-    return metadata
+    return set_originagent_metadata(raw, originagent)
 
 
 def _is_safe_workspace_skill_name(name: str) -> bool:

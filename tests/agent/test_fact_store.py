@@ -1,4 +1,5 @@
 import json
+from datetime import datetime, timedelta
 
 import pytest
 
@@ -235,6 +236,64 @@ def test_render_memory_md_is_deterministic_by_category_scope_content_and_id(fact
     assert markdown.index("Use dim bedroom lights") < markdown.index(
         "Use bright kitchen lights"
     )
+
+
+def test_decay_confidence_only_updates_stale_active_facts(fact_store):
+    now = datetime(2026, 5, 26, 12, 0, 0)
+    stale = fact_store.upsert_fact(
+        "Use warm bedroom lights",
+        category="preference",
+        scope="home.bedroom.lighting",
+        confidence=0.9,
+    )
+    recent = fact_store.upsert_fact(
+        "Use quiet notifications",
+        category="preference",
+        scope="user.notifications",
+        confidence=0.8,
+    )
+    pending = fact_store.upsert_fact(
+        "Guests cannot unlock the front door",
+        category="policy",
+        scope="home.entry.lock",
+        confidence=0.9,
+    )
+    records = fact_store.read_all()
+    for record in records:
+        if record.fact_id == stale.fact_id:
+            record.last_seen_at = (now - timedelta(days=40)).isoformat()
+        elif record.fact_id == recent.fact_id:
+            record.last_seen_at = (now - timedelta(days=10)).isoformat()
+        elif record.fact_id == pending.fact_id:
+            record.last_seen_at = (now - timedelta(days=90)).isoformat()
+    fact_store._write_records_unlocked(records)
+
+    changed = fact_store.decay_confidence(
+        factor=0.5,
+        min_confidence=0.3,
+        decay_start_days=30,
+        now=now,
+    )
+
+    assert changed == 1
+    by_id = {record.fact_id: record for record in fact_store.read_all()}
+    assert by_id[stale.fact_id].confidence == 0.3
+    assert by_id[recent.fact_id].confidence == 0.8
+    assert by_id[pending.fact_id].confidence == 0.9
+
+
+def test_calibrate_confidence_applies_bias_after_sample_threshold(fact_store):
+    fact_store.calibration_file.write_text(
+        json.dumps({
+            "fact:home": {"bias": -0.15, "count": 12},
+            "fact:user": {"bias": -0.2, "count": 3},
+        }),
+        encoding="utf-8",
+    )
+
+    assert fact_store.calibrate_confidence("fact", "home", 0.9) == pytest.approx(0.75)
+    assert fact_store.calibrate_confidence("fact", "user", 0.9) == 0.9
+    assert fact_store.calibrate_confidence("fact", "missing", 0.9) == 0.9
 
 
 def test_memory_store_rebuilds_memory_md_from_active_facts(tmp_path):

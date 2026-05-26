@@ -9,6 +9,7 @@ from typing import Any
 
 import yaml
 
+from OriginAgent.agent.metadata import ORIGINAGENT_METADATA_KEY, originagent_metadata
 from OriginAgent.agent.memory import redact_memory_text
 from OriginAgent.agent.skills import BUILTIN_SKILLS_DIR
 from OriginAgent.utils.helpers import truncate_text
@@ -111,15 +112,15 @@ def build_skill_artifact(record: dict[str, Any], workspace: Path) -> SkillArtifa
         body = _fallback_body(record)
     body = _ensure_heading(body, skill_name)
 
-    metadata = {
-        "OriginAgent": {
+    metadata = originagent_metadata(
+        {
             "proposal_status": "proposed",
             "verification_status": "unverified",
             "review_proposal_id": _clean_metadata(record.get("id")),
             "domain_id": _clean_metadata(record.get("domain_id") or "core"),
             "created_by": "background_review",
         }
-    }
+    )
     frontmatter = {
         "name": skill_name,
         "description": description,
@@ -229,7 +230,7 @@ def validate_skill_artifact_content(
     metadata = frontmatter.get("metadata")
     if not isinstance(metadata, dict):
         raise ValueError("skill metadata is required")
-    originagent_meta = metadata.get("OriginAgent")
+    originagent_meta = metadata.get(ORIGINAGENT_METADATA_KEY)
     if not isinstance(originagent_meta, dict):
         raise ValueError("metadata.OriginAgent is required")
     required = {

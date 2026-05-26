@@ -5,6 +5,7 @@ import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+from OriginAgent.session.cold_archive import SessionColdArchiveStore
 from OriginAgent.session.search import SessionSearchService
 
 
@@ -85,6 +86,45 @@ def test_searches_history_with_cursor_long_content_and_redaction(tmp_path: Path)
     assert row["locator"]["has_full_content"] is True
     assert "[REDACTED_SECRET]" in row["snippet"]
     assert "supersecret12345" not in row["snippet"]
+
+
+def test_searches_cold_archive_only_when_explicitly_requested(tmp_path: Path) -> None:
+    result = SessionColdArchiveStore(tmp_path).archive(
+        "cli:direct",
+        [
+            {
+                "role": "user",
+                "content": "cold archive exact phrase",
+                "timestamp": "2026-05-20T10:00:00",
+            },
+            {
+                "role": "assistant",
+                "content": "cold archive assistant reply",
+                "timestamp": "2026-05-20T10:01:00",
+            },
+        ],
+        reason="auto_compact",
+    )
+    assert result is not None
+
+    service = SessionSearchService(tmp_path)
+    default = service.search(query="cold archive exact phrase")
+    explicit = service.search(query="cold archive exact phrase", sources=["cold"])
+
+    assert default["searched_sources"] == ["sessions", "history", "webui"]
+    assert default["total_matches"] == 0
+    assert explicit["searched_sources"] == ["cold"]
+    assert explicit["total_matches"] == 1
+    row = explicit["results"][0]
+    assert row["source"] == "cold"
+    assert row["session_key"] == "cli:direct"
+    assert row["role"] == "user"
+    assert row["record_status"] == "auto_compact"
+    assert row["locator"]["archive_id"] == result.archive_id
+    assert row["locator"]["batch_line"] == result.line
+    assert row["locator"]["message_index"] == 0
+    assert row["locator"]["session_key"] == "cli:direct"
+    assert row["locator"]["has_full_content"] is True
 
 
 def test_searches_webui_transcript_and_maps_websocket_stem(tmp_path: Path) -> None:

@@ -22,6 +22,7 @@ from loguru import logger
 from OriginAgent.agent.facts import FactStore
 from OriginAgent.agent.memory import redact_memory_text
 from OriginAgent.config.loader import get_config_path
+from OriginAgent.session.cold_archive import SESSION_COLD_ARCHIVE_DIR
 from OriginAgent.utils.helpers import ensure_dir, truncate_text
 
 try:  # pragma: no cover - dependency presence is verified by integration tests.
@@ -41,7 +42,7 @@ INDEX_SCHEMA_VERSION = "1"
 INDEX_SNIPPET_MAX_CHARS = 240
 MAX_INDEX_TOKEN_LENGTH = 80
 MAX_QUERY_TOKENS = 24
-SUPPORTED_INDEX_SOURCES = ("sessions", "history", "webui", "facts")
+SUPPORTED_INDEX_SOURCES = ("sessions", "history", "webui", "facts", "cold")
 DEFAULT_INDEX_SOURCES = ("sessions", "history", "webui")
 _TOKEN_RE = re.compile(r"[A-Za-z0-9]+(?:[._:/\\-][A-Za-z0-9]+)*")
 _CAMEL_BOUNDARY_RE = re.compile(r"(?<=[a-z0-9])(?=[A-Z])")
@@ -511,6 +512,9 @@ class SessionSearchIndexService:
         if source == "facts":
             path = self.workspace / "memory" / "facts.jsonl"
             return [path] if path.is_file() else []
+        if source == "cold":
+            root = self.workspace / SESSION_COLD_ARCHIVE_DIR
+            return sorted(root.glob("*.jsonl")) if root.is_dir() else []
         return []
 
     def _records_for_source(self, source: str, path: Path) -> list[dict[str, Any]]:
@@ -528,7 +532,7 @@ class SessionSearchIndexService:
                 "role": record.role,
                 "timestamp": _format_timestamp(record.timestamp),
                 "locator": record.locator,
-                "record_status": "",
+                "record_status": record.record_status,
             }
             for record in loaded.records
         ]

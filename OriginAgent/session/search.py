@@ -15,11 +15,12 @@ from loguru import logger
 
 from OriginAgent.agent.memory import redact_memory_text
 from OriginAgent.config.loader import get_config_path
+from OriginAgent.session.cold_archive import SESSION_COLD_ARCHIVE_DIR
 from OriginAgent.utils.helpers import truncate_text
 
 DEFAULT_SOURCES: tuple[str, ...] = ("sessions", "history", "webui")
-SUPPORTED_SOURCES: tuple[str, ...] = ("sessions", "history", "webui", "facts")
-SOURCE_PRIORITY: dict[str, int] = {"sessions": 0, "history": 1, "webui": 2, "facts": 3}
+SUPPORTED_SOURCES: tuple[str, ...] = ("sessions", "history", "webui", "facts", "cold")
+SOURCE_PRIORITY: dict[str, int] = {"sessions": 0, "history": 1, "webui": 2, "facts": 3, "cold": 4}
 SUPPORTED_MODES: tuple[str, ...] = ("literal", "hybrid", "semantic")
 DEFAULT_LIMIT = 10
 MAX_LIMIT = 50
@@ -106,6 +107,7 @@ class SessionSearchService:
         self.workspace = Path(workspace)
         self.sessions_dir = self.workspace / "sessions"
         self.history_file = self.workspace / "memory" / "history.jsonl"
+        self.cold_archive_dir = self.workspace / SESSION_COLD_ARCHIVE_DIR
         self._webui_dir = webui_dir
         self._cache_ttl_s = cache_ttl_s
         self._cache_records_per_source = cache_records_per_source
@@ -371,6 +373,10 @@ class SessionSearchService:
         if source == "facts":
             facts_file = self.workspace / "memory" / "facts.jsonl"
             return [facts_file] if facts_file.is_file() else []
+        if source == "cold":
+            if not self.cold_archive_dir.is_dir():
+                return []
+            return sorted(path for path in self.cold_archive_dir.glob("*.jsonl") if path.is_file())
         return []
 
     def _scan_source(self, source: str, paths: list[Path]) -> _SourceLoad:
@@ -409,6 +415,9 @@ class SessionSearchService:
                         stored_key = data.get("key")
                         if isinstance(stored_key, str) and stored_key:
                             session_key = stored_key
+                        continue
+                    if source == "cold":
+                        records.extend(_cold_records_from_json(self.workspace, path, line_no, data))
                         continue
                     record = self._record_from_json(source, path, line_no, session_key, data)
                     if record is not None:
@@ -696,6 +705,52 @@ def _fact_record_from_json(
         locator=locator,
         record_status=status,
     )
+
+
+def _cold_records_from_json(
+    workspace: Path,
+    path: Path,
+    line_no: int,
+    data: dict[str, Any],
+) -> list[SearchRecord]:
+    messages = data.get("messages")
+    if not isinstance(messages, list):
+        return []
+    session_key = str(data.get("session_key") or "unknown")
+    archive_id = str(data.get("archive_id") or "")
+    reason = str(data.get("reason") or "")
+    archived_at = data.get("archived_at")
+    rel_path = _relative_path(workspace, path)
+    out: list[SearchRecord] = []
+    for index, message in enumerate(messages):
+        if not isinstance(message, dict):
+            continue
+        role = str(message.get("role") or "").lower()
+        if role not in {"user", "assistant", "tool", "system"}:
+            continue
+        text = _text_from_content(message.get("content"))
+        if not text.strip():
+            continue
+        out.append(
+            SearchRecord(
+                source="cold",
+                session_key=session_key,
+                role=role,
+                timestamp=_parse_record_timestamp(message.get("timestamp") or archived_at),
+                text=text,
+                locator={
+                    "path": rel_path,
+                    "archive_id": archive_id,
+                    "batch_line": line_no,
+                    "message_index": index,
+                    "session_key": session_key,
+                    "reason": reason,
+                    "has_full_content": True,
+                },
+                record_status=reason,
+            )
+        )
+    return out
 
 
 @lru_cache(maxsize=2048)

@@ -131,6 +131,39 @@ def test_apply_fact_without_payload_uses_conservative_note_fallback(tmp_path: Pa
     assert facts[0]["scope"] == "review.fact"
 
 
+def test_reject_fact_proposal_lowers_matching_active_fact_confidence(tmp_path: Path) -> None:
+    store = ReviewProposalStore(tmp_path)
+    existing = store._memory_store.upsert_fact_and_rebuild_memory(
+        "User prefers morning showers",
+        category="preference",
+        scope="user.routine",
+        owner="user",
+        confidence=0.9,
+    )
+    store.append_many([
+        _proposal(
+            "review_fact_reject",
+            proposal_type="fact",
+            content="User prefers morning showers",
+            payload={
+                "content": "User prefers morning showers",
+                "category": "preference",
+                "scope": "user.routine",
+                "owner": "user",
+            },
+        )
+    ])
+
+    result = store.reject("review_fact_reject", reason="user corrected this")
+
+    assert result.ok is True
+    assert result.fact_id == existing.fact_id
+    facts = _facts(tmp_path)
+    assert len(facts) == 1
+    assert facts[0]["confidence"] == pytest.approx(0.63)
+    assert len(_events(tmp_path)) == 1
+
+
 def test_high_risk_review_application_goes_pending_confirmation(tmp_path: Path) -> None:
     store = ReviewProposalStore(tmp_path)
     store.append_many([

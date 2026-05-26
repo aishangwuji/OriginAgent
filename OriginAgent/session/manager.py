@@ -1,5 +1,6 @@
 """Session management for conversation history."""
 
+import inspect
 import json
 import os
 import re
@@ -27,6 +28,29 @@ _MESSAGE_TIME_PREFIX_RE = re.compile(r"^\[Message Time: [^\]]+\]\n?")
 _LOCAL_IMAGE_BREADCRUMB_RE = re.compile(r"^\[image: (?:/|~)[^\]]+\]\s*$")
 _TOOL_CALL_ECHO_RE = re.compile(r'^\s*(?:generate_image|message)\([^)]*\)\s*$')
 _SESSION_PREVIEW_MAX_CHARS = 120
+
+
+def _call_archive_callback(
+    callback: Any,
+    messages: list[dict[str, Any]],
+    *,
+    session_key: str,
+    reason: str,
+) -> None:
+    try:
+        signature = inspect.signature(callback)
+    except (TypeError, ValueError):
+        callback(messages, session_key=session_key, reason=reason)
+        return
+    parameters = signature.parameters
+    accepts_kwargs = any(
+        parameter.kind == inspect.Parameter.VAR_KEYWORD
+        for parameter in parameters.values()
+    )
+    if accepts_kwargs or {"session_key", "reason"}.issubset(parameters):
+        callback(messages, session_key=session_key, reason=reason)
+    else:
+        callback(messages)
 
 
 def _sanitize_assistant_replay_text(content: str) -> str:
@@ -224,8 +248,16 @@ class Session:
         if len(self.messages) <= max_messages:
             return
 
-        retained = list(self.messages[-max_messages:])
+        retained = self._recent_legal_suffix(max_messages)
+        dropped = len(self.messages) - len(retained)
+        self.messages = retained
+        self.last_consolidated = max(0, self.last_consolidated - dropped)
+        self.updated_at = datetime.now()
 
+    def _recent_legal_suffix(self, max_messages: int) -> list[dict[str, Any]]:
+        if max_messages <= 0:
+            return []
+        retained = list(self.messages[-max_messages:])
         # Prefer starting at a user turn when one exists within the tail.
         first_user = next((i for i, m in enumerate(retained) if m.get("role") == "user"), None)
         if first_user is not None:
@@ -252,11 +284,7 @@ class Session:
             start = find_legal_message_start(retained)
             if start:
                 retained = retained[start:]
-
-        dropped = len(self.messages) - len(retained)
-        self.messages = retained
-        self.last_consolidated = max(0, self.last_consolidated - dropped)
-        self.updated_at = datetime.now()
+        return retained
 
     def enforce_file_cap(
         self,
@@ -270,8 +298,8 @@ class Session:
         before = list(self.messages)
         before_last_consolidated = self.last_consolidated
         before_count = len(before)
-        self.retain_recent_legal_suffix(limit)
-        dropped_count = before_count - len(self.messages)
+        retained = self._recent_legal_suffix(limit)
+        dropped_count = before_count - len(retained)
         if dropped_count <= 0:
             return
 
@@ -279,7 +307,15 @@ class Session:
         already_consolidated = min(before_last_consolidated, dropped_count)
         archive_chunk = dropped[already_consolidated:]
         if archive_chunk and on_archive:
-            on_archive(archive_chunk)
+            _call_archive_callback(
+                on_archive,
+                archive_chunk,
+                session_key=self.key,
+                reason="session_file_cap",
+            )
+        self.messages = retained
+        self.last_consolidated = max(0, before_last_consolidated - dropped_count)
+        self.updated_at = datetime.now()
         logger.info(
             "Session file cap hit for {}: dropped {}, raw-archived {}, kept {}",
             self.key,

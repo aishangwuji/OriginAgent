@@ -261,6 +261,11 @@ class AgentDefaults(Base):
         validation_alias=AliasChoices("idleCompactAfterMinutes", "sessionTtlMinutes"),
         serialization_alias="idleCompactAfterMinutes",
     )  # Auto-compact idle threshold in minutes (0 = disabled)
+    cold_archive_enabled: bool = Field(
+        default=True,
+        validation_alias=AliasChoices("coldArchiveEnabled", "cold_archive_enabled"),
+        serialization_alias="coldArchiveEnabled",
+    )  # Preserve trimmed persisted session messages in a local cold archive.
     max_messages: int = Field(
         default=120,
         ge=0,

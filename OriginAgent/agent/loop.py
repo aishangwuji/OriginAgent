@@ -64,6 +64,7 @@ from OriginAgent.providers.base import LLMProvider
 from OriginAgent.providers.factory import ProviderSnapshot
 from OriginAgent.security.capabilities import CapabilitySnapshot
 from OriginAgent.security.grants import CapabilityGrantStore
+from OriginAgent.session.cold_archive import SessionColdArchiveStore
 from OriginAgent.session.goal_state import goal_state_ws_blob, runner_wall_llm_timeout_s
 from OriginAgent.session.manager import Session, SessionManager
 from OriginAgent.session.search_index import SessionSearchIndexService
@@ -251,6 +252,7 @@ class AgentLoop:
         learning_config_loader: Callable[[], "BackgroundReviewConfig"] | None = None,
         curator_config: "CuratorConfig | None" = None,
         curator_config_loader: Callable[[], "CuratorConfig"] | None = None,
+        cold_archive_enabled: bool = True,
     ):
         from OriginAgent.config.schema import ExecToolConfig, ToolsConfig, WebToolsConfig
 
@@ -340,6 +342,9 @@ class AgentLoop:
             domain_pack_manager=self.domain_packs,
         )
         self.sessions = session_manager or SessionManager(workspace)
+        self.session_cold_archive = (
+            SessionColdArchiveStore(workspace) if cold_archive_enabled else None
+        )
         self._persist = TurnPersistManager(self.max_tool_result_chars, self.sessions)
         self._tool_audit_config = ToolAuditConfig.from_config(tool_audit_config or _tc.audit)
         self.tools = ToolRegistry(
@@ -442,6 +447,7 @@ class AgentLoop:
             sessions=self.sessions,
             consolidator=self.consolidator,
             session_ttl_minutes=session_ttl_minutes,
+            cold_archive=self.session_cold_archive,
         )
         self.dream = Dream(
             store=self.context.memory,
@@ -544,6 +550,7 @@ class AgentLoop:
             unified_session=defaults.unified_session,
             disabled_skills=defaults.disabled_skills,
             session_ttl_minutes=defaults.session_ttl_minutes,
+            cold_archive_enabled=defaults.cold_archive_enabled,
             consolidation_ratio=defaults.consolidation_ratio,
             max_messages=defaults.max_messages,
             tools_config=config.tools,
@@ -567,6 +574,17 @@ class AgentLoop:
     def _sync_subagent_runtime_limits(self) -> None:
         """Keep subagent runtime limits aligned with mutable loop settings."""
         self.subagents.max_iterations = self.max_iterations
+
+    def _archive_session_file_cap(
+        self,
+        messages: list[dict[str, Any]],
+        *,
+        session_key: str,
+        reason: str,
+    ) -> None:
+        if self.session_cold_archive is not None:
+            self.session_cold_archive.archive(session_key, messages, reason=reason)
+        self.context.memory.raw_archive(messages)
 
     def _apply_provider_snapshot(self, snapshot: ProviderSnapshot) -> None:
         """Swap model/provider for future turns without disturbing an active one."""
@@ -1594,7 +1612,7 @@ class AgentLoop:
         )
         save_skip = 1 + len(history_for_model) + (1 if is_subagent else 0)
         self._save_turn(session, all_msgs, save_skip)
-        session.enforce_file_cap(on_archive=self.context.memory.raw_archive)
+        session.enforce_file_cap(on_archive=self._archive_session_file_cap)
         self._clear_runtime_checkpoint(session)
         self.sessions.save(session)
         self._schedule_background(
@@ -1907,7 +1925,7 @@ class AgentLoop:
         merge_turn_media_into_last_assistant(ctx.all_messages, ctx.generated_media, extra_media)
 
         self._save_turn(ctx.session, ctx.all_messages, ctx.save_skip)
-        ctx.session.enforce_file_cap(on_archive=self.context.memory.raw_archive)
+        ctx.session.enforce_file_cap(on_archive=self._archive_session_file_cap)
         self._clear_pending_user_turn(ctx.session)
         self._clear_runtime_checkpoint(ctx.session)
         self.sessions.save(ctx.session)

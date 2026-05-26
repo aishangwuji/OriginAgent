@@ -13,15 +13,22 @@ from OriginAgent.session.manager import Session, SessionManager
 
 if TYPE_CHECKING:
     from OriginAgent.agent.memory import Consolidator
+    from OriginAgent.session.cold_archive import SessionColdArchiveStore
 
 
 class AutoCompact:
     _RECENT_SUFFIX_MESSAGES = 8
 
-    def __init__(self, sessions: SessionManager, consolidator: Consolidator,
-                 session_ttl_minutes: int = 0):
+    def __init__(
+        self,
+        sessions: SessionManager,
+        consolidator: Consolidator,
+        session_ttl_minutes: int = 0,
+        cold_archive: SessionColdArchiveStore | None = None,
+    ):
         self.sessions = sessions
         self.consolidator = consolidator
+        self.cold_archive = cold_archive
         self._ttl = session_ttl_minutes
         self._archiving: set[str] = set()
         self._summaries: dict[str, str] = {}
@@ -82,6 +89,12 @@ class AutoCompact:
             last_active = session.updated_at
             summary = None
             if archive_msgs:
+                if self.cold_archive is not None:
+                    self.cold_archive.archive(
+                        key,
+                        archive_msgs,
+                        reason="auto_compact",
+                    )
                 result = await self.consolidator.archive(archive_msgs)
                 if record_recent_summary(session, result, last_active=last_active):
                     summary = session_summary_text(session)

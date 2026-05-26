@@ -28,6 +28,7 @@ from OriginAgent.agent.facts import (
     VALID_CATEGORIES,
     VALID_OWNERS,
     FactRecord,
+    canonical_key_for_fact,
 )
 from OriginAgent.agent.memory import MemoryStore, redact_memory_text
 from OriginAgent.agent.skill_artifacts import write_skill_artifact
@@ -501,7 +502,17 @@ class ReviewProposalStore:
             terminal = self._terminal_result(record, action=action)
             if terminal is not None:
                 return terminal
-            event = self._append_event_unlocked(proposal_id, status=status, reason=reason)
+            feedback_fact = (
+                self._apply_rejected_fact_feedback_unlocked(record)
+                if status == "rejected"
+                else None
+            )
+            event = self._append_event_unlocked(
+                proposal_id,
+                status=status,
+                reason=reason,
+                fact_id=feedback_fact.fact_id if feedback_fact is not None else None,
+            )
             return ReviewDecisionResult(
                 proposal_id=proposal_id,
                 status=status,
@@ -510,6 +521,7 @@ class ReviewProposalStore:
                 message=f"Review proposal {status}.",
                 proposal=self._find_unlocked(proposal_id),
                 event=event,
+                fact_id=feedback_fact.fact_id if feedback_fact is not None else None,
             )
 
     def _append_event_unlocked(
@@ -554,7 +566,34 @@ class ReviewProposalStore:
 
     def _apply_to_memory(self, record: dict[str, Any]) -> FactRecord:
         fact_fields = _fact_fields_from_proposal(record)
+        fact_fields["confidence"] = self._memory_store.fact_store.calibrate_confidence(
+            _proposal_type(record),
+            str(record.get("domain_id") or "core"),
+            fact_fields["confidence"],
+        )
         return self._memory_store.upsert_fact_and_rebuild_memory(**fact_fields)
+
+    def _apply_rejected_fact_feedback_unlocked(
+        self,
+        record: dict[str, Any],
+    ) -> FactRecord | None:
+        if _proposal_type(record) != "fact":
+            return None
+        try:
+            canonical_key = _canonical_key_from_review_fact(record)
+            if not canonical_key:
+                return None
+            return self._memory_store.scale_fact_confidence_for_canonical_key_and_rebuild_memory(
+                canonical_key,
+                self._memory_store.fact_store.config.reject_confidence_multiplier,
+                status="active",
+            )
+        except Exception:
+            logger.exception(
+                "Failed to apply rejection feedback for review proposal {}",
+                record.get("id"),
+            )
+            return None
 
     def _apply_to_skill_unlocked(self, record: dict[str, Any], *, reason: str = "") -> ReviewDecisionResult:
         proposal_id = str(record.get("id") or "")
@@ -1345,6 +1384,18 @@ def _fact_fields_from_proposal(record: dict[str, Any]) -> dict[str, Any]:
             else None
         ),
     }
+
+
+def _canonical_key_from_review_fact(record: dict[str, Any]) -> str:
+    if _proposal_type(record) != "fact":
+        return ""
+    fields = _fact_fields_from_proposal(record)
+    return canonical_key_for_fact(
+        fields["content"],
+        fields["owner"],
+        fields["category"],
+        fields["scope"],
+    )
 
 
 def _message_text(message: dict[str, Any]) -> str:

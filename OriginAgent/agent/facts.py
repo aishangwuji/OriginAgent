@@ -16,7 +16,7 @@ import re
 import uuid
 from contextlib import suppress
 from dataclasses import asdict, dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
 
@@ -36,6 +36,13 @@ class FactStoreConfig:
     high_risk_keywords: tuple[str, ...] = ()
     temporary_language: tuple[str, ...] = ()
     uncertain_language: tuple[str, ...] = ()
+    confidence_decay_factor: float = 0.98
+    min_confidence: float = 0.3
+    decay_start_days: int = 30
+    auto_active_confidence_threshold: float = 0.8
+    auto_active_budget: float = 5.0
+    reject_confidence_multiplier: float = 0.7
+    calibration_min_count: int = 10
 
 
 DEFAULT_FACT_STORE_CONFIG = FactStoreConfig(
@@ -104,7 +111,6 @@ VALID_STATUSES = {
 }
 HIGH_RISK_CATEGORIES = set(DEFAULT_FACT_STORE_CONFIG.high_risk_categories)
 CONFLICT_CATEGORIES = set(DEFAULT_FACT_STORE_CONFIG.conflict_categories)
-MAX_AUTO_ACTIVE_PROPOSALS = 5
 MAX_DEPRECATIONS_PER_BATCH = 3
 HIGH_RISK_KEYWORDS = DEFAULT_FACT_STORE_CONFIG.high_risk_keywords
 TEMPORARY_LANGUAGE = DEFAULT_FACT_STORE_CONFIG.temporary_language
@@ -264,6 +270,10 @@ def canonical_key_for_fact(
         scope.strip().lower(),
     ])
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def domain_id_for_fact(scope: str, content: str) -> str:
+    return _infer_domain_key(scope, content)
 
 
 def parse_fact_proposal_response(text: str) -> DreamFactProposalBatch:
@@ -598,6 +608,7 @@ class FactStore:
         self.workspace = workspace
         self.memory_dir = ensure_dir(workspace / "memory")
         self.facts_file = facts_file or self.memory_dir / "facts.jsonl"
+        self.calibration_file = self.memory_dir / "confidence_calibration.json"
         self._lock_file = self.memory_dir / ".lock"
         self._lock_factory = lock_factory
         self._redactor = redactor or _default_redactor
@@ -682,6 +693,157 @@ class FactStore:
                 fact.fact_id,
             ),
         )
+
+    def find_by_canonical_key(
+        self,
+        canonical_key: str,
+        *,
+        status: str | None = None,
+    ) -> FactRecord | None:
+        with self._locked():
+            return self.find_by_canonical_key_unlocked(canonical_key, status=status)
+
+    def find_by_canonical_key_unlocked(
+        self,
+        canonical_key: str,
+        *,
+        status: str | None = None,
+    ) -> FactRecord | None:
+        canonical_key = str(canonical_key or "").strip()
+        if not canonical_key:
+            return None
+        target_status = _normalize_status(status) if status else None
+        for record in self.read_all_unlocked():
+            if record.canonical_key != canonical_key:
+                continue
+            if target_status and record.status != target_status:
+                continue
+            return record
+        return None
+
+    def update_confidence(self, fact_id: str, confidence: float) -> FactRecord | None:
+        with self._locked():
+            records = self.read_all_unlocked()
+            updated = self.update_confidence_in_records_unlocked(
+                records,
+                fact_id,
+                confidence,
+            )
+            if updated is not None:
+                self._write_records_unlocked(records)
+            return updated
+
+    def update_confidence_in_records_unlocked(
+        self,
+        records: list[FactRecord],
+        fact_id: str,
+        confidence: float,
+    ) -> FactRecord | None:
+        fact_id = str(fact_id or "").strip()
+        if not fact_id:
+            return None
+        new_confidence = _normalize_confidence(confidence)
+        for record in records:
+            if record.fact_id != fact_id:
+                continue
+            if record.confidence == new_confidence:
+                return record
+            record.confidence = new_confidence
+            record.updated_at = datetime.now().isoformat()
+            return record
+        return None
+
+    def decay_confidence(
+        self,
+        *,
+        factor: float | None = None,
+        min_confidence: float | None = None,
+        decay_start_days: int | None = None,
+        now: datetime | None = None,
+    ) -> int:
+        with self._locked():
+            records = self.read_all_unlocked()
+            changed = self.decay_confidence_in_records_unlocked(
+                records,
+                factor=factor,
+                min_confidence=min_confidence,
+                decay_start_days=decay_start_days,
+                now=now,
+            )
+            if changed:
+                self._write_records_unlocked(records)
+            return changed
+
+    def decay_confidence_in_records_unlocked(
+        self,
+        records: list[FactRecord],
+        *,
+        factor: float | None = None,
+        min_confidence: float | None = None,
+        decay_start_days: int | None = None,
+        now: datetime | None = None,
+    ) -> int:
+        factor = _normalize_decay_factor(
+            self.config.confidence_decay_factor if factor is None else factor
+        )
+        min_confidence = _normalize_confidence(
+            self.config.min_confidence if min_confidence is None else min_confidence
+        )
+        start_days = (
+            self.config.decay_start_days
+            if decay_start_days is None
+            else int(decay_start_days)
+        )
+        start_days = max(0, start_days)
+        now_dt = now or datetime.now()
+        changed = 0
+        for record in records:
+            if record.status != "active":
+                continue
+            last_seen = _parse_datetime(record.last_seen_at)
+            if last_seen is None:
+                continue
+            days_since_seen = _days_between(last_seen, now_dt)
+            if days_since_seen <= start_days:
+                continue
+            new_confidence = max(
+                record.confidence * (factor ** days_since_seen),
+                min_confidence,
+            )
+            new_confidence = _normalize_confidence(new_confidence)
+            if new_confidence == record.confidence:
+                continue
+            record.confidence = new_confidence
+            record.updated_at = now_dt.isoformat()
+            changed += 1
+        return changed
+
+    def calibrate_confidence(
+        self,
+        proposal_type: str,
+        domain_id: str,
+        raw_confidence: float,
+    ) -> float:
+        confidence = _normalize_confidence(raw_confidence)
+        key = _calibration_key(proposal_type, domain_id)
+        if not key:
+            return confidence
+        calibration = self._read_confidence_calibration()
+        raw_entry = calibration.get(key)
+        if not isinstance(raw_entry, dict):
+            return confidence
+        count = _int_value(raw_entry.get("count"), default=0)
+        if count <= self.config.calibration_min_count:
+            return confidence
+        bias = _float_value(raw_entry.get("bias"), default=0.0)
+        return max(0.1, min(0.99, confidence + bias))
+
+    def _read_confidence_calibration(self) -> dict[str, Any]:
+        try:
+            parsed = json.loads(self.calibration_file.read_text(encoding="utf-8"))
+        except (FileNotFoundError, json.JSONDecodeError, OSError):
+            return {}
+        return parsed if isinstance(parsed, dict) else {}
 
     def upsert_fact(
         self,
@@ -1108,6 +1270,61 @@ def _normalize_confidence(value: Any) -> float:
     except (TypeError, ValueError) as exc:
         raise ValueError("confidence must be numeric") from exc
     return max(0.0, min(1.0, confidence))
+
+
+def _normalize_decay_factor(value: Any) -> float:
+    try:
+        factor = float(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("confidence decay factor must be numeric") from exc
+    return max(0.0, min(1.0, factor))
+
+
+def _parse_datetime(value: str) -> datetime | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    if text.endswith("Z"):
+        text = f"{text[:-1]}+00:00"
+    try:
+        return datetime.fromisoformat(text)
+    except ValueError:
+        return None
+
+
+def _days_between(start: datetime, end: datetime) -> int:
+    if start.tzinfo is not None and end.tzinfo is None:
+        end = end.replace(tzinfo=timezone.utc)
+    elif start.tzinfo is None and end.tzinfo is not None:
+        start = start.replace(tzinfo=end.tzinfo)
+    delta = end - start
+    return max(0, delta.days)
+
+
+def _calibration_key(proposal_type: str, domain_id: str) -> str:
+    proposal = str(proposal_type or "").strip().lower()
+    domain = str(domain_id or "").strip().lower()
+    if not proposal or not domain:
+        return ""
+    return f"{proposal}:{domain}"
+
+
+def _int_value(value: Any, *, default: int) -> int:
+    if isinstance(value, bool):
+        return default
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _float_value(value: Any, *, default: float) -> float:
+    if isinstance(value, bool):
+        return default
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
 
 
 def _normalize_source_cursors(value: list[int] | Any | None) -> list[int]:

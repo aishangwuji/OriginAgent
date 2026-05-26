@@ -26,6 +26,7 @@ from OriginAgent.agent.domain_packs import (
     DomainToolDeclaration,
     DomainWorkflowDeclaration,
 )
+from OriginAgent.agent.metadata import read_originagent_metadata, set_originagent_metadata
 from OriginAgent.agent.skill_lifecycle import _metadata_originagent, _read_skill_markdown, _set_metadata_originagent, _write_skill_markdown
 from OriginAgent.agent.tools.base import Tool
 from OriginAgent.agent.workflow_artifacts import validate_workflow_artifact_dir
@@ -864,10 +865,7 @@ class DomainPackGovernanceService:
         if not isinstance(metadata, dict):
             metadata = {}
             data["metadata"] = metadata
-        originagent = metadata.get("OriginAgent")
-        if not isinstance(originagent, dict):
-            originagent = {}
-            metadata["OriginAgent"] = originagent
+        originagent = read_originagent_metadata(metadata)
         originagent.update(
             {
                 "migrated_from_workspace": True,
@@ -877,6 +875,7 @@ class DomainPackGovernanceService:
                 "managed_by_domain_pack": True,
             }
         )
+        data["metadata"] = set_originagent_metadata(metadata, originagent)
         manifest_backup = _read_yaml_file(target_pack.path / "domain_pack.yaml")
         try:
             target_dir.mkdir(parents=True, exist_ok=False)

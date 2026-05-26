@@ -34,7 +34,7 @@ class SessionSearchTool(Tool):
     @property
     def description(self) -> str:
         return (
-            "Search previous OriginAgent conversations, memory/history archives, and WebUI "
+            "Search previous OriginAgent conversations, memory/history archives, cold archives, and WebUI "
             "transcripts. Defaults to case-insensitive literal text matching; pass "
             "mode='hybrid' or mode='semantic' for indexed multilingual recall when "
             "enabled. Use this for "
@@ -68,10 +68,10 @@ class SessionSearchTool(Tool):
             sources=ArraySchema(
                 StringSchema(
                     "History source.",
-                    enum=["sessions", "history", "webui", "facts"],
+                    enum=["sessions", "history", "webui", "facts", "cold"],
                 ),
                 description="Optional sources to search. Defaults to sessions/history/webui.",
-                max_items=4,
+                max_items=5,
             ),
             mode=StringSchema(
                 "Search mode. literal preserves exact legacy behavior; hybrid combines literal and indexed multilingual recall; semantic uses indexed multilingual recall.",

@@ -14,6 +14,7 @@ from OriginAgent.bus.queue import MessageBus
 from OriginAgent.command import CommandContext
 from OriginAgent.config.schema import AgentDefaults
 from OriginAgent.providers.base import LLMResponse
+from OriginAgent.session.cold_archive import SessionColdArchiveStore
 
 
 def _archive_result(summary: str, cursor: int = 1) -> ArchiveResult:
@@ -72,6 +73,15 @@ class TestSessionTTLConfig:
         """Config should still accept the old sessionTtlMinutes key for compatibility."""
         defaults = AgentDefaults.model_validate({"sessionTtlMinutes": 30})
         assert defaults.session_ttl_minutes == 30
+
+    def test_cold_archive_enabled_default_and_alias(self):
+        defaults = AgentDefaults()
+        assert defaults.cold_archive_enabled is True
+
+        disabled = AgentDefaults.model_validate({"coldArchiveEnabled": False})
+        assert disabled.cold_archive_enabled is False
+        data = disabled.model_dump(mode="json", by_alias=True)
+        assert data["coldArchiveEnabled"] is False
 
     def test_serializes_with_user_friendly_alias(self):
         """Config dumps should use idleCompactAfterMinutes for JSON output."""
@@ -168,6 +178,65 @@ class TestAgentLoopTTLParam:
         archived = archive_fn.call_args.args[0]
         assert [m["content"] for m in archived] == ["u2", "u3"]
 
+    def test_session_enforce_file_cap_passes_context_to_new_archive_callback(self, tmp_path):
+        from OriginAgent.session.manager import Session
+
+        captured = {}
+
+        def archive_fn(messages, *, session_key: str, reason: str):
+            captured["messages"] = messages
+            captured["session_key"] = session_key
+            captured["reason"] = reason
+
+        session = Session(key="cli:direct")
+        for i in range(8):
+            session.add_message("user", f"u{i}")
+        session.last_consolidated = 2
+
+        session.enforce_file_cap(on_archive=archive_fn, limit=4)
+
+        assert [m["content"] for m in captured["messages"]] == ["u2", "u3"]
+        assert captured["session_key"] == "cli:direct"
+        assert captured["reason"] == "session_file_cap"
+
+    def test_session_enforce_file_cap_preserves_messages_when_archive_fails(self, tmp_path):
+        from OriginAgent.session.manager import Session
+
+        session = Session(key="cli:direct")
+        for i in range(8):
+            session.add_message("user", f"u{i}")
+        before = list(session.messages)
+
+        def archive_fn(messages):
+            raise RuntimeError("archive failed")
+
+        with pytest.raises(RuntimeError, match="archive failed"):
+            session.enforce_file_cap(on_archive=archive_fn, limit=4)
+
+        assert session.messages == before
+
+    @pytest.mark.asyncio
+    async def test_session_file_cap_callback_writes_cold_archive_and_raw_summary(self, tmp_path):
+        from OriginAgent.session.manager import Session
+
+        loop = _make_loop(tmp_path)
+        loop.context.memory.raw_archive = MagicMock()
+        session = Session(key="cli:direct")
+        for i in range(8):
+            session.add_message("user", f"u{i}")
+        session.last_consolidated = 2
+
+        session.enforce_file_cap(on_archive=loop._archive_session_file_cap, limit=4)
+
+        records = list(SessionColdArchiveStore(tmp_path).iter_records())
+        assert len(records) == 1
+        archived = records[0][2]
+        assert archived["session_key"] == "cli:direct"
+        assert archived["reason"] == "session_file_cap"
+        assert [m["content"] for m in archived["messages"]] == ["u2", "u3"]
+        loop.context.memory.raw_archive.assert_called_once()
+        await loop.close_mcp()
+
 
 class TestAutoCompact:
     """Test the _archive method."""
@@ -237,10 +306,39 @@ class TestAutoCompact:
         await loop.auto_compact._archive("cli:test")
 
         assert len(archived_messages) == 4
+        cold = list(SessionColdArchiveStore(tmp_path).iter_records())
+        assert len(cold) == 1
+        assert cold[0][2]["session_key"] == "cli:test"
+        assert cold[0][2]["reason"] == "auto_compact"
+        assert [m["content"] for m in cold[0][2]["messages"]] == [
+            "msg user 0",
+            "msg assistant 0",
+            "msg user 1",
+            "msg assistant 1",
+        ]
         session_after = loop.sessions.get_or_create("cli:test")
         assert len(session_after.messages) == loop.auto_compact._RECENT_SUFFIX_MESSAGES
         assert session_after.messages[0]["content"] == "msg user 2"
         assert session_after.messages[-1]["content"] == "msg assistant 5"
+        await loop.close_mcp()
+
+    @pytest.mark.asyncio
+    async def test_auto_compact_preserves_session_when_cold_archive_fails(self, tmp_path):
+        """Cold archive failure must not trim the only detailed session copy."""
+        loop = _make_loop(tmp_path, session_ttl_minutes=15)
+        session = loop.sessions.get_or_create("cli:test")
+        _add_turns(session, 6)
+        loop.sessions.save(session)
+        before = list(session.messages)
+
+        loop.session_cold_archive.archive = MagicMock(side_effect=RuntimeError("cold archive failed"))
+        loop.consolidator.archive = AsyncMock(return_value=_archive_result("Summary."))
+
+        await loop.auto_compact._archive("cli:test")
+
+        session_after = loop.sessions.get_or_create("cli:test")
+        assert session_after.messages == before
+        loop.consolidator.archive.assert_not_called()
         await loop.close_mcp()
 
     @pytest.mark.asyncio

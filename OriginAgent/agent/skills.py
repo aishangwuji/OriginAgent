@@ -1,6 +1,5 @@
 """Skills loader for agent capabilities."""
 
-import json
 import os
 import re
 import shutil
@@ -9,6 +8,7 @@ from typing import TYPE_CHECKING
 
 import yaml
 
+from OriginAgent.agent.metadata import read_originagent_metadata
 from OriginAgent.agent.skill_lifecycle import SkillLifecycleStore
 
 if TYPE_CHECKING:
@@ -289,23 +289,11 @@ class SkillsLoader:
         return content
 
     def _parse_OriginAgent_metadata(self, raw: object) -> dict:
-        """Extract OriginAgent/openclaw metadata from a frontmatter field.
+        """Extract OriginAgent metadata from a frontmatter field.
 
-        ``raw`` may be a dict (already parsed by yaml.safe_load) or a JSON str.
+        Legacy OpenClaw metadata is handled by the shared metadata helper.
         """
-        if isinstance(raw, dict):
-            data = raw
-        elif isinstance(raw, str):
-            try:
-                data = json.loads(raw)
-            except (json.JSONDecodeError, TypeError):
-                return {}
-        else:
-            return {}
-        if not isinstance(data, dict):
-            return {}
-        payload = data.get("OriginAgent", data.get("openclaw", {}))
-        return payload if isinstance(payload, dict) else {}
+        return read_originagent_metadata(raw)
 
     def _check_requirements(self, skill_meta: dict) -> bool:
         """Check if skill requirements are met (bins, env vars)."""

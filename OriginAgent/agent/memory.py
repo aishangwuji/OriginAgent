@@ -24,9 +24,10 @@ from OriginAgent.agent.facts import (
     DreamFactProposalBatch,
     FactRecord,
     FactStore,
-    MAX_AUTO_ACTIVE_PROPOSALS,
     MAX_DEPRECATIONS_PER_BATCH,
     ValidationIssue,
+    canonical_key_for_fact,
+    domain_id_for_fact,
     parse_fact_proposal_response,
     render_memory_md as render_facts_memory_md,
     validate_deprecation_proposal,
@@ -349,6 +350,69 @@ class MemoryStore:
             self._write_text_atomic(self.memory_file, memory_md)
             return fact
 
+    def update_fact_confidence_and_rebuild_memory(
+        self,
+        fact_id: str,
+        confidence: float,
+    ) -> FactRecord | None:
+        with self._locked():
+            records = self.fact_store.read_all_unlocked()
+            fact = self.fact_store.update_confidence_in_records_unlocked(
+                records,
+                fact_id,
+                confidence,
+            )
+            if fact is None:
+                return None
+            self.fact_store._write_records_unlocked(records)
+            self._write_text_atomic(self.memory_file, render_facts_memory_md(records))
+            return fact
+
+    def scale_fact_confidence_for_canonical_key_and_rebuild_memory(
+        self,
+        canonical_key: str,
+        multiplier: float,
+        *,
+        status: str = "active",
+    ) -> FactRecord | None:
+        canonical_key = str(canonical_key or "").strip()
+        if not canonical_key:
+            return None
+        multiplier = max(0.0, min(1.0, float(multiplier)))
+        with self._locked():
+            records = self.fact_store.read_all_unlocked()
+            target = next(
+                (
+                    record
+                    for record in records
+                    if record.canonical_key == canonical_key
+                    and record.status == status
+                ),
+                None,
+            )
+            if target is None:
+                return None
+            fact = self.fact_store.update_confidence_in_records_unlocked(
+                records,
+                target.fact_id,
+                target.confidence * multiplier,
+            )
+            if fact is None:
+                return None
+            self.fact_store._write_records_unlocked(records)
+            self._write_text_atomic(self.memory_file, render_facts_memory_md(records))
+            return fact
+
+    def decay_fact_confidence_and_rebuild_memory(self) -> int:
+        with self._locked():
+            records = self.fact_store.read_all_unlocked()
+            changed = self.fact_store.decay_confidence_in_records_unlocked(records)
+            if not changed:
+                return 0
+            self.fact_store._write_records_unlocked(records)
+            self._write_text_atomic(self.memory_file, render_facts_memory_md(records))
+            return changed
+
     def apply_fact_proposals_and_rebuild_memory(
         self,
         batch: DreamFactProposalBatch,
@@ -377,10 +441,24 @@ class MemoryStore:
         with self._locked():
             records = self.fact_store.read_all_unlocked()
             result = DreamFactApplyResult(parse_rejected=list(batch.parse_rejected))
-            active_count = 0
+            active_budget_remaining = self.fact_store.config.auto_active_budget
             deprecation_count = 0
 
-            for proposal in batch.facts_to_upsert:
+            calibrated_upserts = [
+                (
+                    self.fact_store.calibrate_confidence(
+                        "fact",
+                        domain_id_for_fact(proposal.scope, proposal.content),
+                        proposal.confidence,
+                    ),
+                    proposal,
+                )
+                for proposal in batch.facts_to_upsert
+            ]
+            calibrated_upserts.sort(key=lambda item: item[0], reverse=True)
+
+            for calibrated_confidence, proposal in calibrated_upserts:
+                proposal.confidence = calibrated_confidence
                 validation = validate_fact_proposal(
                     proposal,
                     existing_facts=records,
@@ -390,11 +468,44 @@ class MemoryStore:
                 )
                 issues = list(validation.issues)
                 decision = validation.decision
-                if decision == "active" and active_count >= MAX_AUTO_ACTIVE_PROPOSALS:
+                existing_active_fact = None
+                if decision == "active":
+                    canonical_key = canonical_key_for_fact(
+                        proposal.content,
+                        proposal.owner,
+                        proposal.category,
+                        proposal.scope,
+                    )
+                    existing_active_fact = next(
+                        (
+                            record
+                            for record in records
+                            if record.canonical_key == canonical_key
+                            and record.status == "active"
+                        ),
+                        None,
+                    )
+                if (
+                    decision == "active"
+                    and existing_active_fact is None
+                    and validation.confidence
+                    < self.fact_store.config.auto_active_confidence_threshold
+                ):
                     issues.append(ValidationIssue(
-                        code="active_auto_limit_exceeded",
+                        code="active_confidence_below_threshold",
                         severity="pending",
-                        message="Automatic active fact limit exceeded for this Dream batch.",
+                        message="Fact confidence is below the automatic activation threshold.",
+                    ))
+                    decision = "pending_confirmation"
+                elif (
+                    decision == "active"
+                    and existing_active_fact is None
+                    and active_budget_remaining < validation.confidence
+                ):
+                    issues.append(ValidationIssue(
+                        code="active_confidence_budget_exceeded",
+                        severity="pending",
+                        message="Automatic active fact confidence budget exceeded for this Dream batch.",
                     ))
                     decision = "pending_confirmation"
                 if decision == "reject":
@@ -418,7 +529,8 @@ class MemoryStore:
                     supersedes_fact_id=proposal.supersedes_fact_id,
                 )
                 if decision == "active":
-                    active_count += 1
+                    if existing_active_fact is None:
+                        active_budget_remaining -= validation.confidence
                     result.accepted.append(fact)
                 else:
                     result.pending.append(fact)
@@ -1602,6 +1714,10 @@ class Dream:
                 logger.error("Dream parse failure: snapshot restore failed")
             return False
 
+        decayed_fact_count = self.store.decay_fact_confidence_and_rebuild_memory()
+        if decayed_fact_count:
+            logger.info("Dream decayed confidence for {} active fact(s)", decayed_fact_count)
+
         try:
             apply_result = self.store.apply_fact_proposals_and_rebuild_memory(
                 proposal_batch,
@@ -1679,9 +1795,13 @@ class Dream:
             len(apply_result.accepted)
             + len(apply_result.pending)
             + len(apply_result.deprecated)
+            + decayed_fact_count
         )
         if fact_changes:
-            changelog.insert(0, f"facts: {self._format_apply_result(apply_result)}")
+            fact_summary = self._format_apply_result(apply_result)
+            if decayed_fact_count:
+                fact_summary = f"{fact_summary} decayed={decayed_fact_count}"
+            changelog.insert(0, f"facts: {fact_summary}")
 
         # Only advance cursor on successful completion to prevent silent loss
         if result and result.stop_reason == "completed":
