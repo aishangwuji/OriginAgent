@@ -67,9 +67,22 @@ async def test_content_read_reports_disabled_provider() -> None:
     assert data["error"] == "content_read provider 'github' is disabled"
 
 
-def test_agent_loop_registers_content_read_by_default(tmp_path) -> None:
+def test_agent_loop_does_not_register_content_read_by_default(tmp_path) -> None:
     cfg = Config()
     cfg.agents.defaults.workspace = str(tmp_path)
+    provider = MagicMock()
+    provider.get_default_model.return_value = "test-model"
+
+    loop = AgentLoop.from_config(cfg, bus=MessageBus(), provider=provider)
+
+    assert "web_fetch" in loop.tools.tool_names
+    assert "content_read" not in loop.tools.tool_names
+
+
+def test_agent_loop_registers_content_read_when_legacy_tool_enabled(tmp_path) -> None:
+    cfg = Config()
+    cfg.agents.defaults.workspace = str(tmp_path)
+    cfg.tools.content_read.enabled = True
     provider = MagicMock()
     provider.get_default_model.return_value = "test-model"
 

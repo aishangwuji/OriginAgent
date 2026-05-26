@@ -138,12 +138,14 @@ def register_default_tools(
     image_generation_provider_configs: dict[str, Any],
     timezone: str,
     runtime_profile: str,
+    introspection_service: Any | None = None,
+    confirmation_store: PendingConfirmationStore | None = None,
     domain_runtime_overrides: dict[str, Any] | None = None,
 ) -> None:
     """Register all default tools with the registry."""
     allowed_dir = workspace if (restrict_to_workspace or exec_config.sandbox) else None
     extra_read = [BUILTIN_SKILLS_DIR] if allowed_dir else None
-    confirmation_store = PendingConfirmationStore(workspace)
+    confirmation_store = confirmation_store or PendingConfirmationStore(workspace)
 
     registry.register(AskUserTool())
     registry.register(
@@ -160,6 +162,7 @@ def register_default_tools(
             background_review_service=background_review_service,
             curator_service=curator_service,
             session_search_index_service=session_search_index_service,
+            introspection_service=introspection_service,
         )
     )
     registry.register(ToolAuditSummaryTool(workspace=workspace, audit_mode=audit_config.mode))

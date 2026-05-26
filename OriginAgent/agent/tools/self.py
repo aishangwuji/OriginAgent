@@ -13,6 +13,7 @@ from OriginAgent.agent.tools.base import Tool
 
 if TYPE_CHECKING:
     from OriginAgent.agent.loop import AgentLoop
+    from OriginAgent.agent.introspection.service import RuntimeIntrospectionService
 
 
 def _has_real_attr(obj: Any, key: str) -> bool:
@@ -94,8 +95,14 @@ class MyTool(Tool):
 
     _MAX_RUNTIME_KEYS = 64
 
-    def __init__(self, loop: AgentLoop, modify_allowed: bool = True) -> None:
+    def __init__(
+        self,
+        loop: AgentLoop,
+        modify_allowed: bool = True,
+        introspection_service: RuntimeIntrospectionService | None = None,
+    ) -> None:
         self._loop = loop
+        self._introspection_service = introspection_service
         self._modify_allowed = modify_allowed
         self._channel = ""
         self._chat_id = ""
@@ -105,6 +112,7 @@ class MyTool(Tool):
         result = cls.__new__(cls)
         memo[id(self)] = result
         result._loop = self._loop
+        result._introspection_service = self._introspection_service
         result._modify_allowed = self._modify_allowed
         result._channel = self._channel
         result._chat_id = self._chat_id
@@ -178,10 +186,30 @@ class MyTool(Tool):
     # Path resolution
     # ------------------------------------------------------------------
 
+    def _loop_summary(self) -> dict[str, Any]:
+        if self._introspection_service is not None:
+            return self._introspection_service.current_loop_summary()
+        return {
+            "max_iterations": getattr(self._loop, "max_iterations", None),
+            "context_window_tokens": getattr(self._loop, "context_window_tokens", None),
+            "model": getattr(self._loop, "model", None),
+            "workspace": getattr(self._loop, "workspace", None),
+            "provider_retry_mode": getattr(self._loop, "provider_retry_mode", None),
+            "max_tool_result_chars": getattr(self._loop, "max_tool_result_chars", None),
+            "_current_iteration": getattr(self._loop, "_current_iteration", None),
+            "web_config": getattr(self._loop, "web_config", None),
+            "exec_config": getattr(self._loop, "exec_config", None),
+            "subagents": getattr(self._loop, "subagents", None),
+            "_last_usage": getattr(self._loop, "_last_usage", None),
+            "scratchpad": getattr(self._loop, "_runtime_vars", {}),
+        }
+
     def _resolve_path(self, path: str) -> tuple[Any, str | None]:
         parts = path.split(".")
-        obj = self._loop
-        for part in parts:
+        root = self._loop_summary()
+        obj: Any = root
+        used_summary = True
+        for index, part in enumerate(parts):
             if part in self._DENIED_ATTRS or part.startswith("__"):
                 return None, f"'{part}' is not accessible"
             if part in self.BLOCKED:
@@ -193,6 +221,13 @@ class MyTool(Tool):
                     if part in obj:
                         obj = obj[part]
                     else:
+                        if index == 0:
+                            used_summary = False
+                            obj = self._loop
+                            if not _has_real_attr(obj, part):
+                                return None, f"'{part}' not found"
+                            obj = getattr(obj, part)
+                            continue
                         return None, f"'{part}' not found in dict"
                 else:
                     if not _has_real_attr(obj, part):
@@ -200,6 +235,8 @@ class MyTool(Tool):
                     obj = getattr(obj, part)
             except (KeyError, AttributeError) as e:
                 return None, f"'{part}' not found: {e}"
+        if not used_summary and "." not in path and not _has_real_attr(self._loop, path):
+            return None, f"'{path}' not found"
         return obj, None
 
     @staticmethod
@@ -326,45 +363,47 @@ class MyTool(Tool):
         top = key.split(".")[0]
         if top in self._DENIED_ATTRS or top.startswith("__"):
             return f"Error: '{top}' is not accessible"
+        if key == "scratchpad":
+            rv = {
+                k: v for k, v in self._loop_summary().get("scratchpad", {}).items()
+                if self._is_valid_scratchpad_key(k) is None
+            }
+            return self._format_value(rv, "scratchpad") if rv else "scratchpad is empty"
         obj, err = self._resolve_path(key)
         if err:
             # "scratchpad" alias for _runtime_vars
-            if key == "scratchpad":
-                rv = {
-                    k: v for k, v in self._loop._runtime_vars.items()
-                    if self._is_valid_scratchpad_key(k) is None
-                }
-                return self._format_value(rv, "scratchpad") if rv else "scratchpad is empty"
             # Fallback: check _runtime_vars for simple keys stored by modify
+            scratchpad = self._loop_summary().get("scratchpad", {})
             if (
                 "." not in key
-                and key in self._loop._runtime_vars
+                and key in scratchpad
                 and self._is_valid_scratchpad_key(key) is None
             ):
-                return self._format_value(self._loop._runtime_vars[key], key)
+                return self._format_value(scratchpad[key], key)
             return f"Error: {err}"
         # Guard against mock auto-generated attributes
-        if "." not in key and not _has_real_attr(self._loop, key):
-            if key in self._loop._runtime_vars and self._is_valid_scratchpad_key(key) is None:
-                return self._format_value(self._loop._runtime_vars[key], key)
+        if "." not in key and key not in self._loop_summary() and not _has_real_attr(self._loop, key):
+            scratchpad = self._loop_summary().get("scratchpad", {})
+            if key in scratchpad and self._is_valid_scratchpad_key(key) is None:
+                return self._format_value(scratchpad[key], key)
             return f"Error: '{key}' not found"
         return self._format_value(obj, key)
 
     def _inspect_all(self) -> str:
-        loop = self._loop
+        summary = self._loop_summary()
         parts: list[str] = []
         # RESTRICTED keys
         for k in self.RESTRICTED:
-            parts.append(self._format_value(getattr(loop, k, None), k))
+            parts.append(self._format_value(summary.get(k), k))
         # Other useful top-level keys shown in description
         for k in ("workspace", "provider_retry_mode", "max_tool_result_chars", "_current_iteration", "web_config", "exec_config", "subagents"):
-            if _has_real_attr(loop, k):
-                parts.append(self._format_value(getattr(loop, k, None), k))
+            if k in summary:
+                parts.append(self._format_value(summary.get(k), k))
         # Token usage
-        usage = loop._last_usage
+        usage = summary.get("_last_usage")
         if usage:
             parts.append(self._format_value(usage, "_last_usage"))
-        rv = loop._runtime_vars
+        rv = summary.get("scratchpad", {})
         if rv:
             parts.append(self._format_value(rv, "scratchpad"))
         return "\n".join(parts)

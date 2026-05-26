@@ -5,13 +5,13 @@ from __future__ import annotations
 import json
 from typing import Any
 
+from loguru import logger
+
 from OriginAgent.agent.tools.base import Tool
 from OriginAgent.agent.tools.limits import ToolLimits
 from OriginAgent.agent.tools.schema import IntegerSchema, StringSchema, tool_parameters_schema
 from OriginAgent.integrations.content_read.reader import (
     CONTENT_READ_PROVIDERS,
-    ContentReadError,
-    ContentReader,
 )
 from OriginAgent.security.policy import PolicyDeniedError
 
@@ -21,10 +21,8 @@ class ContentReadTool(Tool):
 
     name = "content_read"
     description = (
-        "Read a URL as structured content using the same platform providers "
-        "that web_fetch uses in provider=auto. "
-        "Supports auto, generic, rss, github, and hackernews. "
-        "Returns source_type, title, url, content, metadata, and truncated."
+        "Deprecated compatibility wrapper for structured URL reads. "
+        "Use web_fetch with mode=structured instead."
     )
 
     def __init__(
@@ -76,33 +74,30 @@ class ContentReadTool(Tool):
             max_chars = kwargs.pop("maxChars")
         cleaned_url = url.strip(" \t\r\n`\"'")
         try:
-            from OriginAgent.security.network import validate_url_target
+            from OriginAgent.agent.tools.web import WebFetchTool
+            from OriginAgent.config.schema import WebFetchConfig
 
-            ok, err = validate_url_target(cleaned_url)
-            if not ok:
-                return json.dumps(
-                    {"error": f"URL validation failed: {err}", "url": cleaned_url},
-                    ensure_ascii=False,
-                )
-            enabled = set(getattr(self.config, "providers", None) or [])
-            reader = ContentReader(
+            logger.warning(
+                "content_read is deprecated; use web_fetch(mode='structured') instead"
+            )
+            web_fetch = WebFetchTool(
+                config=WebFetchConfig(
+                    use_jina_reader=bool(getattr(self.config, "use_jina_reader", True))
+                ),
                 proxy=self.proxy,
                 user_agent=self.user_agent,
-                enabled_providers=enabled or {"generic", "rss", "github", "hackernews"},
-                use_jina_reader=bool(getattr(self.config, "use_jina_reader", True)),
-                rss_entry_limit=int(getattr(self.config, "rss_entry_limit", 10)),
-                hackernews_comment_limit=int(
-                    getattr(self.config, "hackernews_comment_limit", 20)
-                ),
+                max_chars=self.max_chars,
+                limits=self._limits,
+                content_read_config=self.config,
             )
-            result = await reader.read(cleaned_url, provider=provider)
-            payload = result.to_payload(max_chars or self.max_chars)
-            payload["untrusted"] = True
-            return json.dumps(payload, ensure_ascii=False)
+            return await web_fetch.execute(
+                cleaned_url,
+                mode="structured",
+                provider=provider,
+                max_chars=max_chars or self.max_chars,
+            )
         except PolicyDeniedError:
             raise
-        except (ContentReadError, ValueError) as exc:
-            return json.dumps({"error": str(exc), "url": cleaned_url}, ensure_ascii=False)
         except Exception as exc:
             return json.dumps(
                 {"error": f"content_read failed: {type(exc).__name__}: {exc}", "url": cleaned_url},

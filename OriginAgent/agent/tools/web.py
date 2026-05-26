@@ -402,6 +402,16 @@ class WebFetchTool(Tool):
     def parameters(self) -> dict[str, Any]:
         return tool_parameters_schema(
             url=StringSchema("URL to fetch"),
+            mode={
+                "type": "string",
+                "description": (
+                    "Fetch mode. auto keeps the default behavior; structured uses only "
+                    "content providers; web forces generic webpage extraction; image "
+                    "fetches image content directly."
+                ),
+                "enum": ["auto", "structured", "web", "image"],
+                "default": "auto",
+            },
             extract_mode={
                 "type": "string",
                 "enum": ["markdown", "text"],
@@ -434,12 +444,15 @@ class WebFetchTool(Tool):
     async def execute(
         self,
         url: str,
+        mode: str = "auto",
         extract_mode: str = "markdown",
         provider: str = "auto",
         max_chars: int | None = None,
         **kwargs: Any,
     ) -> Any:
         url = url.strip(" \t\r\n`\"'")
+        if "mode" in kwargs:
+            mode = kwargs.pop("mode")
         if "extractMode" in kwargs and extract_mode == "markdown":
             extract_mode = kwargs.pop("extractMode")
         if "provider" in kwargs:
@@ -447,15 +460,55 @@ class WebFetchTool(Tool):
         if "maxChars" in kwargs and max_chars is None:
             max_chars = kwargs.pop("maxChars")
         max_chars = max_chars or self.max_chars
+        mode = (mode or "auto").strip().lower()
+        if mode not in {"auto", "structured", "web", "image"}:
+            return json.dumps(
+                {
+                    "error": (
+                        f"Unsupported web_fetch mode '{mode}'. "
+                        "Supported modes: auto, structured, web, image"
+                    ),
+                    "url": url,
+                },
+                ensure_ascii=False,
+            )
         is_valid, error_msg = _validate_url_safe(url)
         if not is_valid:
             return json.dumps({"error": f"URL validation failed: {error_msg}", "url": url}, ensure_ascii=False)
+
+        if mode == "image":
+            return await self._fetch_image(url)
+        if mode == "structured":
+            return await self._fetch_structured_only(url, provider, max_chars)
+        if mode == "web":
+            return await self._fetch_web_only(url, extract_mode, max_chars)
 
         structured = await self._fetch_structured_if_applicable(url, provider, max_chars)
         if structured is not None:
             return structured
 
-        # Detect and fetch images directly to avoid Jina's textual image captioning
+        return await self._fetch_web_only(url, extract_mode, max_chars)
+
+    async def _fetch_web_only(self, url: str, extract_mode: str, max_chars: int) -> Any:
+        image = await self._fetch_image_if_applicable(url)
+        if image is not None:
+            return image
+
+        result = None
+        if self.config.use_jina_reader:
+            result = await self._fetch_jina(url, max_chars)
+        if result is None:
+            result = await self._fetch_readability(url, extract_mode, max_chars)
+        return result
+
+    async def _fetch_image(self, url: str) -> Any:
+        image = await self._fetch_image_if_applicable(url, force=True)
+        if image is not None:
+            return image
+        return json.dumps({"error": "URL did not return an image", "url": url}, ensure_ascii=False)
+
+    async def _fetch_image_if_applicable(self, url: str, *, force: bool = False) -> Any | None:
+        """Detect and fetch images directly to avoid textual image captioning."""
         try:
             async with httpx.AsyncClient(proxy=self.proxy, follow_redirects=True, max_redirects=MAX_REDIRECTS, timeout=15.0) as client:
                 async with client.stream("GET", url, headers={"User-Agent": self.user_agent}) as r:
@@ -470,17 +523,21 @@ class WebFetchTool(Tool):
                         r.raise_for_status()
                         raw = await self._read_limited(r)
                         return build_image_content_blocks(raw, ctype, url, f"(Image fetched from: {url})")
+                    if force:
+                        return json.dumps(
+                            {
+                                "error": f"URL did not return an image (content-type: {ctype or 'unknown'})",
+                                "url": url,
+                            },
+                            ensure_ascii=False,
+                        )
         except PolicyDeniedError:
             raise
         except Exception as e:
             logger.debug("Pre-fetch image detection failed for {}: {}", url, e)
-
-        result = None
-        if self.config.use_jina_reader:
-            result = await self._fetch_jina(url, max_chars)
-        if result is None:
-            result = await self._fetch_readability(url, extract_mode, max_chars)
-        return result
+            if force:
+                return json.dumps({"error": str(e), "url": url}, ensure_ascii=False)
+        return None
 
     async def _fetch_structured_if_applicable(
         self,
@@ -504,11 +561,6 @@ class WebFetchTool(Tool):
         if normalized == "generic":
             return None
         cfg = self.content_read_config
-        if cfg is not None and not bool(getattr(cfg, "enabled", True)):
-            return None if normalized == "auto" else json.dumps(
-                {"error": "content_read providers are disabled", "url": url},
-                ensure_ascii=False,
-            )
         enabled = set(getattr(cfg, "providers", None) or ["generic", "rss", "github", "hackernews"])
         structured_enabled = {name for name in enabled if name != "generic"}
         reader = ContentReader(
@@ -539,6 +591,51 @@ class WebFetchTool(Tool):
                 "length": len(text),
                 "untrusted": True,
                 "text": text,
+            }
+        )
+        return json.dumps(payload, ensure_ascii=False)
+
+    async def _fetch_structured_only(
+        self,
+        url: str,
+        provider: str,
+        max_chars: int,
+    ) -> str:
+        normalized = (provider or "auto").strip().lower()
+        if normalized not in CONTENT_READ_PROVIDERS:
+            return json.dumps(
+                {
+                    "error": (
+                        f"Unsupported web_fetch provider '{provider}'. "
+                        f"Supported providers: {', '.join(CONTENT_READ_PROVIDERS)}"
+                    ),
+                    "url": url,
+                },
+                ensure_ascii=False,
+            )
+        cfg = self.content_read_config
+        enabled = set(getattr(cfg, "providers", None) or ["generic", "rss", "github", "hackernews"])
+        reader = ContentReader(
+            proxy=self.proxy,
+            user_agent=self.user_agent,
+            enabled_providers=enabled,
+            use_jina_reader=bool(getattr(cfg, "use_jina_reader", True)),
+            rss_entry_limit=int(getattr(cfg, "rss_entry_limit", 10)),
+            hackernews_comment_limit=int(getattr(cfg, "hackernews_comment_limit", 20)),
+        )
+        try:
+            result = await reader.read(url, provider=normalized)
+        except (ContentReadError, ValueError) as exc:
+            return json.dumps({"error": str(exc), "url": url}, ensure_ascii=False)
+        payload = result.to_payload(max_chars)
+        payload.update(
+            {
+                "finalUrl": payload["url"],
+                "status": 200,
+                "extractor": f"content_read:{payload['source_type']}",
+                "length": len(payload["content"]),
+                "untrusted": True,
+                "text": f"{_UNTRUSTED_BANNER}\n\n{payload['content']}",
             }
         )
         return json.dumps(payload, ensure_ascii=False)

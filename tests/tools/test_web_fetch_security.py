@@ -111,14 +111,97 @@ async def test_web_fetch_provider_generic_forces_original_fetch_path(monkeypatch
 
 
 @pytest.mark.asyncio
-async def test_web_fetch_auto_respects_disabled_structured_providers(monkeypatch):
+async def test_web_fetch_auto_keeps_structured_providers_when_legacy_tool_disabled(monkeypatch):
     tool = WebFetchTool(
         config=WebFetchConfig(use_jina_reader=False),
         content_read_config=ContentReadToolConfig(enabled=False),
     )
+    seen: dict[str, str] = {}
+
+    async def fake_read(self, url: str, provider: str = "auto") -> ContentReadResult:
+        seen["url"] = url
+        seen["provider"] = provider
+        return ContentReadResult(
+            source_type="github",
+            title="owner/repo",
+            url=url,
+            content="structured",
+            metadata={},
+        )
+
+    monkeypatch.setattr(ContentReader, "read", fake_read)
+
+    with patch("OriginAgent.security.network.socket.getaddrinfo", _fake_resolve_public):
+        result = await tool.execute(url="https://github.com/owner/repo")
+
+    data = json.loads(result)
+    assert seen == {"url": "https://github.com/owner/repo", "provider": "github"}
+    assert data["extractor"] == "content_read:github"
+    assert data["content"] == "structured"
+    assert data["untrusted"] is True
+
+
+@pytest.mark.asyncio
+async def test_web_fetch_unknown_provider_returns_clear_error():
+    tool = WebFetchTool()
+
+    with patch("OriginAgent.security.network.socket.getaddrinfo", _fake_resolve_public):
+        result = await tool.execute(url="https://example.com/page", provider="unknown")
+
+    data = json.loads(result)
+    assert "Unsupported web_fetch provider" in data["error"]
+
+
+@pytest.mark.asyncio
+async def test_web_fetch_unknown_mode_returns_clear_error():
+    tool = WebFetchTool()
+
+    with patch("OriginAgent.security.network.socket.getaddrinfo", _fake_resolve_public):
+        result = await tool.execute(url="https://example.com/page", mode="unknown")
+
+    data = json.loads(result)
+    assert "Unsupported web_fetch mode" in data["error"]
+
+
+@pytest.mark.asyncio
+async def test_web_fetch_structured_mode_uses_generic_content_reader(monkeypatch):
+    tool = WebFetchTool(config=WebFetchConfig(use_jina_reader=False))
+    seen: dict[str, str] = {}
+
+    async def fake_read(self, url: str, provider: str = "auto") -> ContentReadResult:
+        seen["url"] = url
+        seen["provider"] = provider
+        return ContentReadResult(
+            source_type="web",
+            title="Example",
+            url=url,
+            content="generic content",
+            metadata={"extractor": "fake"},
+        )
+
+    monkeypatch.setattr(ContentReader, "read", fake_read)
+
+    with patch("OriginAgent.security.network.socket.getaddrinfo", _fake_resolve_public):
+        result = await tool.execute(
+            url="https://example.com/page",
+            mode="structured",
+            provider="generic",
+        )
+
+    data = json.loads(result)
+    assert seen == {"url": "https://example.com/page", "provider": "generic"}
+    assert data["extractor"] == "content_read:web"
+    assert data["source_type"] == "web"
+    assert data["content"] == "generic content"
+    assert data["untrusted"] is True
+
+
+@pytest.mark.asyncio
+async def test_web_fetch_web_mode_skips_structured_provider_on_known_platform(monkeypatch):
+    tool = WebFetchTool(config=WebFetchConfig(use_jina_reader=False))
 
     async def fail_structured(*args, **kwargs):
-        raise AssertionError("disabled content_read providers must not be called")
+        raise AssertionError("mode=web must not call content_read providers")
 
     class FakeStreamResponse:
         headers = {"content-type": "text/html"}
@@ -155,22 +238,11 @@ async def test_web_fetch_auto_respects_disabled_structured_providers(monkeypatch
     monkeypatch.setattr("OriginAgent.agent.tools.web.httpx.AsyncClient", FakeClient)
 
     with patch("OriginAgent.security.network.socket.getaddrinfo", _fake_resolve_public):
-        result = await tool.execute(url="https://github.com/owner/repo")
+        result = await tool.execute(url="https://github.com/owner/repo", mode="web")
 
     data = json.loads(result)
     assert data["extractor"] == "readability"
     assert data["untrusted"] is True
-
-
-@pytest.mark.asyncio
-async def test_web_fetch_unknown_provider_returns_clear_error():
-    tool = WebFetchTool()
-
-    with patch("OriginAgent.security.network.socket.getaddrinfo", _fake_resolve_public):
-        result = await tool.execute(url="https://example.com/page", provider="unknown")
-
-    data = json.loads(result)
-    assert "Unsupported web_fetch provider" in data["error"]
 
 
 @pytest.mark.asyncio

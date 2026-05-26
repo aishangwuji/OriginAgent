@@ -50,9 +50,18 @@ def test_tool_audit_config_rejects_invalid_mode() -> None:
 def test_default_security_tools_are_narrow() -> None:
     patterns = ToolAuditConfig().security_tools
 
-    for name in ("exec", "message", "cron", "spawn", "originagent_device_lighting", "mcp_demo"):
+    for name in (
+        "exec",
+        "message",
+        "web_fetch",
+        "content_read",
+        "cron",
+        "spawn",
+        "originagent_device_lighting",
+        "mcp_demo",
+    ):
         assert _matches_security_tool(name, patterns)
-    for name in ("read_file", "list_dir", "grep", "glob", "web_fetch", "web_search"):
+    for name in ("read_file", "list_dir", "grep", "glob", "web_search"):
         assert not _matches_security_tool(name, patterns)
 
 

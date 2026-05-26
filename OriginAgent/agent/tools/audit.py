@@ -33,6 +33,7 @@ class ToolAuditConfig:
         "exec",
         "message",
         "web_fetch",
+        "content_read",
         "cron",
         "spawn",
         "originagent_device_*",

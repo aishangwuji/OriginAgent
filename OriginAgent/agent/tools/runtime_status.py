@@ -7,12 +7,9 @@ from collections import Counter
 from pathlib import Path
 from typing import Any
 
-from OriginAgent.agent.domain_pack_governance import summarize_domain_pack_governance
 from OriginAgent.agent.confirmation import PendingConfirmationStore
-from OriginAgent.agent.self_model import SelfModelService
-from OriginAgent.agent.skills import SkillsLoader
+from OriginAgent.agent.introspection.service import RuntimeIntrospectionService
 from OriginAgent.agent.tools.base import Tool
-from OriginAgent.agent.workflow_artifacts import summarize_workflow_artifacts
 from OriginAgent.cron.service import CronService
 
 
@@ -34,6 +31,7 @@ class RuntimeStatusTool(Tool):
         background_review_service: Any | None = None,
         curator_service: Any | None = None,
         session_search_index_service: Any | None = None,
+        introspection_service: RuntimeIntrospectionService | None = None,
     ) -> None:
         self._workspace = Path(workspace)
         self._registry = registry
@@ -47,6 +45,7 @@ class RuntimeStatusTool(Tool):
         self._background_review_service = background_review_service
         self._curator_service = curator_service
         self._session_search_index_service = session_search_index_service
+        self._introspection_service = introspection_service
 
     @property
     def description(self) -> str:
@@ -61,14 +60,8 @@ class RuntimeStatusTool(Tool):
         return True
 
     async def execute(self) -> dict[str, Any]:
-        domain_status = _domain_pack_status(self._domain_pack_manager)
-        background_review_status = _background_review_status(self._background_review_service)
-        curator_status = _curator_status(self._curator_service)
-        workflow_status = _workflow_artifact_status(self._workspace)
-        skill_status = _skill_lifecycle_status(self._workspace, self._domain_pack_manager)
-        session_search_status = _session_search_status(self._session_search_index_service)
-        self_model = SelfModelService(
-            self._workspace,
+        service = self._introspection_service or RuntimeIntrospectionService(
+            workspace=self._workspace,
             registry=self._registry,
             sessions=self._sessions,
             pending_queues=self._pending_queues,
@@ -79,25 +72,9 @@ class RuntimeStatusTool(Tool):
             domain_pack_manager=self._domain_pack_manager,
             background_review_service=self._background_review_service,
             curator_service=self._curator_service,
-        ).build()
-        return {
-            "workspace_present": self._workspace.exists(),
-            "workspace_name": self._workspace.name,
-            "registered_tools_count": _safe_len(getattr(self._registry, "tool_names", [])),
-            "active_sessions_count": _session_count(self._sessions),
-            "pending_queue_count": len(self._pending_queues),
-            "runtime_profile": self._runtime_profile,
-            "audit_mode": self._audit_mode,
-            "cron_available": self._cron_service is not None,
-            "confirmation_available": self._confirmation_store is not None,
-            **domain_status,
-            **background_review_status,
-            **curator_status,
-            **skill_status,
-            **workflow_status,
-            **session_search_status,
-            "self_model": self_model,
-        }
+            session_search_index_service=self._session_search_index_service,
+        )
+        return service.system_status()
 
 
 class ToolAuditSummaryTool(Tool):
@@ -280,21 +257,6 @@ def _string_value(value: Any) -> str | None:
     return value if isinstance(value, str) and value else None
 
 
-def _safe_len(value: Any) -> int:
-    try:
-        return len(value)
-    except Exception:
-        return 0
-
-
-def _session_count(sessions: Any) -> int:
-    for attr in ("sessions", "_sessions"):
-        value = getattr(sessions, attr, None)
-        if value is not None:
-            return _safe_len(value)
-    return 0
-
-
 def _capability_summary(snapshot: Any) -> str:
     if not snapshot:
         return "none"
@@ -319,136 +281,3 @@ def _capability_summary(snapshot: Any) -> str:
         if snapshot.get(key) is True
     ]
     return f"{source}:{trigger}:enabled_flags={len(flags)}"
-
-
-def _domain_pack_status(manager: Any | None) -> dict[str, Any]:
-    if manager is None:
-        return {
-            "domain_packs_count": 0,
-            "active_domain_pack_ids": [],
-            "registered_domain_tools_count": 0,
-            "skipped_domain_tools_count": 0,
-            "workspace_domain_pack_count": 0,
-            "builtin_domain_pack_count": 0,
-            "domain_pack_status_counts": {},
-            "active_domain_pack_count": 0,
-            "domain_pack_override_count": 0,
-            "domain_pack_eval_status_counts": {},
-            "last_domain_pack_event_at": None,
-        }
-    governance = summarize_domain_pack_governance(getattr(manager, "workspace", Path(".")), manager)
-    try:
-        packs = manager.list_packs()
-    except Exception:
-        return {
-            "domain_packs_count": 0,
-            "active_domain_pack_ids": [],
-            "registered_domain_tools_count": 0,
-            "skipped_domain_tools_count": 0,
-            **governance,
-        }
-    counts = manager.domain_tool_runtime_counts() if hasattr(manager, "domain_tool_runtime_counts") else {}
-    return {
-        "domain_packs_count": len(packs),
-        "active_domain_pack_ids": [pack.id for pack in packs if getattr(pack, "active", False)],
-        "registered_domain_tools_count": int(counts.get("registered", 0) or 0),
-        "skipped_domain_tools_count": int(counts.get("skipped", 0) or 0),
-        **governance,
-    }
-
-
-def _background_review_status(service: Any | None) -> dict[str, Any]:
-    if service is None or not hasattr(service, "runtime_status"):
-        return {
-            "background_review_enabled": False,
-            "background_review_running_count": 0,
-            "background_review_proposal_count": 0,
-            "background_review_pending_count": 0,
-            "background_review_last_created_at": None,
-            "background_review_last_result": None,
-        }
-    try:
-        return dict(service.runtime_status())
-    except Exception:
-        return {
-            "background_review_enabled": False,
-            "background_review_running_count": 0,
-            "background_review_proposal_count": 0,
-            "background_review_pending_count": 0,
-            "background_review_last_created_at": None,
-            "background_review_last_result": None,
-        }
-
-
-def _curator_status(service: Any | None) -> dict[str, Any]:
-    if service is None or not hasattr(service, "runtime_status"):
-        return {
-            "curator_enabled": False,
-            "curator_running_count": 0,
-            "curator_proposal_count": 0,
-            "curator_pending_count": 0,
-            "curator_last_created_at": None,
-            "curator_last_result": None,
-            "curator_type_counts": {},
-        }
-    try:
-        return dict(service.runtime_status())
-    except Exception:
-        return {
-            "curator_enabled": False,
-            "curator_running_count": 0,
-            "curator_proposal_count": 0,
-            "curator_pending_count": 0,
-            "curator_last_created_at": None,
-            "curator_last_result": None,
-            "curator_type_counts": {},
-        }
-
-
-def _workflow_artifact_status(workspace: Path) -> dict[str, Any]:
-    try:
-        return summarize_workflow_artifacts(workspace)
-    except Exception:
-        return {
-            "workflow_artifacts_count": 0,
-            "workflow_artifact_status_counts": {},
-            "invalid_workflow_artifacts_count": 0,
-        }
-
-
-def _skill_lifecycle_status(workspace: Path, domain_pack_manager: Any | None) -> dict[str, Any]:
-    try:
-        loader = SkillsLoader(workspace, domain_pack_manager=domain_pack_manager)
-        return loader.lifecycle.stats(loader.list_skills(filter_unavailable=False))
-    except Exception:
-        return {
-            "skills_count": 0,
-            "workspace_skills_count": 0,
-            "skill_lifecycle_status_counts": {},
-            "skill_verification_status_counts": {},
-            "unverified_skill_count": 0,
-            "deprecated_skill_count": 0,
-            "rejected_skill_count": 0,
-            "always_workspace_skill_count": 0,
-        }
-
-
-def _session_search_status(service: Any | None) -> dict[str, Any]:
-    defaults = {
-        "session_search_backend": "literal",
-        "session_search_semantic_enabled": False,
-        "session_search_index_available": False,
-        "session_search_indexed_doc_count": 0,
-        "session_search_indexed_source_counts": {},
-        "session_search_index_stale": False,
-        "session_search_refresh_running": False,
-        "session_search_last_indexed_at": None,
-        "session_search_last_index_error": None,
-        "session_search_skipped_secret_risk_count": 0,
-    }
-    if service is None or not hasattr(service, "runtime_status"):
-        return defaults
-    try:
-        return {**defaults, **dict(service.runtime_status())}
-    except Exception:
-        return defaults

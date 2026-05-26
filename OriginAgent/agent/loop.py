@@ -39,6 +39,7 @@ from OriginAgent.agent.curator import CuratorService
 from OriginAgent.agent.domain_packs import DomainPackManager
 from OriginAgent.agent.hook import AgentHook, CompositeHook
 from OriginAgent.agent.identity import ActorResolver, RuntimeContext
+from OriginAgent.agent.introspection.service import RuntimeIntrospectionService
 from OriginAgent.agent.memory import Consolidator, Dream
 from OriginAgent.agent.progress_hook import AgentProgressHook
 from OriginAgent.agent.runner import _MAX_INJECTIONS_PER_TURN, AgentRunner, AgentRunSpec
@@ -50,6 +51,7 @@ from OriginAgent.agent.tools.ask import (
     pending_ask_user_id,
 )
 from OriginAgent.agent.tools.audit import JsonlToolAuditSink, ToolAuditConfig
+from OriginAgent.agent.confirmation import PendingConfirmationStore
 from OriginAgent.agent.tools.file_state import FileStateStore, bind_file_states, reset_file_states
 from OriginAgent.agent.tools.message import MessageTool
 from OriginAgent.agent.tools.registry import ToolRegistry
@@ -403,6 +405,22 @@ class AgentLoop:
             background_review_service=self.background_review,
             curator_service=self.curator,
         )
+        self._confirmation_store = PendingConfirmationStore(workspace)
+        self.introspection = RuntimeIntrospectionService(
+            loop=self,
+            workspace=workspace,
+            registry=self.tools,
+            sessions=self.sessions,
+            pending_queues=self._pending_queues,
+            cron_service=self.cron_service,
+            confirmation_store=self._confirmation_store,
+            audit_mode=self._tool_audit_config.mode,
+            runtime_profile=self._runtime_profile,
+            domain_pack_manager=self.domain_packs,
+            background_review_service=self.background_review,
+            curator_service=self.curator,
+            session_search_index_service=self.session_search_index,
+        )
         # ORIGINAGENT_MAX_CONCURRENT_REQUESTS: <=0 means unlimited; default 3.
         _max = int(os.environ.get("ORIGINAGENT_MAX_CONCURRENT_REQUESTS", "3"))
         self._concurrency_gate: asyncio.Semaphore | None = (
@@ -433,7 +451,13 @@ class AgentLoop:
         )
         self._register_default_tools()
         if _tc.my.enable:
-            self.tools.register(MyTool(loop=self, modify_allowed=_tc.my.allow_set))
+            self.tools.register(
+                MyTool(
+                    loop=self,
+                    modify_allowed=_tc.my.allow_set,
+                    introspection_service=self.introspection,
+                )
+            )
         self._runtime_vars: dict[str, Any] = {}
         self._capability_snapshot: CapabilitySnapshot | None = None
         self._current_iteration: int = 0
@@ -631,6 +655,8 @@ class AgentLoop:
             image_generation_provider_configs=self._image_generation_provider_configs,
             timezone=self.context.timezone or "UTC",
             runtime_profile=self._runtime_profile,
+            introspection_service=self.introspection,
+            confirmation_store=self._confirmation_store,
             domain_runtime_overrides=self._domain_runtime_overrides,
         )
 

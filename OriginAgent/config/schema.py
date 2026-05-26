@@ -449,7 +449,7 @@ class WebToolsConfig(Base):
 class ContentReadToolConfig(Base):
     """Platform-aware content_read tool configuration."""
 
-    enabled: bool = True
+    enabled: bool = False
     providers: list[str] = Field(
         default_factory=lambda: ["generic", "rss", "github", "hackernews"]
     )
@@ -521,6 +521,7 @@ class ToolAuditConfig(Base):
         "exec",
         "message",
         "web_fetch",
+        "content_read",
         "cron",
         "spawn",
         "originagent_device_*",
