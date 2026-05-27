@@ -6,16 +6,19 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+import yaml
 
 from OriginAgent.agent.background_review import ReviewProposal, ReviewProposalStore
 from OriginAgent.agent.curator import CURATOR_ORIGIN, CuratorService
 from OriginAgent.agent.evolution import (
     AUTO_EVOLUTION_ORIGIN,
+    SIGNAL_KIND_SKILL,
     SIGNAL_KIND_WORKFLOW,
     OpportunitySignalCandidate,
     OpportunitySignalStore,
 )
 from OriginAgent.agent.skills import SkillsLoader
+from OriginAgent.agent.tools.runtime_status import RuntimeStatusTool
 from OriginAgent.config.schema import EvolutionConfig
 
 
@@ -61,6 +64,34 @@ def _seed_workflow_signal(
     return store
 
 
+def _seed_skill_signal(
+    workspace: Path,
+    *,
+    target: str = "log review troubleshooting skill",
+    cursors: tuple[int, ...] = (1, 2, 3, 4, 5),
+) -> OpportunitySignalStore:
+    store = OpportunitySignalStore(workspace)
+    store.upsert_candidates([
+        OpportunitySignalCandidate(
+            kind=SIGNAL_KIND_SKILL,
+            target_key=target,
+            title=f"Skill candidate: {target}",
+            summary=f"Repeated read-only skill-like request pattern: {target}",
+            evidence_sources=[
+                {
+                    "cursor": cursor,
+                    "session_key": f"websocket:skill-{cursor}",
+                    "timestamp": f"2026-05-2{min(cursor, 9)}T10:00:00+00:00",
+                    "preview": "Please turn this troubleshooting analysis into a reusable skill for log review.",
+                }
+                for cursor in cursors
+            ],
+            risk_level="medium",
+        )
+    ])
+    return store
+
+
 def _write_skill(
     workspace: Path,
     skill_dir: str,
@@ -97,6 +128,17 @@ def _write_skill(
 
 def _proposal_events(workspace: Path) -> list[dict]:
     event_file = workspace / "memory" / "review_proposal_events.jsonl"
+    if not event_file.exists():
+        return []
+    return [
+        json.loads(line)
+        for line in event_file.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+
+
+def _evolution_events(workspace: Path) -> list[dict]:
+    event_file = workspace / "memory" / "evolution_events.jsonl"
     if not event_file.exists():
         return []
     return [
@@ -280,8 +322,155 @@ async def test_curator_curated_evolution_writes_workflow_proposal_and_marks_sign
         "issues": [],
         "issue_counts": {},
     }
+    assert payload["sandbox"]["status"] == "passed"
     signals = signal_store.read_all()
     assert len(signals) == 1
+    assert signals[0].status == "converted"
+    assert signals[0].converted_proposal_id == record["id"]
+
+
+@pytest.mark.asyncio
+async def test_curator_auto_verify_disabled_leaves_workflow_proposal_pending(tmp_path: Path) -> None:
+    review_store = ReviewProposalStore(tmp_path)
+    _seed_workflow_signal(tmp_path, cursors=(1, 2, 3, 4, 5))
+    service = CuratorService(
+        workspace=tmp_path,
+        config=SimpleNamespace(enabled=True, max_proposals_per_run=12),
+        evolution_config=EvolutionConfig(
+            mode="curated",
+            dry_run=False,
+            workflow_min_seen_count=5,
+            auto_verify_workflows=False,
+        ),
+        store=review_store,
+    )
+
+    result = await service.review_workspace(session_key="websocket:chat-a", turn_id="turn-1")
+    records = review_store.list_records(origin=AUTO_EVOLUTION_ORIGIN, limit=10)
+
+    assert result.status == "ok"
+    assert result.proposals_written == 1
+    assert len(records) == 1
+    assert records[0]["status"] == "pending"
+    assert not (tmp_path / "workflows").exists()
+    assert _proposal_events(tmp_path) == []
+
+
+@pytest.mark.asyncio
+async def test_curator_auto_verifies_low_risk_workflow_without_activating(tmp_path: Path) -> None:
+    review_store = ReviewProposalStore(tmp_path)
+    signal_store = _seed_workflow_signal(tmp_path, cursors=(1, 2, 3, 4, 5))
+    service = CuratorService(
+        workspace=tmp_path,
+        config=SimpleNamespace(enabled=True, max_proposals_per_run=12),
+        evolution_config=EvolutionConfig(
+            mode="curated",
+            dry_run=False,
+            workflow_min_seen_count=5,
+            auto_verify_workflows=True,
+        ),
+        store=review_store,
+    )
+
+    result = await service.review_workspace(session_key="websocket:chat-a", turn_id="turn-1")
+    records = review_store.list_records(origin=AUTO_EVOLUTION_ORIGIN, limit=10)
+    signals = signal_store.read_all()
+
+    assert result.status == "ok"
+    assert result.proposals_written == 1
+    assert len(records) == 1
+    record = records[0]
+    assert record["status"] == "applied"
+    assert record["proposal_type"] == "workflow"
+    assert record["applied_workflow_path"] == "workflows/deploy-backend-checks/workflow.yaml"
+    workflow_file = tmp_path / "workflows" / "deploy-backend-checks" / "workflow.yaml"
+    data = yaml.safe_load(workflow_file.read_text(encoding="utf-8"))
+    metadata = data["metadata"]["OriginAgent"]
+    assert metadata["proposal_status"] == "proposed"
+    assert metadata["verification_status"] == "verified"
+    assert metadata["created_by"] == AUTO_EVOLUTION_ORIGIN
+    assert metadata["verified_by"] == AUTO_EVOLUTION_ORIGIN
+    assert metadata["previous_version"] is None
+    assert metadata["opportunity_id"] == signals[0].opportunity_id
+    assert signals[0].status == "converted"
+    assert signals[0].verification_status == "verified"
+    assert any(
+        event.get("result", {}).get("event_name") == "evolution_auto_promotion"
+        for event in _evolution_events(tmp_path)
+    )
+    status = await RuntimeStatusTool(
+        workspace=tmp_path,
+        registry=SimpleNamespace(tool_names=["originagent_runtime_status"]),
+        sessions=object(),
+        pending_queues={},
+        evolution_config=service.evolution_config,
+    ).execute()
+    assert status["evolution"]["auto_verified_workflows_count"] == 1
+    assert status["evolution"]["sandbox"]["passed_workflow_proposals"] == 1
+
+
+@pytest.mark.asyncio
+async def test_curator_skill_candidates_default_disabled(tmp_path: Path) -> None:
+    review_store = ReviewProposalStore(tmp_path)
+    signal_store = _seed_skill_signal(tmp_path)
+    service = CuratorService(
+        workspace=tmp_path,
+        config=SimpleNamespace(enabled=True, max_proposals_per_run=12),
+        evolution_config=EvolutionConfig(mode="curated", dry_run=False),
+        store=review_store,
+    )
+
+    result = await service.review_workspace(session_key="websocket:chat-a", turn_id="turn-1")
+
+    assert result.status == "ok"
+    assert result.proposals_written == 0
+    assert result.evolution_candidates == 1
+    assert review_store.list_records(origin=AUTO_EVOLUTION_ORIGIN, limit=10) == []
+    signals = signal_store.read_all()
+    assert signals[0].status == "open"
+
+
+@pytest.mark.asyncio
+async def test_curator_generates_read_only_skill_proposal_when_enabled(tmp_path: Path) -> None:
+    review_store = ReviewProposalStore(tmp_path)
+    signal_store = _seed_skill_signal(tmp_path)
+    service = CuratorService(
+        workspace=tmp_path,
+        config=SimpleNamespace(enabled=True, max_proposals_per_run=12),
+        evolution_config=EvolutionConfig(
+            mode="curated",
+            dry_run=False,
+            skill_candidates_enabled=True,
+        ),
+        store=review_store,
+    )
+
+    result = await service.review_workspace(session_key="websocket:chat-a", turn_id="turn-1")
+    records = review_store.list_records(origin=AUTO_EVOLUTION_ORIGIN, limit=10)
+
+    assert result.status == "ok"
+    assert result.proposals_written == 1
+    assert result.evolution_candidates == 1
+    assert result.evolution_proposals_prepared == 1
+    assert len(records) == 1
+    record = records[0]
+    assert record["proposal_type"] == "skill"
+    assert record["status"] == "pending"
+    assert record["payload"]["evolution"]["kind"] == SIGNAL_KIND_SKILL
+    assert record["payload"]["static_gate"] == {
+        "decision": "pass",
+        "issues": [],
+        "issue_counts": {},
+    }
+
+    applied = review_store.apply(record["id"], reason="reviewed")
+    assert applied.ok is True
+    skill_file = tmp_path / "skills" / "log-review-troubleshooting-skill" / "SKILL.md"
+    frontmatter = yaml.safe_load(skill_file.read_text(encoding="utf-8").split("---", 2)[1])
+    assert frontmatter["always"] is False
+    assert frontmatter["metadata"]["OriginAgent"]["proposal_status"] == "proposed"
+    assert frontmatter["metadata"]["OriginAgent"]["verification_status"] == "unverified"
+    signals = signal_store.read_all()
     assert signals[0].status == "converted"
     assert signals[0].converted_proposal_id == record["id"]
 

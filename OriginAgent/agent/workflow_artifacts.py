@@ -41,6 +41,8 @@ _EXECUTION_FLAGS = {
     "creates_cron": False,
     "calls_tools": False,
 }
+_ALLOWED_VERIFICATION_STATUSES = {"unverified", "verified"}
+_ALLOWED_CREATED_BY = {"background_review", "auto_evolution"}
 _UNSAFE_PHRASES = (
     "bypass permission",
     "bypass permissions",
@@ -120,7 +122,12 @@ def workflow_name_from_proposal(record: dict[str, Any]) -> str:
     return _slug_from_text(str(record.get("title") or ""))
 
 
-def build_workflow_artifact(record: dict[str, Any], workspace: Path) -> WorkflowArtifact:
+def build_workflow_artifact(
+    record: dict[str, Any],
+    workspace: Path,
+    *,
+    metadata_overrides: dict[str, Any] | None = None,
+) -> WorkflowArtifact:
     """Build and validate a workflow.yaml artifact without writing it."""
 
     workspace = Path(workspace)
@@ -140,6 +147,27 @@ def build_workflow_artifact(record: dict[str, Any], workspace: Path) -> Workflow
         body = _fallback_body(record)
     steps = _clean_steps(payload.get("steps") if isinstance(payload, dict) else None)
 
+    originagent = {
+        "proposal_status": "proposed",
+        "verification_status": "unverified",
+        "review_proposal_id": _clean_metadata(record.get("id")),
+        "domain_id": _clean_metadata(record.get("domain_id") or "core"),
+        "created_by": "background_review",
+        "source_session": _clean_metadata(record.get("session_key")),
+        "source_turn_id": _clean_metadata(record.get("turn_id")),
+    }
+    if metadata_overrides:
+        for key, value in metadata_overrides.items():
+            if key in {
+                "verification_status",
+                "created_by",
+                "previous_version",
+                "verified_by",
+                "verified_at",
+                "opportunity_id",
+            }:
+                originagent[key] = None if key == "previous_version" and value is None else _clean_metadata(value)
+
     data = {
         "schema_version": 1,
         "name": workflow_name,
@@ -148,17 +176,7 @@ def build_workflow_artifact(record: dict[str, Any], workspace: Path) -> Workflow
         "execution": dict(_EXECUTION_FLAGS),
         "body": body,
         "steps": steps,
-        "metadata": originagent_metadata(
-            {
-                "proposal_status": "proposed",
-                "verification_status": "unverified",
-                "review_proposal_id": _clean_metadata(record.get("id")),
-                "domain_id": _clean_metadata(record.get("domain_id") or "core"),
-                "created_by": "background_review",
-                "source_session": _clean_metadata(record.get("session_key")),
-                "source_turn_id": _clean_metadata(record.get("turn_id")),
-            }
-        ),
+        "metadata": originagent_metadata(originagent),
     }
     content = yaml.safe_dump(data, allow_unicode=True, sort_keys=False)
     validate_workflow_artifact_content(
@@ -175,10 +193,15 @@ def build_workflow_artifact(record: dict[str, Any], workspace: Path) -> Workflow
     )
 
 
-def write_workflow_artifact(record: dict[str, Any], workspace: Path) -> WorkflowArtifact:
+def write_workflow_artifact(
+    record: dict[str, Any],
+    workspace: Path,
+    *,
+    metadata_overrides: dict[str, Any] | None = None,
+) -> WorkflowArtifact:
     """Generate, validate, and write one reviewed workspace workflow."""
 
-    artifact = build_workflow_artifact(record, workspace)
+    artifact = build_workflow_artifact(record, workspace, metadata_overrides=metadata_overrides)
     workspace = Path(workspace)
     target_dir = workspace / "workflows" / artifact.name
     target_file = target_dir / "workflow.yaml"
@@ -284,14 +307,14 @@ def validate_workflow_artifact_content(
     originagent_meta = metadata.get(ORIGINAGENT_METADATA_KEY)
     if not isinstance(originagent_meta, dict):
         raise ValueError("metadata.OriginAgent is required")
-    required = {
-        "proposal_status": "proposed",
-        "verification_status": "unverified",
-        "created_by": "background_review",
-    }
-    for key, expected in required.items():
-        if originagent_meta.get(key) != expected:
-            raise ValueError(f"metadata.OriginAgent.{key} must be {expected}")
+    if originagent_meta.get("proposal_status") != "proposed":
+        raise ValueError("metadata.OriginAgent.proposal_status must be proposed")
+    verification_status = str(originagent_meta.get("verification_status") or "")
+    if verification_status not in _ALLOWED_VERIFICATION_STATUSES:
+        raise ValueError("metadata.OriginAgent.verification_status must be unverified or verified")
+    created_by = str(originagent_meta.get("created_by") or "")
+    if created_by not in _ALLOWED_CREATED_BY:
+        raise ValueError("metadata.OriginAgent.created_by must be background_review or auto_evolution")
     if expected_proposal_id and originagent_meta.get("review_proposal_id") != expected_proposal_id:
         raise ValueError("metadata.OriginAgent.review_proposal_id is incorrect")
     if expected_domain_id and originagent_meta.get("domain_id") != expected_domain_id:

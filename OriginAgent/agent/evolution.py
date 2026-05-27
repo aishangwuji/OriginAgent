@@ -19,6 +19,7 @@ from OriginAgent.utils.helpers import ensure_dir, truncate_text
 
 
 SIGNAL_KIND_WORKFLOW = "workflow_candidate"
+SIGNAL_KIND_SKILL = "skill_candidate"
 DEFAULT_EVOLUTION_MODE = "conservative"
 DEFAULT_EVOLUTION_DRY_RUN = True
 AUTO_EVOLUTION_ORIGIN = "auto_evolution"
@@ -64,6 +65,24 @@ _WORKFLOW_CUE_RE = re.compile(
     r"流程|步骤|重复|反复|每次|自动|自动化|部署|构建|测试|检查|审核|发布|同步"
     r")"
 )
+_SKILL_CUE_RE = re.compile(
+    r"(?i)("
+    r"skill|reusable skill|troubleshoot|troubleshooting|diagnose|diagnostic|playbook|"
+    r"analyze|analysis helper|codify|teach the agent|"
+    r"技能|可复用技能|排查|诊断|分析助手|沉淀成技能|教会 agent|教会智能体"
+    r")"
+)
+_SKILL_BODY_MAX_CHARS = 5000
+_SKILL_CONFIDENCE = 0.7
+_DANGEROUS_SKILL_TOOL_RE = re.compile(
+    r"(?i)(?<![a-z0-9_])"
+    r"(?:exec|shell|command|write_file|edit_file|message|cron|spawn|curl|wget|nc|telnet)"
+    r"(?![a-z0-9_])"
+)
+_DANGEROUS_SKILL_INSTALL_RE = re.compile(
+    r"(?i)(?:pip\s+install|npm\s+install|apt-get|apt\s+install|pnpm\s+install|yarn\s+add)"
+)
+_DANGEROUS_SKILL_COMMAND_HEADING_RE = re.compile(r"(?im)^\s*#\s*command\s*:")
 _NOISE_RE = re.compile(r"(?i)\b(event|some event|remember this|user prefers)\b")
 _SPACE_RE = re.compile(r"\s+")
 
@@ -85,6 +104,7 @@ class OpportunitySignal:
     risk_level: str = "low"
     status: str = "open"
     converted_proposal_id: str | None = None
+    verification_status: str = ""
 
     @classmethod
     def from_record(cls, record: dict[str, Any]) -> "OpportunitySignal":
@@ -108,6 +128,7 @@ class OpportunitySignal:
                 if record.get("converted_proposal_id") is not None
                 else None
             ),
+            verification_status=str(record.get("verification_status") or ""),
         )
 
     def to_record(self) -> dict[str, Any]:
@@ -235,7 +256,41 @@ class OpportunitySignalStore:
         candidates.sort(key=lambda signal: (signal.priority_score, signal.last_seen_at), reverse=True)
         return candidates[:effective_limit]
 
-    def mark_converted(self, opportunity_id: str, proposal_id: str) -> bool:
+    def select_skill_candidates(
+        self,
+        config: Any | None = None,
+        *,
+        limit: int | None = None,
+    ) -> list[OpportunitySignal]:
+        threshold = _config_float(config, "skill_priority_threshold", 0.85)
+        min_seen = _config_int(config, "skill_min_seen_count", 5)
+        effective_limit = (
+            max(0, limit)
+            if limit is not None
+            else max(0, _config_int(config, "max_skill_proposals_per_cycle", 1))
+        )
+        if effective_limit <= 0:
+            return []
+        candidates = [
+            signal for signal in self.read_all()
+            if (
+                signal.status == "open"
+                and signal.kind == SIGNAL_KIND_SKILL
+                and signal.converted_proposal_id is None
+                and signal.seen_count >= min_seen
+                and signal.priority_score >= threshold
+            )
+        ]
+        candidates.sort(key=lambda signal: (signal.priority_score, signal.last_seen_at), reverse=True)
+        return candidates[:effective_limit]
+
+    def mark_converted(
+        self,
+        opportunity_id: str,
+        proposal_id: str,
+        *,
+        verification_status: str = "",
+    ) -> bool:
         if not opportunity_id or not proposal_id:
             return False
         with self._lock:
@@ -247,6 +302,8 @@ class OpportunitySignalStore:
                     continue
                 signal.status = "converted"
                 signal.converted_proposal_id = proposal_id
+                if verification_status:
+                    signal.verification_status = verification_status
                 signal.last_seen_at = now_iso
                 changed = True
                 break
@@ -272,11 +329,22 @@ class OpportunitySignalStore:
                 and signal.priority_score >= threshold
             )
         ]
+        eligible_skill_signals = [
+            signal for signal in open_signals
+            if (
+                signal.kind == SIGNAL_KIND_SKILL
+                and signal.seen_count >= _config_int(config, "skill_min_seen_count", 5)
+                and signal.priority_score >= _config_float(config, "skill_priority_threshold", 0.85)
+            )
+        ]
         high.sort(key=lambda signal: (signal.priority_score, signal.last_seen_at), reverse=True)
         return {
             "mode": _config_str(config, "mode", DEFAULT_EVOLUTION_MODE),
             "dry_run": _config_bool(config, "dry_run", DEFAULT_EVOLUTION_DRY_RUN),
             "opportunity_signals_count": len(open_signals),
+            "eligible_workflow_signals": len(high),
+            "eligible_skill_signals": len(eligible_skill_signals),
+            "skill_candidates_enabled": _config_bool(config, "skill_candidates_enabled", False),
             "converted_signals_count": len(converted_signals),
             "suppressed_signals_count": len(suppressed_signals),
             "pending_proposals_from_evolution": 0,
@@ -288,6 +356,11 @@ class OpportunitySignalStore:
                 }
                 for signal in high[:max_high]
             ],
+            "skill_auto_evolution_note": (
+                ""
+                if _config_bool(config, "skill_candidates_enabled", False)
+                else "skill auto-evolution disabled, set evolution.skill_candidates_enabled=true to enable"
+            ),
         }
 
     def _retained_records(
@@ -364,12 +437,63 @@ def detect_workflow_opportunity_candidates(
     return candidates
 
 
+def detect_skill_opportunity_candidates(
+    history_entries: list[dict[str, Any]],
+    *,
+    min_evidence_sources: int = 2,
+) -> list[OpportunitySignalCandidate]:
+    """Detect repeated read-only skill-like patterns without creating proposals."""
+
+    grouped: dict[str, list[dict[str, Any]]] = {}
+    titles: dict[str, str] = {}
+    summaries: dict[str, str] = {}
+    for entry in history_entries:
+        content = str(entry.get("content") or "").strip()
+        if not _looks_like_skill_signal(content):
+            continue
+        target = _target_key(content)
+        if not target:
+            continue
+        evidence = {
+            "cursor": entry.get("cursor"),
+            "session_key": entry.get("session_key"),
+            "timestamp": entry.get("timestamp"),
+            "preview": truncate_text(content, _SIGNAL_PREVIEW_MAX_CHARS),
+        }
+        grouped.setdefault(target, []).append(evidence)
+        titles.setdefault(target, _skill_title_for_target(target))
+        summaries.setdefault(target, f"Repeated read-only skill-like request pattern: {target}")
+
+    candidates: list[OpportunitySignalCandidate] = []
+    for target, evidence in grouped.items():
+        unique = _dedupe_evidence(evidence)
+        if len(unique) < max(1, min_evidence_sources):
+            continue
+        candidates.append(OpportunitySignalCandidate(
+            kind=SIGNAL_KIND_SKILL,
+            target_key=target,
+            title=titles[target],
+            summary=summaries[target],
+            evidence_sources=unique,
+            risk_level="medium",
+        ))
+    return candidates
+
+
 def _looks_like_workflow_signal(content: str) -> bool:
     if len(content.strip()) < 12:
         return False
     if _NOISE_RE.search(content):
         return False
     return bool(_WORKFLOW_CUE_RE.search(content))
+
+
+def _looks_like_skill_signal(content: str) -> bool:
+    if len(content.strip()) < 12:
+        return False
+    if _NOISE_RE.search(content):
+        return False
+    return bool(_SKILL_CUE_RE.search(content))
 
 
 def _target_key(content: str) -> str:
@@ -387,6 +511,13 @@ def _title_for_target(target: str) -> str:
     if not cleaned:
         return "Workflow candidate"
     return f"Workflow candidate: {truncate_text(cleaned, 48).replace(chr(10), ' ')}"
+
+
+def _skill_title_for_target(target: str) -> str:
+    cleaned = target.strip()
+    if not cleaned:
+        return "Skill candidate"
+    return f"Skill candidate: {truncate_text(cleaned, 48).replace(chr(10), ' ')}"
 
 
 def _merge_evidence_sources(
@@ -427,6 +558,13 @@ def evolution_allows_workflow_proposals(config: Any | None = None) -> bool:
     )
 
 
+def evolution_allows_skill_proposals(config: Any | None = None) -> bool:
+    return (
+        evolution_allows_workflow_proposals(config)
+        and _config_bool(config, "skill_candidates_enabled", False)
+    )
+
+
 def build_workflow_payload_from_signal(
     signal: OpportunitySignal,
     *,
@@ -462,6 +600,49 @@ def build_workflow_payload_from_signal(
         },
     }
     gate = static_gate_workflow_payload(payload, config=config)
+    payload["static_gate"] = {
+        "decision": gate["decision"],
+        "issues": gate["issues"],
+        "issue_counts": gate["issue_counts"],
+    }
+    return payload
+
+
+def build_skill_payload_from_signal(
+    signal: OpportunitySignal,
+    *,
+    config: Any | None = None,
+) -> dict[str, Any]:
+    skill_name = _skill_name_from_target(signal.target_key)
+    body, body_truncated = _skill_body_from_signal(signal)
+    payload = {
+        "subject_type": "skill",
+        "subject_id": skill_name,
+        "subject_path": f"skills/{skill_name}/SKILL.md",
+        "curator_key": f"auto-evolution-skill:{signal.opportunity_id}",
+        "target_state_hash": _stable_hash([
+            signal.opportunity_id,
+            signal.target_key,
+            signal.seen_count,
+            round(signal.priority_score, 3),
+        ]),
+        "suggested_action": "skill",
+        "impact_summary": signal.summary,
+        "skill_name": skill_name,
+        "description": f"Read-only skill candidate discovered from repeated usage: {signal.target_key}",
+        "body": body,
+        "evolution": {
+            "origin": AUTO_EVOLUTION_ORIGIN,
+            "opportunity_id": signal.opportunity_id,
+            "kind": signal.kind,
+            "priority_score": round(signal.priority_score, 3),
+            "seen_count": signal.seen_count,
+            "risk_level": signal.risk_level,
+            "body_truncated": body_truncated,
+            "evidence_sources": _clean_evidence_sources(signal.evidence_sources),
+        },
+    }
+    gate = static_gate_skill_payload(payload, config=config)
     payload["static_gate"] = {
         "decision": gate["decision"],
         "issues": gate["issues"],
@@ -534,6 +715,61 @@ def static_gate_workflow_payload(payload: dict[str, Any], *, config: Any | None 
     }
 
 
+def static_gate_skill_payload(payload: dict[str, Any], *, config: Any | None = None) -> dict[str, Any]:
+    issues: list[ValidationIssue] = []
+    allowed_tools = {
+        str(item).strip()
+        for item in getattr(config, "static_gate_allowed_skill_tools", []) or []
+        if str(item).strip()
+    } or {"read_file", "glob", "grep"}
+    body = str(payload.get("body") or "")
+    lower_body = body.casefold()
+    for tool in sorted(allowed_tools):
+        lower_body = lower_body.replace(tool.casefold(), "")
+    if _DANGEROUS_SKILL_TOOL_RE.search(lower_body):
+        issues.append(_issue(
+            "skill_tool_not_allowed",
+            "pending",
+            "Skill draft references a non-read-only or sensitive tool.",
+        ))
+    if _DANGEROUS_SKILL_INSTALL_RE.search(body):
+        issues.append(_issue(
+            "skill_install_command",
+            "pending",
+            "Skill draft includes an installation command.",
+        ))
+    if _DANGEROUS_SKILL_COMMAND_HEADING_RE.search(body):
+        issues.append(_issue(
+            "skill_command_heading",
+            "pending",
+            "Skill draft includes a command-oriented heading.",
+        ))
+    if _contains_dangerous_workflow_term(body):
+        issues.append(_issue(
+            "skill_sensitive_action",
+            "pending",
+            "Skill draft mentions a sensitive or side-effecting action.",
+        ))
+    evolution = payload.get("evolution") if isinstance(payload.get("evolution"), dict) else {}
+    if bool(evolution.get("body_truncated")):
+        issues.append(_issue(
+            "skill_body_truncated",
+            "warning",
+            "Skill body was truncated to the configured artifact size limit.",
+        ))
+    if any(issue.severity == "reject" for issue in issues):
+        decision = "reject"
+    elif issues:
+        decision = "requires_manual_review"
+    else:
+        decision = "pass"
+    return {
+        "decision": decision,
+        "issues": [asdict(issue) for issue in issues],
+        "issue_counts": _issue_counts(issues),
+    }
+
+
 def _workflow_name_from_target(target: str) -> str:
     slug = re.sub(r"[^a-z0-9]+", "-", _redact_text(target).casefold()).strip("-")
     slug = re.sub(r"-{2,}", "-", slug)
@@ -543,6 +779,17 @@ def _workflow_name_from_target(target: str) -> str:
     if not re.match(r"^[a-z0-9]", slug):
         slug = f"workflow-{slug}"
     return slug[:64].strip("-") or "workflow-candidate"
+
+
+def _skill_name_from_target(target: str) -> str:
+    slug = re.sub(r"[^a-z0-9]+", "-", _redact_text(target).casefold()).strip("-")
+    slug = re.sub(r"-{2,}", "-", slug)
+    if not slug:
+        digest = hashlib.sha256(target.encode("utf-8")).hexdigest()[:8]
+        slug = f"skill-{digest}"
+    if not re.match(r"^[a-z0-9]", slug):
+        slug = f"skill-{slug}"
+    return slug[:64].strip("-") or "skill-candidate"
 
 
 def _workflow_body_from_signal(signal: OpportunitySignal) -> str:
@@ -563,6 +810,42 @@ def _workflow_body_from_signal(signal: OpportunitySignal) -> str:
         else:
             lines.append(f"- {label}")
     return "\n".join(lines).strip()
+
+
+def _skill_body_from_signal(signal: OpportunitySignal) -> tuple[str, bool]:
+    title = signal.title.replace("Skill candidate:", "").strip() or signal.target_key
+    lines = [
+        f"# {_human_title(title)}",
+        "",
+        "Use this skill when a repeated, read-only analysis or troubleshooting pattern matches the evidence below.",
+        "",
+        "## Guardrails",
+        "- Use only read-only tools unless a human explicitly approves a separate proposal.",
+        "- Do not install packages, change files, contact people, or schedule background work.",
+        "- Keep findings grounded in the current workspace and the cited evidence.",
+        "",
+        "## Procedure",
+        f"1. Confirm the user is asking about this pattern: {_redact_text(signal.target_key)}.",
+        "2. Gather read-only context with allowed tools such as `read_file`, `glob`, or `grep`.",
+        "3. Summarize the result and call out uncertainty instead of making state-changing changes.",
+        "",
+        "## Evidence",
+    ]
+    for item in signal.evidence_sources[:5]:
+        preview = _redact_text(str(item.get("preview") or "")).strip()
+        cursor = item.get("cursor")
+        timestamp = item.get("timestamp")
+        label = f"cursor={cursor}" if cursor is not None else "cursor=unknown"
+        if timestamp:
+            label = f"{label}, timestamp={timestamp}"
+        if preview:
+            lines.append(f"- {label}: {preview}")
+        else:
+            lines.append(f"- {label}")
+    body = "\n".join(lines).strip()
+    if len(body) <= _SKILL_BODY_MAX_CHARS:
+        return body, False
+    return body[:_SKILL_BODY_MAX_CHARS].rstrip(), True
 
 
 def _workflow_steps_from_signal(signal: OpportunitySignal, *, config: Any | None = None) -> list[dict[str, Any]]:
@@ -626,6 +909,21 @@ def _contains_dangerous_workflow_term(text: str) -> bool:
     return any(term.casefold() in lowered for term in _DANGEROUS_WORKFLOW_CJK_TERMS)
 
 
+def _contains_dangerous_skill_term(text: str) -> bool:
+    return bool(
+        _DANGEROUS_SKILL_TOOL_RE.search(text)
+        or _DANGEROUS_SKILL_INSTALL_RE.search(text)
+        or _DANGEROUS_SKILL_COMMAND_HEADING_RE.search(text)
+    )
+
+
+def _human_title(text: str) -> str:
+    words = re.findall(r"[\w\u4e00-\u9fff-]+", text.strip())
+    if not words:
+        return "Read Only Skill Candidate"
+    return " ".join(words[:8]).replace("-", " ").title()
+
+
 def _redact_text(text: str) -> str:
     try:
         from OriginAgent.agent.memory import redact_memory_text
@@ -659,7 +957,7 @@ def _priority_score(signal: OpportunitySignal) -> float:
     }) / max(signal.seen_count, 1), 1.0)
     score = (
         0.4 * seen_component
-        + 0.3 * _WORKFLOW_CONFIDENCE
+        + 0.3 * (_SKILL_CONFIDENCE if signal.kind == SIGNAL_KIND_SKILL else _WORKFLOW_CONFIDENCE)
         + 0.3 * evidence_diversity
     )
     return max(0.0, min(1.0, score))

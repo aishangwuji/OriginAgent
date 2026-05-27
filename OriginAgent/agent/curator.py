@@ -20,14 +20,19 @@ from OriginAgent.agent.domain_packs import DomainPackManager
 from OriginAgent.agent.evolution import (
     AUTO_EVOLUTION_ORIGIN,
     OpportunitySignalStore,
+    build_skill_payload_from_signal,
     build_workflow_payload_from_signal,
+    evolution_allows_skill_proposals,
     evolution_allows_workflow_proposals,
 )
+from OriginAgent.agent.evolution_sandbox import SandboxEvaluator
 from OriginAgent.agent.facts import CONFLICT_CATEGORIES, FactStore, normalize_fact_content
 from OriginAgent.agent.memory import redact_memory_text
 from OriginAgent.agent.skill_lifecycle import _read_skill_markdown
 from OriginAgent.agent.skills import SkillsLoader
-from OriginAgent.agent.workflow_artifacts import validate_workflow_artifact_dir
+from OriginAgent.agent.workflow_artifacts import validate_workflow_artifact_dir, write_workflow_artifact
+from OriginAgent.evolution.events import EventType, EvolutionEvent
+from OriginAgent.evolution.ledger import EvolutionLedger
 
 CURATOR_ORIGIN = "curator"
 _CURATOR_SESSION_KEY = "curator:system"
@@ -74,6 +79,7 @@ class CuratorService:
         self.domain_pack_manager = domain_pack_manager
         self.store = store or ReviewProposalStore(self.workspace)
         self.opportunity_signals = OpportunitySignalStore(self.workspace)
+        self.sandbox = SandboxEvaluator(self.workspace, self.evolution_config)
         self._running = 0
         self._last_result: CuratorResult | None = None
         self._last_evolution_scan: dict[str, Any] = {}
@@ -87,6 +93,7 @@ class CuratorService:
         if self._evolution_config_loader is not None:
             try:
                 self._evolution_config = self._evolution_config_loader()
+                self.sandbox = SandboxEvaluator(self.workspace, self._evolution_config)
             except Exception:
                 logger.exception("Failed to refresh evolution config")
 
@@ -200,6 +207,15 @@ class CuratorService:
             created_at=now,
             limit=limit - len(proposals),
         ))
+        if len(proposals) >= limit:
+            return proposals
+
+        add_all(self._evolution_skill_proposals(
+            session_key=session_key,
+            turn_id=turn_id,
+            created_at=now,
+            limit=limit - len(proposals),
+        ))
         return proposals
 
     def _evolution_workflow_proposals(
@@ -217,8 +233,12 @@ class CuratorService:
         self._last_evolution_scan = {
             "mode": mode,
             "dry_run": dry_run,
-            "candidates": len(signals),
+            "workflow_candidates": len(signals),
+            "skill_candidates": int(self._last_evolution_scan.get("skill_candidates", 0) or 0),
+            "candidates": len(signals) + int(self._last_evolution_scan.get("skill_candidates", 0) or 0),
             "prepared": 0,
+            "workflow_prepared": 0,
+            "skill_prepared": 0,
         }
         if not signals or not evolution_allows_workflow_proposals(config):
             return []
@@ -226,6 +246,7 @@ class CuratorService:
         proposals: list[ReviewProposal] = []
         for signal in signals:
             payload = build_workflow_payload_from_signal(signal, config=config)
+            payload["sandbox"] = self.sandbox.evaluate_workflow_payload(payload)
             static_gate = payload.get("static_gate") if isinstance(payload.get("static_gate"), dict) else {}
             if static_gate.get("decision") == "reject":
                 continue
@@ -259,7 +280,60 @@ class CuratorService:
                 confidence=max(0.1, min(0.99, signal.priority_score)),
                 origin=AUTO_EVOLUTION_ORIGIN,
             ))
-        self._last_evolution_scan["prepared"] = len(proposals)
+        self._last_evolution_scan["workflow_prepared"] = len(proposals)
+        self._last_evolution_scan["prepared"] = int(self._last_evolution_scan.get("prepared", 0) or 0) + len(proposals)
+        return proposals
+
+    def _evolution_skill_proposals(
+        self,
+        *,
+        session_key: str,
+        turn_id: str,
+        created_at: str,
+        limit: int,
+    ) -> list[ReviewProposal]:
+        config = self.evolution_config
+        mode = str(getattr(config, "mode", "conservative") or "conservative")
+        dry_run = bool(getattr(config, "dry_run", True))
+        signals = self.opportunity_signals.select_skill_candidates(config, limit=max(0, limit))
+        self._last_evolution_scan.update({
+            "mode": mode,
+            "dry_run": dry_run,
+            "skill_candidates": len(signals),
+            "candidates": int(self._last_evolution_scan.get("workflow_candidates", 0) or 0) + len(signals),
+        })
+        if not signals or not evolution_allows_skill_proposals(config):
+            return []
+
+        proposals: list[ReviewProposal] = []
+        for signal in signals:
+            payload = build_skill_payload_from_signal(signal, config=config)
+            static_gate = payload.get("static_gate") if isinstance(payload.get("static_gate"), dict) else {}
+            if static_gate.get("decision") == "reject":
+                continue
+            evidence = _evidence_lines(signal.evidence_sources)
+            proposals.append(self._proposal(
+                session_key=session_key,
+                turn_id=turn_id,
+                created_at=created_at,
+                proposal_type="skill",
+                domain_id="core",
+                title=f"Create read-only skill from repeated pattern `{signal.target_key}`",
+                content=(
+                    "A high-scoring opportunity signal suggests this repeated read-only pattern "
+                    "could become a reviewed skill draft."
+                ),
+                rationale=(
+                    "Curator converted an auto-evolution opportunity signal into a normal skill "
+                    "review proposal. StaticGate results are attached in payload.static_gate."
+                ),
+                evidence=evidence,
+                payload=payload,
+                confidence=max(0.1, min(0.99, signal.priority_score)),
+                origin=AUTO_EVOLUTION_ORIGIN,
+            ))
+        self._last_evolution_scan["skill_prepared"] = len(proposals)
+        self._last_evolution_scan["prepared"] = int(self._last_evolution_scan.get("prepared", 0) or 0) + len(proposals)
         return proposals
 
     def _mark_evolution_proposals_converted(self, proposals: list[ReviewProposal]) -> None:
@@ -269,8 +343,102 @@ class CuratorService:
             payload = proposal.payload if isinstance(proposal.payload, dict) else {}
             evolution = payload.get("evolution") if isinstance(payload.get("evolution"), dict) else {}
             opportunity_id = str(evolution.get("opportunity_id") or "")
+            verified = proposal.proposal_type == "workflow" and self._maybe_auto_verify_workflow(proposal)
             if opportunity_id:
-                self.opportunity_signals.mark_converted(opportunity_id, proposal.id)
+                self.opportunity_signals.mark_converted(
+                    opportunity_id,
+                    proposal.id,
+                    verification_status="verified" if verified else "",
+                )
+
+    def _maybe_auto_verify_workflow(self, proposal: ReviewProposal) -> bool:
+        config = self.evolution_config
+        if not bool(getattr(config, "auto_verify_workflows", False)):
+            return False
+        if not evolution_allows_workflow_proposals(config):
+            return False
+        payload = proposal.payload if isinstance(proposal.payload, dict) else {}
+        evolution = payload.get("evolution") if isinstance(payload.get("evolution"), dict) else {}
+        if str(evolution.get("origin") or "") != AUTO_EVOLUTION_ORIGIN:
+            return False
+        static_gate = payload.get("static_gate") if isinstance(payload.get("static_gate"), dict) else {}
+        sandbox = payload.get("sandbox") if isinstance(payload.get("sandbox"), dict) else {}
+        if static_gate.get("decision") != "pass" or static_gate.get("issues"):
+            return False
+        if sandbox.get("status") != "passed":
+            return False
+        if str(evolution.get("risk_level") or "low") != "low":
+            return False
+        try:
+            priority = float(evolution.get("priority_score") or 0)
+            seen_count = int(evolution.get("seen_count") or 0)
+        except (TypeError, ValueError):
+            return False
+        if round(priority, 2) < float(getattr(config, "workflow_auto_verify_threshold", 0.9) or 0.9):
+            return False
+        if seen_count < int(getattr(config, "workflow_auto_verify_min_seen_count", 5) or 5):
+            return False
+
+        now = datetime.now(timezone.utc).isoformat()
+        record = proposal.to_json()
+        metadata = {
+            "verification_status": "verified",
+            "created_by": AUTO_EVOLUTION_ORIGIN,
+            "previous_version": None,
+            "verified_by": AUTO_EVOLUTION_ORIGIN,
+            "verified_at": now,
+            "opportunity_id": str(evolution.get("opportunity_id") or ""),
+        }
+        try:
+            artifact = write_workflow_artifact(record, self.workspace, metadata_overrides=metadata).to_json()
+            with self.store._locked():
+                event = self.store._append_event_unlocked(
+                    proposal.id,
+                    status="applied",
+                    reason="auto_evolution verified low-risk workflow proposal",
+                    artifact=artifact,
+                )
+            self._append_auto_promotion_event(
+                proposal=proposal,
+                artifact=artifact,
+                review_event_id=str(event.get("event_id") or ""),
+            )
+            return True
+        except Exception:
+            logger.exception("Auto-evolution workflow verification failed for {}", proposal.id)
+            return False
+
+    def _append_auto_promotion_event(
+        self,
+        *,
+        proposal: ReviewProposal,
+        artifact: dict[str, Any],
+        review_event_id: str,
+    ) -> None:
+        payload = proposal.payload if isinstance(proposal.payload, dict) else {}
+        evolution = payload.get("evolution") if isinstance(payload.get("evolution"), dict) else {}
+        workflow_name = str(artifact.get("workflow_name") or payload.get("workflow_name") or "")
+        artifact_path = str(artifact.get("path") or payload.get("subject_path") or "")
+        try:
+            EvolutionLedger(self.workspace).append(EvolutionEvent.new(
+                EventType.UNMAPPED,
+                actor=AUTO_EVOLUTION_ORIGIN,
+                module_id=workflow_name,
+                module_type="workflow",
+                source_event_stream="evolution",
+                source_event_id=review_event_id or proposal.id,
+                result={
+                    "event_name": "evolution_auto_promotion",
+                    "opportunity_id": str(evolution.get("opportunity_id") or ""),
+                    "proposal_id": proposal.id,
+                    "workflow_name": workflow_name,
+                    "artifact_path": artifact_path,
+                    "activated_by": AUTO_EVOLUTION_ORIGIN,
+                    "promoted_at": datetime.now(timezone.utc).isoformat(),
+                },
+            ))
+        except Exception:
+            logger.exception("Failed to append auto-evolution promotion event for {}", proposal.id)
 
     def _workspace_skill_records(self, review_lookup: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
         loader = SkillsLoader(self.workspace, domain_pack_manager=self.domain_pack_manager)
@@ -857,6 +1025,20 @@ def _clean_evidence(items: list[str]) -> list[str]:
         if len(cleaned) >= _MAX_EVIDENCE:
             break
     return cleaned
+
+
+def _evidence_lines(items: list[dict[str, Any]]) -> list[str]:
+    evidence: list[str] = []
+    for item in items[:_MAX_EVIDENCE]:
+        cursor = item.get("cursor")
+        timestamp = item.get("timestamp")
+        preview = str(item.get("preview") or "").strip()
+        evidence.append(
+            f"cursor={cursor} timestamp={timestamp}: {preview}"
+            if preview
+            else f"cursor={cursor} timestamp={timestamp}"
+        )
+    return evidence
 
 
 def _redact_payload(value: Any) -> Any:

@@ -8,13 +8,18 @@ import pytest
 
 from OriginAgent.agent.evolution import (
     AUTO_EVOLUTION_ORIGIN,
+    SIGNAL_KIND_SKILL,
     SIGNAL_KIND_WORKFLOW,
+    build_skill_payload_from_signal,
     build_workflow_payload_from_signal,
     OpportunitySignalCandidate,
     OpportunitySignalStore,
+    detect_skill_opportunity_candidates,
     detect_workflow_opportunity_candidates,
+    static_gate_skill_payload,
     static_gate_workflow_payload,
 )
+from OriginAgent.agent.evolution_sandbox import SandboxEvaluator
 from OriginAgent.agent.background_review import ReviewProposal, ReviewProposalStore
 from OriginAgent.agent.tools.runtime_status import RuntimeStatusTool
 from OriginAgent.config.schema import EvolutionConfig
@@ -78,6 +83,35 @@ def test_workflow_detector_requires_repeated_evidence() -> None:
     assert len(candidates[0].evidence_sources) == 2
 
 
+def test_skill_detector_and_payload_keep_candidates_read_only(tmp_path) -> None:
+    entries = [
+        {
+            "cursor": cursor,
+            "timestamp": f"2026-05-2{cursor} 10:00",
+            "content": "Please turn this troubleshooting analysis into a reusable skill for log review.",
+        }
+        for cursor in range(1, 6)
+    ]
+
+    candidates = detect_skill_opportunity_candidates(entries, min_evidence_sources=5)
+    store = OpportunitySignalStore(tmp_path)
+    signal = store.upsert_candidates(candidates)[0]
+    payload = build_skill_payload_from_signal(signal, config=EvolutionConfig())
+
+    assert signal.kind == SIGNAL_KIND_SKILL
+    assert signal.seen_count == 5
+    assert signal.priority_score >= 0.85
+    assert payload["subject_type"] == "skill"
+    assert payload["evolution"]["origin"] == AUTO_EVOLUTION_ORIGIN
+    assert payload["evolution"]["kind"] == SIGNAL_KIND_SKILL
+    assert payload["static_gate"] == {
+        "decision": "pass",
+        "issues": [],
+        "issue_counts": {},
+    }
+    assert len(payload["body"]) <= 5000
+
+
 @pytest.mark.asyncio
 async def test_runtime_status_reports_evolution_defaults(tmp_path) -> None:
     result = await RuntimeStatusTool(
@@ -94,7 +128,17 @@ async def test_runtime_status_reports_evolution_defaults(tmp_path) -> None:
     assert result["evolution"]["suppressed_signals_count"] == 0
     assert result["evolution"]["pending_proposals_from_evolution"] == 0
     assert result["evolution"]["proposal_count_from_evolution"] == 0
+    assert result["evolution"]["auto_verified_workflows_count"] == 0
     assert result["evolution"]["static_gate_issue_counts"] == {}
+    assert result["evolution"]["sandbox"] == {
+        "enabled": True,
+        "passed_workflow_proposals": 0,
+        "failed_workflow_proposals": 0,
+        "blocked_workflow_proposals": 0,
+    }
+    assert result["evolution"]["skill_candidates_enabled"] is False
+    assert result["evolution"]["eligible_workflow_signals"] == 0
+    assert result["evolution"]["eligible_skill_signals"] == 0
     assert result["evolution"]["high_score_signals"] == []
 
 
@@ -115,6 +159,7 @@ async def test_runtime_status_reports_high_score_evolution_signals(tmp_path) -> 
     assert evolution["mode"] == "conservative"
     assert evolution["dry_run"] is True
     assert evolution["opportunity_signals_count"] == 1
+    assert evolution["eligible_workflow_signals"] == 1
     assert evolution["pending_proposals_from_evolution"] == 0
     assert evolution["high_score_signals"] == [
         {
@@ -179,6 +224,66 @@ def test_static_gate_uses_validation_issue_shape_for_risky_workflows() -> None:
     }
 
 
+def test_static_gate_flags_risky_skill_drafts() -> None:
+    payload = {
+        "body": (
+            "# Command: install helper\n\n"
+            "Use exec to run curl, then npm install a package and continue."
+        ),
+        "evolution": {"body_truncated": True},
+    }
+
+    result = static_gate_skill_payload(payload, config=EvolutionConfig())
+
+    assert result["decision"] == "requires_manual_review"
+    assert all(set(issue) == {"code", "severity", "message"} for issue in result["issues"])
+    assert {issue["code"] for issue in result["issues"]} == {
+        "skill_tool_not_allowed",
+        "skill_install_command",
+        "skill_command_heading",
+        "skill_sensitive_action",
+        "skill_body_truncated",
+    }
+    assert result["issue_counts"] == {"pending": 4, "warning": 1}
+
+
+def test_sandbox_evaluator_passes_read_only_and_blocks_side_effects(tmp_path) -> None:
+    evaluator = SandboxEvaluator(tmp_path, EvolutionConfig())
+    base_payload = {
+        "target_state_hash": "sandbox-state",
+        "evolution": {
+            "opportunity_id": "opportunity-1",
+            "evidence_sources": [{"cursor": 1}, {"cursor": 2}],
+        },
+    }
+
+    passed = evaluator.evaluate_workflow_payload({
+        **base_payload,
+        "steps": [{"title": "Read", "tool": "read_file", "path": "notes.txt"}],
+    })
+    blocked = evaluator.evaluate_workflow_payload({
+        **base_payload,
+        "target_state_hash": "sandbox-state-2",
+        "steps": [{"title": "Write", "tool": "write_file", "path": "notes.txt"}],
+    })
+    failed = evaluator.evaluate_workflow_payload({
+        **base_payload,
+        "target_state_hash": "sandbox-state-3",
+        "steps": [{"title": "Escape", "tool": "read_file", "path": "..\\secrets.txt"}],
+    })
+
+    assert passed["status"] == "passed"
+    assert passed["replay_summary"] == {
+        "steps_checked": 1,
+        "blocked_steps": 0,
+        "sample_count": 2,
+    }
+    assert blocked["status"] == "blocked"
+    assert blocked["issues"][0]["code"] == "sandbox_tool_blocked"
+    assert failed["status"] == "failed"
+    assert failed["issues"][0]["code"] == "sandbox_path_outside_root"
+
+
 @pytest.mark.asyncio
 async def test_runtime_status_counts_pending_auto_evolution_proposals(tmp_path) -> None:
     ReviewProposalStore(tmp_path).append_many([
@@ -203,7 +308,8 @@ async def test_runtime_status_counts_pending_auto_evolution_proposals(tmp_path) 
                         }
                     ],
                     "issue_counts": {"pending": 1},
-                }
+                },
+                "sandbox": {"status": "blocked"},
             },
         )
     ])
@@ -222,3 +328,4 @@ async def test_runtime_status_counts_pending_auto_evolution_proposals(tmp_path) 
     assert evolution["pending_proposals_from_evolution"] == 1
     assert evolution["proposal_count_from_evolution"] == 1
     assert evolution["static_gate_issue_counts"] == {"pending": 1}
+    assert evolution["sandbox"]["blocked_workflow_proposals"] == 1

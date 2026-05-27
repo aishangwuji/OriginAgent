@@ -198,6 +198,45 @@ class CuratorConfig(Base):
     )
 
 
+class EvolutionSandboxConfig(Base):
+    """Read-only sandbox evaluation settings for governed evolution."""
+
+    enabled: bool = True
+    read_only_tools: list[str] = Field(
+        default_factory=lambda: ["read_file", "glob", "grep"],
+        validation_alias=AliasChoices("readOnlyTools", "read_only_tools"),
+        serialization_alias="readOnlyTools",
+    )
+    timeout_seconds: int = Field(
+        default=10,
+        ge=1,
+        le=120,
+        validation_alias=AliasChoices("timeoutSeconds", "timeout_seconds"),
+        serialization_alias="timeoutSeconds",
+    )
+    max_output_chars: int = Field(
+        default=8000,
+        ge=100,
+        le=100_000,
+        validation_alias=AliasChoices("maxOutputChars", "max_output_chars"),
+        serialization_alias="maxOutputChars",
+    )
+    max_replay_samples: int = Field(
+        default=3,
+        ge=0,
+        le=20,
+        validation_alias=AliasChoices("maxReplaySamples", "max_replay_samples"),
+        serialization_alias="maxReplaySamples",
+    )
+    cache_ttl_hours: int = Field(
+        default=24,
+        ge=0,
+        le=168,
+        validation_alias=AliasChoices("cacheTtlHours", "cache_ttl_hours"),
+        serialization_alias="cacheTtlHours",
+    )
+
+
 class EvolutionConfig(Base):
     """Governed self-evolution observability settings."""
 
@@ -263,6 +302,64 @@ class EvolutionConfig(Base):
         le=25,
         validation_alias=AliasChoices("staticGateMaxWorkflowSteps", "static_gate_max_workflow_steps"),
         serialization_alias="staticGateMaxWorkflowSteps",
+    )
+    auto_verify_workflows: bool = Field(
+        default=False,
+        validation_alias=AliasChoices("autoVerifyWorkflows", "auto_verify_workflows"),
+        serialization_alias="autoVerifyWorkflows",
+    )
+    workflow_auto_verify_threshold: float = Field(
+        default=0.9,
+        ge=0.0,
+        le=1.0,
+        validation_alias=AliasChoices("workflowAutoVerifyThreshold", "workflow_auto_verify_threshold"),
+        serialization_alias="workflowAutoVerifyThreshold",
+    )
+    workflow_auto_verify_min_seen_count: int = Field(
+        default=5,
+        ge=1,
+        le=100,
+        validation_alias=AliasChoices("workflowAutoVerifyMinSeenCount", "workflow_auto_verify_min_seen_count"),
+        serialization_alias="workflowAutoVerifyMinSeenCount",
+    )
+    skill_candidates_enabled: bool = Field(
+        default=False,
+        validation_alias=AliasChoices("skillCandidatesEnabled", "skill_candidates_enabled"),
+        serialization_alias="skillCandidatesEnabled",
+    )
+    skill_min_seen_count: int = Field(
+        default=5,
+        ge=1,
+        le=100,
+        validation_alias=AliasChoices("skillMinSeenCount", "skill_min_seen_count"),
+        serialization_alias="skillMinSeenCount",
+    )
+    skill_priority_threshold: float = Field(
+        default=0.85,
+        ge=0.0,
+        le=1.0,
+        validation_alias=AliasChoices("skillPriorityThreshold", "skill_priority_threshold"),
+        serialization_alias="skillPriorityThreshold",
+    )
+    static_gate_allowed_skill_tools: list[str] = Field(
+        default_factory=lambda: ["read_file", "glob", "grep"],
+        validation_alias=AliasChoices(
+            "staticGateAllowedSkillTools",
+            "static_gate_allowed_skill_tools",
+        ),
+        serialization_alias="staticGateAllowedSkillTools",
+    )
+    max_skill_proposals_per_cycle: int = Field(
+        default=1,
+        ge=0,
+        le=10,
+        validation_alias=AliasChoices("maxSkillProposalsPerCycle", "max_skill_proposals_per_cycle"),
+        serialization_alias="maxSkillProposalsPerCycle",
+    )
+    sandbox: EvolutionSandboxConfig = Field(
+        default_factory=EvolutionSandboxConfig,
+        validation_alias=AliasChoices("sandbox"),
+        serialization_alias="sandbox",
     )
 
 

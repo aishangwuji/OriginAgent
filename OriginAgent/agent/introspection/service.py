@@ -244,9 +244,15 @@ class RuntimeIntrospectionService:
             status = OpportunitySignalStore(workspace).runtime_status(config)
             from OriginAgent.agent.background_review import ReviewProposalStore
             from OriginAgent.agent.evolution import AUTO_EVOLUTION_ORIGIN
+            from OriginAgent.agent.evolution_sandbox import sandbox_status_counts
 
             proposal_store = ReviewProposalStore(workspace)
             proposal_stats = proposal_store.stats(origin=AUTO_EVOLUTION_ORIGIN)
+            applied_records = proposal_store.list_records(
+                origin=AUTO_EVOLUTION_ORIGIN,
+                status="applied",
+                limit=50,
+            )
             pending_records = proposal_store.list_records(
                 origin=AUTO_EVOLUTION_ORIGIN,
                 status="pending",
@@ -262,11 +268,29 @@ class RuntimeIntrospectionService:
                         issue_counts[str(severity)] = issue_counts.get(str(severity), 0) + int(count)
                     except (TypeError, ValueError):
                         continue
+            sandbox_counts = sandbox_status_counts(workspace)
+            auto_verified = 0
+            for record in applied_records:
+                payload = record.get("payload") if isinstance(record.get("payload"), dict) else {}
+                evolution = payload.get("evolution") if isinstance(payload.get("evolution"), dict) else {}
+                if (
+                    str(record.get("proposal_type") or "") == "workflow"
+                    and str(evolution.get("origin") or "") == AUTO_EVOLUTION_ORIGIN
+                    and str(record.get("review_reason") or "") == "auto_evolution verified low-risk workflow proposal"
+                ):
+                    auto_verified += 1
             return {
                 **status,
                 "pending_proposals_from_evolution": proposal_stats["pending_count"],
                 "proposal_count_from_evolution": proposal_stats["proposal_count"],
+                "auto_verified_workflows_count": auto_verified,
                 "static_gate_issue_counts": issue_counts,
+                "sandbox": {
+                    "enabled": bool(getattr(getattr(config, "sandbox", None), "enabled", True)),
+                    "passed_workflow_proposals": sandbox_counts.get("passed", 0),
+                    "failed_workflow_proposals": sandbox_counts.get("failed", 0),
+                    "blocked_workflow_proposals": sandbox_counts.get("blocked", 0),
+                },
             }
         except Exception:
             mode = str(getattr(config, "mode", "conservative") if config is not None else "conservative")
@@ -279,7 +303,17 @@ class RuntimeIntrospectionService:
                 "suppressed_signals_count": 0,
                 "pending_proposals_from_evolution": 0,
                 "proposal_count_from_evolution": 0,
+                "auto_verified_workflows_count": 0,
                 "static_gate_issue_counts": {},
+                "sandbox": {
+                    "enabled": True,
+                    "passed_workflow_proposals": 0,
+                    "failed_workflow_proposals": 0,
+                    "blocked_workflow_proposals": 0,
+                },
+                "skill_candidates_enabled": False,
+                "eligible_workflow_signals": 0,
+                "eligible_skill_signals": 0,
                 "high_score_signals": [],
             }
 

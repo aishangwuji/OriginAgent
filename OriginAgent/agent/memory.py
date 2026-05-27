@@ -36,6 +36,7 @@ from OriginAgent.agent.facts import (
 from OriginAgent.agent.auxiliary_llm import call_llm
 from OriginAgent.agent.evolution import (
     OpportunitySignalStore,
+    detect_skill_opportunity_candidates,
     detect_workflow_opportunity_candidates,
 )
 from OriginAgent.agent.runner import AgentRunner, AgentRunSpec
@@ -1632,6 +1633,10 @@ class Dream:
             batch,
             min_evidence_sources=1,
         )
+        candidates.extend(detect_skill_opportunity_candidates(
+            batch,
+            min_evidence_sources=1,
+        ))
         if not candidates:
             return 0
         updated = self.opportunity_signals.upsert_candidates(
