@@ -86,6 +86,7 @@ if TYPE_CHECKING:
         ExecToolConfig,
         BackgroundReviewConfig,
         CuratorConfig,
+        EvolutionConfig,
         ModelPresetConfig,
         ProviderConfig,
         ToolsConfig,
@@ -252,6 +253,8 @@ class AgentLoop:
         learning_config_loader: Callable[[], "BackgroundReviewConfig"] | None = None,
         curator_config: "CuratorConfig | None" = None,
         curator_config_loader: Callable[[], "CuratorConfig"] | None = None,
+        evolution_config: "EvolutionConfig | None" = None,
+        evolution_config_loader: Callable[[], "EvolutionConfig"] | None = None,
         cold_archive_enabled: bool = True,
     ):
         from OriginAgent.config.schema import ExecToolConfig, ToolsConfig, WebToolsConfig
@@ -302,6 +305,7 @@ class AgentLoop:
         self.web_config = web_config or WebToolsConfig()
         self.exec_config = exec_config or ExecToolConfig()
         self.tools_config = _tc
+        self.evolution_config = evolution_config or defaults.learning.evolution
         self.session_search_index = SessionSearchIndexService(
             workspace,
             backend=_tc.session_search.backend,
@@ -339,6 +343,8 @@ class AgentLoop:
             workspace=workspace,
             config=curator_config or defaults.learning.curator,
             config_loader=curator_config_loader,
+            evolution_config=self.evolution_config,
+            evolution_config_loader=evolution_config_loader,
             domain_pack_manager=self.domain_packs,
         )
         self.sessions = session_manager or SessionManager(workspace)
@@ -425,6 +431,7 @@ class AgentLoop:
             background_review_service=self.background_review,
             curator_service=self.curator,
             session_search_index_service=self.session_search_index,
+            evolution_config=self.evolution_config,
         )
         # ORIGINAGENT_MAX_CONCURRENT_REQUESTS: <=0 means unlimited; default 3.
         _max = int(os.environ.get("ORIGINAGENT_MAX_CONCURRENT_REQUESTS", "3"))
@@ -454,6 +461,7 @@ class AgentLoop:
             provider=provider,
             model=self.model,
             auxiliary_router=self.auxiliary_router,
+            evolution_config=self.evolution_config,
         )
         self._register_default_tools()
         if _tc.my.enable:
@@ -529,6 +537,11 @@ class AgentLoop:
 
             return load_config().agents.defaults.learning.curator
 
+        def _evolution_config_loader():
+            from OriginAgent.config.loader import load_config
+
+            return load_config().agents.defaults.learning.evolution
+
         return cls(
             bus=bus,
             provider=provider,
@@ -568,6 +581,8 @@ class AgentLoop:
             learning_config_loader=_background_review_config_loader,
             curator_config=defaults.learning.curator,
             curator_config_loader=_curator_config_loader,
+            evolution_config=defaults.learning.evolution,
+            evolution_config_loader=_evolution_config_loader,
             **extra,
         )
 

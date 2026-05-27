@@ -6,6 +6,7 @@ import pytest
 
 from unittest.mock import AsyncMock, MagicMock, patch
 
+from OriginAgent.agent.evolution import OpportunitySignalStore
 from OriginAgent.agent.memory import Dream, MemoryStore
 from OriginAgent.agent.runner import AgentRunResult
 from OriginAgent.utils.gitstore import LineAge
@@ -120,6 +121,25 @@ class TestDreamRun:
         system_prompt = spec.initial_messages[0]["content"]
         assert "controlled background review proposal flow" in system_prompt
         assert "skill-creator" not in system_prompt
+
+    async def test_records_evolution_signals_without_review_proposals(
+        self, dream, mock_provider, mock_runner, store
+    ):
+        """Dream v0.1 should observe workflow opportunities without proposing changes."""
+        store.append_history("Every time we deploy backend, run tests and check logs.")
+        store.append_history("Every time we deploy backend, run tests and check logs.")
+        store.append_history("Every time we deploy backend, run tests and check logs.")
+        mock_provider.chat_with_retry.return_value = MagicMock(content=EMPTY_FACT_PROPOSALS)
+        mock_runner.run = AsyncMock(return_value=_make_run_result())
+
+        result = await dream.run()
+
+        assert result is True
+        signals = OpportunitySignalStore(store.workspace).read_all()
+        assert len(signals) == 1
+        assert signals[0].kind == "workflow_candidate"
+        assert signals[0].seen_count == 3
+        assert not (store.workspace / "memory" / "review_proposals.jsonl").exists()
 
     async def test_skill_write_tool_accepts_workspace_relative_skill_path(self, dream, store):
         """Dream skill creation should allow skills/<name>/SKILL.md relative to workspace root."""

@@ -198,6 +198,74 @@ class CuratorConfig(Base):
     )
 
 
+class EvolutionConfig(Base):
+    """Governed self-evolution observability settings."""
+
+    mode: Literal["conservative", "curated", "exploratory", "aggressive"] = "conservative"
+    dry_run: bool = Field(
+        default=True,
+        validation_alias=AliasChoices("dryRun", "dry_run"),
+        serialization_alias="dryRun",
+    )
+    signal_retention_days: int = Field(
+        default=30,
+        ge=1,
+        le=365,
+        validation_alias=AliasChoices("signalRetentionDays", "signal_retention_days"),
+        serialization_alias="signalRetentionDays",
+    )
+    workflow_min_seen_count: int = Field(
+        default=3,
+        ge=1,
+        le=100,
+        validation_alias=AliasChoices("workflowMinSeenCount", "workflow_min_seen_count"),
+        serialization_alias="workflowMinSeenCount",
+    )
+    workflow_min_evidence_sources: int = Field(
+        default=2,
+        ge=1,
+        le=50,
+        validation_alias=AliasChoices("workflowMinEvidenceSources", "workflow_min_evidence_sources"),
+        serialization_alias="workflowMinEvidenceSources",
+    )
+    workflow_priority_threshold: float = Field(
+        default=0.7,
+        ge=0.0,
+        le=1.0,
+        validation_alias=AliasChoices("workflowPriorityThreshold", "workflow_priority_threshold"),
+        serialization_alias="workflowPriorityThreshold",
+    )
+    max_high_score_signals: int = Field(
+        default=5,
+        ge=0,
+        le=20,
+        validation_alias=AliasChoices("maxHighScoreSignals", "max_high_score_signals"),
+        serialization_alias="maxHighScoreSignals",
+    )
+    max_proposals_per_cycle: int = Field(
+        default=3,
+        ge=0,
+        le=20,
+        validation_alias=AliasChoices("maxProposalsPerCycle", "max_proposals_per_cycle"),
+        serialization_alias="maxProposalsPerCycle",
+    )
+    static_gate_allowed_workflow_tools: list[str] = Field(
+        default_factory=lambda: ["read_file", "glob", "grep", "web_fetch"],
+        validation_alias=AliasChoices(
+            "staticGateAllowedWorkflowTools",
+            "static_gate_allowed_workflow_tools",
+        ),
+        serialization_alias="staticGateAllowedWorkflowTools",
+    )
+    static_gate_max_workflow_steps: int = Field(
+        default=10,
+        ge=1,
+        le=25,
+        validation_alias=AliasChoices("staticGateMaxWorkflowSteps", "static_gate_max_workflow_steps"),
+        serialization_alias="staticGateMaxWorkflowSteps",
+    )
+
+
 class LearningConfig(Base):
     """Agent self-improvement and review configuration."""
 
@@ -210,6 +278,11 @@ class LearningConfig(Base):
         default_factory=CuratorConfig,
         validation_alias=AliasChoices("curator"),
         serialization_alias="curator",
+    )
+    evolution: EvolutionConfig = Field(
+        default_factory=EvolutionConfig,
+        validation_alias=AliasChoices("evolution"),
+        serialization_alias="evolution",
     )
 
 

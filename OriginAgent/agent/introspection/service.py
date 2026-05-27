@@ -36,6 +36,7 @@ class RuntimeIntrospectionService:
         background_review_service: Any | None = None,
         curator_service: Any | None = None,
         session_search_index_service: Any | None = None,
+        evolution_config: Any | None = None,
     ) -> None:
         self._loop = loop
         self._workspace = Path(workspace)
@@ -50,6 +51,7 @@ class RuntimeIntrospectionService:
         self._background_review_service = background_review_service
         self._curator_service = curator_service
         self._session_search_index_service = session_search_index_service
+        self._evolution_config = evolution_config
 
     def current_loop_summary(self) -> dict[str, Any]:
         """Return the current loop fields used by the task-level self tool."""
@@ -102,6 +104,7 @@ class RuntimeIntrospectionService:
         workflow_status = self._workflow_artifact_status(self._workspace)
         skill_status = self._skill_lifecycle_status(self._workspace, self._domain_pack_manager)
         session_search_status = self._session_search_status(self._session_search_index_service)
+        evolution_status = self._evolution_status(self._workspace, self._evolution_config)
         self_model = SelfModelService(
             self._workspace,
             registry=self._registry,
@@ -131,6 +134,7 @@ class RuntimeIntrospectionService:
             **skill_status,
             **workflow_status,
             **session_search_status,
+            "evolution": evolution_status,
             "self_model": self_model,
         }
 
@@ -227,6 +231,57 @@ class RuntimeIntrospectionService:
             return {**defaults, **dict(service.runtime_status())}
         except Exception:
             return defaults
+
+    @staticmethod
+    def _evolution_status(workspace: Path, config: Any | None) -> dict[str, Any]:
+        try:
+            if config is None:
+                from OriginAgent.config.schema import EvolutionConfig
+
+                config = EvolutionConfig()
+            from OriginAgent.agent.evolution import OpportunitySignalStore
+
+            status = OpportunitySignalStore(workspace).runtime_status(config)
+            from OriginAgent.agent.background_review import ReviewProposalStore
+            from OriginAgent.agent.evolution import AUTO_EVOLUTION_ORIGIN
+
+            proposal_store = ReviewProposalStore(workspace)
+            proposal_stats = proposal_store.stats(origin=AUTO_EVOLUTION_ORIGIN)
+            pending_records = proposal_store.list_records(
+                origin=AUTO_EVOLUTION_ORIGIN,
+                status="pending",
+                limit=50,
+            )
+            issue_counts: dict[str, int] = {}
+            for record in pending_records:
+                payload = record.get("payload") if isinstance(record.get("payload"), dict) else {}
+                gate = payload.get("static_gate") if isinstance(payload.get("static_gate"), dict) else {}
+                counts = gate.get("issue_counts") if isinstance(gate.get("issue_counts"), dict) else {}
+                for severity, count in counts.items():
+                    try:
+                        issue_counts[str(severity)] = issue_counts.get(str(severity), 0) + int(count)
+                    except (TypeError, ValueError):
+                        continue
+            return {
+                **status,
+                "pending_proposals_from_evolution": proposal_stats["pending_count"],
+                "proposal_count_from_evolution": proposal_stats["proposal_count"],
+                "static_gate_issue_counts": issue_counts,
+            }
+        except Exception:
+            mode = str(getattr(config, "mode", "conservative") if config is not None else "conservative")
+            dry_run = bool(getattr(config, "dry_run", True) if config is not None else True)
+            return {
+                "mode": mode,
+                "dry_run": dry_run,
+                "opportunity_signals_count": 0,
+                "converted_signals_count": 0,
+                "suppressed_signals_count": 0,
+                "pending_proposals_from_evolution": 0,
+                "proposal_count_from_evolution": 0,
+                "static_gate_issue_counts": {},
+                "high_score_signals": [],
+            }
 
 
 def _safe_len(value: Any) -> int:

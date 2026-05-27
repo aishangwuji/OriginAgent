@@ -34,6 +34,10 @@ from OriginAgent.agent.facts import (
     validate_fact_proposal,
 )
 from OriginAgent.agent.auxiliary_llm import call_llm
+from OriginAgent.agent.evolution import (
+    OpportunitySignalStore,
+    detect_workflow_opportunity_candidates,
+)
 from OriginAgent.agent.runner import AgentRunner, AgentRunSpec
 from OriginAgent.agent.tools.registry import ToolRegistry
 from OriginAgent.session.manager import Session
@@ -1440,6 +1444,7 @@ class Dream:
         max_tool_result_chars: int = 16_000,
         annotate_line_ages: bool = True,
         auxiliary_router: AuxiliaryLLMRouter | None = None,
+        evolution_config: Any | None = None,
     ):
         self.store = store
         self.provider = provider
@@ -1452,6 +1457,8 @@ class Dream:
         # Default True keeps the #3212 behavior; set False to feed MEMORY.md raw
         # (e.g. if a specific LLM reacts poorly to the `← Nd` suffix).
         self.annotate_line_ages = annotate_line_ages
+        self.evolution_config = evolution_config
+        self.opportunity_signals = OpportunitySignalStore(store.workspace)
         runner_provider = (
             auxiliary_router.task_provider("dream_phase2")
             if auxiliary_router is not None
@@ -1619,6 +1626,20 @@ class Dream:
             deprecated=len(result.deprecated),
         )
 
+    def _record_opportunity_signals(self, batch: list[dict[str, Any]]) -> int:
+        retention_days = int(getattr(self.evolution_config, "signal_retention_days", 30) or 30)
+        candidates = detect_workflow_opportunity_candidates(
+            batch,
+            min_evidence_sources=1,
+        )
+        if not candidates:
+            return 0
+        updated = self.opportunity_signals.upsert_candidates(
+            candidates,
+            retention_days=retention_days,
+        )
+        return len(updated)
+
     async def run(self) -> bool:
         """Process unprocessed history entries. Returns True if work was done."""
         from OriginAgent.agent.skills import BUILTIN_SKILLS_DIR
@@ -1642,6 +1663,12 @@ class Dream:
             f"{truncate_text(e['content'], self._HISTORY_ENTRY_PREVIEW_MAX_CHARS)}"
             for e in batch
         )
+        try:
+            signal_count = self._record_opportunity_signals(batch)
+            if signal_count:
+                logger.info("Dream recorded {} evolution opportunity signal(s)", signal_count)
+        except Exception:
+            logger.exception("Dream opportunity signal collection failed")
 
         # Current file contents + per-line age annotations (MEMORY.md only).
         # Each file is capped in the *prompt preview* only; Phase 2 still sees

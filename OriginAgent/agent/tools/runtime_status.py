@@ -31,6 +31,7 @@ class RuntimeStatusTool(Tool):
         background_review_service: Any | None = None,
         curator_service: Any | None = None,
         session_search_index_service: Any | None = None,
+        evolution_config: Any | None = None,
         introspection_service: RuntimeIntrospectionService | None = None,
     ) -> None:
         self._workspace = Path(workspace)
@@ -45,6 +46,7 @@ class RuntimeStatusTool(Tool):
         self._background_review_service = background_review_service
         self._curator_service = curator_service
         self._session_search_index_service = session_search_index_service
+        self._evolution_config = evolution_config
         self._introspection_service = introspection_service
 
     @property
@@ -73,6 +75,7 @@ class RuntimeStatusTool(Tool):
             background_review_service=self._background_review_service,
             curator_service=self._curator_service,
             session_search_index_service=self._session_search_index_service,
+            evolution_config=self._evolution_config,
         )
         return service.system_status()
 
