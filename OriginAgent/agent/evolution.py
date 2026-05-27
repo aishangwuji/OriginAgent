@@ -327,6 +327,93 @@ class OpportunitySignalStore:
                 self._write_all_unlocked(records)
             return changed
 
+    def suppress_signal(
+        self,
+        opportunity_id: str,
+        *,
+        reason: str = "",
+        now: datetime | None = None,
+    ) -> OpportunitySignal | None:
+        """Manually suppress an open opportunity signal."""
+
+        if not opportunity_id:
+            return None
+        now_dt = _normalize_datetime(now)
+        with self._lock:
+            records = self.read_all()
+            updated: OpportunitySignal | None = None
+            for signal in records:
+                if signal.opportunity_id != opportunity_id or signal.status == "converted":
+                    continue
+                signal.status = "suppressed"
+                signal.suppression_reason = _clean_signal_text(
+                    reason or "Manual evolution control-plane suppression.",
+                    512,
+                )
+                signal.verification_status = "manual_suppressed"
+                signal.last_feedback_at = now_dt.isoformat()
+                updated = signal
+                break
+            if updated is None:
+                return None
+            self._write_all_unlocked(records)
+        safe_append_outcome(
+            EvolutionOutcomeStore(self.workspace),
+            "signal_suppressed",
+            opportunity_id=updated.opportunity_id,
+            artifact_type=updated.kind,
+            feedback_score=updated.priority_score,
+            metadata={
+                "origin": AUTO_EVOLUTION_ORIGIN,
+                "reason": updated.suppression_reason,
+                "source": "manual_override",
+            },
+            timestamp=now_dt,
+        )
+        return updated
+
+    def resume_signal(
+        self,
+        opportunity_id: str,
+        *,
+        reason: str = "",
+        now: datetime | None = None,
+    ) -> OpportunitySignal | None:
+        """Reopen a manually or feedback-suppressed opportunity signal."""
+
+        if not opportunity_id:
+            return None
+        now_dt = _normalize_datetime(now)
+        with self._lock:
+            records = self.read_all()
+            updated: OpportunitySignal | None = None
+            for signal in records:
+                if signal.opportunity_id != opportunity_id or signal.status != "suppressed":
+                    continue
+                signal.status = "open"
+                signal.suppression_reason = ""
+                signal.verification_status = "manual_resumed"
+                signal.last_feedback_at = now_dt.isoformat()
+                updated = signal
+                break
+            if updated is None:
+                return None
+            self._write_all_unlocked(records)
+        safe_append_outcome(
+            EvolutionOutcomeStore(self.workspace),
+            "signal_resumed",
+            opportunity_id=updated.opportunity_id,
+            artifact_type=updated.kind,
+            feedback_score=updated.priority_score,
+            metadata={
+                "origin": AUTO_EVOLUTION_ORIGIN,
+                "reason": _clean_signal_text(reason or "Manual evolution control-plane resume.", 512),
+                "source": "manual_override",
+            },
+            timestamp=now_dt,
+        )
+        return updated
+
     def apply_feedback(
         self,
         opportunity_id: str,

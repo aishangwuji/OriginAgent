@@ -10,6 +10,13 @@ import pytest
 from pydantic import BaseModel
 
 from OriginAgent.agent.tools.self import MyTool
+from OriginAgent.agent.tools.self import EVOLUTION_MANUAL_OVERRIDE_DISABLED
+from OriginAgent.agent.evolution import (
+    SIGNAL_KIND_WORKFLOW,
+    OpportunitySignalCandidate,
+    OpportunitySignalStore,
+)
+from OriginAgent.config.schema import EvolutionConfig
 
 
 # ---------------------------------------------------------------------------
@@ -30,6 +37,7 @@ def _make_mock_loop(**overrides):
     loop._last_usage = {"prompt_tokens": 100, "completion_tokens": 50}
     loop._runtime_vars = {}
     loop._current_iteration = 0
+    loop.evolution_config = EvolutionConfig()
     loop.provider_retry_mode = "standard"
     loop.max_tool_result_chars = 16000
     loop._concurrency_gate = None
@@ -63,6 +71,23 @@ def _make_tool(loop=None):
     if loop is None:
         loop = _make_mock_loop()
     return MyTool(loop=loop)
+
+
+def _evolution_candidate(*, target: str = "deploy backend checks") -> OpportunitySignalCandidate:
+    return OpportunitySignalCandidate(
+        kind=SIGNAL_KIND_WORKFLOW,
+        target_key=target,
+        title=f"Workflow candidate: {target}",
+        summary=f"Repeated workflow-like request pattern: {target}",
+        evidence_sources=[
+            {
+                "cursor": cursor,
+                "timestamp": f"2026-05-2{cursor}T10:00:00+00:00",
+                "preview": "Every time we deploy backend, run tests and check logs.",
+            }
+            for cursor in (1, 2, 3)
+        ],
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -920,6 +945,81 @@ class TestReadOnlyMode:
         tool = _make_tool()
         assert "IMPORTANT" in tool.description
         assert "READ-ONLY" not in tool.description
+
+
+# ---------------------------------------------------------------------------
+# evolution control plane
+# ---------------------------------------------------------------------------
+
+class TestEvolutionControlPlane:
+
+    @pytest.mark.asyncio
+    async def test_evolution_write_actions_require_manual_override(self, tmp_path):
+        loop = _make_mock_loop(workspace=tmp_path, evolution_config=EvolutionConfig())
+        tool = _make_tool(loop)
+
+        result = await tool.execute(
+            action="suppress_signal",
+            key="workflow_candidate:missing",
+            value={"reason": "test"},
+        )
+
+        assert result == EVOLUTION_MANUAL_OVERRIDE_DISABLED
+
+    @pytest.mark.asyncio
+    async def test_suppress_and_resume_signal_when_manual_override_enabled(self, tmp_path):
+        store = OpportunitySignalStore(tmp_path)
+        signal = store.upsert_candidates([_evolution_candidate()])[0]
+        loop = _make_mock_loop(
+            workspace=tmp_path,
+            evolution_config=EvolutionConfig(allow_manual_override=True),
+        )
+        tool = _make_tool(loop)
+
+        suppressed = await tool.execute(
+            action="suppress_signal",
+            key=signal.opportunity_id,
+            value={"reason": "not useful now"},
+        )
+        resumed = await tool.execute(
+            action="resume_signal",
+            key=signal.opportunity_id,
+            value="reconsider",
+        )
+        records = store.read_all()
+
+        assert "Suppressed opportunity signal" in suppressed
+        assert "not useful now" in suppressed
+        assert "Resumed opportunity signal" in resumed
+        assert records[0].status == "open"
+        assert records[0].verification_status == "manual_resumed"
+        assert records[0].suppression_reason == ""
+
+    @pytest.mark.asyncio
+    async def test_maintenance_action_when_manual_override_enabled(self, tmp_path):
+        loop = _make_mock_loop(
+            workspace=tmp_path,
+            evolution_config=EvolutionConfig(allow_manual_override=True),
+        )
+        tool = _make_tool(loop)
+
+        result = await tool.execute(action="run_maintenance")
+
+        assert "Evolution maintenance completed" in result
+        assert "outcome_retention_days" in result
+
+    @pytest.mark.asyncio
+    async def test_feedback_calibration_action_when_manual_override_enabled(self, tmp_path):
+        loop = _make_mock_loop(
+            workspace=tmp_path,
+            evolution_config=EvolutionConfig(allow_manual_override=True),
+        )
+        tool = _make_tool(loop)
+
+        result = await tool.execute(action="run_feedback_calibration")
+
+        assert "Evolution feedback calibration completed" in result
+        assert "processed_events" in result
 
 
 # ---------------------------------------------------------------------------

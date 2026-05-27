@@ -267,6 +267,11 @@ class EvolutionConfig(Base):
     """Governed self-evolution observability settings."""
 
     mode: Literal["conservative", "curated", "exploratory", "aggressive"] = "conservative"
+    allow_manual_override: bool = Field(
+        default=False,
+        validation_alias=AliasChoices("allowManualOverride", "allow_manual_override"),
+        serialization_alias="allowManualOverride",
+    )
     dry_run: bool = Field(
         default=True,
         validation_alias=AliasChoices("dryRun", "dry_run"),

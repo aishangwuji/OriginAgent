@@ -33,6 +33,7 @@ from OriginAgent.agent.evolution_outcomes import (
 from OriginAgent.agent.evolution_dependencies import EvolutionDependencyStore
 from OriginAgent.agent.evolution_gate import PromotionGate
 from OriginAgent.agent.evolution_feedback import EvolutionFeedbackCalibrator
+from OriginAgent.agent.evolution_maintenance import run_evolution_maintenance
 from OriginAgent.agent.evolution_sandbox import SandboxEvaluator
 from OriginAgent.agent.facts import CONFLICT_CATEGORIES, FactStore, normalize_fact_content
 from OriginAgent.agent.memory import redact_memory_text
@@ -192,27 +193,10 @@ class CuratorService:
             logger.exception("Evolution feedback calibration failed")
 
     def _run_evolution_maintenance(self) -> None:
-        config = self.evolution_config
-        maintenance: dict[str, Any] = {
-            "outcome_retention_days": max(1, int(getattr(config, "outcome_retention_days", 90) or 90)),
-            "outcome_archive_enabled": bool(getattr(config, "outcome_archive_enabled", True)),
-            "dependency_stale_cleanup_enabled": bool(
-                getattr(config, "dependency_stale_cleanup_enabled", True)
-            ),
-        }
-        try:
-            maintenance["outcome_retention"] = self.outcomes.enforce_retention(
-                retention_days=int(maintenance["outcome_retention_days"]),
-                archive=bool(maintenance["outcome_archive_enabled"]),
-            )
-        except Exception:
-            logger.exception("Evolution outcome retention failed")
-        if maintenance["dependency_stale_cleanup_enabled"]:
-            try:
-                maintenance["dependency_cleanup"] = self.dependencies.prune_stale_references()
-            except Exception:
-                logger.exception("Evolution dependency cleanup failed")
-        self._last_evolution_scan["maintenance"] = maintenance
+        self._last_evolution_scan["maintenance"] = run_evolution_maintenance(
+            self.workspace,
+            self.evolution_config,
+        )
 
     def _build_proposals(self, *, session_key: str, turn_id: str) -> list[ReviewProposal]:
         now = datetime.now(timezone.utc).isoformat()

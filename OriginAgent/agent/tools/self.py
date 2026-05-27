@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import time
 import re
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from loguru import logger
@@ -14,6 +15,11 @@ from OriginAgent.agent.tools.base import Tool
 if TYPE_CHECKING:
     from OriginAgent.agent.loop import AgentLoop
     from OriginAgent.agent.introspection.service import RuntimeIntrospectionService
+
+
+EVOLUTION_MANUAL_OVERRIDE_DISABLED = (
+    "Evolution manual override is disabled. Set evolution.allow_manual_override=true in config to enable."
+)
 
 
 def _has_real_attr(obj: Any, key: str) -> bool:
@@ -71,6 +77,13 @@ class MyTool(Tool):
     _SCRATCHPAD_KEY_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_-]{0,63}$")
     _SCRATCHPAD_RESERVED = frozenset({
         "scratchpad", "workspace", "web_config", "exec_config", "subagents",
+    })
+    EVOLUTION_CONTROL_ACTIONS = frozenset({
+        "suppress_signal",
+        "resume_signal",
+        "run_maintenance",
+        "force_cleanup",
+        "run_feedback_calibration",
     })
 
     @classmethod
@@ -130,13 +143,16 @@ class MyTool(Tool):
     def description(self) -> str:
         base = (
             "Check and set your own runtime state.\n"
-            "Actions: check, set.\n"
+            "Actions: check, set, suppress_signal, resume_signal, run_maintenance, "
+            "force_cleanup, run_feedback_calibration.\n"
             "- check (no key): full config overview — start here.\n"
             "- check (key): drill into a value. Dot-paths allowed "
             "(e.g. '_last_usage.prompt_tokens', 'web_config.enable').\n"
             "- set (key, value): change only max_iterations, context_window_tokens, model, "
             "or store notes under a simple scratchpad key. "
             "Scratchpad keys persist across turns but not restarts.\n"
+            "- evolution control actions are writes and require "
+            "learning.evolution.allow_manual_override=true.\n"
             "Key values: _current_iteration (current progress), "
             "max_iterations - _current_iteration = remaining iterations.\n"
             "Note: web_config and exec_config are readable but read-only.\n"
@@ -164,15 +180,26 @@ class MyTool(Tool):
             "properties": {
                 "action": {
                     "type": "string",
-                    "enum": ["check", "set"],
+                    "enum": [
+                        "check",
+                        "set",
+                        "suppress_signal",
+                        "resume_signal",
+                        "run_maintenance",
+                        "force_cleanup",
+                        "run_feedback_calibration",
+                    ],
                     "description": "Action to perform",
                 },
                 "key": {
                     "type": "string",
                     "description": "Key to check or set. Dot-paths are allowed for check only. "
-                    "For set, use max_iterations/context_window_tokens/model or a simple scratchpad key.",
+                    "For set, use max_iterations/context_window_tokens/model or a simple scratchpad key. "
+                    "For suppress_signal/resume_signal, use the opportunity_id.",
                 },
-                "value": {"description": "New value (for set). Type must match target (int for max_iterations/context_window_tokens, str for model)."},
+                "value": {
+                    "description": "New value (for set), or an optional reason string/object for evolution control actions.",
+                },
             },
             "required": ["action"],
             "additionalProperties": False,
@@ -349,11 +376,78 @@ class MyTool(Tool):
     ) -> str:
         if action in ("inspect", "check"):
             return self._inspect(key)
+        if action in self.EVOLUTION_CONTROL_ACTIONS:
+            return self._evolution_control(action, key, value)
         if not self._modify_allowed:
             return "Error: set is disabled (tools.my.allow_set is false)"
         if action in ("modify", "set"):
             return self._modify(key, value)
         return f"Unknown action: {action}"
+
+    # -- evolution control plane --
+
+    def _evolution_control(self, action: str, key: str | None, value: Any) -> str:
+        config = self._evolution_config()
+        if not bool(getattr(config, "allow_manual_override", False)):
+            return EVOLUTION_MANUAL_OVERRIDE_DISABLED
+
+        workspace = self._workspace_path()
+        if action == "run_feedback_calibration":
+            from OriginAgent.agent.evolution_feedback import EvolutionFeedbackCalibrator
+
+            result = EvolutionFeedbackCalibrator(workspace, config).run().to_json()
+            self._audit("evolution_control", "run_feedback_calibration")
+            return f"Evolution feedback calibration completed: {result!r}"
+
+        if action in {"run_maintenance", "force_cleanup"}:
+            from OriginAgent.agent.evolution_maintenance import run_evolution_maintenance
+
+            result = run_evolution_maintenance(
+                workspace,
+                config,
+                force_cleanup=(action == "force_cleanup"),
+            )
+            self._audit("evolution_control", action)
+            return f"Evolution maintenance completed: {result!r}"
+
+        if err := self._validate_key(key, "opportunity_id"):
+            return err
+        reason = self._evolution_reason(value)
+        from OriginAgent.agent.evolution import OpportunitySignalStore
+
+        store = OpportunitySignalStore(workspace)
+        if action == "suppress_signal":
+            signal = store.suppress_signal(key or "", reason=reason)
+            self._audit("evolution_control", f"suppress_signal {key}")
+            if signal is None:
+                return f"Error: opportunity signal '{key}' not found or cannot be suppressed"
+            return f"Suppressed opportunity signal {signal.opportunity_id}: {signal.suppression_reason}"
+        if action == "resume_signal":
+            signal = store.resume_signal(key or "", reason=reason)
+            self._audit("evolution_control", f"resume_signal {key}")
+            if signal is None:
+                return f"Error: opportunity signal '{key}' not found or is not suppressed"
+            return f"Resumed opportunity signal {signal.opportunity_id}"
+        return f"Unknown action: {action}"
+
+    def _evolution_config(self) -> Any | None:
+        if _has_real_attr(self._loop, "evolution_config"):
+            return getattr(self._loop, "evolution_config", None)
+        return None
+
+    def _workspace_path(self) -> Path:
+        workspace = getattr(self._loop, "workspace", None)
+        return Path(workspace) if workspace is not None else Path(".")
+
+    @staticmethod
+    def _evolution_reason(value: Any) -> str:
+        if isinstance(value, dict):
+            value = value.get("reason", "")
+        if value is None:
+            return ""
+        if isinstance(value, (str, int, float, bool)):
+            return str(value)
+        return ""
 
     # -- inspect --
 
