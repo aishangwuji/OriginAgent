@@ -20,6 +20,7 @@ from loguru import logger
 from OriginAgent.agent.auxiliary_llm import AuxiliaryLLMRouter, call_llm
 from OriginAgent.agent.domain_pack_governance import DomainPackGovernanceService
 from OriginAgent.agent.domain_packs import DomainPackManager
+from OriginAgent.agent.evolution import AUTO_EVOLUTION_ORIGIN, OpportunitySignalStore
 from OriginAgent.agent.evolution_outcomes import (
     EvolutionOutcomeStore,
     proposal_outcome_context,
@@ -666,11 +667,17 @@ class ReviewProposalStore:
                 event=event,
                 error=str(exc),
             )
+        verification_event = self._verify_auto_evolution_skill_unlocked(record, artifact=artifact, reason=reason)
         event = self._append_event_unlocked(
             proposal_id,
             status="applied",
             reason=reason,
             artifact=artifact,
+        )
+        self._trace_auto_evolution_skill_verification_unlocked(
+            record,
+            event,
+            verification_event=verification_event,
         )
         return ReviewDecisionResult(
             proposal_id=proposal_id,
@@ -681,6 +688,72 @@ class ReviewProposalStore:
             proposal=self._find_unlocked(proposal_id),
             event=event,
             artifact=artifact,
+        )
+
+    def _verify_auto_evolution_skill_unlocked(
+        self,
+        record: dict[str, Any],
+        *,
+        artifact: dict[str, Any],
+        reason: str,
+    ) -> dict[str, Any] | None:
+        if not _auto_evolution_skill_verify_allowed(record, artifact):
+            return None
+        skill_name = str(artifact.get("skill_name") or "")
+        if not skill_name:
+            return None
+        try:
+            from OriginAgent.agent.skill_lifecycle import SkillLifecycleStore
+
+            lifecycle = SkillLifecycleStore(self.workspace)
+            result = lifecycle.transition(
+                skill_name,
+                action="verify",
+                reason=reason or "auto_evolution read-only skill verification",
+                actor=AUTO_EVOLUTION_ORIGIN,
+            )
+            if not result.ok:
+                logger.warning(
+                    "Auto-evolution skill verification skipped for {}: {}",
+                    skill_name,
+                    result.error or result.message,
+                )
+                return None
+            return result.event if isinstance(result.event, dict) else {}
+        except Exception:
+            logger.exception("Auto-evolution skill verification failed for {}", skill_name)
+            return None
+
+    def _trace_auto_evolution_skill_verification_unlocked(
+        self,
+        record: dict[str, Any],
+        event: dict[str, Any],
+        *,
+        verification_event: dict[str, Any] | None,
+    ) -> None:
+        if not verification_event:
+            return
+        refreshed = self._find_unlocked(str(record.get("id") or "")) or record
+        context = proposal_outcome_context(refreshed, event)
+        safe_append_outcome(
+            self._outcome_store,
+            "promoted",
+            **context,
+            review_status="applied",
+            promotion_status="verified",
+            metadata={
+                "auto_verified": True,
+                "lifecycle_event_id": str(verification_event.get("event_id") or ""),
+                "reason": str(verification_event.get("reason") or ""),
+                "activation_status": "not_active",
+            },
+        )
+        payload = refreshed.get("payload") if isinstance(refreshed.get("payload"), dict) else {}
+        evolution = payload.get("evolution") if isinstance(payload.get("evolution"), dict) else {}
+        OpportunitySignalStore(self.workspace).mark_converted(
+            str(evolution.get("opportunity_id") or ""),
+            str(refreshed.get("id") or ""),
+            verification_status="verified",
         )
 
     def _apply_to_workflow_unlocked(
@@ -1237,6 +1310,22 @@ def _is_auto_evolution_record(record: dict[str, Any]) -> bool:
     payload = record.get("payload") if isinstance(record.get("payload"), dict) else {}
     evolution = payload.get("evolution") if isinstance(payload.get("evolution"), dict) else {}
     return str(evolution.get("origin") or "").strip().lower() == "auto_evolution"
+
+
+def _auto_evolution_skill_verify_allowed(record: dict[str, Any], artifact: dict[str, Any]) -> bool:
+    if _proposal_type(record) != "skill" or not _is_auto_evolution_record(record):
+        return False
+    if str(artifact.get("artifact_type") or "skill").strip().lower() != "skill":
+        return False
+    if not str(artifact.get("skill_name") or "").strip():
+        return False
+    payload = record.get("payload") if isinstance(record.get("payload"), dict) else {}
+    static_gate = payload.get("static_gate") if isinstance(payload.get("static_gate"), dict) else {}
+    promotion_gate = payload.get("promotion_gate") if isinstance(payload.get("promotion_gate"), dict) else {}
+    return (
+        str(static_gate.get("decision") or "").strip().lower() == "pass"
+        and str(promotion_gate.get("decision") or "").strip().lower() == "pass"
+    )
 
 
 def _apply_action_kind(proposal_type: str) -> str | None:

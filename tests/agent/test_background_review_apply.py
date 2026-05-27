@@ -226,6 +226,7 @@ def test_apply_skill_proposal_writes_proposed_workspace_skill(tmp_path: Path) ->
     assert frontmatter["metadata"]["OriginAgent"]["created_by"] == "background_review"
     assert frontmatter["metadata"]["OriginAgent"]["proposal_status"] == "proposed"
     assert frontmatter["metadata"]["OriginAgent"]["verification_status"] == "unverified"
+    assert frontmatter["metadata"]["OriginAgent"]["lifecycle_status"] == "proposed"
     record = store.get("review_skill")
     assert record["applied_skill_name"] == "lighting-troubleshooting"
     assert record["applied_skill_path"] == "skills/lighting-troubleshooting/SKILL.md"

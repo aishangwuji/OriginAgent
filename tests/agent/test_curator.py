@@ -756,12 +756,25 @@ async def test_curator_generates_read_only_skill_proposal_when_enabled(tmp_path:
     skill_file = tmp_path / "skills" / "log-review-troubleshooting-skill" / "SKILL.md"
     frontmatter = yaml.safe_load(skill_file.read_text(encoding="utf-8").split("---", 2)[1])
     assert frontmatter["always"] is False
-    assert frontmatter["metadata"]["OriginAgent"]["proposal_status"] == "proposed"
-    assert frontmatter["metadata"]["OriginAgent"]["verification_status"] == "unverified"
+    metadata = frontmatter["metadata"]["OriginAgent"]
+    assert metadata["proposal_status"] == "proposed"
+    assert metadata["verification_status"] == "verified"
+    assert metadata["lifecycle_status"] == "proposed"
+    assert metadata["created_by"] == AUTO_EVOLUTION_ORIGIN
+    assert metadata["reviewed_by"] == AUTO_EVOLUTION_ORIGIN
     assert EvolutionSnapshotStore(tmp_path).stats()["snapshot_type_counts"] == {"skill": 1}
+    outcome_stats = EvolutionOutcomeStore(tmp_path).stats()
+    assert outcome_stats["promotion_status_counts"] == {
+        "proposed": 1,
+        "verified": 1,
+    }
+    loader = SkillsLoader(tmp_path)
+    assert "log-review-troubleshooting-skill" not in loader.build_skills_summary()
+    assert "log-review-troubleshooting-skill" not in loader.get_always_skills()
     signals = signal_store.read_all()
     assert signals[0].status == "converted"
     assert signals[0].converted_proposal_id == record["id"]
+    assert signals[0].verification_status == "verified"
 
 
 def test_curator_promote_apply_verifies_and_activates_workspace_skill(tmp_path: Path) -> None:

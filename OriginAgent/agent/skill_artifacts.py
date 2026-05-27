@@ -21,6 +21,8 @@ _DESCRIPTION_MAX_CHARS = 512
 _BODY_MAX_CHARS = 5000
 _METADATA_MAX_CHARS = 512
 _ALLOWED_ROOT_FILES = {"SKILL.md"}
+_ALLOWED_VERIFICATION_STATUSES = {"unverified", "verified"}
+_ALLOWED_CREATED_BY = {"background_review", "auto_evolution"}
 _UNSAFE_PHRASES = (
     "bypass permission",
     "bypass permissions",
@@ -116,9 +118,10 @@ def build_skill_artifact(record: dict[str, Any], workspace: Path) -> SkillArtifa
         {
             "proposal_status": "proposed",
             "verification_status": "unverified",
+            "lifecycle_status": "proposed",
             "review_proposal_id": _clean_metadata(record.get("id")),
             "domain_id": _clean_metadata(record.get("domain_id") or "core"),
-            "created_by": "background_review",
+            "created_by": _created_by_for_record(record),
         }
     )
     frontmatter = {
@@ -235,12 +238,19 @@ def validate_skill_artifact_content(
         raise ValueError("metadata.OriginAgent is required")
     required = {
         "proposal_status": "proposed",
-        "verification_status": "unverified",
-        "created_by": "background_review",
     }
     for key, expected in required.items():
         if originagent_meta.get(key) != expected:
             raise ValueError(f"metadata.OriginAgent.{key} must be {expected}")
+    verification_status = str(originagent_meta.get("verification_status") or "")
+    if verification_status not in _ALLOWED_VERIFICATION_STATUSES:
+        raise ValueError("metadata.OriginAgent.verification_status must be unverified or verified")
+    lifecycle_status = str(originagent_meta.get("lifecycle_status") or "")
+    if lifecycle_status and lifecycle_status != "proposed":
+        raise ValueError("metadata.OriginAgent.lifecycle_status must be proposed")
+    created_by = str(originagent_meta.get("created_by") or "")
+    if created_by not in _ALLOWED_CREATED_BY:
+        raise ValueError("metadata.OriginAgent.created_by must be background_review or auto_evolution")
     if expected_proposal_id and originagent_meta.get("review_proposal_id") != expected_proposal_id:
         raise ValueError("metadata.OriginAgent.review_proposal_id is incorrect")
     if expected_domain_id and originagent_meta.get("domain_id") != expected_domain_id:
@@ -285,6 +295,14 @@ def _clean_field(value: Any, max_chars: int) -> str:
 
 def _clean_metadata(value: Any) -> str:
     return _clean_field(value, _METADATA_MAX_CHARS)
+
+
+def _created_by_for_record(record: dict[str, Any]) -> str:
+    origin = str(record.get("origin") or "").strip().lower()
+    payload = record.get("payload") if isinstance(record.get("payload"), dict) else {}
+    evolution = payload.get("evolution") if isinstance(payload.get("evolution"), dict) else {}
+    evolution_origin = str(evolution.get("origin") or "").strip().lower()
+    return "auto_evolution" if "auto_evolution" in {origin, evolution_origin} else "background_review"
 
 
 def _fallback_body(record: dict[str, Any]) -> str:
