@@ -306,6 +306,7 @@ class RuntimeIntrospectionService:
                 "pending_proposals_from_evolution": proposal_stats["pending_count"],
                 "proposal_count_from_evolution": proposal_stats["proposal_count"],
                 "auto_verified_workflows_count": auto_verified,
+                "maintenance": _evolution_maintenance_policy(config),
                 "outcomes": outcome_stats,
                 "snapshots": snapshot_stats,
                 "dependencies": dependency_stats,
@@ -344,7 +345,12 @@ class RuntimeIntrospectionService:
                     "promotion_status_counts": {},
                     "rollback_status_counts": {},
                     "last_outcome_at": None,
+                    "archive": {
+                        "archived_outcome_count": 0,
+                        "last_archived_at": None,
+                    },
                 },
+                "maintenance": _evolution_maintenance_policy(config),
                 "snapshots": {
                     "snapshot_count": 0,
                     "snapshot_type_counts": {},
@@ -400,3 +406,17 @@ def _session_count(sessions: Any) -> int:
         if value is not None:
             return _safe_len(value)
     return 0
+
+
+def _evolution_maintenance_policy(config: Any | None) -> dict[str, Any]:
+    return {
+        "outcome_retention_days": int(
+            getattr(config, "outcome_retention_days", 90) if config is not None else 90
+        ),
+        "outcome_archive_enabled": bool(
+            getattr(config, "outcome_archive_enabled", True) if config is not None else True
+        ),
+        "dependency_stale_cleanup_enabled": bool(
+            getattr(config, "dependency_stale_cleanup_enabled", True) if config is not None else True
+        ),
+    }

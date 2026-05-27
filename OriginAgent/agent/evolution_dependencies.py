@@ -15,6 +15,7 @@ from typing import Any
 import yaml
 from filelock import FileLock
 
+from OriginAgent.agent.metadata import read_originagent_metadata
 from OriginAgent.utils.helpers import ensure_dir, truncate_text
 
 DEPENDENCY_SCHEMA_VERSION = "originagent.evolution.dependencies.v1"
@@ -185,6 +186,44 @@ class EvolutionDependencyStore:
 
     def rollback_blockers(self, *, artifact_type: str, artifact_name: str) -> list[dict[str, str]]:
         return self.referenced_by(artifact_type=artifact_type, artifact_name=artifact_name)
+
+    def prune_stale_references(self) -> dict[str, Any]:
+        """Drop dependency records and edges that point at missing or retired artifacts."""
+
+        records = self.read_all()
+        retained: list[dict[str, Any]] = []
+        removed_records = 0
+        removed_edges = 0
+        for record in records:
+            artifact_type = _clean_type(record.get("artifact_type"))
+            artifact_name = _clean_name(record.get("artifact_name"))
+            artifact_path = _normalize_path(record.get("artifact_path"))
+            if (
+                artifact_type not in _ARTIFACT_TYPES
+                or not artifact_name
+                or _artifact_is_stale(self.workspace, artifact_type, artifact_name, artifact_path)
+            ):
+                removed_records += 1
+                continue
+            next_record = dict(record)
+            refs = []
+            for dep in _references(record.get("depends_on")):
+                if _artifact_is_stale(self.workspace, dep.type, dep.name, ""):
+                    removed_edges += 1
+                    continue
+                refs.append(dep.to_json())
+            next_record["depends_on"] = refs
+            retained.append(next_record)
+        retained = self._with_reverse_links(retained)
+        if removed_records or removed_edges:
+            with self._lock:
+                self._write_all_unlocked(retained)
+        return {
+            "removed_artifacts": removed_records,
+            "removed_edges": removed_edges,
+            "remaining_artifacts": len(retained),
+            "stale_reference_count": self.stats()["stale_reference_count"],
+        }
 
     def stats(self) -> dict[str, Any]:
         records = self.read_all()
@@ -398,6 +437,50 @@ def _default_artifact_path(artifact_type: str, artifact_name: str) -> str:
     if artifact_type == "workflow":
         return f"workflows/{artifact_name}/workflow.yaml"
     return f"skills/{artifact_name}/SKILL.md"
+
+
+def _artifact_is_stale(workspace: Path, artifact_type: str, artifact_name: str, artifact_path: str) -> bool:
+    path = workspace / (artifact_path or _default_artifact_path(artifact_type, artifact_name))
+    if not path.is_file():
+        return True
+    try:
+        content = path.read_text(encoding="utf-8")
+    except OSError:
+        return True
+    if artifact_type == "skill":
+        return _skill_lifecycle_status(content) in {"deprecated", "rejected"}
+    if artifact_type == "workflow":
+        return _workflow_proposal_status(content) in {"archived", "deprecated", "rejected"}
+    return False
+
+
+def _skill_lifecycle_status(content: str) -> str:
+    if not content.startswith("---"):
+        return ""
+    parts = content.split("---", 2)
+    if len(parts) < 3:
+        return ""
+    try:
+        frontmatter = yaml.safe_load(parts[1])
+    except yaml.YAMLError:
+        return ""
+    if not isinstance(frontmatter, dict):
+        return ""
+    metadata = frontmatter.get("metadata")
+    originagent = read_originagent_metadata(metadata)
+    return str(originagent.get("lifecycle_status") or "").strip().casefold()
+
+
+def _workflow_proposal_status(content: str) -> str:
+    try:
+        data = yaml.safe_load(content)
+    except yaml.YAMLError:
+        return ""
+    if not isinstance(data, dict):
+        return ""
+    metadata = data.get("metadata")
+    originagent = read_originagent_metadata(metadata)
+    return str(originagent.get("proposal_status") or "").strip().casefold()
 
 
 def _evidence(text: str, start: int, end: int) -> str:

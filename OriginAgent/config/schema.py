@@ -279,6 +279,23 @@ class EvolutionConfig(Base):
         validation_alias=AliasChoices("signalRetentionDays", "signal_retention_days"),
         serialization_alias="signalRetentionDays",
     )
+    outcome_retention_days: int = Field(
+        default=90,
+        ge=1,
+        le=3650,
+        validation_alias=AliasChoices("outcomeRetentionDays", "outcome_retention_days"),
+        serialization_alias="outcomeRetentionDays",
+    )
+    outcome_archive_enabled: bool = Field(
+        default=True,
+        validation_alias=AliasChoices("outcomeArchiveEnabled", "outcome_archive_enabled"),
+        serialization_alias="outcomeArchiveEnabled",
+    )
+    dependency_stale_cleanup_enabled: bool = Field(
+        default=True,
+        validation_alias=AliasChoices("dependencyStaleCleanupEnabled", "dependency_stale_cleanup_enabled"),
+        serialization_alias="dependencyStaleCleanupEnabled",
+    )
     workflow_min_seen_count: int = Field(
         default=3,
         ge=1,

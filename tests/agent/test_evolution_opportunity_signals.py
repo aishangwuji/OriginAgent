@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
 import pytest
@@ -185,6 +185,15 @@ async def test_runtime_status_reports_evolution_defaults(tmp_path) -> None:
         "promotion_status_counts": {},
         "rollback_status_counts": {},
         "last_outcome_at": None,
+        "archive": {
+            "archived_outcome_count": 0,
+            "last_archived_at": None,
+        },
+    }
+    assert result["evolution"]["maintenance"] == {
+        "outcome_retention_days": 90,
+        "outcome_archive_enabled": True,
+        "dependency_stale_cleanup_enabled": True,
     }
     assert result["evolution"]["snapshots"] == {
         "snapshot_count": 0,
@@ -225,6 +234,38 @@ async def test_runtime_status_reports_evolution_defaults(tmp_path) -> None:
     assert result["evolution"]["eligible_workflow_signals"] == 0
     assert result["evolution"]["eligible_skill_signals"] == 0
     assert result["evolution"]["high_score_signals"] == []
+
+
+def test_outcome_store_archives_old_noncritical_events(tmp_path) -> None:
+    store = EvolutionOutcomeStore(tmp_path)
+    now = datetime(2026, 5, 27, 12, 0, tzinfo=timezone.utc)
+    old = now - timedelta(days=120)
+    recent = now - timedelta(days=5)
+
+    old_signal = store.append_event("signal_created", opportunity_id="opp_old", timestamp=old)
+    old_promoted = store.append_event("promoted", opportunity_id="opp_keep", timestamp=old)
+    recent_signal = store.append_event("signal_updated", opportunity_id="opp_recent", timestamp=recent)
+
+    result = store.enforce_retention(retention_days=90, archive=True, now=now)
+    records = store.read_all()
+    archive = store.archive_stats()
+    archived_path = tmp_path / "memory" / "archive" / "evolution_outcomes_archive.jsonl"
+    archived_lines = [
+        json.loads(line)
+        for line in archived_path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+
+    assert result["archived_count"] == 1
+    assert result["retained_count"] == 2
+    assert result["archive_path"] == "memory/archive/evolution_outcomes_archive.jsonl"
+    assert [record["event_id"] for record in records] == [
+        old_promoted["event_id"],
+        recent_signal["event_id"],
+    ]
+    assert archive["archived_outcome_count"] == 1
+    assert archive["last_archived_at"] is not None
+    assert archived_lines[0]["record"]["event_id"] == old_signal["event_id"]
 
 
 @pytest.mark.asyncio

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import threading
+from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -601,6 +602,96 @@ def test_evolution_rollback_blocks_when_artifact_has_dependents(tmp_path: Path) 
     assert dependent_file.exists()
     outcome_stats = EvolutionOutcomeStore(tmp_path).stats()
     assert outcome_stats["rollback_status_counts"] == {"blocked": 1}
+
+
+def test_evolution_dependency_cleanup_prunes_stale_artifacts_and_edges(tmp_path: Path) -> None:
+    base_file = _write_workflow_artifact(
+        tmp_path,
+        "base-workflow",
+        body="Base workflow body.",
+        review_proposal_id="review_base",
+    )
+    _write_workflow_artifact(
+        tmp_path,
+        "dependent-workflow",
+        body="Run workflow:base-workflow and workflow:missing-workflow before summarizing.",
+        review_proposal_id="review_dependent",
+    )
+    dependency_store = EvolutionDependencyStore(tmp_path)
+    dependency_store.update_artifact(
+        artifact_type="workflow",
+        artifact_name="base-workflow",
+        artifact_path="workflows/base-workflow/workflow.yaml",
+    )
+    dependency_store.update_artifact(
+        artifact_type="workflow",
+        artifact_name="dependent-workflow",
+        artifact_path="workflows/dependent-workflow/workflow.yaml",
+    )
+    data = yaml.safe_load(base_file.read_text(encoding="utf-8"))
+    data["metadata"]["OriginAgent"]["proposal_status"] = "deprecated"
+    base_file.write_text(yaml.safe_dump(data, allow_unicode=True, sort_keys=False), encoding="utf-8")
+
+    result = dependency_store.prune_stale_references()
+    records = dependency_store.read_all()
+
+    assert result == {
+        "removed_artifacts": 1,
+        "removed_edges": 2,
+        "remaining_artifacts": 1,
+        "stale_reference_count": 0,
+    }
+    assert records[0]["artifact_name"] == "dependent-workflow"
+    assert records[0]["depends_on"] == []
+    assert records[0]["referenced_by"] == []
+
+
+@pytest.mark.asyncio
+async def test_curator_runs_evolution_retention_and_dependency_cleanup(tmp_path: Path) -> None:
+    old = datetime(2000, 1, 1, 0, 0, tzinfo=timezone.utc)
+    outcomes = EvolutionOutcomeStore(tmp_path)
+    old_event = outcomes.append_event("signal_created", opportunity_id="opp_old", timestamp=old)
+    outcomes.append_event("promoted", opportunity_id="opp_keep", timestamp=old)
+    _write_workflow_artifact(
+        tmp_path,
+        "dependent-workflow",
+        body="Run workflow:missing-workflow before summarizing.",
+        review_proposal_id="review_dependent",
+    )
+    dependency_store = EvolutionDependencyStore(tmp_path)
+    dependency_store.update_artifact(
+        artifact_type="workflow",
+        artifact_name="dependent-workflow",
+        artifact_path="workflows/dependent-workflow/workflow.yaml",
+    )
+    service = CuratorService(
+        workspace=tmp_path,
+        config=SimpleNamespace(enabled=True, max_proposals_per_run=12),
+        evolution_config=EvolutionConfig(
+            outcome_retention_days=90,
+            outcome_archive_enabled=True,
+            dependency_stale_cleanup_enabled=True,
+        ),
+        store=ReviewProposalStore(tmp_path),
+    )
+
+    result = await service.review_workspace(session_key="websocket:chat-a", turn_id="turn-1")
+    maintenance = service._last_evolution_scan["maintenance"]
+    archive_lines = [
+        json.loads(line)
+        for line in (tmp_path / "memory" / "archive" / "evolution_outcomes_archive.jsonl")
+        .read_text(encoding="utf-8")
+        .splitlines()
+        if line.strip()
+    ]
+
+    assert result.status == "ok"
+    assert maintenance["outcome_retention"]["archived_count"] == 1
+    assert maintenance["dependency_cleanup"]["removed_edges"] == 1
+    assert outcomes.stats()["outcome_type_counts"] == {"promoted": 1}
+    assert outcomes.stats()["archive"]["archived_outcome_count"] == 1
+    assert archive_lines[0]["record"]["event_id"] == old_event["event_id"]
+    assert dependency_store.read_all()[0]["depends_on"] == []
 
 
 @pytest.mark.asyncio

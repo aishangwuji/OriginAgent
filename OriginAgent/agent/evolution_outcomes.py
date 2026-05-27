@@ -7,7 +7,7 @@ import os
 import uuid
 from contextlib import suppress
 from dataclasses import asdict, dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -17,8 +17,10 @@ from OriginAgent.utils.helpers import ensure_dir, truncate_text
 
 OUTCOME_SCHEMA_VERSION = "originagent.evolution.outcome.v1"
 OUTCOME_STORE_RELATIVE = Path("memory") / "evolution_outcomes.jsonl"
+OUTCOME_ARCHIVE_RELATIVE = Path("memory") / "archive" / "evolution_outcomes_archive.jsonl"
 
 _MAX_TEXT_CHARS = 1000
+_PERMANENT_EVENT_TYPES = {"promoted", "rolled_back", "review_rejected", "review_failed"}
 
 
 @dataclass(frozen=True)
@@ -159,6 +161,43 @@ class EvolutionOutcomeStore:
                 tmp_path.unlink(missing_ok=True)
                 raise
 
+    def enforce_retention(
+        self,
+        *,
+        retention_days: int = 90,
+        archive: bool = True,
+        now: datetime | None = None,
+    ) -> dict[str, Any]:
+        """Move old non-critical outcome records into an archive copy."""
+
+        now_dt = _timestamp_dt(now)
+        cutoff = now_dt - timedelta(days=max(1, int(retention_days or 90)))
+        records = self.read_all()
+        retained: list[dict[str, Any]] = []
+        archived: list[dict[str, Any]] = []
+        for record in records:
+            event_time = _parse_datetime(str(record.get("timestamp") or ""))
+            if (
+                event_time is None
+                or event_time >= cutoff
+                or str(record.get("type") or "") in _PERMANENT_EVENT_TYPES
+            ):
+                retained.append(record)
+            else:
+                archived.append(record)
+        if archived:
+            if archive:
+                self._append_archive(archived)
+            self.compact_copy(retained)
+        return {
+            "retention_days": max(1, int(retention_days or 90)),
+            "archive_enabled": bool(archive),
+            "retained_count": len(retained),
+            "archived_count": len(archived),
+            "archive_path": str(OUTCOME_ARCHIVE_RELATIVE).replace("\\", "/") if archived and archive else "",
+            "cutoff": cutoff.isoformat(),
+        }
+
     def stats(self) -> dict[str, Any]:
         records = self.read_all()
         type_counts: dict[str, int] = {}
@@ -187,7 +226,51 @@ class EvolutionOutcomeStore:
             "promotion_status_counts": promotion_counts,
             "rollback_status_counts": rollback_counts,
             "last_outcome_at": last_event_at,
+            "archive": self.archive_stats(),
         }
+
+    def archive_stats(self) -> dict[str, Any]:
+        archive_path = self.workspace / OUTCOME_ARCHIVE_RELATIVE
+        records = 0
+        last_archived_at = None
+        with suppress(FileNotFoundError):
+            with archive_path.open("r", encoding="utf-8") as handle:
+                for line in handle:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        raw = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    if not isinstance(raw, dict):
+                        continue
+                    records += 1
+                    archived_at = raw.get("archived_at")
+                    if isinstance(archived_at, str) and (
+                        last_archived_at is None or archived_at > last_archived_at
+                    ):
+                        last_archived_at = archived_at
+        return {
+            "archived_outcome_count": records,
+            "last_archived_at": last_archived_at,
+        }
+
+    def _append_archive(self, records: list[dict[str, Any]]) -> None:
+        if not records:
+            return
+        archive_path = self.workspace / OUTCOME_ARCHIVE_RELATIVE
+        now = datetime.now(timezone.utc).isoformat()
+        with self._lock:
+            archive_path.parent.mkdir(parents=True, exist_ok=True)
+            with archive_path.open("a", encoding="utf-8") as handle:
+                for record in records:
+                    archived = {
+                        "archived_at": now,
+                        "source_path": str(OUTCOME_STORE_RELATIVE).replace("\\", "/"),
+                        "record": _redact_json(record),
+                    }
+                    handle.write(json.dumps(archived, ensure_ascii=False, sort_keys=True) + "\n")
 
 
 def proposal_outcome_context(record: dict[str, Any], event: dict[str, Any] | None = None) -> dict[str, str]:
@@ -236,11 +319,26 @@ def safe_append_outcome(store: EvolutionOutcomeStore, event_type: str, **kwargs:
 
 
 def _timestamp(value: datetime | None) -> str:
+    return _timestamp_dt(value).isoformat()
+
+
+def _timestamp_dt(value: datetime | None) -> datetime:
     if value is None:
-        return datetime.now(timezone.utc).isoformat()
+        return datetime.now(timezone.utc)
     if value.tzinfo is None:
-        value = value.replace(tzinfo=timezone.utc)
-    return value.astimezone(timezone.utc).isoformat()
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
+
+
+def _parse_datetime(value: str) -> datetime | None:
+    if not value:
+        return None
+    with suppress(ValueError):
+        parsed = datetime.fromisoformat(value)
+        if parsed.tzinfo is None:
+            return parsed.replace(tzinfo=timezone.utc)
+        return parsed.astimezone(timezone.utc)
+    return None
 
 
 def _safe_score(value: float | None) -> float | None:
