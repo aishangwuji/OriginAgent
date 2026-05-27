@@ -11,11 +11,15 @@ from pydantic import BaseModel
 
 from OriginAgent.agent.tools.self import MyTool
 from OriginAgent.agent.tools.self import EVOLUTION_MANUAL_OVERRIDE_DISABLED
+from OriginAgent.agent.background_review import ReviewProposal, ReviewProposalStore
 from OriginAgent.agent.evolution import (
+    AUTO_EVOLUTION_ORIGIN,
     SIGNAL_KIND_WORKFLOW,
     OpportunitySignalCandidate,
     OpportunitySignalStore,
+    build_workflow_payload_from_signal,
 )
+from OriginAgent.agent.evolution_outcomes import EvolutionOutcomeStore
 from OriginAgent.config.schema import EvolutionConfig
 
 
@@ -88,6 +92,35 @@ def _evolution_candidate(*, target: str = "deploy backend checks") -> Opportunit
             for cursor in (1, 2, 3)
         ],
     )
+
+
+def _append_retryable_workflow_proposal(tmp_path: Path) -> tuple[str, str]:
+    signal = OpportunitySignalStore(tmp_path).upsert_candidates([_evolution_candidate()])[0]
+    payload = build_workflow_payload_from_signal(signal, config=EvolutionConfig())
+    payload["steps"] = [
+        {
+            "title": "Read trial notes",
+            "tool": "read_file",
+            "path": "notes.txt",
+        }
+    ]
+    proposal_id = "review_auto_workflow_retry"
+    ReviewProposalStore(tmp_path).append_many([
+        ReviewProposal(
+            id=proposal_id,
+            created_at="2026-05-20T10:00:00+00:00",
+            session_key="curator:system",
+            turn_id="turn-1",
+            origin=AUTO_EVOLUTION_ORIGIN,
+            proposal_type="workflow",
+            domain_id="core",
+            title="Create workflow",
+            content="Create a reviewed workflow.",
+            payload=payload,
+            confidence=signal.priority_score,
+        )
+    ])
+    return proposal_id, signal.opportunity_id
 
 
 # ---------------------------------------------------------------------------
@@ -967,6 +1000,19 @@ class TestEvolutionControlPlane:
         assert result == EVOLUTION_MANUAL_OVERRIDE_DISABLED
 
     @pytest.mark.asyncio
+    async def test_evolution_read_actions_do_not_require_manual_override(self, tmp_path):
+        signal = OpportunitySignalStore(tmp_path).upsert_candidates([_evolution_candidate()])[0]
+        loop = _make_mock_loop(workspace=tmp_path, evolution_config=EvolutionConfig())
+        tool = _make_tool(loop)
+
+        result = await tool.execute(action="inspect_signal", key=signal.opportunity_id)
+        recommendations = await tool.execute(action="list_evolution_recommendations")
+
+        assert "Evolution signal inspection" in result
+        assert "'found': True" in result
+        assert "Evolution recommendations" in recommendations
+
+    @pytest.mark.asyncio
     async def test_suppress_and_resume_signal_when_manual_override_enabled(self, tmp_path):
         store = OpportunitySignalStore(tmp_path)
         signal = store.upsert_candidates([_evolution_candidate()])[0]
@@ -1020,6 +1066,44 @@ class TestEvolutionControlPlane:
 
         assert "Evolution feedback calibration completed" in result
         assert "processed_events" in result
+
+    @pytest.mark.asyncio
+    async def test_retry_trial_requires_manual_override(self, tmp_path):
+        proposal_id, _ = _append_retryable_workflow_proposal(tmp_path)
+        loop = _make_mock_loop(workspace=tmp_path, evolution_config=EvolutionConfig())
+        tool = _make_tool(loop)
+
+        result = await tool.execute(
+            action="retry_trial",
+            key=proposal_id,
+            value={"fixtures": {"notes.txt": "Trial notes."}},
+        )
+
+        assert result == EVOLUTION_MANUAL_OVERRIDE_DISABLED
+
+    @pytest.mark.asyncio
+    async def test_retry_trial_updates_proposal_when_manual_override_enabled(self, tmp_path):
+        proposal_id, _ = _append_retryable_workflow_proposal(tmp_path)
+        loop = _make_mock_loop(
+            workspace=tmp_path,
+            evolution_config=EvolutionConfig(allow_manual_override=True),
+        )
+        tool = _make_tool(loop)
+
+        result = await tool.execute(
+            action="retry_trial",
+            key=proposal_id,
+            value={"fixtures": {"notes.txt": "Trial notes."}},
+        )
+        record = ReviewProposalStore(tmp_path).get(proposal_id)
+        outcomes = EvolutionOutcomeStore(tmp_path).stats()
+
+        assert "Evolution trial retry completed" in result
+        assert "'ok': True" in result
+        assert record is not None
+        assert record["payload"]["trial"]["status"] == "passed"
+        assert record["payload"]["operator_insights"]["trial_summary"]["status"] == "passed"
+        assert outcomes["outcome_type_counts"]["trial_retried"] == 1
 
 
 # ---------------------------------------------------------------------------

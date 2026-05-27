@@ -39,6 +39,7 @@ The `my` tool exposes a small evolution control plane:
 - `run_maintenance`
 - `force_cleanup`
 - `run_feedback_calibration`
+- `retry_trial`
 
 These are write actions. They are disabled unless `learning.evolution.allow_manual_override=true`.
 
@@ -49,6 +50,37 @@ Evolution manual override is disabled. Set evolution.allow_manual_override=true 
 ```
 
 This protects the evolution state from accidental mutation by ordinary task execution or by the model itself. Administrators should enable manual override only for an intentional maintenance session, then disable it again.
+
+## Operator Loop
+
+v1.3 adds an operator loop on top of the governed evolution pipeline. It does not expand what the agent may activate automatically. It turns existing signals, gates, trials, health scores, and feedback into reviewable operator summaries.
+
+Auto-evolution proposals include:
+
+- `operator_insights.trial_summary`: compact sandbox or retry-trial status.
+- `operator_insights.risk_summary`: gate decisions, issue counts, and high-signal issue messages.
+- `operator_insights.health_impact`: estimated direction and score impact.
+- `operator_insights.recommended_action`: `review_required`, `auto_apply`, or `reject`.
+- `operator_insights.why_not_auto_active`: policy reminders explaining why verified artifacts still do not become active.
+
+`originagent_runtime_status.evolution.operator_recommendations` reports bounded operational suggestions such as:
+
+- health trend is degrading.
+- stale dependencies should be cleaned by maintenance.
+- sandbox failures need inspection or retry.
+- pending auto-evolution proposals should be reviewed.
+- repeated negative feedback suggests suppressing a signal.
+
+These recommendations are redacted summaries. They do not expose raw trial output or raw evidence text.
+
+The `my` tool also exposes read-only operator views:
+
+- `inspect_signal` with `key=<opportunity_id>`.
+- `inspect_evolution_proposal` with `key=<proposal_id>`.
+- `explain_evolution_health`.
+- `list_evolution_recommendations`.
+
+These read actions do not require `allow_manual_override`. The write action `retry_trial` does require `allow_manual_override=true` and only applies to pending auto-evolution workflow proposals. Retry trial re-runs the read-only isolated trial with optional fixtures, updates the proposal payload with compact trial evidence, and writes a `trial_retried` outcome event.
 
 ## Trial Isolation
 
@@ -146,6 +178,7 @@ Important fields:
 - `sandbox`: sandbox pass/fail/block counts.
 - `evolution_health`: current 0-100 health score and reasons.
 - `evolution_health_history`: bounded score trend.
+- `operator_recommendations`: bounded, redacted operational suggestions.
 - `maintenance`: configured retention and cleanup policy.
 
 These fields are redacted summaries. They do not expose raw trial outputs, raw evidence text, commands, secrets, paths outside the governed stores, or hidden audit internals.

@@ -387,6 +387,13 @@ async def test_curator_curated_evolution_writes_workflow_proposal_and_marks_sign
         "auto_verify_eligible": False,
         "issue_counts": {},
     }
+    assert payload["operator_insights"]["trial_summary"]["status"] == "passed"
+    assert payload["operator_insights"]["recommended_action"] == "review_required"
+    assert payload["operator_insights"]["risk_summary"]["level"] == "low"
+    assert (
+        "OriginAgent governance does not auto-activate evolution artifacts."
+        in payload["operator_insights"]["why_not_auto_active"]
+    )
     outcome_stats = EvolutionOutcomeStore(tmp_path).stats()
     assert outcome_stats["outcome_type_counts"]["gate_evaluated"] == 1
     assert outcome_stats["gate_decision_counts"] == {"pass": 2}
@@ -754,6 +761,12 @@ async def test_curator_generates_read_only_skill_proposal_when_enabled(tmp_path:
     assert record["payload"]["promotion_gate"]["decision"] == "pass"
     assert record["payload"]["promotion_gate"]["suggested_action"] == "review_required"
     assert record["payload"]["promotion_gate"]["sandbox_status"] == "not_applicable"
+    assert record["payload"]["operator_insights"]["trial_summary"]["status"] == "not_run"
+    assert record["payload"]["operator_insights"]["recommended_action"] == "review_required"
+    assert (
+        "Evolution-generated skills must remain `always: false` and require review before activation."
+        in record["payload"]["operator_insights"]["why_not_auto_active"]
+    )
 
     applied = review_store.apply(record["id"], reason="reviewed")
     assert applied.ok is True

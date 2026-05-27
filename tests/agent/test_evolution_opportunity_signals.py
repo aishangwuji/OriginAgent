@@ -25,6 +25,7 @@ from OriginAgent.agent.evolution_health_history import EvolutionHealthHistorySto
 from OriginAgent.agent.evolution_trial import TrialRunner
 from OriginAgent.agent.evolution_trial_logs import EvolutionTrialLogStore
 from OriginAgent.agent.evolution_outcomes import EvolutionOutcomeStore
+from OriginAgent.agent.evolution_operator import EvolutionOperator
 from OriginAgent.agent.background_review import ReviewProposal, ReviewProposalStore
 from OriginAgent.agent.tools.runtime_status import RuntimeStatusTool
 from OriginAgent.config.schema import EvolutionConfig
@@ -320,6 +321,7 @@ async def test_runtime_status_reports_evolution_defaults(tmp_path) -> None:
         "trend": "unknown",
         "last_snapshot_at": None,
     }
+    assert result["evolution"]["operator_recommendations"] == []
     assert result["evolution"]["promotion_gate_decision_counts"] == {}
     assert result["evolution"]["static_gate_issue_counts"] == {}
     assert result["evolution"]["sandbox"] == {
@@ -743,6 +745,54 @@ def test_trial_runner_does_not_read_real_workspace(tmp_path) -> None:
     assert "real workspace content" not in result["step_results"][0]["output"]
 
 
+def test_evolution_operator_retries_trial_and_updates_proposal(tmp_path) -> None:
+    signal = OpportunitySignalStore(tmp_path).upsert_candidates([_candidate(cursors=(1, 2, 3))])[0]
+    payload = build_workflow_payload_from_signal(signal, config=EvolutionConfig())
+    payload["steps"] = [
+        {
+            "title": "Read fixture notes",
+            "tool": "read_file",
+            "path": "notes.txt",
+        }
+    ]
+    ReviewProposalStore(tmp_path).append_many([
+        ReviewProposal(
+            id="review_auto_workflow_retry",
+            created_at="2026-05-20T10:00:00+00:00",
+            session_key="curator:system",
+            turn_id="turn-1",
+            origin=AUTO_EVOLUTION_ORIGIN,
+            proposal_type="workflow",
+            domain_id="core",
+            title="Create workflow",
+            content="Create a reviewed workflow.",
+            payload=payload,
+            confidence=signal.priority_score,
+        )
+    ])
+
+    result = EvolutionOperator(tmp_path, EvolutionConfig()).retry_trial(
+        "review_auto_workflow_retry",
+        fixtures={"notes.txt": "Trial fixture notes."},
+        actor="test",
+    )
+    record = ReviewProposalStore(tmp_path).get("review_auto_workflow_retry")
+    trial_logs = EvolutionTrialLogStore(tmp_path).read_all()
+    outcome_stats = EvolutionOutcomeStore(tmp_path).stats()
+
+    assert result.ok is True
+    assert result.status == "passed"
+    assert result.trial is not None
+    assert result.trial["step_results"][0]["output"] == "Trial fixture notes."
+    assert record is not None
+    assert record["payload"]["trial"]["status"] == "passed"
+    assert record["payload"]["operator_insights"]["trial_summary"]["status"] == "passed"
+    assert record["payload"]["operator_insights"]["recommended_action"] == "review_required"
+    assert trial_logs[0]["proposal_id"] == "review_auto_workflow_retry"
+    assert trial_logs[0]["status"] == "passed"
+    assert outcome_stats["outcome_type_counts"]["trial_retried"] == 1
+
+
 def test_sandbox_evaluator_reports_step_level_failures_without_execution(tmp_path) -> None:
     evaluator = SandboxEvaluator(tmp_path, EvolutionConfig())
 
@@ -839,3 +889,9 @@ async def test_runtime_status_counts_pending_auto_evolution_proposals(tmp_path) 
     assert evolution["evolution_health"]["level"] == "degraded"
     assert "- sandbox pass rate 0%" in evolution["evolution_health"]["reasons"]
     assert "- sandbox blocked or failed proposals: 1" in evolution["evolution_health"]["reasons"]
+    recommendation_codes = {
+        item["code"]
+        for item in evolution["operator_recommendations"]
+    }
+    assert "sandbox_attention_needed" in recommendation_codes
+    assert "pending_evolution_proposal" in recommendation_codes

@@ -84,6 +84,13 @@ class MyTool(Tool):
         "run_maintenance",
         "force_cleanup",
         "run_feedback_calibration",
+        "retry_trial",
+    })
+    EVOLUTION_READ_ACTIONS = frozenset({
+        "inspect_signal",
+        "inspect_evolution_proposal",
+        "explain_evolution_health",
+        "list_evolution_recommendations",
     })
 
     @classmethod
@@ -144,14 +151,17 @@ class MyTool(Tool):
         base = (
             "Check and set your own runtime state.\n"
             "Actions: check, set, suppress_signal, resume_signal, run_maintenance, "
-            "force_cleanup, run_feedback_calibration.\n"
+            "force_cleanup, run_feedback_calibration, inspect_signal, "
+            "inspect_evolution_proposal, explain_evolution_health, "
+            "list_evolution_recommendations, retry_trial.\n"
             "- check (no key): full config overview — start here.\n"
             "- check (key): drill into a value. Dot-paths allowed "
             "(e.g. '_last_usage.prompt_tokens', 'web_config.enable').\n"
             "- set (key, value): change only max_iterations, context_window_tokens, model, "
             "or store notes under a simple scratchpad key. "
             "Scratchpad keys persist across turns but not restarts.\n"
-            "- evolution control actions are writes and require "
+            "- evolution inspect/explain/list actions are read-only operator views.\n"
+            "- evolution control actions and retry_trial are writes and require "
             "learning.evolution.allow_manual_override=true.\n"
             "Key values: _current_iteration (current progress), "
             "max_iterations - _current_iteration = remaining iterations.\n"
@@ -188,6 +198,11 @@ class MyTool(Tool):
                         "run_maintenance",
                         "force_cleanup",
                         "run_feedback_calibration",
+                        "inspect_signal",
+                        "inspect_evolution_proposal",
+                        "explain_evolution_health",
+                        "list_evolution_recommendations",
+                        "retry_trial",
                     ],
                     "description": "Action to perform",
                 },
@@ -195,7 +210,8 @@ class MyTool(Tool):
                     "type": "string",
                     "description": "Key to check or set. Dot-paths are allowed for check only. "
                     "For set, use max_iterations/context_window_tokens/model or a simple scratchpad key. "
-                    "For suppress_signal/resume_signal, use the opportunity_id.",
+                    "For suppress_signal/resume_signal/inspect_signal, use the opportunity_id. "
+                    "For inspect_evolution_proposal/retry_trial, use the proposal_id.",
                 },
                 "value": {
                     "description": "New value (for set), or an optional reason string/object for evolution control actions.",
@@ -376,6 +392,8 @@ class MyTool(Tool):
     ) -> str:
         if action in ("inspect", "check"):
             return self._inspect(key)
+        if action in self.EVOLUTION_READ_ACTIONS:
+            return self._evolution_read(action, key)
         if action in self.EVOLUTION_CONTROL_ACTIONS:
             return self._evolution_control(action, key, value)
         if not self._modify_allowed:
@@ -386,12 +404,57 @@ class MyTool(Tool):
 
     # -- evolution control plane --
 
+    def _evolution_read(self, action: str, key: str | None) -> str:
+        from OriginAgent.agent.evolution_operator import EvolutionOperator
+
+        operator = EvolutionOperator(self._workspace_path(), self._evolution_config())
+        if action == "inspect_signal":
+            if err := self._validate_key(key, "opportunity_id"):
+                return err
+            result = operator.inspect_signal(key or "")
+            self._audit("evolution_read", f"inspect_signal {key}")
+            return f"Evolution signal inspection: {result!r}"
+        if action == "inspect_evolution_proposal":
+            if err := self._validate_key(key, "proposal_id"):
+                return err
+            result = operator.inspect_proposal(key or "")
+            self._audit("evolution_read", f"inspect_evolution_proposal {key}")
+            return f"Evolution proposal inspection: {result!r}"
+        if action == "explain_evolution_health":
+            result = operator.explain_health()
+            self._audit("evolution_read", "explain_evolution_health")
+            return f"Evolution health explanation: {result!r}"
+        if action == "list_evolution_recommendations":
+            result = operator.list_recommendations()
+            self._audit("evolution_read", "list_evolution_recommendations")
+            return f"Evolution recommendations: {result!r}"
+        return f"Unknown action: {action}"
+
     def _evolution_control(self, action: str, key: str | None, value: Any) -> str:
         config = self._evolution_config()
         if not bool(getattr(config, "allow_manual_override", False)):
             return EVOLUTION_MANUAL_OVERRIDE_DISABLED
 
         workspace = self._workspace_path()
+        if action == "retry_trial":
+            if err := self._validate_key(key, "proposal_id"):
+                return err
+            from OriginAgent.agent.evolution_operator import EvolutionOperator
+
+            fixtures = value.get("fixtures") if isinstance(value, dict) else None
+            if fixtures is not None and not isinstance(fixtures, dict):
+                return "Error: retry_trial fixtures must be an object mapping relative paths to text"
+            result = EvolutionOperator(workspace, config).retry_trial(
+                key or "",
+                fixtures={
+                    str(path): str(content)
+                    for path, content in (fixtures or {}).items()
+                },
+                actor="my",
+            ).to_json()
+            self._audit("evolution_control", f"retry_trial {key}")
+            return f"Evolution trial retry completed: {result!r}"
+
         if action == "run_feedback_calibration":
             from OriginAgent.agent.evolution_feedback import EvolutionFeedbackCalibrator
 

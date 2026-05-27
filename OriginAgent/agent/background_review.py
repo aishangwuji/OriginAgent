@@ -172,6 +172,29 @@ class ReviewProposalStore:
                     handle.write(json.dumps(proposal.to_json(), ensure_ascii=False) + "\n")
         return len(proposals)
 
+    def update_payload(self, proposal_id: str, payload: dict[str, Any]) -> dict[str, Any] | None:
+        """Rewrite one pending proposal payload for governed operator updates."""
+
+        proposal_id = proposal_id.strip()
+        if not proposal_id or not isinstance(payload, dict):
+            return None
+        with self._locked():
+            records = self._iter_proposals_unlocked()
+            latest_events = self._latest_events_unlocked()
+            changed = False
+            for record in records:
+                if str(record.get("id") or "") != proposal_id:
+                    continue
+                if str(latest_events.get(proposal_id, {}).get("status") or "pending") in _TERMINAL_REVIEW_STATUSES:
+                    return None
+                record["payload"] = _redact_json_payload(payload)
+                changed = True
+                break
+            if not changed:
+                return None
+            self._write_proposals_unlocked(records)
+            return self._find_unlocked(proposal_id)
+
     def _read_jsonl(self, path: Path, *, label: str) -> list[dict[str, Any]]:
         rows: list[dict[str, Any]] = []
         try:
@@ -198,6 +221,18 @@ class ReviewProposalStore:
 
     def _iter_events_unlocked(self) -> list[dict[str, Any]]:
         return self._read_jsonl(self.event_path, label="event")
+
+    def _write_proposals_unlocked(self, records: list[dict[str, Any]]) -> None:
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        tmp_path = self.path.with_suffix(self.path.suffix + ".tmp")
+        try:
+            with tmp_path.open("w", encoding="utf-8") as handle:
+                for record in records:
+                    handle.write(json.dumps(record, ensure_ascii=False) + "\n")
+            tmp_path.replace(self.path)
+        except BaseException:
+            tmp_path.unlink(missing_ok=True)
+            raise
 
     def _latest_events_unlocked(self) -> dict[str, dict[str, Any]]:
         latest: dict[str, dict[str, Any]] = {}

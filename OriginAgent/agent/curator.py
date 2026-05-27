@@ -34,6 +34,7 @@ from OriginAgent.agent.evolution_dependencies import EvolutionDependencyStore
 from OriginAgent.agent.evolution_gate import PromotionGate
 from OriginAgent.agent.evolution_feedback import EvolutionFeedbackCalibrator
 from OriginAgent.agent.evolution_maintenance import run_evolution_maintenance
+from OriginAgent.agent.evolution_operator import build_operator_insights
 from OriginAgent.agent.evolution_sandbox import SandboxEvaluator
 from OriginAgent.agent.facts import CONFLICT_CATEGORIES, FactStore, normalize_fact_content
 from OriginAgent.agent.memory import redact_memory_text
@@ -283,6 +284,11 @@ class CuratorService:
             payload["sandbox"] = self.sandbox.evaluate_workflow_payload(payload)
             gate = self.promotion_gate.evaluate(payload, proposal_type="workflow")
             payload["promotion_gate"] = gate.to_json()
+            payload["operator_insights"] = build_operator_insights(
+                payload,
+                proposal_type="workflow",
+                config=config,
+            )
             if gate.decision == "blocked":
                 self._trace_gate_evaluated(payload, proposal_type="workflow")
                 continue
@@ -346,6 +352,11 @@ class CuratorService:
             payload = build_skill_payload_from_signal(signal, config=config)
             gate = self.promotion_gate.evaluate(payload, proposal_type="skill")
             payload["promotion_gate"] = gate.to_json()
+            payload["operator_insights"] = build_operator_insights(
+                payload,
+                proposal_type="skill",
+                config=config,
+            )
             if gate.decision == "blocked":
                 self._trace_gate_evaluated(payload, proposal_type="skill")
                 continue

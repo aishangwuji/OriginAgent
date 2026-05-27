@@ -252,6 +252,7 @@ class RuntimeIntrospectionService:
                 health_history_policy_status,
             )
             from OriginAgent.agent.evolution_outcomes import EvolutionOutcomeStore
+            from OriginAgent.agent.evolution_operator import EvolutionOperator
             from OriginAgent.agent.evolution_sandbox import sandbox_status_counts, trial_policy_status
             from OriginAgent.agent.evolution_snapshots import EvolutionSnapshotStore
             from OriginAgent.agent.evolution_trial_logs import EvolutionTrialLogStore, trial_log_policy_status
@@ -306,6 +307,15 @@ class RuntimeIntrospectionService:
                 sandbox_counts=sandbox_counts,
                 trial_status=trial_status,
             )
+            health_history = health_history_store.summary()
+            operator_recommendations = EvolutionOperator(workspace, config).list_recommendations(
+                health=health,
+                health_history=health_history,
+                outcome_stats=outcome_stats,
+                dependency_stats=dependency_stats,
+                feedback_stats=feedback_stats,
+                sandbox_counts=sandbox_counts,
+            )
             auto_verified = 0
             for record in applied_records:
                 payload = record.get("payload") if isinstance(record.get("payload"), dict) else {}
@@ -329,8 +339,9 @@ class RuntimeIntrospectionService:
                 "evolution_health": health,
                 "evolution_health_history": {
                     **health_history_policy_status(config),
-                    **health_history_store.summary(),
+                    **health_history,
                 },
+                "operator_recommendations": operator_recommendations,
                 "promotion_gate_decision_counts": promotion_gate_counts,
                 "static_gate_issue_counts": issue_counts,
                 "sandbox": {
@@ -419,6 +430,7 @@ class RuntimeIntrospectionService:
                     "trend": "unknown",
                     "last_snapshot_at": None,
                 },
+                "operator_recommendations": [],
                 "promotion_gate_decision_counts": {},
                 "static_gate_issue_counts": {},
                 "sandbox": {
