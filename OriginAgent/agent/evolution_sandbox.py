@@ -31,6 +31,7 @@ class SandboxEvaluationResult:
     checked_at: str = ""
     issues: list[dict[str, str]] = field(default_factory=list)
     replay_summary: dict[str, int] = field(default_factory=dict)
+    step_results: list[dict[str, Any]] = field(default_factory=list)
     policy: dict[str, Any] = field(default_factory=dict)
     cached: bool = False
 
@@ -59,11 +60,14 @@ class SandboxEvaluator:
                 isolated_workspace=True,
                 checked_at=_now_iso(),
                 replay_summary={"steps_checked": 0, "blocked_steps": 0, "sample_count": 0},
+                step_results=[],
             ).to_json()
 
         cache_key = self._cache_key(payload)
         cached = self._read_cached(cache_key)
         if cached is not None:
+            cached.setdefault("step_results", [])
+            cached.setdefault("policy", {})
             cached["cached"] = True
             return cached
 
@@ -89,6 +93,7 @@ class SandboxEvaluator:
                 isolated_workspace=True,
                 checked_at=_now_iso(),
                 replay_summary={"steps_checked": 0, "blocked_steps": 0, "sample_count": 0},
+                step_results=[],
                 policy=self._trial_policy(),
             ).to_json()
         return self._evaluate_trial_uncached(payload)
@@ -102,33 +107,22 @@ class SandboxEvaluator:
             steps = []
 
         allowed_tools = self._allowed_tools()
-        blocked_steps = 0
-        checked_steps = 0
         with tempfile.TemporaryDirectory(prefix="originagent_sandbox_") as tmp:
             sandbox_root = Path(tmp).resolve()
-            for index, step in enumerate(steps):
-                if not isinstance(step, dict):
-                    issues.append(_issue(
-                        "sandbox_step_not_mapping",
-                        "reject",
-                        f"Workflow step {index + 1} must be a mapping.",
-                    ))
-                    blocked_steps += 1
-                    continue
-                checked_steps += 1
-                tool = str(step.get("tool") or "").strip()
-                if tool and tool not in allowed_tools:
-                    issues.append(_issue(
-                        "sandbox_tool_blocked",
-                        "pending",
-                        f"Workflow step {index + 1} references non-read-only tool `{tool}`.",
-                    ))
-                    blocked_steps += 1
-                    continue
-                path_issue = self._check_step_paths(step, sandbox_root, index)
-                if path_issue is not None:
-                    issues.append(path_issue)
-                    blocked_steps += 1
+            step_results = self._evaluate_steps(
+                steps,
+                root=sandbox_root,
+                allowed_tools=allowed_tools,
+                issue_prefix="sandbox",
+                blocked_tools=set(),
+                read_only_only=True,
+            )
+
+        for step_result in step_results:
+            for issue in step_result["issues"]:
+                issues.append(ValidationIssue(**issue))
+        blocked_steps = sum(1 for step in step_results if step["status"] != "passed")
+        checked_steps = sum(1 for step in step_results if step["status"] != "invalid")
 
         status = "passed"
         if any(issue.severity == "reject" for issue in issues):
@@ -148,10 +142,13 @@ class SandboxEvaluator:
                 "blocked_steps": blocked_steps,
                 "sample_count": sample_count,
             },
+            step_results=step_results,
             policy={
                 "allowed_tools": sorted(allowed_tools),
                 "isolated_workspace": True,
                 "read_only": True,
+                "executes_tools": False,
+                "workspace_visible": False,
             },
         ).to_json()
 
@@ -174,41 +171,22 @@ class SandboxEvaluator:
                 "Trial execution requires an isolated temporary workspace.",
             ))
 
-        blocked_steps = 0
-        checked_steps = 0
         with self._trial_temp_directory() as tmp:
             trial_root = Path(tmp).resolve()
-            for index, step in enumerate(steps):
-                if not isinstance(step, dict):
-                    issues.append(_issue(
-                        "trial_step_not_mapping",
-                        "reject",
-                        f"Workflow step {index + 1} must be a mapping.",
-                    ))
-                    blocked_steps += 1
-                    continue
-                checked_steps += 1
-                tool = str(step.get("tool") or "").strip()
-                if tool and tool in blocked_tools:
-                    issues.append(_issue(
-                        "trial_tool_blocked",
-                        "pending",
-                        f"Workflow step {index + 1} references blocked trial tool `{tool}`.",
-                    ))
-                    blocked_steps += 1
-                    continue
-                if read_only_only and tool and tool not in allowed_tools:
-                    issues.append(_issue(
-                        "trial_tool_not_read_only",
-                        "pending",
-                        f"Workflow step {index + 1} references non-read-only trial tool `{tool}`.",
-                    ))
-                    blocked_steps += 1
-                    continue
-                path_issue = self._check_step_paths(step, trial_root, index, issue_prefix="trial")
-                if path_issue is not None:
-                    issues.append(path_issue)
-                    blocked_steps += 1
+            step_results = self._evaluate_steps(
+                steps,
+                root=trial_root,
+                allowed_tools=allowed_tools,
+                issue_prefix="trial",
+                blocked_tools=blocked_tools,
+                read_only_only=read_only_only,
+            )
+
+        for step_result in step_results:
+            for issue in step_result["issues"]:
+                issues.append(ValidationIssue(**issue))
+        blocked_steps = sum(1 for step in step_results if step["status"] != "passed")
+        checked_steps = sum(1 for step in step_results if step["status"] != "invalid")
 
         status = "passed"
         if any(issue.severity == "reject" for issue in issues):
@@ -227,8 +205,66 @@ class SandboxEvaluator:
                 "blocked_steps": blocked_steps,
                 "sample_count": _sample_count(payload, self.config),
             },
+            step_results=step_results,
             policy=self._trial_policy(),
         ).to_json()
+
+    def _evaluate_steps(
+        self,
+        steps: list[Any],
+        *,
+        root: Path,
+        allowed_tools: set[str],
+        issue_prefix: str,
+        blocked_tools: set[str],
+        read_only_only: bool,
+    ) -> list[dict[str, Any]]:
+        results: list[dict[str, Any]] = []
+        for index, step in enumerate(steps):
+            if not isinstance(step, dict):
+                issue = _issue(
+                    f"{issue_prefix}_step_not_mapping",
+                    "reject",
+                    f"Workflow step {index + 1} must be a mapping.",
+                )
+                results.append(_step_result(
+                    index=index,
+                    step={},
+                    status="invalid",
+                    issues=[issue],
+                    path_keys=[],
+                ))
+                continue
+
+            tool = str(step.get("tool") or "").strip()
+            step_issues: list[ValidationIssue] = []
+            if tool and tool in blocked_tools:
+                step_issues.append(_issue(
+                    f"{issue_prefix}_tool_blocked",
+                    "pending",
+                    f"Workflow step {index + 1} references blocked {issue_prefix} tool `{tool}`.",
+                ))
+            elif read_only_only and tool and tool not in allowed_tools:
+                message = (
+                    f"Workflow step {index + 1} references non-read-only {issue_prefix} tool `{tool}`."
+                    if issue_prefix == "trial"
+                    else f"Workflow step {index + 1} references non-read-only tool `{tool}`."
+                )
+                code = f"{issue_prefix}_tool_not_read_only" if issue_prefix == "trial" else f"{issue_prefix}_tool_blocked"
+                step_issues.append(_issue(code, "pending", message))
+
+            path_issue, path_keys = self._check_step_paths(step, root, index, issue_prefix=issue_prefix)
+            if path_issue is not None:
+                step_issues.append(path_issue)
+
+            results.append(_step_result(
+                index=index,
+                step=step,
+                status=_step_status(step_issues),
+                issues=step_issues,
+                path_keys=path_keys,
+            ))
+        return results
 
     def _check_step_paths(
         self,
@@ -237,7 +273,8 @@ class SandboxEvaluator:
         index: int,
         *,
         issue_prefix: str = "sandbox",
-    ) -> ValidationIssue | None:
+    ) -> tuple[ValidationIssue | None, list[str]]:
+        checked: list[str] = []
         for key in ("path", "file", "file_path", "target_path", "pattern"):
             raw = step.get(key)
             if raw is None:
@@ -245,6 +282,7 @@ class SandboxEvaluator:
             value = str(raw).strip()
             if not value:
                 continue
+            checked.append(key)
             try:
                 candidate = (sandbox_root / value).resolve()
                 candidate.relative_to(sandbox_root)
@@ -253,8 +291,8 @@ class SandboxEvaluator:
                     f"{issue_prefix}_path_outside_root",
                     "reject",
                     f"Workflow step {index + 1} path `{truncate_text(value, 80)}` leaves sandbox root.",
-                )
-        return None
+                ), checked
+        return None, checked
 
     def _allowed_tools(self) -> set[str]:
         sandbox_config = getattr(self.config, "sandbox", None)
@@ -408,6 +446,34 @@ def _issue(code: str, severity: str, message: str) -> ValidationIssue:
         severity=severity,
         message=truncate_text(message, _MAX_MESSAGE_CHARS),
     )
+
+
+def _step_result(
+    *,
+    index: int,
+    step: dict[str, Any],
+    status: str,
+    issues: list[ValidationIssue],
+    path_keys: list[str],
+) -> dict[str, Any]:
+    return {
+        "index": index + 1,
+        "title": truncate_text(str(step.get("title") or ""), 120),
+        "tool": str(step.get("tool") or "").strip(),
+        "status": status,
+        "issues": [asdict(issue) for issue in issues],
+        "path_keys_checked": sorted(path_keys),
+        "executed": False,
+        "simulated": True,
+    }
+
+
+def _step_status(issues: list[ValidationIssue]) -> str:
+    if any(issue.severity == "reject" for issue in issues):
+        return "failed"
+    if issues:
+        return "blocked"
+    return "passed"
 
 
 def _now_iso() -> str:

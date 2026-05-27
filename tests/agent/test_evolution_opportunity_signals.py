@@ -405,10 +405,28 @@ def test_sandbox_evaluator_passes_read_only_and_blocks_side_effects(tmp_path) ->
         "blocked_steps": 0,
         "sample_count": 2,
     }
+    assert passed["policy"]["executes_tools"] is False
+    assert passed["policy"]["workspace_visible"] is False
+    assert passed["step_results"] == [
+        {
+            "index": 1,
+            "title": "Read",
+            "tool": "read_file",
+            "status": "passed",
+            "issues": [],
+            "path_keys_checked": ["path"],
+            "executed": False,
+            "simulated": True,
+        }
+    ]
     assert blocked["status"] == "blocked"
     assert blocked["issues"][0]["code"] == "sandbox_tool_blocked"
+    assert blocked["step_results"][0]["status"] == "blocked"
+    assert blocked["step_results"][0]["issues"][0]["code"] == "sandbox_tool_blocked"
     assert failed["status"] == "failed"
     assert failed["issues"][0]["code"] == "sandbox_path_outside_root"
+    assert failed["step_results"][0]["status"] == "failed"
+    assert failed["step_results"][0]["issues"][0]["code"] == "sandbox_path_outside_root"
 
 
 def test_trial_evaluator_enforces_isolated_read_only_policy(tmp_path) -> None:
@@ -448,8 +466,48 @@ def test_trial_evaluator_enforces_isolated_read_only_policy(tmp_path) -> None:
     ]
     assert blocked["status"] == "blocked"
     assert blocked["issues"][0]["code"] == "trial_tool_blocked"
+    assert blocked["step_results"][0]["status"] == "blocked"
+    assert blocked["step_results"][0]["executed"] is False
+    assert blocked["step_results"][0]["simulated"] is True
     assert failed["status"] == "failed"
     assert failed["issues"][0]["code"] == "trial_path_outside_root"
+    assert failed["step_results"][0]["status"] == "failed"
+
+
+def test_sandbox_evaluator_reports_step_level_failures_without_execution(tmp_path) -> None:
+    evaluator = SandboxEvaluator(tmp_path, EvolutionConfig())
+
+    result = evaluator.evaluate_workflow_payload({
+        "target_state_hash": "step-level-sandbox",
+        "evolution": {
+            "opportunity_id": "opportunity-step-level",
+            "evidence_sources": [{"cursor": 1}],
+        },
+        "steps": [
+            {"title": "Read", "tool": "read_file", "path": "notes.txt"},
+            {"title": "Write", "tool": "write_file", "path": "notes.txt"},
+            {"title": "Escape", "tool": "grep", "pattern": "..\\secret"},
+            "bad-step",
+        ],
+    })
+
+    assert result["status"] == "failed"
+    assert result["replay_summary"] == {
+        "steps_checked": 3,
+        "blocked_steps": 3,
+        "sample_count": 1,
+    }
+    assert [step["status"] for step in result["step_results"]] == [
+        "passed",
+        "blocked",
+        "failed",
+        "invalid",
+    ]
+    assert all(step["executed"] is False for step in result["step_results"])
+    assert all(step["simulated"] is True for step in result["step_results"])
+    assert result["step_results"][1]["issues"][0]["code"] == "sandbox_tool_blocked"
+    assert result["step_results"][2]["issues"][0]["code"] == "sandbox_path_outside_root"
+    assert result["step_results"][3]["issues"][0]["code"] == "sandbox_step_not_mapping"
 
 
 @pytest.mark.asyncio
