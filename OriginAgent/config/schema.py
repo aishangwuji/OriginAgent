@@ -452,6 +452,20 @@ class EvolutionConfig(Base):
         ),
         serialization_alias="feedbackSuppressAfterNegativeCount",
     )
+    feedback_cooldown_days: int = Field(
+        default=14,
+        ge=1,
+        le=365,
+        validation_alias=AliasChoices("feedbackCooldownDays", "feedback_cooldown_days"),
+        serialization_alias="feedbackCooldownDays",
+    )
+    feedback_trend_window_days: int = Field(
+        default=14,
+        ge=1,
+        le=365,
+        validation_alias=AliasChoices("feedbackTrendWindowDays", "feedback_trend_window_days"),
+        serialization_alias="feedbackTrendWindowDays",
+    )
 
 
 class LearningConfig(Base):

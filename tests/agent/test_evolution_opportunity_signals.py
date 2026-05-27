@@ -105,6 +105,80 @@ def test_feedback_calibrator_lowers_rejected_evolution_signal_once(tmp_path) -> 
     assert outcome_stats["outcome_type_counts"]["feedback_applied"] == 1
 
 
+def test_feedback_calibrator_skips_positive_reinforcement_during_cooldown(tmp_path) -> None:
+    signal_store = OpportunitySignalStore(tmp_path)
+    signal = signal_store.upsert_candidates([_candidate(cursors=(1, 2, 3))])[0]
+    review_store = ReviewProposalStore(tmp_path)
+    payload = build_workflow_payload_from_signal(signal, config=EvolutionConfig())
+    review_store.append_many([
+        ReviewProposal(
+            id="review_auto_workflow_rejected",
+            created_at="2026-05-20T10:00:00+00:00",
+            session_key="curator:system",
+            turn_id="turn-1",
+            origin=AUTO_EVOLUTION_ORIGIN,
+            proposal_type="workflow",
+            domain_id="core",
+            title="Reject workflow",
+            content="Create a reviewed workflow.",
+            payload=payload,
+            confidence=signal.priority_score,
+        ),
+        ReviewProposal(
+            id="review_auto_workflow_approved",
+            created_at="2026-05-20T10:01:00+00:00",
+            session_key="curator:system",
+            turn_id="turn-2",
+            origin=AUTO_EVOLUTION_ORIGIN,
+            proposal_type="workflow",
+            domain_id="core",
+            title="Approve workflow",
+            content="Create a reviewed workflow.",
+            payload=payload,
+            confidence=signal.priority_score,
+        ),
+    ])
+    review_store.reject("review_auto_workflow_rejected", reason="not useful")
+    review_store.apply("review_auto_workflow_approved", reason="manual follow-up")
+
+    result = EvolutionFeedbackCalibrator(
+        tmp_path,
+        EvolutionConfig(feedback_cooldown_days=30, feedback_trend_window_days=30),
+    ).run()
+    updated = signal_store.read_all()[0]
+    status = EvolutionFeedbackCalibrator(
+        tmp_path,
+        EvolutionConfig(feedback_cooldown_days=30, feedback_trend_window_days=30),
+    ).status()
+    feedback_events = [
+        event for event in EvolutionOutcomeStore(tmp_path).read_all()
+        if event.get("type") == "feedback_applied"
+    ]
+
+    assert result.processed_events == 2
+    assert result.feedback_applied == 1
+    assert result.negative_feedback_applied == 1
+    assert result.positive_feedback_applied == 0
+    assert result.cooldown_skipped_events == 1
+    assert updated.feedback_negative_count == 1
+    assert updated.feedback_positive_count == 0
+    assert updated.feedback_multiplier == pytest.approx(0.8)
+    assert updated.priority_score == pytest.approx(signal.priority_score * 0.8)
+    assert status["cooldown_count"] == 1
+    assert status["next_cooldown_expires_at"] is not None
+    assert status["feedback_event_count"] == 2
+    assert status["feedback_polarity_counts"] == {"negative": 1, "positive": 1}
+    assert status["feedback_trend_counts"] == {
+        "negative": 1,
+        "skipped_positive": 1,
+        "net": -1,
+    }
+    assert status["feedback_trends"][signal.opportunity_id]["negative"] == 1
+    assert status["feedback_trends"][signal.opportunity_id]["skipped_positive"] == 1
+    assert status["last_result"]["cooldown_skipped_events"] == 1
+    assert feedback_events[1]["calibration_result"]["skipped_by_cooldown"] is True
+
+
 def test_workflow_detector_requires_repeated_evidence() -> None:
     entries = [
         {
@@ -211,6 +285,11 @@ async def test_runtime_status_reports_evolution_defaults(tmp_path) -> None:
         "processed_event_count": 0,
         "feedback_event_count": 0,
         "feedback_polarity_counts": {},
+        "cooldown_count": 0,
+        "next_cooldown_expires_at": None,
+        "feedback_trend_window_days": 14,
+        "feedback_trend_counts": {},
+        "feedback_trends": {},
         "last_calibrated_at": None,
         "last_result": None,
     }

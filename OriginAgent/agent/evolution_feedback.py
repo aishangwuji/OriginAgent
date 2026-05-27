@@ -6,7 +6,7 @@ import json
 import os
 from contextlib import suppress
 from dataclasses import asdict, dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -34,6 +34,7 @@ class EvolutionFeedbackResult:
     positive_feedback_applied: int = 0
     suppressed_signals: int = 0
     skipped_events: int = 0
+    cooldown_skipped_events: int = 0
     last_event_id: str = ""
     last_calibrated_at: str | None = None
 
@@ -64,12 +65,14 @@ class EvolutionFeedbackCalibrator:
         if not _config_bool(self.config, "feedback_calibration_enabled", True):
             return self._status_result()
         with self._lock:
+            now_dt = datetime.now(timezone.utc)
             state = self._read_state_unlocked()
             processed_ids = {
                 str(item)
                 for item in state.get("processed_event_ids", [])
                 if str(item)
             }
+            cooldowns = _active_cooldowns(state.get("cooldowns"), now_dt)
             stats = {
                 "processed_events": 0,
                 "feedback_applied": 0,
@@ -77,6 +80,7 @@ class EvolutionFeedbackCalibrator:
                 "positive_feedback_applied": 0,
                 "suppressed_signals": 0,
                 "skipped_events": 0,
+                "cooldown_skipped_events": 0,
                 "last_event_id": "",
             }
             for event in self.outcomes.read_all():
@@ -93,6 +97,32 @@ class EvolutionFeedbackCalibrator:
                 opportunity_id = feedback["opportunity_id"]
                 if not opportunity_id:
                     stats["skipped_events"] += 1
+                    continue
+                cooldown = _cooldown_for(cooldowns, opportunity_id, now_dt)
+                if feedback["polarity"] == "positive" and cooldown is not None:
+                    stats["skipped_events"] += 1
+                    stats["cooldown_skipped_events"] += 1
+                    safe_append_outcome(
+                        self.outcomes,
+                        "feedback_applied",
+                        opportunity_id=opportunity_id,
+                        proposal_id=str(event.get("proposal_id") or ""),
+                        artifact_type=str(event.get("artifact_type") or ""),
+                        artifact_name=str(event.get("artifact_name") or ""),
+                        artifact_path=str(event.get("artifact_path") or ""),
+                        calibration_result={
+                            "source_event_id": event_id,
+                            "source_event_type": event_type,
+                            "polarity": feedback["polarity"],
+                            "skipped_by_cooldown": True,
+                            "cooldown_until": str(cooldown.get("until") or ""),
+                            "cooldown_reason": str(cooldown.get("reason") or ""),
+                        },
+                        metadata={
+                            "reason": "Positive feedback skipped during active cooldown.",
+                            "origin": AUTO_EVOLUTION_ORIGIN,
+                        },
+                    )
                     continue
                 updated = self.signals.apply_feedback(
                     opportunity_id,
@@ -114,6 +144,14 @@ class EvolutionFeedbackCalibrator:
                 stats["feedback_applied"] += 1
                 if feedback["polarity"] == "negative":
                     stats["negative_feedback_applied"] += 1
+                    cooldowns[opportunity_id] = {
+                        "until": (now_dt + timedelta(
+                            days=max(1, _config_int(self.config, "feedback_cooldown_days", 14))
+                        )).isoformat(),
+                        "reason": feedback["reason"],
+                        "source_event_id": event_id,
+                        "source_event_type": event_type,
+                    }
                 elif feedback["polarity"] == "positive":
                     stats["positive_feedback_applied"] += 1
                 if updated.status == "suppressed":
@@ -140,9 +178,12 @@ class EvolutionFeedbackCalibrator:
                     },
                     metadata={"reason": feedback["reason"], "origin": AUTO_EVOLUTION_ORIGIN},
                 )
-            now = datetime.now(timezone.utc).isoformat()
+            now = now_dt.isoformat()
+            trends = self._feedback_trends(now_dt)
             state.update({
                 "processed_event_ids": sorted(processed_ids),
+                "cooldowns": cooldowns,
+                "feedback_trends": trends,
                 "last_calibrated_at": now,
                 "last_result": {
                     **stats,
@@ -159,6 +200,10 @@ class EvolutionFeedbackCalibrator:
         with self._lock:
             state = self._read_state_unlocked()
         last = state.get("last_result") if isinstance(state.get("last_result"), dict) else {}
+        now_dt = datetime.now(timezone.utc)
+        cooldowns = _active_cooldowns(state.get("cooldowns"), now_dt)
+        trends = state.get("feedback_trends") if isinstance(state.get("feedback_trends"), dict) else {}
+        trend_counts = _feedback_trend_counts(trends)
         feedback_events = [
             event for event in self.outcomes.read_all()
             if str(event.get("type") or "") == "feedback_applied"
@@ -177,6 +222,14 @@ class EvolutionFeedbackCalibrator:
             ]),
             "feedback_event_count": len(feedback_events),
             "feedback_polarity_counts": polarity_counts,
+            "cooldown_count": len(cooldowns),
+            "next_cooldown_expires_at": _next_cooldown_expiry(cooldowns),
+            "feedback_trend_window_days": max(
+                1,
+                _config_int(self.config, "feedback_trend_window_days", 14),
+            ),
+            "feedback_trend_counts": trend_counts,
+            "feedback_trends": trends,
             "last_calibrated_at": state.get("last_calibrated_at"),
             "last_result": last or None,
         }
@@ -191,6 +244,7 @@ class EvolutionFeedbackCalibrator:
             positive_feedback_applied=_safe_int(last.get("positive_feedback_applied"), 0),
             suppressed_signals=_safe_int(last.get("suppressed_signals"), 0),
             skipped_events=_safe_int(last.get("skipped_events"), 0),
+            cooldown_skipped_events=_safe_int(last.get("cooldown_skipped_events"), 0),
             last_event_id=str(last.get("last_event_id") or ""),
             last_calibrated_at=(
                 str(status.get("last_calibrated_at"))
@@ -267,6 +321,52 @@ class EvolutionFeedbackCalibrator:
                     return str(evolution.get("opportunity_id") or "")
         return ""
 
+    def _feedback_trends(self, now: datetime) -> dict[str, Any]:
+        window_days = max(1, _config_int(self.config, "feedback_trend_window_days", 14))
+        cutoff = now - timedelta(days=window_days)
+        trends: dict[str, dict[str, Any]] = {}
+        for event in self.outcomes.read_all():
+            if str(event.get("type") or "") != "feedback_applied":
+                continue
+            event_time = _parse_datetime(str(event.get("timestamp") or ""))
+            if event_time is None or event_time < cutoff:
+                continue
+            opportunity_id = str(event.get("opportunity_id") or "")
+            if not opportunity_id:
+                continue
+            result = event.get("calibration_result")
+            if not isinstance(result, dict):
+                continue
+            polarity = str(result.get("polarity") or "")
+            if polarity not in {"negative", "positive"}:
+                continue
+            trend = trends.setdefault(
+                opportunity_id,
+                {
+                    "window_days": window_days,
+                    "positive": 0,
+                    "negative": 0,
+                    "skipped_positive": 0,
+                    "skipped_negative": 0,
+                    "net": 0,
+                    "last_polarity": "",
+                    "last_feedback_at": None,
+                    "updated_at": now.isoformat(),
+                },
+            )
+            skipped = bool(result.get("skipped_by_cooldown"))
+            if skipped:
+                key = "skipped_positive" if polarity == "positive" else "skipped_negative"
+                trend[key] += 1
+            else:
+                trend[polarity] += 1
+            if trend["last_feedback_at"] is None or event_time.isoformat() >= str(trend["last_feedback_at"]):
+                trend["last_polarity"] = polarity
+                trend["last_feedback_at"] = event_time.isoformat()
+        for trend in trends.values():
+            trend["net"] = int(trend["positive"]) - int(trend["negative"])
+        return trends
+
     def _read_state_unlocked(self) -> dict[str, Any]:
         with suppress(FileNotFoundError):
             try:
@@ -275,7 +375,13 @@ class EvolutionFeedbackCalibrator:
                 raw = None
             if isinstance(raw, dict):
                 return raw
-        return {"processed_event_ids": [], "last_calibrated_at": None, "last_result": None}
+        return {
+            "processed_event_ids": [],
+            "cooldowns": {},
+            "feedback_trends": {},
+            "last_calibrated_at": None,
+            "last_result": None,
+        }
 
     def _write_state_unlocked(self, state: dict[str, Any]) -> None:
         tmp_path = self.state_path.with_suffix(self.state_path.suffix + ".tmp")
@@ -300,6 +406,14 @@ def feedback_status(workspace: Path, config: Any | None = None) -> dict[str, Any
             "processed_event_count": 0,
             "feedback_event_count": 0,
             "feedback_polarity_counts": {},
+            "cooldown_count": 0,
+            "next_cooldown_expires_at": None,
+            "feedback_trend_window_days": max(
+                1,
+                _config_int(config, "feedback_trend_window_days", 14),
+            ),
+            "feedback_trend_counts": {},
+            "feedback_trends": {},
             "last_calibrated_at": None,
             "last_result": None,
         }
@@ -322,6 +436,84 @@ def _safe_int(value: Any, default: int) -> int:
         return int(value)
     except (TypeError, ValueError):
         return default
+
+
+def _parse_datetime(value: str) -> datetime | None:
+    if not value:
+        return None
+    with suppress(ValueError):
+        parsed = datetime.fromisoformat(value)
+        if parsed.tzinfo is None:
+            return parsed.replace(tzinfo=timezone.utc)
+        return parsed.astimezone(timezone.utc)
+    return None
+
+
+def _active_cooldowns(value: Any, now: datetime) -> dict[str, dict[str, Any]]:
+    if not isinstance(value, dict):
+        return {}
+    active: dict[str, dict[str, Any]] = {}
+    for opportunity_id, raw in value.items():
+        if not str(opportunity_id):
+            continue
+        if not isinstance(raw, dict):
+            continue
+        until = _parse_datetime(str(raw.get("until") or ""))
+        if until is None or until <= now:
+            continue
+        active[str(opportunity_id)] = {
+            "until": until.isoformat(),
+            "reason": truncate_text(str(raw.get("reason") or ""), 512),
+            "source_event_id": str(raw.get("source_event_id") or ""),
+            "source_event_type": str(raw.get("source_event_type") or ""),
+        }
+    return active
+
+
+def _cooldown_for(
+    cooldowns: dict[str, dict[str, Any]],
+    opportunity_id: str,
+    now: datetime,
+) -> dict[str, Any] | None:
+    cooldown = cooldowns.get(opportunity_id)
+    if not cooldown:
+        return None
+    until = _parse_datetime(str(cooldown.get("until") or ""))
+    if until is None or until <= now:
+        return None
+    return cooldown
+
+
+def _next_cooldown_expiry(cooldowns: dict[str, dict[str, Any]]) -> str | None:
+    expiries = [
+        str(cooldown.get("until") or "")
+        for cooldown in cooldowns.values()
+        if str(cooldown.get("until") or "")
+    ]
+    return min(expiries) if expiries else None
+
+
+def _feedback_trend_counts(trends: Any) -> dict[str, int]:
+    if not isinstance(trends, dict):
+        return {}
+    if not trends:
+        return {}
+    counts = {
+        "positive": 0,
+        "negative": 0,
+        "skipped_positive": 0,
+        "skipped_negative": 0,
+        "net": 0,
+    }
+    for trend in trends.values():
+        if not isinstance(trend, dict):
+            continue
+        counts["positive"] += _safe_int(trend.get("positive"), 0)
+        counts["negative"] += _safe_int(trend.get("negative"), 0)
+        counts["skipped_positive"] += _safe_int(trend.get("skipped_positive"), 0)
+        counts["skipped_negative"] += _safe_int(trend.get("skipped_negative"), 0)
+    counts["net"] = counts["positive"] - counts["negative"]
+    return {key: value for key, value in counts.items() if value != 0 or key == "net"}
 
 
 def _config_bool(config: Any | None, attr: str, default: bool) -> bool:
