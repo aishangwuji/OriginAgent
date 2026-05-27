@@ -207,6 +207,14 @@ async def test_runtime_status_reports_evolution_defaults(tmp_path) -> None:
         "failed_workflow_proposals": 0,
         "blocked_workflow_proposals": 0,
     }
+    assert result["evolution"]["trial"] == {
+        "enabled": True,
+        "isolated_workspace": True,
+        "read_only_tools_only": True,
+        "allowed_tools": ["glob", "grep", "read_file"],
+        "blocked_tools": ["cron", "edit_file", "exec", "message", "spawn", "write_file"],
+        "temp_dir_configured": False,
+    }
     assert result["evolution"]["skill_candidates_enabled"] is False
     assert result["evolution"]["eligible_workflow_signals"] == 0
     assert result["evolution"]["eligible_skill_signals"] == 0
@@ -354,6 +362,47 @@ def test_sandbox_evaluator_passes_read_only_and_blocks_side_effects(tmp_path) ->
     assert blocked["issues"][0]["code"] == "sandbox_tool_blocked"
     assert failed["status"] == "failed"
     assert failed["issues"][0]["code"] == "sandbox_path_outside_root"
+
+
+def test_trial_evaluator_enforces_isolated_read_only_policy(tmp_path) -> None:
+    evaluator = SandboxEvaluator(tmp_path, EvolutionConfig())
+    base_payload = {
+        "target_state_hash": "trial-state",
+        "evolution": {
+            "opportunity_id": "opportunity-trial",
+            "evidence_sources": [{"cursor": 1}, {"cursor": 2}],
+        },
+    }
+
+    passed = evaluator.evaluate_trial_workflow_payload({
+        **base_payload,
+        "steps": [{"title": "Read", "tool": "read_file", "path": "notes.txt"}],
+    })
+    blocked = evaluator.evaluate_trial_workflow_payload({
+        **base_payload,
+        "steps": [{"title": "Write", "tool": "write_file", "path": "notes.txt"}],
+    })
+    failed = evaluator.evaluate_trial_workflow_payload({
+        **base_payload,
+        "steps": [{"title": "Escape", "tool": "read_file", "path": "..\\secrets.txt"}],
+    })
+
+    assert passed["status"] == "passed"
+    assert passed["mode"] == "trial"
+    assert passed["read_only"] is True
+    assert passed["isolated_workspace"] is True
+    assert passed["policy"]["blocked_tools"] == [
+        "cron",
+        "edit_file",
+        "exec",
+        "message",
+        "spawn",
+        "write_file",
+    ]
+    assert blocked["status"] == "blocked"
+    assert blocked["issues"][0]["code"] == "trial_tool_blocked"
+    assert failed["status"] == "failed"
+    assert failed["issues"][0]["code"] == "trial_path_outside_root"
 
 
 @pytest.mark.asyncio

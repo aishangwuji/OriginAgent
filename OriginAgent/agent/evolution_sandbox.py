@@ -25,10 +25,13 @@ class SandboxEvaluationResult:
     """Serializable result attached to an auto-evolution proposal payload."""
 
     status: str
+    mode: str = "sandbox"
     read_only: bool = True
+    isolated_workspace: bool = True
     checked_at: str = ""
     issues: list[dict[str, str]] = field(default_factory=list)
     replay_summary: dict[str, int] = field(default_factory=dict)
+    policy: dict[str, Any] = field(default_factory=dict)
     cached: bool = False
 
     def to_json(self) -> dict[str, Any]:
@@ -51,7 +54,9 @@ class SandboxEvaluator:
         if not enabled:
             return SandboxEvaluationResult(
                 status="skipped",
+                mode="sandbox",
                 read_only=True,
+                isolated_workspace=True,
                 checked_at=_now_iso(),
                 replay_summary={"steps_checked": 0, "blocked_steps": 0, "sample_count": 0},
             ).to_json()
@@ -65,6 +70,28 @@ class SandboxEvaluator:
         result = self._evaluate_uncached(payload)
         self._write_cached(cache_key, result)
         return result
+
+    def evaluate_trial_workflow_payload(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """Evaluate whether a verified workflow is safe to trial-run.
+
+        This is a hard gate for trial mode, not an executor. It enforces the
+        v1.1 rule that trial remains isolated and read-only before any future
+        runtime can consider invoking an artifact.
+        """
+
+        trial_config = getattr(self.config, "trial", None)
+        enabled = bool(getattr(trial_config, "enabled", True))
+        if not enabled:
+            return SandboxEvaluationResult(
+                status="skipped",
+                mode="trial",
+                read_only=True,
+                isolated_workspace=True,
+                checked_at=_now_iso(),
+                replay_summary={"steps_checked": 0, "blocked_steps": 0, "sample_count": 0},
+                policy=self._trial_policy(),
+            ).to_json()
+        return self._evaluate_trial_uncached(payload)
 
     def _evaluate_uncached(self, payload: dict[str, Any]) -> dict[str, Any]:
         checked_at = _now_iso()
@@ -111,7 +138,9 @@ class SandboxEvaluator:
         sample_count = _sample_count(payload, self.config)
         return SandboxEvaluationResult(
             status=status,
+            mode="sandbox",
             read_only=True,
+            isolated_workspace=True,
             checked_at=checked_at,
             issues=[asdict(issue) for issue in issues],
             replay_summary={
@@ -119,6 +148,86 @@ class SandboxEvaluator:
                 "blocked_steps": blocked_steps,
                 "sample_count": sample_count,
             },
+            policy={
+                "allowed_tools": sorted(allowed_tools),
+                "isolated_workspace": True,
+                "read_only": True,
+            },
+        ).to_json()
+
+    def _evaluate_trial_uncached(self, payload: dict[str, Any]) -> dict[str, Any]:
+        checked_at = _now_iso()
+        issues: list[ValidationIssue] = []
+        trial_config = getattr(self.config, "trial", None)
+        isolated_workspace = bool(getattr(trial_config, "isolated_workspace", True))
+        read_only_only = bool(getattr(trial_config, "read_only_tools_only", True))
+        allowed_tools = self._allowed_tools()
+        blocked_tools = self._blocked_trial_tools()
+        steps = payload.get("steps")
+        if not isinstance(steps, list):
+            issues.append(_issue("trial_steps_not_list", "reject", "Workflow steps must be a list."))
+            steps = []
+        if not isolated_workspace:
+            issues.append(_issue(
+                "trial_isolation_required",
+                "reject",
+                "Trial execution requires an isolated temporary workspace.",
+            ))
+
+        blocked_steps = 0
+        checked_steps = 0
+        with self._trial_temp_directory() as tmp:
+            trial_root = Path(tmp).resolve()
+            for index, step in enumerate(steps):
+                if not isinstance(step, dict):
+                    issues.append(_issue(
+                        "trial_step_not_mapping",
+                        "reject",
+                        f"Workflow step {index + 1} must be a mapping.",
+                    ))
+                    blocked_steps += 1
+                    continue
+                checked_steps += 1
+                tool = str(step.get("tool") or "").strip()
+                if tool and tool in blocked_tools:
+                    issues.append(_issue(
+                        "trial_tool_blocked",
+                        "pending",
+                        f"Workflow step {index + 1} references blocked trial tool `{tool}`.",
+                    ))
+                    blocked_steps += 1
+                    continue
+                if read_only_only and tool and tool not in allowed_tools:
+                    issues.append(_issue(
+                        "trial_tool_not_read_only",
+                        "pending",
+                        f"Workflow step {index + 1} references non-read-only trial tool `{tool}`.",
+                    ))
+                    blocked_steps += 1
+                    continue
+                path_issue = self._check_step_paths(step, trial_root, index, issue_prefix="trial")
+                if path_issue is not None:
+                    issues.append(path_issue)
+                    blocked_steps += 1
+
+        status = "passed"
+        if any(issue.severity == "reject" for issue in issues):
+            status = "failed"
+        elif blocked_steps:
+            status = "blocked"
+        return SandboxEvaluationResult(
+            status=status,
+            mode="trial",
+            read_only=read_only_only,
+            isolated_workspace=isolated_workspace,
+            checked_at=checked_at,
+            issues=[asdict(issue) for issue in issues],
+            replay_summary={
+                "steps_checked": checked_steps,
+                "blocked_steps": blocked_steps,
+                "sample_count": _sample_count(payload, self.config),
+            },
+            policy=self._trial_policy(),
         ).to_json()
 
     def _check_step_paths(
@@ -126,6 +235,8 @@ class SandboxEvaluator:
         step: dict[str, Any],
         sandbox_root: Path,
         index: int,
+        *,
+        issue_prefix: str = "sandbox",
     ) -> ValidationIssue | None:
         for key in ("path", "file", "file_path", "target_path", "pattern"):
             raw = step.get(key)
@@ -139,7 +250,7 @@ class SandboxEvaluator:
                 candidate.relative_to(sandbox_root)
             except (OSError, ValueError):
                 return _issue(
-                    "sandbox_path_outside_root",
+                    f"{issue_prefix}_path_outside_root",
                     "reject",
                     f"Workflow step {index + 1} path `{truncate_text(value, 80)}` leaves sandbox root.",
                 )
@@ -150,6 +261,30 @@ class SandboxEvaluator:
         raw_tools = getattr(sandbox_config, "read_only_tools", None) or []
         tools = {str(item).strip() for item in raw_tools if str(item).strip()}
         return tools or set(_DEFAULT_ALLOWED_TOOLS)
+
+    def _blocked_trial_tools(self) -> set[str]:
+        trial_config = getattr(self.config, "trial", None)
+        raw_tools = getattr(trial_config, "blocked_tools", None) or []
+        return {str(item).strip() for item in raw_tools if str(item).strip()}
+
+    def _trial_policy(self) -> dict[str, Any]:
+        trial_config = getattr(self.config, "trial", None)
+        return {
+            "enabled": bool(getattr(trial_config, "enabled", True)),
+            "isolated_workspace": bool(getattr(trial_config, "isolated_workspace", True)),
+            "read_only_tools_only": bool(getattr(trial_config, "read_only_tools_only", True)),
+            "allowed_tools": sorted(self._allowed_tools()),
+            "blocked_tools": sorted(self._blocked_trial_tools()),
+            "temp_dir_configured": bool(str(getattr(trial_config, "temp_dir", "") or "").strip()),
+        }
+
+    def _trial_temp_directory(self) -> tempfile.TemporaryDirectory[str]:
+        trial_config = getattr(self.config, "trial", None)
+        configured = str(getattr(trial_config, "temp_dir", "") or "").strip()
+        if configured:
+            base = ensure_dir(Path(configured))
+            return tempfile.TemporaryDirectory(prefix="originagent_trial_", dir=str(base))
+        return tempfile.TemporaryDirectory(prefix="originagent_trial_")
 
     def _cache_key(self, payload: dict[str, Any]) -> str:
         evolution = payload.get("evolution") if isinstance(payload.get("evolution"), dict) else {}
@@ -232,6 +367,23 @@ def sandbox_status_counts(workspace: Path) -> dict[str, int]:
         if status:
             counts[status] = counts.get(status, 0) + 1
     return counts
+
+
+def trial_policy_status(config: Any | None = None) -> dict[str, Any]:
+    sandbox_config = getattr(config, "sandbox", None)
+    trial_config = getattr(config, "trial", None)
+    raw_allowed = getattr(sandbox_config, "read_only_tools", None) or []
+    allowed_tools = {str(item).strip() for item in raw_allowed if str(item).strip()}
+    raw_blocked = getattr(trial_config, "blocked_tools", None) or []
+    blocked_tools = {str(item).strip() for item in raw_blocked if str(item).strip()}
+    return {
+        "enabled": bool(getattr(trial_config, "enabled", True)),
+        "isolated_workspace": bool(getattr(trial_config, "isolated_workspace", True)),
+        "read_only_tools_only": bool(getattr(trial_config, "read_only_tools_only", True)),
+        "allowed_tools": sorted(allowed_tools or set(_DEFAULT_ALLOWED_TOOLS)),
+        "blocked_tools": sorted(blocked_tools),
+        "temp_dir_configured": bool(str(getattr(trial_config, "temp_dir", "") or "").strip()),
+    }
 
 
 def _sample_count(payload: dict[str, Any], config: Any | None) -> int:

@@ -246,7 +246,7 @@ class RuntimeIntrospectionService:
             from OriginAgent.agent.evolution import AUTO_EVOLUTION_ORIGIN
             from OriginAgent.agent.evolution_feedback import feedback_status
             from OriginAgent.agent.evolution_outcomes import EvolutionOutcomeStore
-            from OriginAgent.agent.evolution_sandbox import sandbox_status_counts
+            from OriginAgent.agent.evolution_sandbox import sandbox_status_counts, trial_policy_status
             from OriginAgent.agent.evolution_snapshots import EvolutionSnapshotStore
 
             proposal_store = ReviewProposalStore(workspace)
@@ -288,6 +288,7 @@ class RuntimeIntrospectionService:
                 if decision:
                     promotion_gate_counts[decision] = promotion_gate_counts.get(decision, 0) + 1
             sandbox_counts = sandbox_status_counts(workspace)
+            trial_status = trial_policy_status(config)
             auto_verified = 0
             for record in applied_records:
                 payload = record.get("payload") if isinstance(record.get("payload"), dict) else {}
@@ -314,6 +315,7 @@ class RuntimeIntrospectionService:
                     "failed_workflow_proposals": sandbox_counts.get("failed", 0),
                     "blocked_workflow_proposals": sandbox_counts.get("blocked", 0),
                 },
+                "trial": trial_status,
             }
         except Exception:
             mode = str(getattr(config, "mode", "conservative") if config is not None else "conservative")
@@ -360,6 +362,14 @@ class RuntimeIntrospectionService:
                     "passed_workflow_proposals": 0,
                     "failed_workflow_proposals": 0,
                     "blocked_workflow_proposals": 0,
+                },
+                "trial": {
+                    "enabled": True,
+                    "isolated_workspace": True,
+                    "read_only_tools_only": True,
+                    "allowed_tools": ["glob", "grep", "read_file"],
+                    "blocked_tools": ["cron", "edit_file", "exec", "message", "spawn", "write_file"],
+                    "temp_dir_configured": False,
                 },
                 "skill_candidates_enabled": False,
                 "eligible_workflow_signals": 0,

@@ -237,6 +237,32 @@ class EvolutionSandboxConfig(Base):
     )
 
 
+class EvolutionTrialConfig(Base):
+    """Isolated trial-mode settings for verified evolution artifacts."""
+
+    enabled: bool = True
+    isolated_workspace: bool = Field(
+        default=True,
+        validation_alias=AliasChoices("isolatedWorkspace", "isolated_workspace"),
+        serialization_alias="isolatedWorkspace",
+    )
+    read_only_tools_only: bool = Field(
+        default=True,
+        validation_alias=AliasChoices("readOnlyToolsOnly", "read_only_tools_only"),
+        serialization_alias="readOnlyToolsOnly",
+    )
+    blocked_tools: list[str] = Field(
+        default_factory=lambda: ["write_file", "edit_file", "exec", "message", "cron", "spawn"],
+        validation_alias=AliasChoices("blockedTools", "blocked_tools"),
+        serialization_alias="blockedTools",
+    )
+    temp_dir: str = Field(
+        default="",
+        validation_alias=AliasChoices("tempDir", "temp_dir"),
+        serialization_alias="tempDir",
+    )
+
+
 class EvolutionConfig(Base):
     """Governed self-evolution observability settings."""
 
@@ -360,6 +386,11 @@ class EvolutionConfig(Base):
         default_factory=EvolutionSandboxConfig,
         validation_alias=AliasChoices("sandbox"),
         serialization_alias="sandbox",
+    )
+    trial: EvolutionTrialConfig = Field(
+        default_factory=EvolutionTrialConfig,
+        validation_alias=AliasChoices("trial"),
+        serialization_alias="trial",
     )
     feedback_calibration_enabled: bool = Field(
         default=True,
