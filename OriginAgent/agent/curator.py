@@ -17,6 +17,12 @@ from loguru import logger
 
 from OriginAgent.agent.background_review import ReviewProposal, ReviewProposalStore
 from OriginAgent.agent.domain_packs import DomainPackManager
+from OriginAgent.agent.evolution import (
+    AUTO_EVOLUTION_ORIGIN,
+    OpportunitySignalStore,
+    build_workflow_payload_from_signal,
+    evolution_allows_workflow_proposals,
+)
 from OriginAgent.agent.facts import CONFLICT_CATEGORIES, FactStore, normalize_fact_content
 from OriginAgent.agent.memory import redact_memory_text
 from OriginAgent.agent.skill_lifecycle import _read_skill_markdown
@@ -40,6 +46,10 @@ class CuratorResult:
     status: str
     proposals_written: int = 0
     reason: str = ""
+    evolution_candidates: int = 0
+    evolution_proposals_prepared: int = 0
+    evolution_dry_run: bool = True
+    evolution_mode: str = "conservative"
 
 
 class CuratorService:
@@ -51,24 +61,34 @@ class CuratorService:
         workspace: Path,
         config: Any | None = None,
         config_loader: Any | None = None,
+        evolution_config: Any | None = None,
+        evolution_config_loader: Any | None = None,
         domain_pack_manager: DomainPackManager | None = None,
         store: ReviewProposalStore | None = None,
     ) -> None:
         self.workspace = Path(workspace)
         self._config = config
         self._config_loader = config_loader
+        self._evolution_config = evolution_config
+        self._evolution_config_loader = evolution_config_loader
         self.domain_pack_manager = domain_pack_manager
         self.store = store or ReviewProposalStore(self.workspace)
+        self.opportunity_signals = OpportunitySignalStore(self.workspace)
         self._running = 0
         self._last_result: CuratorResult | None = None
+        self._last_evolution_scan: dict[str, Any] = {}
 
     def refresh_config(self) -> None:
-        if self._config_loader is None:
-            return
-        try:
-            self._config = self._config_loader()
-        except Exception:
-            logger.exception("Failed to refresh curator config")
+        if self._config_loader is not None:
+            try:
+                self._config = self._config_loader()
+            except Exception:
+                logger.exception("Failed to refresh curator config")
+        if self._evolution_config_loader is not None:
+            try:
+                self._evolution_config = self._evolution_config_loader()
+            except Exception:
+                logger.exception("Failed to refresh evolution config")
 
     @property
     def config(self) -> Any:
@@ -81,6 +101,14 @@ class CuratorService:
     @property
     def enabled(self) -> bool:
         return bool(getattr(self.config, "enabled", False))
+
+    @property
+    def evolution_config(self) -> Any:
+        if self._evolution_config is None:
+            from OriginAgent.config.schema import EvolutionConfig
+
+            self._evolution_config = EvolutionConfig()
+        return self._evolution_config
 
     def runtime_status(self) -> dict[str, Any]:
         stats = self.store.stats(origin=CURATOR_ORIGIN)
@@ -108,9 +136,20 @@ class CuratorService:
 
         self._running += 1
         try:
+            self._last_evolution_scan = {}
             proposals = self._build_proposals(session_key=session_key, turn_id=turn_id)
             written = await asyncio.to_thread(self.store.append_many, proposals)
-            return self._remember(CuratorResult(status="ok", proposals_written=written))
+            if written:
+                self._mark_evolution_proposals_converted(proposals)
+            scan = dict(self._last_evolution_scan)
+            return self._remember(CuratorResult(
+                status="ok",
+                proposals_written=written,
+                evolution_candidates=int(scan.get("candidates", 0) or 0),
+                evolution_proposals_prepared=int(scan.get("prepared", 0) or 0),
+                evolution_dry_run=bool(scan.get("dry_run", True)),
+                evolution_mode=str(scan.get("mode") or "conservative"),
+            ))
         except Exception as exc:
             logger.exception("Curator review failed")
             return self._remember(CuratorResult(status="error", reason=str(exc)))
@@ -152,7 +191,86 @@ class CuratorService:
             return proposals
 
         add_all(self._fact_conflict_proposals(session_key=session_key, turn_id=turn_id, created_at=now))
+        if len(proposals) >= limit:
+            return proposals
+
+        add_all(self._evolution_workflow_proposals(
+            session_key=session_key,
+            turn_id=turn_id,
+            created_at=now,
+            limit=limit - len(proposals),
+        ))
         return proposals
+
+    def _evolution_workflow_proposals(
+        self,
+        *,
+        session_key: str,
+        turn_id: str,
+        created_at: str,
+        limit: int,
+    ) -> list[ReviewProposal]:
+        config = self.evolution_config
+        mode = str(getattr(config, "mode", "conservative") or "conservative")
+        dry_run = bool(getattr(config, "dry_run", True))
+        signals = self.opportunity_signals.select_workflow_candidates(config, limit=max(0, limit))
+        self._last_evolution_scan = {
+            "mode": mode,
+            "dry_run": dry_run,
+            "candidates": len(signals),
+            "prepared": 0,
+        }
+        if not signals or not evolution_allows_workflow_proposals(config):
+            return []
+
+        proposals: list[ReviewProposal] = []
+        for signal in signals:
+            payload = build_workflow_payload_from_signal(signal, config=config)
+            static_gate = payload.get("static_gate") if isinstance(payload.get("static_gate"), dict) else {}
+            if static_gate.get("decision") == "reject":
+                continue
+            evidence = []
+            for item in signal.evidence_sources[:_MAX_EVIDENCE]:
+                cursor = item.get("cursor")
+                timestamp = item.get("timestamp")
+                preview = str(item.get("preview") or "").strip()
+                evidence.append(
+                    f"cursor={cursor} timestamp={timestamp}: {preview}"
+                    if preview
+                    else f"cursor={cursor} timestamp={timestamp}"
+                )
+            proposals.append(self._proposal(
+                session_key=session_key,
+                turn_id=turn_id,
+                created_at=created_at,
+                proposal_type="workflow",
+                domain_id="core",
+                title=f"Create workflow from repeated pattern `{signal.target_key}`",
+                content=(
+                    "A high-scoring opportunity signal suggests this repeated interaction "
+                    "should become a reviewed manual workflow."
+                ),
+                rationale=(
+                    "Curator converted an auto-evolution opportunity signal into a normal "
+                    "workflow review proposal. StaticGate results are attached in payload.static_gate."
+                ),
+                evidence=evidence,
+                payload=payload,
+                confidence=max(0.1, min(0.99, signal.priority_score)),
+                origin=AUTO_EVOLUTION_ORIGIN,
+            ))
+        self._last_evolution_scan["prepared"] = len(proposals)
+        return proposals
+
+    def _mark_evolution_proposals_converted(self, proposals: list[ReviewProposal]) -> None:
+        for proposal in proposals:
+            if proposal.origin != AUTO_EVOLUTION_ORIGIN:
+                continue
+            payload = proposal.payload if isinstance(proposal.payload, dict) else {}
+            evolution = payload.get("evolution") if isinstance(payload.get("evolution"), dict) else {}
+            opportunity_id = str(evolution.get("opportunity_id") or "")
+            if opportunity_id:
+                self.opportunity_signals.mark_converted(opportunity_id, proposal.id)
 
     def _workspace_skill_records(self, review_lookup: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
         loader = SkillsLoader(self.workspace, domain_pack_manager=self.domain_pack_manager)
@@ -660,10 +778,11 @@ class CuratorService:
         evidence: list[str],
         payload: dict[str, Any],
         confidence: float,
+        origin: str = CURATOR_ORIGIN,
     ) -> ReviewProposal:
         return ReviewProposal(
             id=f"review_{uuid.uuid4().hex}",
-            origin=CURATOR_ORIGIN,
+            origin=origin,
             created_at=created_at,
             session_key=session_key or _CURATOR_SESSION_KEY,
             turn_id=turn_id,
@@ -685,11 +804,13 @@ class CuratorService:
 
 
 class _ProposalDeduper:
+    _ORIGINS = {CURATOR_ORIGIN, AUTO_EVOLUTION_ORIGIN}
+
     def __init__(self, records: list[dict[str, Any]]) -> None:
         self._pending: set[tuple[str, str]] = set()
         self._terminal: set[tuple[str, str, str]] = set()
         for record in records:
-            if str(record.get("origin") or "background_review") != CURATOR_ORIGIN:
+            if str(record.get("origin") or "background_review") not in self._ORIGINS:
                 continue
             payload = record.get("payload") if isinstance(record.get("payload"), dict) else {}
             curator_key = str(payload.get("curator_key") or "").strip()

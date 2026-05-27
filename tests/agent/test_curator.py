@@ -9,7 +9,14 @@ import pytest
 
 from OriginAgent.agent.background_review import ReviewProposal, ReviewProposalStore
 from OriginAgent.agent.curator import CURATOR_ORIGIN, CuratorService
+from OriginAgent.agent.evolution import (
+    AUTO_EVOLUTION_ORIGIN,
+    SIGNAL_KIND_WORKFLOW,
+    OpportunitySignalCandidate,
+    OpportunitySignalStore,
+)
 from OriginAgent.agent.skills import SkillsLoader
+from OriginAgent.config.schema import EvolutionConfig
 
 
 def _review_proposal(proposal_id: str, *, origin: str = "background_review", proposal_type: str = "skill") -> ReviewProposal:
@@ -25,6 +32,33 @@ def _review_proposal(proposal_id: str, *, origin: str = "background_review", pro
         content="Proposal content.",
         rationale="Proposal rationale.",
     )
+
+
+def _seed_workflow_signal(
+    workspace: Path,
+    *,
+    target: str = "deploy backend checks",
+    cursors: tuple[int, ...] = (1, 2, 3),
+) -> OpportunitySignalStore:
+    store = OpportunitySignalStore(workspace)
+    store.upsert_candidates([
+        OpportunitySignalCandidate(
+            kind=SIGNAL_KIND_WORKFLOW,
+            target_key=target,
+            title=f"Workflow candidate: {target}",
+            summary=f"Repeated workflow-like request pattern: {target}",
+            evidence_sources=[
+                {
+                    "cursor": cursor,
+                    "session_key": f"websocket:chat-{cursor}",
+                    "timestamp": f"2026-05-2{cursor}T10:00:00+00:00",
+                    "preview": "Every time we deploy backend, run tests and check logs.",
+                }
+                for cursor in cursors
+            ],
+        )
+    ])
+    return store
 
 
 def _write_skill(
@@ -180,6 +214,76 @@ async def test_curator_writes_proposals_off_event_loop_thread(tmp_path: Path) ->
     assert result.proposals_written == 1
     assert store.thread_id is not None
     assert store.thread_id != loop_thread_id
+
+
+@pytest.mark.asyncio
+async def test_curator_default_evolution_dry_run_does_not_write_workflow_proposals(tmp_path: Path) -> None:
+    review_store = ReviewProposalStore(tmp_path)
+    signal_store = _seed_workflow_signal(tmp_path)
+    service = CuratorService(
+        workspace=tmp_path,
+        config=SimpleNamespace(enabled=True, max_proposals_per_run=12),
+        store=review_store,
+    )
+
+    result = await service.review_workspace(session_key="websocket:chat-a", turn_id="turn-1")
+
+    assert result.status == "ok"
+    assert result.proposals_written == 0
+    assert result.evolution_candidates == 1
+    assert result.evolution_proposals_prepared == 0
+    assert result.evolution_dry_run is True
+    assert result.evolution_mode == "conservative"
+    assert review_store.list_records(origin=AUTO_EVOLUTION_ORIGIN, limit=10) == []
+    signals = signal_store.read_all()
+    assert len(signals) == 1
+    assert signals[0].status == "open"
+    assert signals[0].converted_proposal_id is None
+
+
+@pytest.mark.asyncio
+async def test_curator_curated_evolution_writes_workflow_proposal_and_marks_signal_converted(
+    tmp_path: Path,
+) -> None:
+    review_store = ReviewProposalStore(tmp_path)
+    signal_store = _seed_workflow_signal(tmp_path)
+    service = CuratorService(
+        workspace=tmp_path,
+        config=SimpleNamespace(enabled=True, max_proposals_per_run=12),
+        evolution_config=EvolutionConfig(mode="curated", dry_run=False),
+        store=review_store,
+    )
+
+    first = await service.review_workspace(session_key="websocket:chat-a", turn_id="turn-1")
+    second = await service.review_workspace(session_key="websocket:chat-a", turn_id="turn-2")
+    records = review_store.list_records(origin=AUTO_EVOLUTION_ORIGIN, limit=10)
+
+    assert first.status == "ok"
+    assert first.proposals_written == 1
+    assert first.evolution_candidates == 1
+    assert first.evolution_proposals_prepared == 1
+    assert first.evolution_dry_run is False
+    assert first.evolution_mode == "curated"
+    assert second.proposals_written == 0
+    assert len(records) == 1
+    record = records[0]
+    assert record["proposal_type"] == "workflow"
+    assert record["origin"] == AUTO_EVOLUTION_ORIGIN
+    assert record["status"] == "pending"
+    assert record["can_apply"] is True
+    payload = record["payload"]
+    assert payload["evolution"]["origin"] == AUTO_EVOLUTION_ORIGIN
+    assert payload["evolution"]["opportunity_id"]
+    assert payload["evolution"]["seen_count"] == 3
+    assert payload["static_gate"] == {
+        "decision": "pass",
+        "issues": [],
+        "issue_counts": {},
+    }
+    signals = signal_store.read_all()
+    assert len(signals) == 1
+    assert signals[0].status == "converted"
+    assert signals[0].converted_proposal_id == record["id"]
 
 
 def test_curator_promote_apply_verifies_and_activates_workspace_skill(tmp_path: Path) -> None:
