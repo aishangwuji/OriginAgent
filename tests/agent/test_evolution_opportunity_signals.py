@@ -144,6 +144,7 @@ async def test_runtime_status_reports_evolution_defaults(tmp_path) -> None:
         "rollback_status_counts": {},
         "last_outcome_at": None,
     }
+    assert result["evolution"]["promotion_gate_decision_counts"] == {}
     assert result["evolution"]["static_gate_issue_counts"] == {}
     assert result["evolution"]["sandbox"] == {
         "enabled": True,
@@ -325,6 +326,16 @@ async def test_runtime_status_counts_pending_auto_evolution_proposals(tmp_path) 
                     ],
                     "issue_counts": {"pending": 1},
                 },
+                "promotion_gate": {
+                    "decision": "manual_review",
+                    "suggested_action": "review_required",
+                    "risk_level": "low",
+                    "reasons": ["Sandbox blocked one or more workflow steps."],
+                    "static_gate_decision": "requires_manual_review",
+                    "sandbox_status": "blocked",
+                    "auto_verify_eligible": False,
+                    "issue_counts": {"pending": 1},
+                },
                 "sandbox": {"status": "blocked"},
             },
         )
@@ -343,5 +354,6 @@ async def test_runtime_status_counts_pending_auto_evolution_proposals(tmp_path) 
     assert evolution["dry_run"] is False
     assert evolution["pending_proposals_from_evolution"] == 1
     assert evolution["proposal_count_from_evolution"] == 1
+    assert evolution["promotion_gate_decision_counts"] == {"manual_review": 1}
     assert evolution["static_gate_issue_counts"] == {"pending": 1}
     assert evolution["sandbox"]["blocked_workflow_proposals"] == 1

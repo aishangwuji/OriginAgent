@@ -250,6 +250,10 @@ class RuntimeIntrospectionService:
             proposal_store = ReviewProposalStore(workspace)
             proposal_stats = proposal_store.stats(origin=AUTO_EVOLUTION_ORIGIN)
             outcome_stats = EvolutionOutcomeStore(workspace).stats()
+            recent_records = proposal_store.list_records(
+                origin=AUTO_EVOLUTION_ORIGIN,
+                limit=50,
+            )
             applied_records = proposal_store.list_records(
                 origin=AUTO_EVOLUTION_ORIGIN,
                 status="applied",
@@ -263,13 +267,22 @@ class RuntimeIntrospectionService:
             issue_counts: dict[str, int] = {}
             for record in pending_records:
                 payload = record.get("payload") if isinstance(record.get("payload"), dict) else {}
-                gate = payload.get("static_gate") if isinstance(payload.get("static_gate"), dict) else {}
+                gate = payload.get("promotion_gate") if isinstance(payload.get("promotion_gate"), dict) else {}
+                if not gate:
+                    gate = payload.get("static_gate") if isinstance(payload.get("static_gate"), dict) else {}
                 counts = gate.get("issue_counts") if isinstance(gate.get("issue_counts"), dict) else {}
                 for severity, count in counts.items():
                     try:
                         issue_counts[str(severity)] = issue_counts.get(str(severity), 0) + int(count)
                     except (TypeError, ValueError):
                         continue
+            promotion_gate_counts: dict[str, int] = {}
+            for record in recent_records:
+                payload = record.get("payload") if isinstance(record.get("payload"), dict) else {}
+                gate = payload.get("promotion_gate") if isinstance(payload.get("promotion_gate"), dict) else {}
+                decision = str(gate.get("decision") or "").strip()
+                if decision:
+                    promotion_gate_counts[decision] = promotion_gate_counts.get(decision, 0) + 1
             sandbox_counts = sandbox_status_counts(workspace)
             auto_verified = 0
             for record in applied_records:
@@ -287,6 +300,7 @@ class RuntimeIntrospectionService:
                 "proposal_count_from_evolution": proposal_stats["proposal_count"],
                 "auto_verified_workflows_count": auto_verified,
                 "outcomes": outcome_stats,
+                "promotion_gate_decision_counts": promotion_gate_counts,
                 "static_gate_issue_counts": issue_counts,
                 "sandbox": {
                     "enabled": bool(getattr(getattr(config, "sandbox", None), "enabled", True)),
@@ -317,6 +331,7 @@ class RuntimeIntrospectionService:
                     "rollback_status_counts": {},
                     "last_outcome_at": None,
                 },
+                "promotion_gate_decision_counts": {},
                 "static_gate_issue_counts": {},
                 "sandbox": {
                     "enabled": True,

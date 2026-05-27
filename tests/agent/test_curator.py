@@ -17,6 +17,7 @@ from OriginAgent.agent.evolution import (
     OpportunitySignalCandidate,
     OpportunitySignalStore,
 )
+from OriginAgent.agent.evolution_outcomes import EvolutionOutcomeStore
 from OriginAgent.agent.skills import SkillsLoader
 from OriginAgent.agent.tools.runtime_status import RuntimeStatusTool
 from OriginAgent.config.schema import EvolutionConfig
@@ -323,6 +324,19 @@ async def test_curator_curated_evolution_writes_workflow_proposal_and_marks_sign
         "issue_counts": {},
     }
     assert payload["sandbox"]["status"] == "passed"
+    assert payload["promotion_gate"] == {
+        "decision": "pass",
+        "suggested_action": "review_required",
+        "risk_level": "low",
+        "reasons": ["Workflow passed the gate but still requires review by current policy."],
+        "static_gate_decision": "pass",
+        "sandbox_status": "passed",
+        "auto_verify_eligible": False,
+        "issue_counts": {},
+    }
+    outcome_stats = EvolutionOutcomeStore(tmp_path).stats()
+    assert outcome_stats["outcome_type_counts"]["gate_evaluated"] == 1
+    assert outcome_stats["gate_decision_counts"] == {"pass": 2}
     signals = signal_store.read_all()
     assert len(signals) == 1
     assert signals[0].status == "converted"
@@ -382,6 +396,8 @@ async def test_curator_auto_verifies_low_risk_workflow_without_activating(tmp_pa
     record = records[0]
     assert record["status"] == "applied"
     assert record["proposal_type"] == "workflow"
+    assert record["payload"]["promotion_gate"]["auto_verify_eligible"] is True
+    assert record["payload"]["promotion_gate"]["suggested_action"] == "auto_apply"
     assert record["applied_workflow_path"] == "workflows/deploy-backend-checks/workflow.yaml"
     workflow_file = tmp_path / "workflows" / "deploy-backend-checks" / "workflow.yaml"
     data = yaml.safe_load(workflow_file.read_text(encoding="utf-8"))
@@ -406,6 +422,11 @@ async def test_curator_auto_verifies_low_risk_workflow_without_activating(tmp_pa
         evolution_config=service.evolution_config,
     ).execute()
     assert status["evolution"]["auto_verified_workflows_count"] == 1
+    assert status["evolution"]["promotion_gate_decision_counts"] == {"pass": 1}
+    assert status["evolution"]["outcomes"]["promotion_status_counts"] == {
+        "proposed": 1,
+        "verified": 1,
+    }
     assert status["evolution"]["sandbox"]["passed_workflow_proposals"] == 1
 
 
@@ -462,6 +483,9 @@ async def test_curator_generates_read_only_skill_proposal_when_enabled(tmp_path:
         "issues": [],
         "issue_counts": {},
     }
+    assert record["payload"]["promotion_gate"]["decision"] == "pass"
+    assert record["payload"]["promotion_gate"]["suggested_action"] == "review_required"
+    assert record["payload"]["promotion_gate"]["sandbox_status"] == "not_applicable"
 
     applied = review_store.apply(record["id"], reason="reviewed")
     assert applied.ok is True

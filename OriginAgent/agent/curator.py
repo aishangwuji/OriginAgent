@@ -30,6 +30,7 @@ from OriginAgent.agent.evolution_outcomes import (
     proposal_outcome_context,
     safe_append_outcome,
 )
+from OriginAgent.agent.evolution_gate import PromotionGate
 from OriginAgent.agent.evolution_sandbox import SandboxEvaluator
 from OriginAgent.agent.facts import CONFLICT_CATEGORIES, FactStore, normalize_fact_content
 from OriginAgent.agent.memory import redact_memory_text
@@ -86,6 +87,7 @@ class CuratorService:
         self.opportunity_signals = OpportunitySignalStore(self.workspace)
         self.outcomes = EvolutionOutcomeStore(self.workspace)
         self.sandbox = SandboxEvaluator(self.workspace, self.evolution_config)
+        self.promotion_gate = PromotionGate(self.evolution_config)
         self._running = 0
         self._last_result: CuratorResult | None = None
         self._last_evolution_scan: dict[str, Any] = {}
@@ -100,6 +102,7 @@ class CuratorService:
             try:
                 self._evolution_config = self._evolution_config_loader()
                 self.sandbox = SandboxEvaluator(self.workspace, self._evolution_config)
+                self.promotion_gate = PromotionGate(self._evolution_config)
             except Exception:
                 logger.exception("Failed to refresh evolution config")
 
@@ -254,8 +257,10 @@ class CuratorService:
         for signal in signals:
             payload = build_workflow_payload_from_signal(signal, config=config)
             payload["sandbox"] = self.sandbox.evaluate_workflow_payload(payload)
-            static_gate = payload.get("static_gate") if isinstance(payload.get("static_gate"), dict) else {}
-            if static_gate.get("decision") == "reject":
+            gate = self.promotion_gate.evaluate(payload, proposal_type="workflow")
+            payload["promotion_gate"] = gate.to_json()
+            if gate.decision == "blocked":
+                self._trace_gate_evaluated(payload, proposal_type="workflow")
                 continue
             evidence = []
             for item in signal.evidence_sources[:_MAX_EVIDENCE]:
@@ -315,8 +320,10 @@ class CuratorService:
         proposals: list[ReviewProposal] = []
         for signal in signals:
             payload = build_skill_payload_from_signal(signal, config=config)
-            static_gate = payload.get("static_gate") if isinstance(payload.get("static_gate"), dict) else {}
-            if static_gate.get("decision") == "reject":
+            gate = self.promotion_gate.evaluate(payload, proposal_type="skill")
+            payload["promotion_gate"] = gate.to_json()
+            if gate.decision == "blocked":
+                self._trace_gate_evaluated(payload, proposal_type="skill")
                 continue
             evidence = _evidence_lines(signal.evidence_sources)
             proposals.append(self._proposal(
@@ -364,6 +371,19 @@ class CuratorService:
                 continue
             record = proposal.to_json()
             context = proposal_outcome_context(record)
+            gate = payload_gate(record)
+            safe_append_outcome(
+                self.outcomes,
+                "gate_evaluated",
+                **context,
+                feedback_score=proposal.confidence,
+                metadata={
+                    "proposal_type": proposal.proposal_type,
+                    "domain_id": proposal.domain_id,
+                    "origin": proposal.origin,
+                    "promotion_gate": gate,
+                },
+            )
             safe_append_outcome(
                 self.outcomes,
                 "proposal_generated",
@@ -379,6 +399,28 @@ class CuratorService:
                 },
             )
 
+    def _trace_gate_evaluated(self, payload: dict[str, Any], *, proposal_type: str) -> None:
+        evolution = payload.get("evolution") if isinstance(payload.get("evolution"), dict) else {}
+        gate = payload_gate({"payload": payload})
+        sandbox = payload.get("sandbox") if isinstance(payload.get("sandbox"), dict) else {}
+        safe_append_outcome(
+            self.outcomes,
+            "gate_evaluated",
+            opportunity_id=str(evolution.get("opportunity_id") or ""),
+            artifact_type=proposal_type,
+            artifact_name=str(payload.get("workflow_name") or payload.get("skill_name") or ""),
+            artifact_path=str(payload.get("subject_path") or ""),
+            gate_decision=str(gate.get("decision") or ""),
+            sandbox_status=str(sandbox.get("status") or ""),
+            feedback_score=_safe_float(evolution.get("priority_score")),
+            metadata={
+                "proposal_type": proposal_type,
+                "origin": AUTO_EVOLUTION_ORIGIN,
+                "promotion_gate": gate,
+                "blocked_before_proposal": True,
+            },
+        )
+
     def _maybe_auto_verify_workflow(self, proposal: ReviewProposal) -> bool:
         config = self.evolution_config
         if not bool(getattr(config, "auto_verify_workflows", False)):
@@ -389,22 +431,8 @@ class CuratorService:
         evolution = payload.get("evolution") if isinstance(payload.get("evolution"), dict) else {}
         if str(evolution.get("origin") or "") != AUTO_EVOLUTION_ORIGIN:
             return False
-        static_gate = payload.get("static_gate") if isinstance(payload.get("static_gate"), dict) else {}
-        sandbox = payload.get("sandbox") if isinstance(payload.get("sandbox"), dict) else {}
-        if static_gate.get("decision") != "pass" or static_gate.get("issues"):
-            return False
-        if sandbox.get("status") != "passed":
-            return False
-        if str(evolution.get("risk_level") or "low") != "low":
-            return False
-        try:
-            priority = float(evolution.get("priority_score") or 0)
-            seen_count = int(evolution.get("seen_count") or 0)
-        except (TypeError, ValueError):
-            return False
-        if round(priority, 2) < float(getattr(config, "workflow_auto_verify_threshold", 0.9) or 0.9):
-            return False
-        if seen_count < int(getattr(config, "workflow_auto_verify_min_seen_count", 5) or 5):
+        gate = payload.get("promotion_gate") if isinstance(payload.get("promotion_gate"), dict) else {}
+        if not bool(gate.get("auto_verify_eligible")):
             return False
 
         now = datetime.now(timezone.utc).isoformat()
@@ -1090,6 +1118,19 @@ def _redact_payload(value: Any) -> Any:
     if isinstance(value, dict):
         return {str(key): _redact_payload(item) for key, item in value.items()}
     return value
+
+
+def payload_gate(record: dict[str, Any]) -> dict[str, Any]:
+    payload = record.get("payload") if isinstance(record.get("payload"), dict) else {}
+    gate = payload.get("promotion_gate") if isinstance(payload.get("promotion_gate"), dict) else {}
+    return dict(gate)
+
+
+def _safe_float(value: Any) -> float | None:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def _skill_content_hash(name: str, description: str, body: str) -> str:

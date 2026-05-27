@@ -212,6 +212,7 @@ def proposal_outcome_context(record: dict[str, Any], event: dict[str, Any] | Non
         or ""
     )
     artifact_path = str(artifact.get("path") or payload.get("subject_path") or "")
+    promotion_gate = payload.get("promotion_gate") if isinstance(payload.get("promotion_gate"), dict) else {}
     static_gate = payload.get("static_gate") if isinstance(payload.get("static_gate"), dict) else {}
     sandbox = payload.get("sandbox") if isinstance(payload.get("sandbox"), dict) else {}
     return {
@@ -220,7 +221,7 @@ def proposal_outcome_context(record: dict[str, Any], event: dict[str, Any] | Non
         "artifact_type": artifact_type,
         "artifact_name": artifact_name,
         "artifact_path": artifact_path,
-        "gate_decision": str(static_gate.get("decision") or ""),
+        "gate_decision": str(promotion_gate.get("decision") or static_gate.get("decision") or ""),
         "sandbox_status": str(sandbox.get("status") or ""),
     }
 
