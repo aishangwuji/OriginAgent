@@ -322,6 +322,20 @@ class EvolutionConfig(Base):
         validation_alias=AliasChoices("dependencyStaleCleanupEnabled", "dependency_stale_cleanup_enabled"),
         serialization_alias="dependencyStaleCleanupEnabled",
     )
+    health_history_retention_days: int = Field(
+        default=90,
+        ge=1,
+        le=3650,
+        validation_alias=AliasChoices("healthHistoryRetentionDays", "health_history_retention_days"),
+        serialization_alias="healthHistoryRetentionDays",
+    )
+    max_health_history_snapshots: int = Field(
+        default=100,
+        ge=0,
+        le=10_000,
+        validation_alias=AliasChoices("maxHealthHistorySnapshots", "max_health_history_snapshots"),
+        serialization_alias="maxHealthHistorySnapshots",
+    )
     workflow_min_seen_count: int = Field(
         default=3,
         ge=1,

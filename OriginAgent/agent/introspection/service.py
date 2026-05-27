@@ -247,6 +247,10 @@ class RuntimeIntrospectionService:
             from OriginAgent.agent.evolution_dependencies import EvolutionDependencyStore
             from OriginAgent.agent.evolution_feedback import feedback_status
             from OriginAgent.agent.evolution_health import evolution_health_score
+            from OriginAgent.agent.evolution_health_history import (
+                EvolutionHealthHistoryStore,
+                health_history_policy_status,
+            )
             from OriginAgent.agent.evolution_outcomes import EvolutionOutcomeStore
             from OriginAgent.agent.evolution_sandbox import sandbox_status_counts, trial_policy_status
             from OriginAgent.agent.evolution_snapshots import EvolutionSnapshotStore
@@ -294,6 +298,7 @@ class RuntimeIntrospectionService:
             sandbox_counts = sandbox_status_counts(workspace)
             trial_status = trial_policy_status(config)
             trial_log_store = EvolutionTrialLogStore(workspace)
+            health_history_store = EvolutionHealthHistoryStore(workspace)
             health = evolution_health_score(
                 outcome_stats=outcome_stats,
                 dependency_stats=dependency_stats,
@@ -322,6 +327,10 @@ class RuntimeIntrospectionService:
                 "dependencies": dependency_stats,
                 "feedback_calibration": feedback_stats,
                 "evolution_health": health,
+                "evolution_health_history": {
+                    **health_history_policy_status(config),
+                    **health_history_store.summary(),
+                },
                 "promotion_gate_decision_counts": promotion_gate_counts,
                 "static_gate_issue_counts": issue_counts,
                 "sandbox": {
@@ -399,6 +408,17 @@ class RuntimeIntrospectionService:
                         "+ trial isolation enforced",
                     ],
                 },
+                "evolution_health_history": {
+                    "health_history_retention_days": 90,
+                    "max_health_history_snapshots": 100,
+                    "snapshot_count": 0,
+                    "latest_score": None,
+                    "latest_level": None,
+                    "previous_score": None,
+                    "score_delta": 0,
+                    "trend": "unknown",
+                    "last_snapshot_at": None,
+                },
                 "promotion_gate_decision_counts": {},
                 "static_gate_issue_counts": {},
                 "sandbox": {
@@ -457,6 +477,12 @@ def _evolution_maintenance_policy(config: Any | None) -> dict[str, Any]:
         ),
         "dependency_stale_cleanup_enabled": bool(
             getattr(config, "dependency_stale_cleanup_enabled", True) if config is not None else True
+        ),
+        "health_history_retention_days": int(
+            getattr(config, "health_history_retention_days", 90) if config is not None else 90
+        ),
+        "max_health_history_snapshots": int(
+            getattr(config, "max_health_history_snapshots", 100) if config is not None else 100
         ),
         "trial_log_retention_days": int(
             getattr(trial, "trial_log_retention_days", 30) if trial is not None else 30

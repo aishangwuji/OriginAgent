@@ -8,7 +8,11 @@ from typing import Any
 from loguru import logger
 
 from OriginAgent.agent.evolution_dependencies import EvolutionDependencyStore
+from OriginAgent.agent.evolution_feedback import feedback_status
+from OriginAgent.agent.evolution_health import evolution_health_score
+from OriginAgent.agent.evolution_health_history import EvolutionHealthHistoryStore
 from OriginAgent.agent.evolution_outcomes import EvolutionOutcomeStore
+from OriginAgent.agent.evolution_sandbox import sandbox_status_counts, trial_policy_status
 from OriginAgent.agent.evolution_trial_logs import EvolutionTrialLogStore
 
 
@@ -30,6 +34,14 @@ def run_evolution_maintenance(
     dependency_cleanup_enabled = bool(
         getattr(config, "dependency_stale_cleanup_enabled", True) if config is not None else True
     )
+    health_history_retention_days = max(
+        1,
+        int(getattr(config, "health_history_retention_days", 90) if config is not None else 90),
+    )
+    max_health_history_snapshots = max(
+        0,
+        int(getattr(config, "max_health_history_snapshots", 100) if config is not None else 100),
+    )
     trial_config = getattr(config, "trial", None) if config is not None else None
     trial_log_retention_days = max(
         1,
@@ -42,10 +54,13 @@ def run_evolution_maintenance(
     outcomes = EvolutionOutcomeStore(Path(workspace))
     dependencies = EvolutionDependencyStore(Path(workspace))
     trial_logs = EvolutionTrialLogStore(Path(workspace))
+    health_history = EvolutionHealthHistoryStore(Path(workspace))
     maintenance: dict[str, Any] = {
         "outcome_retention_days": outcome_retention_days,
         "outcome_archive_enabled": outcome_archive_enabled,
         "dependency_stale_cleanup_enabled": dependency_cleanup_enabled,
+        "health_history_retention_days": health_history_retention_days,
+        "max_health_history_snapshots": max_health_history_snapshots,
         "trial_log_retention_days": trial_log_retention_days,
         "max_retained_trial_logs": max_retained_trial_logs,
     }
@@ -68,4 +83,28 @@ def run_evolution_maintenance(
         )
     except Exception:
         logger.exception("Evolution trial log retention failed")
+    try:
+        health = evolution_health_score(
+            outcome_stats=outcomes.stats(),
+            dependency_stats=dependencies.stats(),
+            feedback_stats=feedback_status(Path(workspace), config),
+            sandbox_counts=sandbox_status_counts(Path(workspace)),
+            trial_status=trial_policy_status(config),
+        )
+        snapshot = health_history.append_snapshot(
+            health,
+            metadata={"source": "evolution_maintenance"},
+        )
+        maintenance["health_history_snapshot"] = {
+            "snapshot_id": snapshot.get("snapshot_id"),
+            "score": snapshot.get("score"),
+            "level": snapshot.get("level"),
+            "timestamp": snapshot.get("timestamp"),
+        }
+        maintenance["health_history_retention"] = health_history.enforce_retention(
+            max_records=max_health_history_snapshots,
+            retention_days=health_history_retention_days,
+        )
+    except Exception:
+        logger.exception("Evolution health history maintenance failed")
     return maintenance

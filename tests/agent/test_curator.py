@@ -20,6 +20,7 @@ from OriginAgent.agent.evolution import (
 )
 from OriginAgent.agent.evolution_dependencies import EvolutionDependencyStore
 from OriginAgent.agent.evolution_feedback import EvolutionFeedbackCalibrator
+from OriginAgent.agent.evolution_health_history import EvolutionHealthHistoryStore
 from OriginAgent.agent.evolution_outcomes import EvolutionOutcomeStore
 from OriginAgent.agent.evolution_snapshots import EvolutionRollbackService, EvolutionSnapshotStore
 from OriginAgent.agent.skills import SkillsLoader
@@ -688,6 +689,9 @@ async def test_curator_runs_evolution_retention_and_dependency_cleanup(tmp_path:
     assert result.status == "ok"
     assert maintenance["outcome_retention"]["archived_count"] == 1
     assert maintenance["dependency_cleanup"]["removed_edges"] == 1
+    assert maintenance["health_history_snapshot"]["score"] == 100
+    assert maintenance["health_history_retention"]["retained_count"] == 1
+    assert EvolutionHealthHistoryStore(tmp_path).summary()["snapshot_count"] == 1
     assert outcomes.stats()["outcome_type_counts"] == {"promoted": 1}
     assert outcomes.stats()["archive"]["archived_outcome_count"] == 1
     assert archive_lines[0]["record"]["event_id"] == old_event["event_id"]

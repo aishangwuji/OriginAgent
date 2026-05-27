@@ -21,6 +21,7 @@ from OriginAgent.agent.evolution import (
 )
 from OriginAgent.agent.evolution_sandbox import SandboxEvaluator
 from OriginAgent.agent.evolution_feedback import EvolutionFeedbackCalibrator
+from OriginAgent.agent.evolution_health_history import EvolutionHealthHistoryStore
 from OriginAgent.agent.evolution_trial import TrialRunner
 from OriginAgent.agent.evolution_trial_logs import EvolutionTrialLogStore
 from OriginAgent.agent.evolution_outcomes import EvolutionOutcomeStore
@@ -270,6 +271,8 @@ async def test_runtime_status_reports_evolution_defaults(tmp_path) -> None:
         "outcome_retention_days": 90,
         "outcome_archive_enabled": True,
         "dependency_stale_cleanup_enabled": True,
+        "health_history_retention_days": 90,
+        "max_health_history_snapshots": 100,
         "trial_log_retention_days": 30,
         "max_retained_trial_logs": 10,
     }
@@ -305,6 +308,17 @@ async def test_runtime_status_reports_evolution_defaults(tmp_path) -> None:
             "+ no dependency conflicts",
             "+ trial isolation enforced",
         ],
+    }
+    assert result["evolution"]["evolution_health_history"] == {
+        "health_history_retention_days": 90,
+        "max_health_history_snapshots": 100,
+        "snapshot_count": 0,
+        "latest_score": None,
+        "latest_level": None,
+        "previous_score": None,
+        "score_delta": 0,
+        "trend": "unknown",
+        "last_snapshot_at": None,
     }
     assert result["evolution"]["promotion_gate_decision_counts"] == {}
     assert result["evolution"]["static_gate_issue_counts"] == {}
@@ -418,6 +432,38 @@ def test_trial_log_store_truncates_outputs_and_enforces_dual_retention(tmp_path)
     assert records[-1]["opportunity_id"] == "opp_11"
     assert stats["trial_log_count"] == 10
     assert stats["truncated_step_output_count"] == 10
+
+
+def test_health_history_store_reports_trend_and_enforces_retention(tmp_path) -> None:
+    store = EvolutionHealthHistoryStore(tmp_path)
+    now = datetime(2026, 5, 27, 12, 0, tzinfo=timezone.utc)
+
+    store.append_snapshot(
+        {"score": 95, "level": "healthy", "reasons": ["+ stable"]},
+        timestamp=now - timedelta(days=40),
+    )
+    store.append_snapshot(
+        {"score": 90, "level": "healthy", "reasons": ["+ stable"]},
+        timestamp=now - timedelta(days=1),
+    )
+    store.append_snapshot(
+        {"score": 75, "level": "degraded", "reasons": ["- blocked trial output"]},
+        metadata={"source": "test"},
+        timestamp=now,
+    )
+
+    summary = store.summary()
+    retention = store.enforce_retention(max_records=2, retention_days=30, now=now)
+    retained = store.read_all()
+
+    assert summary["snapshot_count"] == 3
+    assert summary["latest_score"] == 75
+    assert summary["previous_score"] == 90
+    assert summary["score_delta"] == -15
+    assert summary["trend"] == "degrading"
+    assert retention["removed_count"] == 1
+    assert retention["retained_count"] == 2
+    assert [record["score"] for record in retained] == [90, 75]
 
 
 @pytest.mark.asyncio
