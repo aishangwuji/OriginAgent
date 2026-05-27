@@ -30,6 +30,27 @@ learning:
 
 `mode=conservative` and `dry_run=true` are the safe defaults. They allow observability without automatically filling the review queue.
 
+## Governed Evolution Control Plane
+
+v2.0 introduces `EvolutionControlPlane` as the single service boundary for governed evolution operations. It does not expand autonomy. It centralizes the same safe capabilities that already existed in v1.x:
+
+- read-only status and artifact inspection.
+- structured action discovery.
+- read-only previews.
+- guarded writes behind policy.
+- dashboard-ready summaries for `originagent_runtime_status`.
+
+The control plane has a small permission model:
+
+- `read`: status, signal/proposal listing, inspection, recommendations, schema validation, report generation.
+- `preview`: non-mutating previews for any operator action.
+- `maintenance`: maintenance and feedback calibration writes.
+- `override`: signal suppression/resume and trial retry writes.
+- `rollback`: governed artifact rollback writes.
+- `apply`: always false in the control plane; review/apply remains a separate human review path.
+
+`originagent_runtime_status.evolution.control_plane` reports the active control-plane version, manual override state, action count, and hard safety boundaries. `originagent_runtime_status.evolution.read_model` provides a compact UI/API-oriented view over signals, proposals, health, dependencies, and snapshots.
+
 ## Control Plane Writes
 
 The `my` tool exposes a small evolution control plane:
@@ -40,6 +61,8 @@ The `my` tool exposes a small evolution control plane:
 - `force_cleanup`
 - `run_feedback_calibration`
 - `retry_trial`
+- `rollback_artifact`
+- `execute_evolution_action`
 
 These are write actions. They are disabled unless `learning.evolution.allow_manual_override=true`.
 
@@ -50,6 +73,8 @@ Evolution manual override is disabled. Set evolution.allow_manual_override=true 
 ```
 
 This protects the evolution state from accidental mutation by ordinary task execution or by the model itself. Administrators should enable manual override only for an intentional maintenance session, then disable it again.
+
+`execute_evolution_action` is the generic v2.0 write entry point. It accepts an object value with `action_kind` plus action-specific fields such as `target_id`, `artifact_type`, `artifact_name`, `snapshot_id`, `fixtures`, `reason`, or `force_cleanup`. It still goes through the same policy checks as the named actions.
 
 ## Operator Loop
 
@@ -87,12 +112,17 @@ These recommendations are redacted summaries. They do not expose raw trial outpu
 
 The `my` tool also exposes read-only operator views:
 
+- `evolution_status`.
+- `list_evolution_actions`.
+- `list_evolution_signals`.
+- `list_evolution_proposals`.
 - `inspect_signal` with `key=<opportunity_id>`.
 - `inspect_evolution_proposal` with `key=<proposal_id>`.
 - `explain_evolution_health`.
 - `list_evolution_recommendations`.
 - `preview_evolution_action`.
 - `generate_evolution_report`.
+- `validate_evolution_schema`.
 
 These read actions do not require `allow_manual_override`.
 
@@ -111,6 +141,8 @@ Preview is strictly read-only. It reports what a real action would do, but it do
 `generate_evolution_report` returns a Markdown report for a bounded period, defaulting to seven days. The report summarizes health, signals, recent outcomes, sandbox/review/rollback counts, recommendations, and the hard safety boundaries.
 
 The write action `retry_trial` does require `allow_manual_override=true` and only applies to pending auto-evolution workflow proposals. Retry trial re-runs the read-only isolated trial with optional fixtures, updates the proposal payload with compact trial evidence, and writes a `trial_retried` outcome event.
+
+`rollback_artifact` also requires `allow_manual_override=true`. Previewing rollback is read-only and reports the selected snapshot and dependency blockers. Executing rollback delegates to the governed rollback service, writes rollback outcomes, and still refuses dependency-breaking rollback unless force is explicitly supplied.
 
 ## Trial Isolation
 
@@ -201,6 +233,8 @@ Maintenance now includes a compact `schema_validation` summary with:
 
 Operator previews and reports surface the same summary so administrators can see schema drift before running maintenance or applying proposals. Schema validation is an observability guardrail; it does not activate artifacts, rewrite stores, or approve proposals.
 
+In v2.0, `validate_evolution_schema` is also exposed as a read action through the control plane and `my`. It returns the same validator result without mutating any governed store.
+
 ## Release Candidate Checklist
 
 Before treating governed evolution as ready for v2.0 control-plane work, the v1.5 release candidate should pass this end-to-end loop:
@@ -237,6 +271,9 @@ The main observability surface is `originagent_runtime_status.evolution`.
 
 Important fields:
 
+- `control_plane`: v2.0 service metadata, manual override state, action count, and safety boundaries.
+- `policy`: current mode, dry-run state, manual override state, and permission summary.
+- `read_model`: compact dashboard-ready signal/proposal/health/dependency/snapshot summary.
 - `mode`, `dry_run`: current evolution posture.
 - `opportunity_signals_count`, `eligible_workflow_signals`, `eligible_skill_signals`: signal inventory.
 - `pending_proposals_from_evolution`: review queue pressure.
@@ -247,5 +284,6 @@ Important fields:
 - `evolution_health_history`: bounded score trend.
 - `operator_recommendations`: bounded, redacted operational suggestions.
 - `maintenance`: configured retention and cleanup policy.
+- `schema_validation`: compact release-contract validation summary.
 
 These fields are redacted summaries. They do not expose raw trial outputs, raw evidence text, commands, secrets, paths outside the governed stores, or hidden audit internals.

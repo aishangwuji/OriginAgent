@@ -85,14 +85,21 @@ class MyTool(Tool):
         "force_cleanup",
         "run_feedback_calibration",
         "retry_trial",
+        "rollback_artifact",
+        "execute_evolution_action",
     })
     EVOLUTION_READ_ACTIONS = frozenset({
+        "evolution_status",
+        "list_evolution_actions",
+        "list_evolution_signals",
+        "list_evolution_proposals",
         "inspect_signal",
         "inspect_evolution_proposal",
         "explain_evolution_health",
         "list_evolution_recommendations",
         "preview_evolution_action",
         "generate_evolution_report",
+        "validate_evolution_schema",
     })
 
     @classmethod
@@ -156,7 +163,9 @@ class MyTool(Tool):
             "force_cleanup, run_feedback_calibration, inspect_signal, "
             "inspect_evolution_proposal, explain_evolution_health, "
             "list_evolution_recommendations, preview_evolution_action, "
-            "generate_evolution_report, retry_trial.\n"
+            "generate_evolution_report, retry_trial, rollback_artifact, "
+            "evolution_status, list_evolution_actions, list_evolution_signals, "
+            "list_evolution_proposals, validate_evolution_schema.\n"
             "- check (no key): full config overview — start here.\n"
             "- check (key): drill into a value. Dot-paths allowed "
             "(e.g. '_last_usage.prompt_tokens', 'web_config.enable').\n"
@@ -201,13 +210,20 @@ class MyTool(Tool):
                         "run_maintenance",
                         "force_cleanup",
                         "run_feedback_calibration",
+                        "evolution_status",
+                        "list_evolution_actions",
+                        "list_evolution_signals",
+                        "list_evolution_proposals",
                         "inspect_signal",
                         "inspect_evolution_proposal",
                         "explain_evolution_health",
                         "list_evolution_recommendations",
                         "preview_evolution_action",
                         "generate_evolution_report",
+                        "validate_evolution_schema",
                         "retry_trial",
+                        "rollback_artifact",
+                        "execute_evolution_action",
                     ],
                     "description": "Action to perform",
                 },
@@ -412,27 +428,42 @@ class MyTool(Tool):
     # -- evolution control plane --
 
     def _evolution_read(self, action: str, key: str | None, value: Any = None) -> str:
-        from OriginAgent.agent.evolution_operator import EvolutionOperator
+        plane = self._evolution_control_plane()
 
-        operator = EvolutionOperator(self._workspace_path(), self._evolution_config())
+        if action == "evolution_status":
+            result = plane.status()
+            self._audit("evolution_read", "evolution_status")
+            return f"Evolution control-plane status: {result!r}"
+        if action == "list_evolution_actions":
+            result = plane.list_actions()
+            self._audit("evolution_read", "list_evolution_actions")
+            return f"Evolution control-plane actions: {result!r}"
+        if action == "list_evolution_signals":
+            result = plane.list_signals(**self._signal_filters(value))
+            self._audit("evolution_read", "list_evolution_signals")
+            return f"Evolution signals: {result!r}"
+        if action == "list_evolution_proposals":
+            result = plane.list_proposals(**self._proposal_filters(value))
+            self._audit("evolution_read", "list_evolution_proposals")
+            return f"Evolution proposals: {result!r}"
         if action == "inspect_signal":
             if err := self._validate_key(key, "opportunity_id"):
                 return err
-            result = operator.inspect_signal(key or "")
+            result = plane.inspect_signal(key or "")
             self._audit("evolution_read", f"inspect_signal {key}")
             return f"Evolution signal inspection: {result!r}"
         if action == "inspect_evolution_proposal":
             if err := self._validate_key(key, "proposal_id"):
                 return err
-            result = operator.inspect_proposal(key or "")
+            result = plane.inspect_proposal(key or "")
             self._audit("evolution_read", f"inspect_evolution_proposal {key}")
             return f"Evolution proposal inspection: {result!r}"
         if action == "explain_evolution_health":
-            result = operator.explain_health()
+            result = plane.explain_health()
             self._audit("evolution_read", "explain_evolution_health")
             return f"Evolution health explanation: {result!r}"
         if action == "list_evolution_recommendations":
-            result = operator.list_recommendations()
+            result = plane.list_recommendations()
             self._audit("evolution_read", "list_evolution_recommendations")
             return f"Evolution recommendations: {result!r}"
         if action == "preview_evolution_action":
@@ -445,7 +476,7 @@ class MyTool(Tool):
             fixtures = value.get("fixtures")
             if fixtures is not None and not isinstance(fixtures, dict):
                 return "Error: preview_evolution_action fixtures must be an object mapping relative paths to text"
-            result = operator.preview_action(
+            result = plane.preview_action(
                 action_kind,
                 target_id=target_id,
                 reason=self._evolution_reason(value),
@@ -454,6 +485,10 @@ class MyTool(Tool):
                     for path, content in (fixtures or {}).items()
                 },
                 force_cleanup=bool(value.get("force_cleanup", False)),
+                artifact_type=str(value.get("artifact_type") or ""),
+                artifact_name=str(value.get("artifact_name") or ""),
+                snapshot_id=str(value.get("snapshot_id") or ""),
+                period_days=self._coerce_period_days(value.get("period_days"), default=7),
             )
             self._audit("evolution_read", f"preview_evolution_action {action_kind} {target_id}")
             return f"Evolution action preview: {result!r}"
@@ -465,73 +500,145 @@ class MyTool(Tool):
                 period_days = self._coerce_period_days(value, default=7)
             elif key:
                 period_days = self._coerce_period_days(key, default=7)
-            report = operator.generate_report(period_days=period_days)
+            report = plane.generate_report(period_days=period_days)
             self._audit("evolution_read", f"generate_evolution_report {period_days}d")
             return f"Evolution report:\n\n{report}"
+        if action == "validate_evolution_schema":
+            result = plane.execute_action("validate_schema")
+            self._audit("evolution_read", "validate_evolution_schema")
+            return f"Evolution schema validation: {result!r}"
         return f"Unknown action: {action}"
 
     def _evolution_control(self, action: str, key: str | None, value: Any) -> str:
-        config = self._evolution_config()
-        if not bool(getattr(config, "allow_manual_override", False)):
-            return EVOLUTION_MANUAL_OVERRIDE_DISABLED
+        plane = self._evolution_control_plane()
+        if action == "execute_evolution_action":
+            if not isinstance(value, dict):
+                return "Error: execute_evolution_action value must be an object"
+            action_kind = str(value.get("action_kind") or value.get("operation") or "").strip()
+            if not action_kind:
+                return "Error: execute_evolution_action requires value.action_kind"
+            result = plane.execute_action(
+                action_kind,
+                **self._control_plane_kwargs(key, value),
+            )
+            self._audit("evolution_control", f"execute_evolution_action {action_kind}")
+            if not result.get("allowed", True) and result.get("message") == EVOLUTION_MANUAL_OVERRIDE_DISABLED:
+                return EVOLUTION_MANUAL_OVERRIDE_DISABLED
+            return f"Evolution control-plane action completed: {result!r}"
 
-        workspace = self._workspace_path()
         if action == "retry_trial":
             if err := self._validate_key(key, "proposal_id"):
                 return err
-            from OriginAgent.agent.evolution_operator import EvolutionOperator
-
             fixtures = value.get("fixtures") if isinstance(value, dict) else None
             if fixtures is not None and not isinstance(fixtures, dict):
                 return "Error: retry_trial fixtures must be an object mapping relative paths to text"
-            result = EvolutionOperator(workspace, config).retry_trial(
-                key or "",
-                fixtures={
-                    str(path): str(content)
-                    for path, content in (fixtures or {}).items()
-                },
-                actor="my",
-            ).to_json()
+            result = plane.execute_action(
+                action,
+                target_id=key or "",
+                fixtures={str(path): str(content) for path, content in (fixtures or {}).items()},
+            )
             self._audit("evolution_control", f"retry_trial {key}")
+            if not result.get("allowed", True) and result.get("message") == EVOLUTION_MANUAL_OVERRIDE_DISABLED:
+                return EVOLUTION_MANUAL_OVERRIDE_DISABLED
             return f"Evolution trial retry completed: {result!r}"
 
         if action == "run_feedback_calibration":
-            from OriginAgent.agent.evolution_feedback import EvolutionFeedbackCalibrator
-
-            result = EvolutionFeedbackCalibrator(workspace, config).run().to_json()
+            result = plane.execute_action(action)
             self._audit("evolution_control", "run_feedback_calibration")
+            if not result.get("allowed", True) and result.get("message") == EVOLUTION_MANUAL_OVERRIDE_DISABLED:
+                return EVOLUTION_MANUAL_OVERRIDE_DISABLED
             return f"Evolution feedback calibration completed: {result!r}"
 
         if action in {"run_maintenance", "force_cleanup"}:
-            from OriginAgent.agent.evolution_maintenance import run_evolution_maintenance
-
-            result = run_evolution_maintenance(
-                workspace,
-                config,
-                force_cleanup=(action == "force_cleanup"),
-            )
+            result = plane.execute_action(action, force_cleanup=(action == "force_cleanup"))
             self._audit("evolution_control", action)
+            if not result.get("allowed", True) and result.get("message") == EVOLUTION_MANUAL_OVERRIDE_DISABLED:
+                return EVOLUTION_MANUAL_OVERRIDE_DISABLED
             return f"Evolution maintenance completed: {result!r}"
+
+        if action == "rollback_artifact":
+            if not isinstance(value, dict):
+                return "Error: rollback_artifact value must be an object with artifact_type and artifact_name"
+            result = plane.execute_action(action, **self._control_plane_kwargs(key, value))
+            self._audit("evolution_control", "rollback_artifact")
+            if not result.get("allowed", True) and result.get("message") == EVOLUTION_MANUAL_OVERRIDE_DISABLED:
+                return EVOLUTION_MANUAL_OVERRIDE_DISABLED
+            return f"Evolution rollback completed: {result!r}"
 
         if err := self._validate_key(key, "opportunity_id"):
             return err
         reason = self._evolution_reason(value)
-        from OriginAgent.agent.evolution import OpportunitySignalStore
-
-        store = OpportunitySignalStore(workspace)
         if action == "suppress_signal":
-            signal = store.suppress_signal(key or "", reason=reason)
+            result = plane.execute_action(action, target_id=key or "", reason=reason)
             self._audit("evolution_control", f"suppress_signal {key}")
-            if signal is None:
+            if not result.get("allowed", True) and result.get("message") == EVOLUTION_MANUAL_OVERRIDE_DISABLED:
+                return EVOLUTION_MANUAL_OVERRIDE_DISABLED
+            signal = result.get("result") if isinstance(result.get("result"), dict) else None
+            if not signal:
                 return f"Error: opportunity signal '{key}' not found or cannot be suppressed"
-            return f"Suppressed opportunity signal {signal.opportunity_id}: {signal.suppression_reason}"
+            return f"Suppressed opportunity signal {signal.get('opportunity_id')}: {signal.get('suppression_reason')}"
         if action == "resume_signal":
-            signal = store.resume_signal(key or "", reason=reason)
+            result = plane.execute_action(action, target_id=key or "", reason=reason)
             self._audit("evolution_control", f"resume_signal {key}")
-            if signal is None:
+            if not result.get("allowed", True) and result.get("message") == EVOLUTION_MANUAL_OVERRIDE_DISABLED:
+                return EVOLUTION_MANUAL_OVERRIDE_DISABLED
+            signal = result.get("result") if isinstance(result.get("result"), dict) else None
+            if not signal:
                 return f"Error: opportunity signal '{key}' not found or is not suppressed"
-            return f"Resumed opportunity signal {signal.opportunity_id}"
+            return f"Resumed opportunity signal {signal.get('opportunity_id')}"
         return f"Unknown action: {action}"
+
+    def _evolution_control_plane(self) -> Any:
+        from OriginAgent.agent.evolution_control_plane import EvolutionControlPlane
+
+        return EvolutionControlPlane(self._workspace_path(), self._evolution_config())
+
+    def _control_plane_kwargs(self, key: str | None, value: dict[str, Any]) -> dict[str, Any]:
+        fixtures = value.get("fixtures")
+        if fixtures is not None and not isinstance(fixtures, dict):
+            fixtures = {}
+        return {
+            "target_id": str(value.get("target_id") or key or "").strip(),
+            "reason": self._evolution_reason(value),
+            "fixtures": {str(path): str(content) for path, content in (fixtures or {}).items()},
+            "force_cleanup": bool(value.get("force_cleanup", False)),
+            "artifact_type": str(value.get("artifact_type") or ""),
+            "artifact_name": str(value.get("artifact_name") or ""),
+            "snapshot_id": str(value.get("snapshot_id") or ""),
+            "period_days": self._coerce_period_days(value.get("period_days"), default=7),
+        }
+
+    @staticmethod
+    def _signal_filters(value: Any) -> dict[str, Any]:
+        if not isinstance(value, dict):
+            return {}
+        filters: dict[str, Any] = {}
+        if value.get("status") is not None:
+            filters["status"] = str(value.get("status") or "")
+        if value.get("kind") is not None:
+            filters["kind"] = str(value.get("kind") or "")
+        if value.get("limit") is not None:
+            try:
+                filters["limit"] = int(value.get("limit"))
+            except (TypeError, ValueError):
+                pass
+        return filters
+
+    @staticmethod
+    def _proposal_filters(value: Any) -> dict[str, Any]:
+        if not isinstance(value, dict):
+            return {}
+        filters: dict[str, Any] = {}
+        if value.get("status") is not None:
+            filters["status"] = str(value.get("status") or "")
+        if value.get("proposal_type") is not None:
+            filters["proposal_type"] = str(value.get("proposal_type") or "")
+        if value.get("limit") is not None:
+            try:
+                filters["limit"] = int(value.get("limit"))
+            except (TypeError, ValueError):
+                pass
+        return filters
 
     def _evolution_config(self) -> Any | None:
         if _has_real_attr(self._loop, "evolution_config"):
