@@ -54,3 +54,12 @@ Grant IDs and raw grant metadata are not returned in user-facing errors.
 Runtime profiles provide conservative defaults for `default`, `household_safe`,
 `local_dev`, and `automation`. They do not bypass capability gates, protected
 paths, grant enforcement, tool audit behavior, or device real-mode freeze.
+
+## Governed Evolution
+
+Self-evolution controls are documented in
+[`governed_evolution.md`](./governed_evolution.md). The important security
+boundary is that evolution can observe, propose, evaluate, trial, verify, and
+record feedback, but it does not automatically activate workflows or skills.
+Trial execution is isolated and read-only, and evolution control-plane writes
+through `my` require `learning.evolution.allow_manual_override=true`.
