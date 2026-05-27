@@ -21,6 +21,7 @@ from OriginAgent.agent.evolution import (
 )
 from OriginAgent.agent.evolution_sandbox import SandboxEvaluator
 from OriginAgent.agent.evolution_feedback import EvolutionFeedbackCalibrator
+from OriginAgent.agent.evolution_trial_logs import EvolutionTrialLogStore
 from OriginAgent.agent.evolution_outcomes import EvolutionOutcomeStore
 from OriginAgent.agent.background_review import ReviewProposal, ReviewProposalStore
 from OriginAgent.agent.tools.runtime_status import RuntimeStatusTool
@@ -268,6 +269,8 @@ async def test_runtime_status_reports_evolution_defaults(tmp_path) -> None:
         "outcome_retention_days": 90,
         "outcome_archive_enabled": True,
         "dependency_stale_cleanup_enabled": True,
+        "trial_log_retention_days": 30,
+        "max_retained_trial_logs": 10,
     }
     assert result["evolution"]["snapshots"] == {
         "snapshot_count": 0,
@@ -318,6 +321,15 @@ async def test_runtime_status_reports_evolution_defaults(tmp_path) -> None:
         "blocked_tools": ["cron", "edit_file", "exec", "message", "spawn", "write_file"],
         "temp_dir_configured": False,
     }
+    assert result["evolution"]["trial_logs"] == {
+        "max_step_output_chars": 2000,
+        "max_retained_trial_logs": 10,
+        "trial_log_retention_days": 30,
+        "trial_log_count": 0,
+        "trial_log_status_counts": {},
+        "last_trial_at": None,
+        "truncated_step_output_count": 0,
+    }
     assert result["evolution"]["skill_candidates_enabled"] is False
     assert result["evolution"]["eligible_workflow_signals"] == 0
     assert result["evolution"]["eligible_skill_signals"] == 0
@@ -347,13 +359,64 @@ def test_outcome_store_archives_old_noncritical_events(tmp_path) -> None:
     assert result["archived_count"] == 1
     assert result["retained_count"] == 2
     assert result["archive_path"] == "memory/archive/evolution_outcomes_archive.jsonl"
-    assert [record["event_id"] for record in records] == [
-        old_promoted["event_id"],
-        recent_signal["event_id"],
+    assert [(record["type"], record["opportunity_id"]) for record in records] == [
+        ("promoted", old_promoted["opportunity_id"]),
+        ("signal_updated", recent_signal["opportunity_id"]),
     ]
     assert archive["archived_outcome_count"] == 1
     assert archive["last_archived_at"] is not None
     assert archived_lines[0]["record"]["event_id"] == old_signal["event_id"]
+
+
+def test_trial_log_store_truncates_outputs_and_enforces_dual_retention(tmp_path) -> None:
+    store = EvolutionTrialLogStore(tmp_path)
+    now = datetime(2026, 5, 27, 12, 0, tzinfo=timezone.utc)
+    old = now - timedelta(days=40)
+    long_output = "x" * 64
+
+    store.append_log(
+        opportunity_id="opp_old",
+        artifact_type="workflow",
+        artifact_name="old-workflow",
+        status="passed",
+        step_logs=[{"index": 1, "tool": "read_file", "status": "passed", "output": long_output}],
+        max_step_output_chars=12,
+        timestamp=old,
+    )
+    for index in range(12):
+        store.append_log(
+            opportunity_id=f"opp_{index}",
+            artifact_type="workflow",
+            artifact_name=f"workflow-{index}",
+            status="passed" if index % 2 else "blocked",
+            step_logs=[
+                {
+                    "index": 1,
+                    "title": "Read",
+                    "tool": "read_file",
+                    "status": "passed",
+                    "output": long_output,
+                }
+            ],
+            max_step_output_chars=12,
+            timestamp=now - timedelta(days=12 - index),
+        )
+
+    first_record = store.read_all()[0]
+    retention = store.enforce_retention(max_records=10, retention_days=30, now=now)
+    records = store.read_all()
+    stats = store.stats()
+
+    assert first_record["step_logs"][0]["output"] == "x" * 12
+    assert first_record["step_logs"][0]["output_chars"] == 64
+    assert first_record["step_logs"][0]["output_truncated"] is True
+    assert retention["retained_count"] == 10
+    assert retention["removed_count"] == 3
+    assert len(records) == 10
+    assert records[0]["opportunity_id"] == "opp_2"
+    assert records[-1]["opportunity_id"] == "opp_11"
+    assert stats["trial_log_count"] == 10
+    assert stats["truncated_step_output_count"] == 10
 
 
 @pytest.mark.asyncio

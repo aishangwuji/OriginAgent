@@ -9,6 +9,7 @@ from loguru import logger
 
 from OriginAgent.agent.evolution_dependencies import EvolutionDependencyStore
 from OriginAgent.agent.evolution_outcomes import EvolutionOutcomeStore
+from OriginAgent.agent.evolution_trial_logs import EvolutionTrialLogStore
 
 
 def run_evolution_maintenance(
@@ -29,12 +30,24 @@ def run_evolution_maintenance(
     dependency_cleanup_enabled = bool(
         getattr(config, "dependency_stale_cleanup_enabled", True) if config is not None else True
     )
+    trial_config = getattr(config, "trial", None) if config is not None else None
+    trial_log_retention_days = max(
+        1,
+        int(getattr(trial_config, "trial_log_retention_days", 30) if trial_config is not None else 30),
+    )
+    max_retained_trial_logs = max(
+        0,
+        int(getattr(trial_config, "max_retained_trial_logs", 10) if trial_config is not None else 10),
+    )
     outcomes = EvolutionOutcomeStore(Path(workspace))
     dependencies = EvolutionDependencyStore(Path(workspace))
+    trial_logs = EvolutionTrialLogStore(Path(workspace))
     maintenance: dict[str, Any] = {
         "outcome_retention_days": outcome_retention_days,
         "outcome_archive_enabled": outcome_archive_enabled,
         "dependency_stale_cleanup_enabled": dependency_cleanup_enabled,
+        "trial_log_retention_days": trial_log_retention_days,
+        "max_retained_trial_logs": max_retained_trial_logs,
     }
     try:
         maintenance["outcome_retention"] = outcomes.enforce_retention(
@@ -48,4 +61,11 @@ def run_evolution_maintenance(
             maintenance["dependency_cleanup"] = dependencies.prune_stale_references()
         except Exception:
             logger.exception("Evolution dependency cleanup failed")
+    try:
+        maintenance["trial_log_retention"] = trial_logs.enforce_retention(
+            max_records=max_retained_trial_logs,
+            retention_days=trial_log_retention_days,
+        )
+    except Exception:
+        logger.exception("Evolution trial log retention failed")
     return maintenance

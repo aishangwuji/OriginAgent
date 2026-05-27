@@ -261,6 +261,27 @@ class EvolutionTrialConfig(Base):
         validation_alias=AliasChoices("tempDir", "temp_dir"),
         serialization_alias="tempDir",
     )
+    max_step_output_chars: int = Field(
+        default=2000,
+        ge=100,
+        le=100_000,
+        validation_alias=AliasChoices("maxStepOutputChars", "max_step_output_chars"),
+        serialization_alias="maxStepOutputChars",
+    )
+    max_retained_trial_logs: int = Field(
+        default=10,
+        ge=0,
+        le=1000,
+        validation_alias=AliasChoices("maxRetainedTrialLogs", "max_retained_trial_logs"),
+        serialization_alias="maxRetainedTrialLogs",
+    )
+    trial_log_retention_days: int = Field(
+        default=30,
+        ge=1,
+        le=3650,
+        validation_alias=AliasChoices("trialLogRetentionDays", "trial_log_retention_days"),
+        serialization_alias="trialLogRetentionDays",
+    )
 
 
 class EvolutionConfig(Base):

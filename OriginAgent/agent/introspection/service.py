@@ -250,6 +250,7 @@ class RuntimeIntrospectionService:
             from OriginAgent.agent.evolution_outcomes import EvolutionOutcomeStore
             from OriginAgent.agent.evolution_sandbox import sandbox_status_counts, trial_policy_status
             from OriginAgent.agent.evolution_snapshots import EvolutionSnapshotStore
+            from OriginAgent.agent.evolution_trial_logs import EvolutionTrialLogStore, trial_log_policy_status
 
             proposal_store = ReviewProposalStore(workspace)
             proposal_stats = proposal_store.stats(origin=AUTO_EVOLUTION_ORIGIN)
@@ -292,6 +293,7 @@ class RuntimeIntrospectionService:
                     promotion_gate_counts[decision] = promotion_gate_counts.get(decision, 0) + 1
             sandbox_counts = sandbox_status_counts(workspace)
             trial_status = trial_policy_status(config)
+            trial_log_store = EvolutionTrialLogStore(workspace)
             health = evolution_health_score(
                 outcome_stats=outcome_stats,
                 dependency_stats=dependency_stats,
@@ -329,6 +331,10 @@ class RuntimeIntrospectionService:
                     "blocked_workflow_proposals": sandbox_counts.get("blocked", 0),
                 },
                 "trial": trial_status,
+                "trial_logs": {
+                    **trial_log_policy_status(config),
+                    **trial_log_store.stats(),
+                },
             }
         except Exception:
             mode = str(getattr(config, "mode", "conservative") if config is not None else "conservative")
@@ -409,6 +415,15 @@ class RuntimeIntrospectionService:
                     "blocked_tools": ["cron", "edit_file", "exec", "message", "spawn", "write_file"],
                     "temp_dir_configured": False,
                 },
+                "trial_logs": {
+                    "max_step_output_chars": 2000,
+                    "max_retained_trial_logs": 10,
+                    "trial_log_retention_days": 30,
+                    "trial_log_count": 0,
+                    "trial_log_status_counts": {},
+                    "last_trial_at": None,
+                    "truncated_step_output_count": 0,
+                },
                 "skill_candidates_enabled": False,
                 "eligible_workflow_signals": 0,
                 "eligible_skill_signals": 0,
@@ -432,6 +447,7 @@ def _session_count(sessions: Any) -> int:
 
 
 def _evolution_maintenance_policy(config: Any | None) -> dict[str, Any]:
+    trial = getattr(config, "trial", None) if config is not None else None
     return {
         "outcome_retention_days": int(
             getattr(config, "outcome_retention_days", 90) if config is not None else 90
@@ -441,5 +457,11 @@ def _evolution_maintenance_policy(config: Any | None) -> dict[str, Any]:
         ),
         "dependency_stale_cleanup_enabled": bool(
             getattr(config, "dependency_stale_cleanup_enabled", True) if config is not None else True
+        ),
+        "trial_log_retention_days": int(
+            getattr(trial, "trial_log_retention_days", 30) if trial is not None else 30
+        ),
+        "max_retained_trial_logs": int(
+            getattr(trial, "max_retained_trial_logs", 10) if trial is not None else 10
         ),
     }
