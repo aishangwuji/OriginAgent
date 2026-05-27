@@ -793,6 +793,59 @@ def test_evolution_operator_retries_trial_and_updates_proposal(tmp_path) -> None
     assert outcome_stats["outcome_type_counts"]["trial_retried"] == 1
 
 
+def test_evolution_operator_previews_actions_without_writing(tmp_path) -> None:
+    signal = OpportunitySignalStore(tmp_path).upsert_candidates([_candidate(cursors=(1, 2, 3))])[0]
+    payload = build_workflow_payload_from_signal(signal, config=EvolutionConfig())
+    payload["steps"] = [{"title": "Read fixture notes", "tool": "read_file", "path": "notes.txt"}]
+    ReviewProposalStore(tmp_path).append_many([
+        ReviewProposal(
+            id="review_auto_workflow_preview",
+            created_at="2026-05-20T10:00:00+00:00",
+            session_key="curator:system",
+            turn_id="turn-1",
+            origin=AUTO_EVOLUTION_ORIGIN,
+            proposal_type="workflow",
+            domain_id="core",
+            title="Create workflow",
+            content="Create a reviewed workflow.",
+            payload=payload,
+            confidence=signal.priority_score,
+        )
+    ])
+
+    operator = EvolutionOperator(tmp_path, EvolutionConfig())
+    suppress_preview = operator.preview_action(
+        "suppress_signal",
+        target_id=signal.opportunity_id,
+        reason="too noisy",
+    )
+    retry_preview = operator.preview_action(
+        "retry_trial",
+        target_id="review_auto_workflow_preview",
+        fixtures={"notes.txt": "Trial fixture notes."},
+    )
+    report = operator.generate_report(period_days=7)
+    record = ReviewProposalStore(tmp_path).get("review_auto_workflow_preview")
+    current_signal = OpportunitySignalStore(tmp_path).read_all()[0]
+    outcome_stats = EvolutionOutcomeStore(tmp_path).stats()
+
+    assert suppress_preview["will_write"] is False
+    assert suppress_preview["requires_manual_override"] is True
+    assert suppress_preview["preview"]["next_status"] == "suppressed"
+    assert retry_preview["will_write"] is False
+    assert retry_preview["target_type"] == "proposal"
+    assert retry_preview["preview"]["trial_gate_status"] == "passed"
+    assert retry_preview["preview"]["would_update_proposal_payload"] is True
+    assert record is not None
+    assert "trial" not in record["payload"]
+    assert "operator_insights" not in record["payload"]
+    assert current_signal.status == "open"
+    assert EvolutionTrialLogStore(tmp_path).read_all() == []
+    assert "trial_retried" not in outcome_stats["outcome_type_counts"]
+    assert report.startswith("# Evolution Operator Report")
+    assert "## Safety Boundaries" in report
+
+
 def test_sandbox_evaluator_reports_step_level_failures_without_execution(tmp_path) -> None:
     evaluator = SandboxEvaluator(tmp_path, EvolutionConfig())
 
@@ -895,3 +948,13 @@ async def test_runtime_status_counts_pending_auto_evolution_proposals(tmp_path) 
     }
     assert "sandbox_attention_needed" in recommendation_codes
     assert "pending_evolution_proposal" in recommendation_codes
+    proposal_rec = next(
+        item for item in evolution["operator_recommendations"]
+        if item["code"] == "pending_evolution_proposal"
+    )
+    assert proposal_rec["action_kind"] == "inspect_evolution_proposal"
+    assert proposal_rec["target_type"] == "proposal"
+    assert proposal_rec["target_id"] == "review_auto_workflow"
+    assert proposal_rec["requires_manual_override"] is False
+    assert proposal_rec["risk_level"] == "low"
+    assert proposal_rec["suggested_my_action"].startswith("my action=inspect_evolution_proposal")

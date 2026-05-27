@@ -20,6 +20,7 @@ from OriginAgent.agent.evolution import (
     build_workflow_payload_from_signal,
 )
 from OriginAgent.agent.evolution_outcomes import EvolutionOutcomeStore
+from OriginAgent.agent.evolution_trial_logs import EvolutionTrialLogStore
 from OriginAgent.config.schema import EvolutionConfig
 
 
@@ -1002,15 +1003,63 @@ class TestEvolutionControlPlane:
     @pytest.mark.asyncio
     async def test_evolution_read_actions_do_not_require_manual_override(self, tmp_path):
         signal = OpportunitySignalStore(tmp_path).upsert_candidates([_evolution_candidate()])[0]
+        proposal_id, _ = _append_retryable_workflow_proposal(tmp_path)
         loop = _make_mock_loop(workspace=tmp_path, evolution_config=EvolutionConfig())
         tool = _make_tool(loop)
 
         result = await tool.execute(action="inspect_signal", key=signal.opportunity_id)
         recommendations = await tool.execute(action="list_evolution_recommendations")
+        preview = await tool.execute(
+            action="preview_evolution_action",
+            key=proposal_id,
+            value={
+                "action_kind": "retry_trial",
+                "fixtures": {"notes.txt": "Trial notes."},
+            },
+        )
+        report = await tool.execute(
+            action="generate_evolution_report",
+            value={"period_days": 7},
+        )
 
         assert "Evolution signal inspection" in result
         assert "'found': True" in result
         assert "Evolution recommendations" in recommendations
+        assert "Evolution action preview" in preview
+        assert "'will_write': False" in preview
+        assert "'trial_gate_status': 'passed'" in preview
+        assert "Evolution report:" in report
+        assert "# Evolution Operator Report" in report
+        assert "## Safety Boundaries" in report
+
+    @pytest.mark.asyncio
+    async def test_preview_retry_trial_does_not_write_governed_state(self, tmp_path):
+        proposal_id, signal_id = _append_retryable_workflow_proposal(tmp_path)
+        loop = _make_mock_loop(workspace=tmp_path, evolution_config=EvolutionConfig())
+        tool = _make_tool(loop)
+
+        result = await tool.execute(
+            action="preview_evolution_action",
+            key=proposal_id,
+            value={
+                "action_kind": "retry_trial",
+                "fixtures": {"notes.txt": "Trial notes."},
+            },
+        )
+        record = ReviewProposalStore(tmp_path).get(proposal_id)
+        signal = OpportunitySignalStore(tmp_path).read_all()[0]
+        trial_logs = EvolutionTrialLogStore(tmp_path).read_all()
+        outcomes = EvolutionOutcomeStore(tmp_path).stats()
+
+        assert "Evolution action preview" in result
+        assert "'will_write': False" in result
+        assert record is not None
+        assert "trial" not in record["payload"]
+        assert "operator_insights" not in record["payload"]
+        assert signal.opportunity_id == signal_id
+        assert signal.status == "open"
+        assert trial_logs == []
+        assert "trial_retried" not in outcomes["outcome_type_counts"]
 
     @pytest.mark.asyncio
     async def test_suppress_and_resume_signal_when_manual_override_enabled(self, tmp_path):

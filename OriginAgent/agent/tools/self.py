@@ -91,6 +91,8 @@ class MyTool(Tool):
         "inspect_evolution_proposal",
         "explain_evolution_health",
         "list_evolution_recommendations",
+        "preview_evolution_action",
+        "generate_evolution_report",
     })
 
     @classmethod
@@ -153,14 +155,15 @@ class MyTool(Tool):
             "Actions: check, set, suppress_signal, resume_signal, run_maintenance, "
             "force_cleanup, run_feedback_calibration, inspect_signal, "
             "inspect_evolution_proposal, explain_evolution_health, "
-            "list_evolution_recommendations, retry_trial.\n"
+            "list_evolution_recommendations, preview_evolution_action, "
+            "generate_evolution_report, retry_trial.\n"
             "- check (no key): full config overview — start here.\n"
             "- check (key): drill into a value. Dot-paths allowed "
             "(e.g. '_last_usage.prompt_tokens', 'web_config.enable').\n"
             "- set (key, value): change only max_iterations, context_window_tokens, model, "
             "or store notes under a simple scratchpad key. "
             "Scratchpad keys persist across turns but not restarts.\n"
-            "- evolution inspect/explain/list actions are read-only operator views.\n"
+            "- evolution inspect/explain/list/preview/report actions are read-only operator views.\n"
             "- evolution control actions and retry_trial are writes and require "
             "learning.evolution.allow_manual_override=true.\n"
             "Key values: _current_iteration (current progress), "
@@ -202,6 +205,8 @@ class MyTool(Tool):
                         "inspect_evolution_proposal",
                         "explain_evolution_health",
                         "list_evolution_recommendations",
+                        "preview_evolution_action",
+                        "generate_evolution_report",
                         "retry_trial",
                     ],
                     "description": "Action to perform",
@@ -211,10 +216,12 @@ class MyTool(Tool):
                     "description": "Key to check or set. Dot-paths are allowed for check only. "
                     "For set, use max_iterations/context_window_tokens/model or a simple scratchpad key. "
                     "For suppress_signal/resume_signal/inspect_signal, use the opportunity_id. "
-                    "For inspect_evolution_proposal/retry_trial, use the proposal_id.",
+                    "For inspect_evolution_proposal/retry_trial, use the proposal_id. "
+                    "For preview_evolution_action, key can be the target id.",
                 },
                 "value": {
-                    "description": "New value (for set), or an optional reason string/object for evolution control actions.",
+                    "description": "New value (for set), an optional reason string/object for evolution control actions, "
+                    "or an object for preview_evolution_action/generate_evolution_report.",
                 },
             },
             "required": ["action"],
@@ -393,7 +400,7 @@ class MyTool(Tool):
         if action in ("inspect", "check"):
             return self._inspect(key)
         if action in self.EVOLUTION_READ_ACTIONS:
-            return self._evolution_read(action, key)
+            return self._evolution_read(action, key, value)
         if action in self.EVOLUTION_CONTROL_ACTIONS:
             return self._evolution_control(action, key, value)
         if not self._modify_allowed:
@@ -404,7 +411,7 @@ class MyTool(Tool):
 
     # -- evolution control plane --
 
-    def _evolution_read(self, action: str, key: str | None) -> str:
+    def _evolution_read(self, action: str, key: str | None, value: Any = None) -> str:
         from OriginAgent.agent.evolution_operator import EvolutionOperator
 
         operator = EvolutionOperator(self._workspace_path(), self._evolution_config())
@@ -428,6 +435,39 @@ class MyTool(Tool):
             result = operator.list_recommendations()
             self._audit("evolution_read", "list_evolution_recommendations")
             return f"Evolution recommendations: {result!r}"
+        if action == "preview_evolution_action":
+            if not isinstance(value, dict):
+                return "Error: preview_evolution_action value must be an object"
+            action_kind = str(value.get("action_kind") or value.get("operation") or "").strip()
+            if not action_kind:
+                return "Error: preview_evolution_action requires value.action_kind"
+            target_id = str(value.get("target_id") or key or "").strip()
+            fixtures = value.get("fixtures")
+            if fixtures is not None and not isinstance(fixtures, dict):
+                return "Error: preview_evolution_action fixtures must be an object mapping relative paths to text"
+            result = operator.preview_action(
+                action_kind,
+                target_id=target_id,
+                reason=self._evolution_reason(value),
+                fixtures={
+                    str(path): str(content)
+                    for path, content in (fixtures or {}).items()
+                },
+                force_cleanup=bool(value.get("force_cleanup", False)),
+            )
+            self._audit("evolution_read", f"preview_evolution_action {action_kind} {target_id}")
+            return f"Evolution action preview: {result!r}"
+        if action == "generate_evolution_report":
+            period_days = 7
+            if isinstance(value, dict):
+                period_days = self._coerce_period_days(value.get("period_days"), default=7)
+            elif value is not None:
+                period_days = self._coerce_period_days(value, default=7)
+            elif key:
+                period_days = self._coerce_period_days(key, default=7)
+            report = operator.generate_report(period_days=period_days)
+            self._audit("evolution_read", f"generate_evolution_report {period_days}d")
+            return f"Evolution report:\n\n{report}"
         return f"Unknown action: {action}"
 
     def _evolution_control(self, action: str, key: str | None, value: Any) -> str:
@@ -511,6 +551,15 @@ class MyTool(Tool):
         if isinstance(value, (str, int, float, bool)):
             return str(value)
         return ""
+
+    @staticmethod
+    def _coerce_period_days(value: Any, *, default: int) -> int:
+        if isinstance(value, bool):
+            return default
+        try:
+            return max(1, min(int(value), 90))
+        except (TypeError, ValueError):
+            return default
 
     # -- inspect --
 

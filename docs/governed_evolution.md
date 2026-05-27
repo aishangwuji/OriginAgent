@@ -71,7 +71,19 @@ Auto-evolution proposals include:
 - pending auto-evolution proposals should be reviewed.
 - repeated negative feedback suggests suppressing a signal.
 
-These recommendations are redacted summaries. They do not expose raw trial output or raw evidence text.
+In v1.4 these recommendations are structured operator actions. Each item includes:
+
+- `code`: stable recommendation identifier.
+- `severity`: `info`, `warning`, or stronger review signal.
+- `action_kind`: concrete operator action such as `inspect_evolution_proposal`, `retry_trial`, `suppress_signal`, or `run_maintenance`.
+- `target_type`: `proposal`, `signal`, `maintenance`, `health`, or `system`.
+- `target_id`: proposal id, opportunity id, or empty for system actions.
+- `requires_manual_override`: whether the real action writes governed evolution state.
+- `risk_level`: compact operator risk summary.
+- `preview`: short human-readable impact description.
+- `suggested_my_action`: the corresponding `my` command shape.
+
+These recommendations are redacted summaries. They do not expose raw trial output or raw evidence text, and they never execute actions by themselves.
 
 The `my` tool also exposes read-only operator views:
 
@@ -79,8 +91,26 @@ The `my` tool also exposes read-only operator views:
 - `inspect_evolution_proposal` with `key=<proposal_id>`.
 - `explain_evolution_health`.
 - `list_evolution_recommendations`.
+- `preview_evolution_action`.
+- `generate_evolution_report`.
 
-These read actions do not require `allow_manual_override`. The write action `retry_trial` does require `allow_manual_override=true` and only applies to pending auto-evolution workflow proposals. Retry trial re-runs the read-only isolated trial with optional fixtures, updates the proposal payload with compact trial evidence, and writes a `trial_retried` outcome event.
+These read actions do not require `allow_manual_override`.
+
+`preview_evolution_action` accepts an object value such as:
+
+```json
+{
+  "action_kind": "retry_trial",
+  "target_id": "review_auto_workflow_123",
+  "fixtures": {"notes.txt": "trial fixture text"}
+}
+```
+
+Preview is strictly read-only. It reports what a real action would do, but it does not update proposal payloads, append outcome events, append trial logs, suppress signals, resume signals, or run maintenance. `retry_trial` preview uses the trial sandbox gate only; it does not invoke the real trial runner.
+
+`generate_evolution_report` returns a Markdown report for a bounded period, defaulting to seven days. The report summarizes health, signals, recent outcomes, sandbox/review/rollback counts, recommendations, and the hard safety boundaries.
+
+The write action `retry_trial` does require `allow_manual_override=true` and only applies to pending auto-evolution workflow proposals. Retry trial re-runs the read-only isolated trial with optional fixtures, updates the proposal payload with compact trial evidence, and writes a `trial_retried` outcome event.
 
 ## Trial Isolation
 
