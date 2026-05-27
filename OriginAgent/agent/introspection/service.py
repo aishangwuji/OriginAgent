@@ -246,6 +246,7 @@ class RuntimeIntrospectionService:
             from OriginAgent.agent.evolution import AUTO_EVOLUTION_ORIGIN
             from OriginAgent.agent.evolution_dependencies import EvolutionDependencyStore
             from OriginAgent.agent.evolution_feedback import feedback_status
+            from OriginAgent.agent.evolution_health import evolution_health_score
             from OriginAgent.agent.evolution_outcomes import EvolutionOutcomeStore
             from OriginAgent.agent.evolution_sandbox import sandbox_status_counts, trial_policy_status
             from OriginAgent.agent.evolution_snapshots import EvolutionSnapshotStore
@@ -291,6 +292,13 @@ class RuntimeIntrospectionService:
                     promotion_gate_counts[decision] = promotion_gate_counts.get(decision, 0) + 1
             sandbox_counts = sandbox_status_counts(workspace)
             trial_status = trial_policy_status(config)
+            health = evolution_health_score(
+                outcome_stats=outcome_stats,
+                dependency_stats=dependency_stats,
+                feedback_stats=feedback_stats,
+                sandbox_counts=sandbox_counts,
+                trial_status=trial_status,
+            )
             auto_verified = 0
             for record in applied_records:
                 payload = record.get("payload") if isinstance(record.get("payload"), dict) else {}
@@ -311,6 +319,7 @@ class RuntimeIntrospectionService:
                 "snapshots": snapshot_stats,
                 "dependencies": dependency_stats,
                 "feedback_calibration": feedback_stats,
+                "evolution_health": health,
                 "promotion_gate_decision_counts": promotion_gate_counts,
                 "static_gate_issue_counts": issue_counts,
                 "sandbox": {
@@ -374,6 +383,15 @@ class RuntimeIntrospectionService:
                     "feedback_trends": {},
                     "last_calibrated_at": None,
                     "last_result": None,
+                },
+                "evolution_health": {
+                    "score": 100,
+                    "level": "healthy",
+                    "reasons": [
+                        "+ no successful rollbacks",
+                        "+ no dependency conflicts",
+                        "+ trial isolation enforced",
+                    ],
                 },
                 "promotion_gate_decision_counts": {},
                 "static_gate_issue_counts": {},

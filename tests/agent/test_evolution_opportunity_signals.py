@@ -293,6 +293,15 @@ async def test_runtime_status_reports_evolution_defaults(tmp_path) -> None:
         "last_calibrated_at": None,
         "last_result": None,
     }
+    assert result["evolution"]["evolution_health"] == {
+        "score": 100,
+        "level": "healthy",
+        "reasons": [
+            "+ no successful rollbacks",
+            "+ no dependency conflicts",
+            "+ trial isolation enforced",
+        ],
+    }
     assert result["evolution"]["promotion_gate_decision_counts"] == {}
     assert result["evolution"]["static_gate_issue_counts"] == {}
     assert result["evolution"]["sandbox"] == {
@@ -645,3 +654,7 @@ async def test_runtime_status_counts_pending_auto_evolution_proposals(tmp_path) 
     assert evolution["promotion_gate_decision_counts"] == {"manual_review": 1}
     assert evolution["static_gate_issue_counts"] == {"pending": 1}
     assert evolution["sandbox"]["blocked_workflow_proposals"] == 1
+    assert evolution["evolution_health"]["score"] == 75
+    assert evolution["evolution_health"]["level"] == "degraded"
+    assert "- sandbox pass rate 0%" in evolution["evolution_health"]["reasons"]
+    assert "- sandbox blocked or failed proposals: 1" in evolution["evolution_health"]["reasons"]
