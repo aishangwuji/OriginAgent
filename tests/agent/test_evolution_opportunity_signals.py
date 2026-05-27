@@ -21,6 +21,7 @@ from OriginAgent.agent.evolution import (
 )
 from OriginAgent.agent.evolution_sandbox import SandboxEvaluator
 from OriginAgent.agent.evolution_feedback import EvolutionFeedbackCalibrator
+from OriginAgent.agent.evolution_trial import TrialRunner
 from OriginAgent.agent.evolution_trial_logs import EvolutionTrialLogStore
 from OriginAgent.agent.evolution_outcomes import EvolutionOutcomeStore
 from OriginAgent.agent.background_review import ReviewProposal, ReviewProposalStore
@@ -623,6 +624,77 @@ def test_trial_evaluator_enforces_isolated_read_only_policy(tmp_path) -> None:
     assert failed["status"] == "failed"
     assert failed["issues"][0]["code"] == "trial_path_outside_root"
     assert failed["step_results"][0]["status"] == "failed"
+
+
+def test_trial_runner_replays_read_only_steps_with_fixture_data(tmp_path) -> None:
+    runner = TrialRunner(tmp_path, EvolutionConfig())
+    payload = {
+        "subject_id": "inspect-logs",
+        "subject_path": "workflows/inspect-logs/workflow.yaml",
+        "workflow_name": "inspect-logs",
+        "evolution": {"opportunity_id": "opportunity-trial-run"},
+        "steps": [
+            {"title": "List logs", "tool": "glob", "pattern": "logs/*.log"},
+            {"title": "Read notes", "tool": "read_file", "path": "notes.txt"},
+            {"title": "Find error", "tool": "grep", "path": "logs/app.log", "pattern": "ERROR"},
+        ],
+    }
+
+    result = runner.run_workflow_payload(
+        payload,
+        fixtures={
+            "notes.txt": "Trial fixture notes.",
+            "logs/app.log": "INFO boot\nERROR failed safely\n",
+        },
+    )
+    log = EvolutionTrialLogStore(tmp_path).read_all()[0]
+
+    assert result["status"] == "passed"
+    assert result["gate_status"] == "passed"
+    assert [step["status"] for step in result["step_results"]] == ["passed", "passed", "passed"]
+    assert all(step["executed"] is True for step in result["step_results"])
+    assert result["step_results"][0]["output"] == "logs/app.log"
+    assert result["step_results"][1]["output"] == "Trial fixture notes."
+    assert "logs/app.log:2:ERROR failed safely" in result["step_results"][2]["output"]
+    assert log["status"] == "passed"
+    assert log["summary"]["executed_steps"] == 3
+
+
+def test_trial_runner_blocks_side_effecting_tools_before_execution(tmp_path) -> None:
+    runner = TrialRunner(tmp_path, EvolutionConfig())
+
+    result = runner.run_workflow_payload({
+        "subject_id": "write-notes",
+        "workflow_name": "write-notes",
+        "evolution": {"opportunity_id": "opportunity-trial-blocked"},
+        "steps": [{"title": "Write", "tool": "write_file", "path": "notes.txt"}],
+    })
+    log = EvolutionTrialLogStore(tmp_path).read_all()[0]
+
+    assert result["status"] == "blocked"
+    assert result["gate_status"] == "blocked"
+    assert result["step_results"][0]["executed"] is False
+    assert result["step_results"][0]["issues"][0]["code"] == "trial_tool_blocked"
+    assert log["status"] == "blocked"
+    assert log["summary"]["executed_steps"] == 0
+
+
+def test_trial_runner_does_not_read_real_workspace(tmp_path) -> None:
+    (tmp_path / "notes.txt").write_text("real workspace content", encoding="utf-8")
+    runner = TrialRunner(tmp_path, EvolutionConfig())
+
+    result = runner.run_workflow_payload({
+        "subject_id": "read-notes",
+        "workflow_name": "read-notes",
+        "evolution": {"opportunity_id": "opportunity-trial-isolation"},
+        "steps": [{"title": "Read", "tool": "read_file", "path": "notes.txt"}],
+    })
+
+    assert result["status"] == "failed"
+    assert result["gate_status"] == "passed"
+    assert result["step_results"][0]["executed"] is True
+    assert "FileNotFoundError" in result["step_results"][0]["output"]
+    assert "real workspace content" not in result["step_results"][0]["output"]
 
 
 def test_sandbox_evaluator_reports_step_level_failures_without_execution(tmp_path) -> None:
