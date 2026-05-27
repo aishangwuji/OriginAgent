@@ -20,6 +20,7 @@ from OriginAgent.agent.evolution import (
     static_gate_workflow_payload,
 )
 from OriginAgent.agent.evolution_sandbox import SandboxEvaluator
+from OriginAgent.agent.evolution_feedback import EvolutionFeedbackCalibrator
 from OriginAgent.agent.evolution_outcomes import EvolutionOutcomeStore
 from OriginAgent.agent.background_review import ReviewProposal, ReviewProposalStore
 from OriginAgent.agent.tools.runtime_status import RuntimeStatusTool
@@ -64,6 +65,44 @@ def test_opportunity_signal_store_upserts_and_dedupes_evidence(tmp_path) -> None
     assert [event["type"] for event in outcomes] == ["signal_created", "signal_updated"]
     assert outcomes[0]["opportunity_id"] == signal.opportunity_id
     assert outcomes[1]["feedback_score"] == pytest.approx(signal.priority_score)
+
+
+def test_feedback_calibrator_lowers_rejected_evolution_signal_once(tmp_path) -> None:
+    signal_store = OpportunitySignalStore(tmp_path)
+    signal = signal_store.upsert_candidates([_candidate(cursors=(1, 2, 3))])[0]
+    review_store = ReviewProposalStore(tmp_path)
+    review_store.append_many([
+        ReviewProposal(
+            id="review_auto_workflow_feedback",
+            created_at="2026-05-20T10:00:00+00:00",
+            session_key="curator:system",
+            turn_id="turn-1",
+            origin=AUTO_EVOLUTION_ORIGIN,
+            proposal_type="workflow",
+            domain_id="core",
+            title="Create workflow",
+            content="Create a reviewed workflow.",
+            payload=build_workflow_payload_from_signal(signal, config=EvolutionConfig()),
+            confidence=signal.priority_score,
+        )
+    ])
+    review_store.reject("review_auto_workflow_feedback", reason="not useful")
+
+    first = EvolutionFeedbackCalibrator(tmp_path, EvolutionConfig()).run()
+    second = EvolutionFeedbackCalibrator(tmp_path, EvolutionConfig()).run()
+
+    updated = signal_store.read_all()[0]
+    assert first.processed_events == 1
+    assert first.feedback_applied == 1
+    assert first.negative_feedback_applied == 1
+    assert second.feedback_applied == 0
+    assert updated.feedback_negative_count == 1
+    assert updated.feedback_multiplier == pytest.approx(0.8)
+    assert updated.priority_score == pytest.approx(signal.priority_score * 0.8)
+    assert updated.status == "open"
+    assert updated.verification_status == "feedback_negative"
+    outcome_stats = EvolutionOutcomeStore(tmp_path).stats()
+    assert outcome_stats["outcome_type_counts"]["feedback_applied"] == 1
 
 
 def test_workflow_detector_requires_repeated_evidence() -> None:
@@ -131,6 +170,9 @@ async def test_runtime_status_reports_evolution_defaults(tmp_path) -> None:
     assert result["evolution"]["opportunity_signals_count"] == 0
     assert result["evolution"]["converted_signals_count"] == 0
     assert result["evolution"]["suppressed_signals_count"] == 0
+    assert result["evolution"]["feedback_adjusted_signals_count"] == 0
+    assert result["evolution"]["feedback_negative_signals_count"] == 0
+    assert result["evolution"]["feedback_positive_signals_count"] == 0
     assert result["evolution"]["pending_proposals_from_evolution"] == 0
     assert result["evolution"]["proposal_count_from_evolution"] == 0
     assert result["evolution"]["auto_verified_workflows_count"] == 0
@@ -148,6 +190,14 @@ async def test_runtime_status_reports_evolution_defaults(tmp_path) -> None:
         "snapshot_count": 0,
         "snapshot_type_counts": {},
         "last_snapshot_at": None,
+    }
+    assert result["evolution"]["feedback_calibration"] == {
+        "enabled": True,
+        "processed_event_count": 0,
+        "feedback_event_count": 0,
+        "feedback_polarity_counts": {},
+        "last_calibrated_at": None,
+        "last_result": None,
     }
     assert result["evolution"]["promotion_gate_decision_counts"] == {}
     assert result["evolution"]["static_gate_issue_counts"] == {}

@@ -307,6 +307,8 @@ class EvolutionRollbackService:
             safe_append_outcome(
                 self.outcomes,
                 "rolled_back",
+                opportunity_id=str(snapshot.get("opportunity_id") or ""),
+                proposal_id=str(snapshot.get("proposal_id") or ""),
                 artifact_type=artifact_type,
                 artifact_name=artifact_name,
                 artifact_path=_relative_to_workspace(target_file, self.workspace),
@@ -340,6 +342,8 @@ class EvolutionRollbackService:
         safe_append_outcome(
             self.outcomes,
             "rolled_back",
+            opportunity_id=str(snapshot.get("opportunity_id") or ""),
+            proposal_id=str(snapshot.get("proposal_id") or ""),
             artifact_type=artifact_type,
             artifact_name=artifact_name,
             artifact_path=_relative_to_workspace(target_file, self.workspace),

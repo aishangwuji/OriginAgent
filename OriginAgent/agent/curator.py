@@ -31,6 +31,7 @@ from OriginAgent.agent.evolution_outcomes import (
     safe_append_outcome,
 )
 from OriginAgent.agent.evolution_gate import PromotionGate
+from OriginAgent.agent.evolution_feedback import EvolutionFeedbackCalibrator
 from OriginAgent.agent.evolution_sandbox import SandboxEvaluator
 from OriginAgent.agent.facts import CONFLICT_CATEGORIES, FactStore, normalize_fact_content
 from OriginAgent.agent.memory import redact_memory_text
@@ -88,6 +89,7 @@ class CuratorService:
         self.outcomes = EvolutionOutcomeStore(self.workspace)
         self.sandbox = SandboxEvaluator(self.workspace, self.evolution_config)
         self.promotion_gate = PromotionGate(self.evolution_config)
+        self.feedback_calibrator = EvolutionFeedbackCalibrator(self.workspace, self.evolution_config)
         self._running = 0
         self._last_result: CuratorResult | None = None
         self._last_evolution_scan: dict[str, Any] = {}
@@ -103,6 +105,7 @@ class CuratorService:
                 self._evolution_config = self._evolution_config_loader()
                 self.sandbox = SandboxEvaluator(self.workspace, self._evolution_config)
                 self.promotion_gate = PromotionGate(self._evolution_config)
+                self.feedback_calibrator = EvolutionFeedbackCalibrator(self.workspace, self._evolution_config)
             except Exception:
                 logger.exception("Failed to refresh evolution config")
 
@@ -153,6 +156,7 @@ class CuratorService:
         self._running += 1
         try:
             self._last_evolution_scan = {}
+            self._run_feedback_calibration()
             proposals = self._build_proposals(session_key=session_key, turn_id=turn_id)
             written = await asyncio.to_thread(self.store.append_many, proposals)
             if written:
@@ -176,6 +180,13 @@ class CuratorService:
     def _remember(self, result: CuratorResult) -> CuratorResult:
         self._last_result = result
         return result
+
+    def _run_feedback_calibration(self) -> None:
+        try:
+            result = self.feedback_calibrator.run()
+            self._last_evolution_scan["feedback_calibration"] = result.to_json()
+        except Exception:
+            logger.exception("Evolution feedback calibration failed")
 
     def _build_proposals(self, *, session_key: str, turn_id: str) -> list[ReviewProposal]:
         now = datetime.now(timezone.utc).isoformat()
@@ -240,6 +251,7 @@ class CuratorService:
         mode = str(getattr(config, "mode", "conservative") or "conservative")
         dry_run = bool(getattr(config, "dry_run", True))
         signals = self.opportunity_signals.select_workflow_candidates(config, limit=max(0, limit))
+        feedback_calibration = self._last_evolution_scan.get("feedback_calibration")
         self._last_evolution_scan = {
             "mode": mode,
             "dry_run": dry_run,
@@ -250,6 +262,8 @@ class CuratorService:
             "workflow_prepared": 0,
             "skill_prepared": 0,
         }
+        if feedback_calibration is not None:
+            self._last_evolution_scan["feedback_calibration"] = feedback_calibration
         if not signals or not evolution_allows_workflow_proposals(config):
             return []
 

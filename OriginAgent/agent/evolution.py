@@ -106,6 +106,12 @@ class OpportunitySignal:
     status: str = "open"
     converted_proposal_id: str | None = None
     verification_status: str = ""
+    feedback_multiplier: float = 1.0
+    feedback_score_offset: float = 0.0
+    feedback_negative_count: int = 0
+    feedback_positive_count: int = 0
+    last_feedback_at: str = ""
+    suppression_reason: str = ""
 
     @classmethod
     def from_record(cls, record: dict[str, Any]) -> "OpportunitySignal":
@@ -130,6 +136,12 @@ class OpportunitySignal:
                 else None
             ),
             verification_status=str(record.get("verification_status") or ""),
+            feedback_multiplier=_safe_float(record.get("feedback_multiplier"), 1.0),
+            feedback_score_offset=_safe_float(record.get("feedback_score_offset"), 0.0),
+            feedback_negative_count=_safe_int(record.get("feedback_negative_count"), 0),
+            feedback_positive_count=_safe_int(record.get("feedback_positive_count"), 0),
+            last_feedback_at=str(record.get("last_feedback_at") or ""),
+            suppression_reason=str(record.get("suppression_reason") or ""),
         )
 
     def to_record(self) -> dict[str, Any]:
@@ -315,11 +327,84 @@ class OpportunitySignalStore:
                 self._write_all_unlocked(records)
             return changed
 
+    def apply_feedback(
+        self,
+        opportunity_id: str,
+        *,
+        multiplier: float = 1.0,
+        delta: float = 0.0,
+        suppress: bool = False,
+        suppression_reason: str = "",
+        suppress_after_negative_count: int = 0,
+        risk_level: str = "",
+        verification_status: str = "",
+        now: datetime | None = None,
+    ) -> OpportunitySignal | None:
+        """Apply durable feedback calibration to one opportunity signal.
+
+        The multiplier and offset are persisted so future evidence upserts keep
+        the calibration instead of recalculating the signal back to its raw
+        heuristic score.
+        """
+
+        if not opportunity_id:
+            return None
+        now_iso = _normalize_datetime(now).isoformat()
+        with self._lock:
+            records = self.read_all()
+            updated: OpportunitySignal | None = None
+            for signal in records:
+                if signal.opportunity_id != opportunity_id:
+                    continue
+                safe_multiplier = max(0.05, min(2.0, _safe_float(multiplier, 1.0)))
+                safe_delta = max(-1.0, min(1.0, _safe_float(delta, 0.0)))
+                signal.feedback_multiplier = max(
+                    0.05,
+                    min(2.0, signal.feedback_multiplier * safe_multiplier),
+                )
+                signal.feedback_score_offset = max(
+                    -1.0,
+                    min(1.0, signal.feedback_score_offset + safe_delta),
+                )
+                if safe_multiplier < 1.0 or safe_delta < 0.0 or suppress:
+                    signal.feedback_negative_count += 1
+                elif safe_multiplier > 1.0 or safe_delta > 0.0:
+                    signal.feedback_positive_count += 1
+                threshold = max(0, _safe_int(suppress_after_negative_count, 0))
+                if threshold > 0 and signal.feedback_negative_count >= threshold:
+                    suppress = True
+                    if not suppression_reason:
+                        suppression_reason = "Repeated negative feedback reached suppression threshold."
+                if suppress:
+                    signal.status = "suppressed"
+                    signal.suppression_reason = _clean_signal_text(suppression_reason, 512)
+                if risk_level:
+                    signal.risk_level = _clean_signal_text(risk_level, 64)
+                if verification_status:
+                    signal.verification_status = _clean_signal_text(verification_status, 128)
+                signal.priority_score = _priority_score(signal)
+                signal.last_feedback_at = now_iso
+                updated = signal
+                break
+            if updated is None:
+                return None
+            self._write_all_unlocked(records)
+            return updated
+
     def runtime_status(self, config: Any | None = None) -> dict[str, Any]:
         signals = self.read_all()
         open_signals = [signal for signal in signals if signal.status == "open"]
         converted_signals = [signal for signal in signals if signal.status == "converted"]
         suppressed_signals = [signal for signal in signals if signal.status == "suppressed"]
+        feedback_adjusted = [
+            signal for signal in signals
+            if (
+                signal.feedback_negative_count > 0
+                or signal.feedback_positive_count > 0
+                or signal.feedback_multiplier != 1.0
+                or signal.feedback_score_offset != 0.0
+            )
+        ]
         threshold = _config_float(config, "workflow_priority_threshold", 0.7)
         min_seen = _config_int(config, "workflow_min_seen_count", 3)
         min_evidence = _config_int(config, "workflow_min_evidence_sources", 2)
@@ -351,6 +436,13 @@ class OpportunitySignalStore:
             "skill_candidates_enabled": _config_bool(config, "skill_candidates_enabled", False),
             "converted_signals_count": len(converted_signals),
             "suppressed_signals_count": len(suppressed_signals),
+            "feedback_adjusted_signals_count": len(feedback_adjusted),
+            "feedback_negative_signals_count": len([
+                signal for signal in feedback_adjusted if signal.feedback_negative_count > 0
+            ]),
+            "feedback_positive_signals_count": len([
+                signal for signal in feedback_adjusted if signal.feedback_positive_count > 0
+            ]),
             "pending_proposals_from_evolution": 0,
             "high_score_signals": [
                 {
@@ -988,6 +1080,7 @@ def _priority_score(signal: OpportunitySignal) -> float:
         + 0.3 * (_SKILL_CONFIDENCE if signal.kind == SIGNAL_KIND_SKILL else _WORKFLOW_CONFIDENCE)
         + 0.3 * evidence_diversity
     )
+    score = (score * signal.feedback_multiplier) + signal.feedback_score_offset
     return max(0.0, min(1.0, score))
 
 

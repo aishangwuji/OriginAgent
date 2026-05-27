@@ -361,6 +361,49 @@ class EvolutionConfig(Base):
         validation_alias=AliasChoices("sandbox"),
         serialization_alias="sandbox",
     )
+    feedback_calibration_enabled: bool = Field(
+        default=True,
+        validation_alias=AliasChoices("feedbackCalibrationEnabled", "feedback_calibration_enabled"),
+        serialization_alias="feedbackCalibrationEnabled",
+    )
+    feedback_reject_multiplier: float = Field(
+        default=0.8,
+        ge=0.05,
+        le=1.0,
+        validation_alias=AliasChoices("feedbackRejectMultiplier", "feedback_reject_multiplier"),
+        serialization_alias="feedbackRejectMultiplier",
+    )
+    feedback_rollback_multiplier: float = Field(
+        default=0.6,
+        ge=0.05,
+        le=1.0,
+        validation_alias=AliasChoices("feedbackRollbackMultiplier", "feedback_rollback_multiplier"),
+        serialization_alias="feedbackRollbackMultiplier",
+    )
+    feedback_rollback_delta: float = Field(
+        default=-0.1,
+        ge=-1.0,
+        le=0.0,
+        validation_alias=AliasChoices("feedbackRollbackDelta", "feedback_rollback_delta"),
+        serialization_alias="feedbackRollbackDelta",
+    )
+    feedback_positive_multiplier: float = Field(
+        default=1.02,
+        ge=1.0,
+        le=2.0,
+        validation_alias=AliasChoices("feedbackPositiveMultiplier", "feedback_positive_multiplier"),
+        serialization_alias="feedbackPositiveMultiplier",
+    )
+    feedback_suppress_after_negative_count: int = Field(
+        default=3,
+        ge=1,
+        le=20,
+        validation_alias=AliasChoices(
+            "feedbackSuppressAfterNegativeCount",
+            "feedback_suppress_after_negative_count",
+        ),
+        serialization_alias="feedbackSuppressAfterNegativeCount",
+    )
 
 
 class LearningConfig(Base):

@@ -244,6 +244,7 @@ class RuntimeIntrospectionService:
             status = OpportunitySignalStore(workspace).runtime_status(config)
             from OriginAgent.agent.background_review import ReviewProposalStore
             from OriginAgent.agent.evolution import AUTO_EVOLUTION_ORIGIN
+            from OriginAgent.agent.evolution_feedback import feedback_status
             from OriginAgent.agent.evolution_outcomes import EvolutionOutcomeStore
             from OriginAgent.agent.evolution_sandbox import sandbox_status_counts
             from OriginAgent.agent.evolution_snapshots import EvolutionSnapshotStore
@@ -252,6 +253,7 @@ class RuntimeIntrospectionService:
             proposal_stats = proposal_store.stats(origin=AUTO_EVOLUTION_ORIGIN)
             outcome_stats = EvolutionOutcomeStore(workspace).stats()
             snapshot_stats = EvolutionSnapshotStore(workspace).stats()
+            feedback_stats = feedback_status(workspace, config)
             recent_records = proposal_store.list_records(
                 origin=AUTO_EVOLUTION_ORIGIN,
                 limit=50,
@@ -303,6 +305,7 @@ class RuntimeIntrospectionService:
                 "auto_verified_workflows_count": auto_verified,
                 "outcomes": outcome_stats,
                 "snapshots": snapshot_stats,
+                "feedback_calibration": feedback_stats,
                 "promotion_gate_decision_counts": promotion_gate_counts,
                 "static_gate_issue_counts": issue_counts,
                 "sandbox": {
@@ -321,6 +324,9 @@ class RuntimeIntrospectionService:
                 "opportunity_signals_count": 0,
                 "converted_signals_count": 0,
                 "suppressed_signals_count": 0,
+                "feedback_adjusted_signals_count": 0,
+                "feedback_negative_signals_count": 0,
+                "feedback_positive_signals_count": 0,
                 "pending_proposals_from_evolution": 0,
                 "proposal_count_from_evolution": 0,
                 "auto_verified_workflows_count": 0,
@@ -338,6 +344,14 @@ class RuntimeIntrospectionService:
                     "snapshot_count": 0,
                     "snapshot_type_counts": {},
                     "last_snapshot_at": None,
+                },
+                "feedback_calibration": {
+                    "enabled": True,
+                    "processed_event_count": 0,
+                    "feedback_event_count": 0,
+                    "feedback_polarity_counts": {},
+                    "last_calibrated_at": None,
+                    "last_result": None,
                 },
                 "promotion_gate_decision_counts": {},
                 "static_gate_issue_counts": {},

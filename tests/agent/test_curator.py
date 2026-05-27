@@ -17,6 +17,7 @@ from OriginAgent.agent.evolution import (
     OpportunitySignalCandidate,
     OpportunitySignalStore,
 )
+from OriginAgent.agent.evolution_feedback import EvolutionFeedbackCalibrator
 from OriginAgent.agent.evolution_outcomes import EvolutionOutcomeStore
 from OriginAgent.agent.evolution_snapshots import EvolutionRollbackService, EvolutionSnapshotStore
 from OriginAgent.agent.skills import SkillsLoader
@@ -464,6 +465,28 @@ async def test_curator_auto_verifies_low_risk_workflow_without_activating(tmp_pa
     ).execute()
     assert status_after["evolution"]["outcomes"]["rollback_status_counts"] == {"succeeded": 1}
     assert status_after["evolution"]["snapshots"]["snapshot_type_counts"] == {"workflow": 2}
+
+    feedback = EvolutionFeedbackCalibrator(tmp_path, service.evolution_config).run()
+    calibrated = signal_store.read_all()[0]
+
+    assert feedback.feedback_applied >= 1
+    assert feedback.negative_feedback_applied == 1
+    assert feedback.suppressed_signals == 1
+    assert calibrated.status == "suppressed"
+    assert calibrated.risk_level == "high"
+    assert calibrated.verification_status == "rolled_back"
+    assert calibrated.feedback_negative_count == 1
+    status_feedback = await RuntimeStatusTool(
+        workspace=tmp_path,
+        registry=SimpleNamespace(tool_names=["originagent_runtime_status"]),
+        sessions=object(),
+        pending_queues={},
+        evolution_config=service.evolution_config,
+    ).execute()
+    assert status_feedback["evolution"]["suppressed_signals_count"] == 1
+    assert status_feedback["evolution"]["feedback_calibration"]["feedback_polarity_counts"] == {
+        "negative": 1
+    }
 
 
 @pytest.mark.asyncio
