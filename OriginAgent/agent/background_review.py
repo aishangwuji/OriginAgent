@@ -25,6 +25,7 @@ from OriginAgent.agent.evolution_outcomes import (
     proposal_outcome_context,
     safe_append_outcome,
 )
+from OriginAgent.agent.evolution_dependencies import EvolutionDependencyStore
 from OriginAgent.agent.evolution_snapshots import snapshot_artifact_if_governed
 from OriginAgent.agent.facts import (
     HIGH_RISK_CATEGORIES,
@@ -575,6 +576,11 @@ class ReviewProposalStore:
             self._find_unlocked(proposal_id) or {"id": proposal_id},
             event,
         )
+        if status == "applied" and isinstance(artifact, dict):
+            try:
+                EvolutionDependencyStore(self.workspace).update_artifact_from_event(artifact)
+            except Exception:
+                logger.exception("Failed to update evolution dependency graph for {}", proposal_id)
         return event
 
     def _trace_review_event_unlocked(self, proposal_id: str, event: dict[str, Any]) -> None:

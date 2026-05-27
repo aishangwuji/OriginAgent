@@ -191,6 +191,12 @@ async def test_runtime_status_reports_evolution_defaults(tmp_path) -> None:
         "snapshot_type_counts": {},
         "last_snapshot_at": None,
     }
+    assert result["evolution"]["dependencies"] == {
+        "tracked_artifacts": 0,
+        "dependency_edges": 0,
+        "rollback_blocked_artifacts": 0,
+        "stale_reference_count": 0,
+    }
     assert result["evolution"]["feedback_calibration"] == {
         "enabled": True,
         "processed_event_count": 0,

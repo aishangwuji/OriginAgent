@@ -6,7 +6,7 @@ import hashlib
 import json
 import uuid
 from contextlib import suppress
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -14,6 +14,7 @@ from typing import Any
 from filelock import FileLock
 
 from OriginAgent.agent.evolution import AUTO_EVOLUTION_ORIGIN
+from OriginAgent.agent.evolution_dependencies import EvolutionDependencyStore
 from OriginAgent.agent.evolution_outcomes import EvolutionOutcomeStore, safe_append_outcome
 from OriginAgent.agent.skill_artifacts import validate_skill_artifact_dir
 from OriginAgent.agent.workflow_artifacts import validate_workflow_artifact_dir
@@ -62,6 +63,7 @@ class EvolutionRollbackResult:
     new_version: str = ""
     event: dict[str, Any] | None = None
     error: str = ""
+    dependency_blockers: list[dict[str, Any]] = field(default_factory=list)
 
     def to_json(self) -> dict[str, Any]:
         return asdict(self)
@@ -205,6 +207,7 @@ class EvolutionRollbackService:
         snapshot_id: str | None = None,
         reason: str = "",
         actor: str = "user",
+        force: bool = False,
     ) -> EvolutionRollbackResult:
         artifact_type = str(artifact_type or "").strip().lower()
         artifact_name = str(artifact_name or "").strip()
@@ -274,6 +277,40 @@ class EvolutionRollbackService:
                 snapshot_id=str(snapshot.get("snapshot_id") or ""),
                 old_version=current_hash,
                 new_version=new_hash,
+            )
+
+        dependency_store = EvolutionDependencyStore(self.workspace)
+        blockers = dependency_store.rollback_blockers(
+            artifact_type=artifact_type,
+            artifact_name=artifact_name,
+        )
+        if blockers and not force:
+            message = "Rollback blocked because other governed artifacts depend on this artifact."
+            safe_append_outcome(
+                self.outcomes,
+                "rolled_back",
+                opportunity_id=str(snapshot.get("opportunity_id") or ""),
+                proposal_id=str(snapshot.get("proposal_id") or ""),
+                artifact_type=artifact_type,
+                artifact_name=artifact_name,
+                artifact_path=_relative_to_workspace(target_file, self.workspace),
+                old_version=current_hash,
+                new_version=new_hash,
+                rollback_status="blocked",
+                metadata={"snapshot_id": snapshot.get("snapshot_id"), "reason": reason, "blockers": blockers},
+            )
+            return EvolutionRollbackResult(
+                ok=False,
+                status="blocked_by_dependencies",
+                message=message,
+                artifact_type=artifact_type,
+                artifact_name=artifact_name,
+                artifact_path=_relative_to_workspace(target_file, self.workspace),
+                snapshot_id=str(snapshot.get("snapshot_id") or ""),
+                old_version=current_hash,
+                new_version=new_hash,
+                error="dependency_blocked",
+                dependency_blockers=blockers,
             )
 
         self.snapshots.create_snapshot(
@@ -352,6 +389,14 @@ class EvolutionRollbackService:
             rollback_status="succeeded",
             metadata={"snapshot_id": snapshot.get("snapshot_id"), "event": succeeded_event, "reason": reason},
         )
+        try:
+            dependency_store.update_artifact(
+                artifact_type=artifact_type,
+                artifact_name=artifact_name,
+                artifact_path=_relative_to_workspace(target_file, self.workspace),
+            )
+        except Exception:
+            pass
         return EvolutionRollbackResult(
             ok=True,
             status="rolled_back",

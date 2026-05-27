@@ -17,6 +17,7 @@ from OriginAgent.agent.evolution import (
     OpportunitySignalCandidate,
     OpportunitySignalStore,
 )
+from OriginAgent.agent.evolution_dependencies import EvolutionDependencyStore
 from OriginAgent.agent.evolution_feedback import EvolutionFeedbackCalibrator
 from OriginAgent.agent.evolution_outcomes import EvolutionOutcomeStore
 from OriginAgent.agent.evolution_snapshots import EvolutionRollbackService, EvolutionSnapshotStore
@@ -127,6 +128,54 @@ def _write_skill(
         encoding="utf-8",
     )
     return path / "SKILL.md"
+
+
+def _write_workflow_artifact(
+    workspace: Path,
+    name: str,
+    *,
+    body: str,
+    review_proposal_id: str,
+) -> Path:
+    path = workspace / "workflows" / name
+    path.mkdir(parents=True, exist_ok=True)
+    (path / "workflow.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "schema_version": 1,
+                "name": name,
+                "description": f"{name} workflow.",
+                "kind": "manual_guide",
+                "execution": {
+                    "auto_run": False,
+                    "creates_cron": False,
+                    "calls_tools": False,
+                },
+                "body": body,
+                "steps": [
+                    {
+                        "title": "Review",
+                        "instruction": "Read available context only.",
+                        "risk": "low",
+                        "confirmation_required": False,
+                    }
+                ],
+                "metadata": {
+                    "OriginAgent": {
+                        "proposal_status": "proposed",
+                        "verification_status": "verified",
+                        "review_proposal_id": review_proposal_id,
+                        "domain_id": "core",
+                        "created_by": AUTO_EVOLUTION_ORIGIN,
+                    }
+                },
+            },
+            allow_unicode=True,
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+    return path / "workflow.yaml"
 
 
 def _proposal_events(workspace: Path) -> list[dict]:
@@ -487,6 +536,71 @@ async def test_curator_auto_verifies_low_risk_workflow_without_activating(tmp_pa
     assert status_feedback["evolution"]["feedback_calibration"]["feedback_polarity_counts"] == {
         "negative": 1
     }
+
+
+def test_evolution_rollback_blocks_when_artifact_has_dependents(tmp_path: Path) -> None:
+    base_file = _write_workflow_artifact(
+        tmp_path,
+        "base-workflow",
+        body="Base workflow body.",
+        review_proposal_id="review_base",
+    )
+    dependent_file = _write_workflow_artifact(
+        tmp_path,
+        "dependent-workflow",
+        body="Run workflow:base-workflow before summarizing.",
+        review_proposal_id="review_dependent",
+    )
+    snapshot = EvolutionSnapshotStore(tmp_path).create_snapshot(
+        {
+            "artifact_type": "workflow",
+            "workflow_name": "base-workflow",
+            "path": "workflows/base-workflow/workflow.yaml",
+        },
+        proposal_id="review_base",
+        opportunity_id="opp_base",
+        reason="test baseline",
+    )
+    dependency_store = EvolutionDependencyStore(tmp_path)
+    dependency_store.update_artifact(
+        artifact_type="workflow",
+        artifact_name="base-workflow",
+        artifact_path="workflows/base-workflow/workflow.yaml",
+    )
+    dependency_store.update_artifact(
+        artifact_type="workflow",
+        artifact_name="dependent-workflow",
+        artifact_path="workflows/dependent-workflow/workflow.yaml",
+    )
+    assert snapshot is not None
+    assert dependency_store.stats()["rollback_blocked_artifacts"] == 1
+
+    data = yaml.safe_load(base_file.read_text(encoding="utf-8"))
+    data["body"] = "Edited body that should remain when rollback is blocked."
+    base_file.write_text(yaml.safe_dump(data, allow_unicode=True, sort_keys=False), encoding="utf-8")
+
+    rollback = EvolutionRollbackService(tmp_path).rollback(
+        artifact_type="workflow",
+        artifact_name="base-workflow",
+        reason="blocked dependency test",
+        actor="tester",
+    )
+
+    assert rollback.ok is False
+    assert rollback.status == "blocked_by_dependencies"
+    assert rollback.error == "dependency_blocked"
+    assert rollback.dependency_blockers == [
+        {
+            "type": "workflow",
+            "name": "dependent-workflow",
+            "source": "static",
+            "evidence": "Run workflow:base-workflow before summarizing.",
+        }
+    ]
+    assert "Edited body" in base_file.read_text(encoding="utf-8")
+    assert dependent_file.exists()
+    outcome_stats = EvolutionOutcomeStore(tmp_path).stats()
+    assert outcome_stats["rollback_status_counts"] == {"blocked": 1}
 
 
 @pytest.mark.asyncio

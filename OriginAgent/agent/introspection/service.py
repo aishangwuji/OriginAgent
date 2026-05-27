@@ -244,6 +244,7 @@ class RuntimeIntrospectionService:
             status = OpportunitySignalStore(workspace).runtime_status(config)
             from OriginAgent.agent.background_review import ReviewProposalStore
             from OriginAgent.agent.evolution import AUTO_EVOLUTION_ORIGIN
+            from OriginAgent.agent.evolution_dependencies import EvolutionDependencyStore
             from OriginAgent.agent.evolution_feedback import feedback_status
             from OriginAgent.agent.evolution_outcomes import EvolutionOutcomeStore
             from OriginAgent.agent.evolution_sandbox import sandbox_status_counts, trial_policy_status
@@ -253,6 +254,7 @@ class RuntimeIntrospectionService:
             proposal_stats = proposal_store.stats(origin=AUTO_EVOLUTION_ORIGIN)
             outcome_stats = EvolutionOutcomeStore(workspace).stats()
             snapshot_stats = EvolutionSnapshotStore(workspace).stats()
+            dependency_stats = EvolutionDependencyStore(workspace).stats()
             feedback_stats = feedback_status(workspace, config)
             recent_records = proposal_store.list_records(
                 origin=AUTO_EVOLUTION_ORIGIN,
@@ -306,6 +308,7 @@ class RuntimeIntrospectionService:
                 "auto_verified_workflows_count": auto_verified,
                 "outcomes": outcome_stats,
                 "snapshots": snapshot_stats,
+                "dependencies": dependency_stats,
                 "feedback_calibration": feedback_stats,
                 "promotion_gate_decision_counts": promotion_gate_counts,
                 "static_gate_issue_counts": issue_counts,
@@ -346,6 +349,12 @@ class RuntimeIntrospectionService:
                     "snapshot_count": 0,
                     "snapshot_type_counts": {},
                     "last_snapshot_at": None,
+                },
+                "dependencies": {
+                    "tracked_artifacts": 0,
+                    "dependency_edges": 0,
+                    "rollback_blocked_artifacts": 0,
+                    "stale_reference_count": 0,
                 },
                 "feedback_calibration": {
                     "enabled": True,

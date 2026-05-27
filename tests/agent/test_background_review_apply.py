@@ -13,6 +13,7 @@ from OriginAgent.agent.background_review import (
     ReviewProposal,
     ReviewProposalStore,
 )
+from OriginAgent.agent.evolution_dependencies import EvolutionDependencyStore
 from OriginAgent.agent.skills import SkillsLoader
 from OriginAgent.agent.workflow_artifacts import (
     validate_workflow_artifact_content,
@@ -390,7 +391,7 @@ def test_apply_workflow_proposal_writes_proposed_workspace_workflow(tmp_path: Pa
             payload={
                 "workflow_name": "lighting-incident-response",
                 "description": "Manual lighting workflow with token=supersecretvalue.",
-                "body": "Use this workflow when lighting automation fails with api_key=supersecretvalue.",
+                "body": "Use this workflow when lighting automation fails with api_key=supersecretvalue. Consult skill:log-review before summarizing.",
                 "steps": [
                     {
                         "title": "Confirm current state",
@@ -453,6 +454,16 @@ def test_apply_workflow_proposal_writes_proposed_workspace_workflow(tmp_path: Pa
     record = store.get("review_workflow")
     assert record["applied_workflow_name"] == "lighting-incident-response"
     assert record["applied_workflow_path"] == "workflows/lighting-incident-response/workflow.yaml"
+    dependencies = EvolutionDependencyStore(tmp_path).read_all()
+    assert dependencies[0]["artifact_type"] == "workflow"
+    assert dependencies[0]["artifact_name"] == "lighting-incident-response"
+    dependency = dependencies[0]["depends_on"][0]
+    assert dependency["type"] == "skill"
+    assert dependency["name"] == "log-review"
+    assert dependency["source"] == "static"
+    assert "skill:log-review" in dependency["evidence"]
+    assert "[REDACTED_SECRET]" in dependency["evidence"]
+    assert EvolutionDependencyStore(tmp_path).stats()["dependency_edges"] == 1
 
 
 def test_legacy_workflow_proposal_without_payload_uses_fallback_template(tmp_path: Path) -> None:
