@@ -18,6 +18,7 @@ from OriginAgent.agent.evolution import (
     OpportunitySignalStore,
 )
 from OriginAgent.agent.evolution_outcomes import EvolutionOutcomeStore
+from OriginAgent.agent.evolution_snapshots import EvolutionRollbackService, EvolutionSnapshotStore
 from OriginAgent.agent.skills import SkillsLoader
 from OriginAgent.agent.tools.runtime_status import RuntimeStatusTool
 from OriginAgent.config.schema import EvolutionConfig
@@ -410,6 +411,14 @@ async def test_curator_auto_verifies_low_risk_workflow_without_activating(tmp_pa
     assert metadata["opportunity_id"] == signals[0].opportunity_id
     assert signals[0].status == "converted"
     assert signals[0].verification_status == "verified"
+    snapshots = EvolutionSnapshotStore(tmp_path).list_snapshots(
+        artifact_type="workflow",
+        artifact_name="deploy-backend-checks",
+    )
+    assert len(snapshots) == 1
+    assert snapshots[0]["proposal_id"] == record["id"]
+    assert snapshots[0]["opportunity_id"] == signals[0].opportunity_id
+    original_content = workflow_file.read_text(encoding="utf-8")
     assert any(
         event.get("result", {}).get("event_name") == "evolution_auto_promotion"
         for event in _evolution_events(tmp_path)
@@ -427,7 +436,34 @@ async def test_curator_auto_verifies_low_risk_workflow_without_activating(tmp_pa
         "proposed": 1,
         "verified": 1,
     }
+    assert status["evolution"]["snapshots"]["snapshot_type_counts"] == {"workflow": 1}
     assert status["evolution"]["sandbox"]["passed_workflow_proposals"] == 1
+
+    data["body"] = "Temporary local edit before rollback."
+    workflow_file.write_text(yaml.safe_dump(data, allow_unicode=True, sort_keys=False), encoding="utf-8")
+    rollback = EvolutionRollbackService(tmp_path).rollback(
+        artifact_type="workflow",
+        artifact_name="deploy-backend-checks",
+        reason="test rollback",
+        actor="tester",
+    )
+
+    assert rollback.ok is True
+    assert rollback.status == "rolled_back"
+    assert workflow_file.read_text(encoding="utf-8") == original_content
+    assert any(
+        event.get("event_type") == "module_rollback_succeeded"
+        for event in _evolution_events(tmp_path)
+    )
+    status_after = await RuntimeStatusTool(
+        workspace=tmp_path,
+        registry=SimpleNamespace(tool_names=["originagent_runtime_status"]),
+        sessions=object(),
+        pending_queues={},
+        evolution_config=service.evolution_config,
+    ).execute()
+    assert status_after["evolution"]["outcomes"]["rollback_status_counts"] == {"succeeded": 1}
+    assert status_after["evolution"]["snapshots"]["snapshot_type_counts"] == {"workflow": 2}
 
 
 @pytest.mark.asyncio
@@ -494,6 +530,7 @@ async def test_curator_generates_read_only_skill_proposal_when_enabled(tmp_path:
     assert frontmatter["always"] is False
     assert frontmatter["metadata"]["OriginAgent"]["proposal_status"] == "proposed"
     assert frontmatter["metadata"]["OriginAgent"]["verification_status"] == "unverified"
+    assert EvolutionSnapshotStore(tmp_path).stats()["snapshot_type_counts"] == {"skill": 1}
     signals = signal_store.read_all()
     assert signals[0].status == "converted"
     assert signals[0].converted_proposal_id == record["id"]

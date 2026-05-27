@@ -25,6 +25,7 @@ from OriginAgent.agent.evolution_outcomes import (
     proposal_outcome_context,
     safe_append_outcome,
 )
+from OriginAgent.agent.evolution_snapshots import snapshot_artifact_if_governed
 from OriginAgent.agent.facts import (
     HIGH_RISK_CATEGORIES,
     HIGH_RISK_KEYWORDS,
@@ -569,6 +570,11 @@ class ReviewProposalStore:
         with self.event_path.open("a", encoding="utf-8") as handle:
             handle.write(json.dumps(event, ensure_ascii=False) + "\n")
         self._trace_review_event_unlocked(proposal_id, event)
+        snapshot_artifact_if_governed(
+            self.workspace,
+            self._find_unlocked(proposal_id) or {"id": proposal_id},
+            event,
+        )
         return event
 
     def _trace_review_event_unlocked(self, proposal_id: str, event: dict[str, Any]) -> None:

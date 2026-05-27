@@ -246,10 +246,12 @@ class RuntimeIntrospectionService:
             from OriginAgent.agent.evolution import AUTO_EVOLUTION_ORIGIN
             from OriginAgent.agent.evolution_outcomes import EvolutionOutcomeStore
             from OriginAgent.agent.evolution_sandbox import sandbox_status_counts
+            from OriginAgent.agent.evolution_snapshots import EvolutionSnapshotStore
 
             proposal_store = ReviewProposalStore(workspace)
             proposal_stats = proposal_store.stats(origin=AUTO_EVOLUTION_ORIGIN)
             outcome_stats = EvolutionOutcomeStore(workspace).stats()
+            snapshot_stats = EvolutionSnapshotStore(workspace).stats()
             recent_records = proposal_store.list_records(
                 origin=AUTO_EVOLUTION_ORIGIN,
                 limit=50,
@@ -300,6 +302,7 @@ class RuntimeIntrospectionService:
                 "proposal_count_from_evolution": proposal_stats["proposal_count"],
                 "auto_verified_workflows_count": auto_verified,
                 "outcomes": outcome_stats,
+                "snapshots": snapshot_stats,
                 "promotion_gate_decision_counts": promotion_gate_counts,
                 "static_gate_issue_counts": issue_counts,
                 "sandbox": {
@@ -330,6 +333,11 @@ class RuntimeIntrospectionService:
                     "promotion_status_counts": {},
                     "rollback_status_counts": {},
                     "last_outcome_at": None,
+                },
+                "snapshots": {
+                    "snapshot_count": 0,
+                    "snapshot_type_counts": {},
+                    "last_snapshot_at": None,
                 },
                 "promotion_gate_decision_counts": {},
                 "static_gate_issue_counts": {},

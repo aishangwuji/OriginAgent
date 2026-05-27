@@ -144,6 +144,11 @@ async def test_runtime_status_reports_evolution_defaults(tmp_path) -> None:
         "rollback_status_counts": {},
         "last_outcome_at": None,
     }
+    assert result["evolution"]["snapshots"] == {
+        "snapshot_count": 0,
+        "snapshot_type_counts": {},
+        "last_snapshot_at": None,
+    }
     assert result["evolution"]["promotion_gate_decision_counts"] == {}
     assert result["evolution"]["static_gate_issue_counts"] == {}
     assert result["evolution"]["sandbox"] == {
