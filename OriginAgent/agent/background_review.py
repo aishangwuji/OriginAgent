@@ -20,6 +20,11 @@ from loguru import logger
 from OriginAgent.agent.auxiliary_llm import AuxiliaryLLMRouter, call_llm
 from OriginAgent.agent.domain_pack_governance import DomainPackGovernanceService
 from OriginAgent.agent.domain_packs import DomainPackManager
+from OriginAgent.agent.evolution_outcomes import (
+    EvolutionOutcomeStore,
+    proposal_outcome_context,
+    safe_append_outcome,
+)
 from OriginAgent.agent.facts import (
     HIGH_RISK_CATEGORIES,
     HIGH_RISK_KEYWORDS,
@@ -149,6 +154,7 @@ class ReviewProposalStore:
         self.event_path = event_path or (self.workspace / PROPOSAL_EVENT_STORE_RELATIVE)
         self._lock_path = self.path.parent / ".review_proposals.lock"
         self._memory_store = MemoryStore(self.workspace)
+        self._outcome_store = EvolutionOutcomeStore(self.workspace)
 
     def _locked(self) -> FileLock:
         self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -562,7 +568,38 @@ class ReviewProposalStore:
         self.event_path.parent.mkdir(parents=True, exist_ok=True)
         with self.event_path.open("a", encoding="utf-8") as handle:
             handle.write(json.dumps(event, ensure_ascii=False) + "\n")
+        self._trace_review_event_unlocked(proposal_id, event)
         return event
+
+    def _trace_review_event_unlocked(self, proposal_id: str, event: dict[str, Any]) -> None:
+        record = self._find_unlocked(proposal_id)
+        if record is None or not _is_auto_evolution_record(record):
+            return
+        context = proposal_outcome_context(record, event)
+        status = str(event.get("status") or "")
+        event_type = {
+            "applied": "review_approved",
+            "rejected": "review_rejected",
+            "deferred": "review_deferred",
+            "failed": "review_failed",
+        }.get(status, "review_recorded")
+        promotion_status = ""
+        if status == "applied" and context.get("artifact_type") in {"workflow", "skill"}:
+            promotion_status = "proposed"
+        safe_append_outcome(
+            self._outcome_store,
+            event_type,
+            **context,
+            review_status=status,
+            promotion_status=promotion_status,
+            metadata={
+                "review_event_id": str(event.get("event_id") or ""),
+                "reason": str(event.get("reason") or ""),
+                "error": str(event.get("error") or ""),
+                "proposal_type": _proposal_type(record),
+                "origin": _proposal_origin(record),
+            },
+        )
 
     def _apply_to_memory(self, record: dict[str, Any]) -> FactRecord:
         fact_fields = _fact_fields_from_proposal(record)
@@ -1180,6 +1217,14 @@ def _proposal_type(record: dict[str, Any]) -> str:
 
 def _proposal_origin(record: dict[str, Any]) -> str:
     return str(record.get("origin") or DEFAULT_REVIEW_ORIGIN).strip().lower() or DEFAULT_REVIEW_ORIGIN
+
+
+def _is_auto_evolution_record(record: dict[str, Any]) -> bool:
+    if _proposal_origin(record) == "auto_evolution":
+        return True
+    payload = record.get("payload") if isinstance(record.get("payload"), dict) else {}
+    evolution = payload.get("evolution") if isinstance(payload.get("evolution"), dict) else {}
+    return str(evolution.get("origin") or "").strip().lower() == "auto_evolution"
 
 
 def _apply_action_kind(proposal_type: str) -> str | None:

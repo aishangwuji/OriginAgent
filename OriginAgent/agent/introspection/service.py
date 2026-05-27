@@ -244,10 +244,12 @@ class RuntimeIntrospectionService:
             status = OpportunitySignalStore(workspace).runtime_status(config)
             from OriginAgent.agent.background_review import ReviewProposalStore
             from OriginAgent.agent.evolution import AUTO_EVOLUTION_ORIGIN
+            from OriginAgent.agent.evolution_outcomes import EvolutionOutcomeStore
             from OriginAgent.agent.evolution_sandbox import sandbox_status_counts
 
             proposal_store = ReviewProposalStore(workspace)
             proposal_stats = proposal_store.stats(origin=AUTO_EVOLUTION_ORIGIN)
+            outcome_stats = EvolutionOutcomeStore(workspace).stats()
             applied_records = proposal_store.list_records(
                 origin=AUTO_EVOLUTION_ORIGIN,
                 status="applied",
@@ -284,6 +286,7 @@ class RuntimeIntrospectionService:
                 "pending_proposals_from_evolution": proposal_stats["pending_count"],
                 "proposal_count_from_evolution": proposal_stats["proposal_count"],
                 "auto_verified_workflows_count": auto_verified,
+                "outcomes": outcome_stats,
                 "static_gate_issue_counts": issue_counts,
                 "sandbox": {
                     "enabled": bool(getattr(getattr(config, "sandbox", None), "enabled", True)),
@@ -304,6 +307,16 @@ class RuntimeIntrospectionService:
                 "pending_proposals_from_evolution": 0,
                 "proposal_count_from_evolution": 0,
                 "auto_verified_workflows_count": 0,
+                "outcomes": {
+                    "outcome_event_count": 0,
+                    "outcome_type_counts": {},
+                    "gate_decision_counts": {},
+                    "sandbox_status_counts": {},
+                    "review_status_counts": {},
+                    "promotion_status_counts": {},
+                    "rollback_status_counts": {},
+                    "last_outcome_at": None,
+                },
                 "static_gate_issue_counts": {},
                 "sandbox": {
                     "enabled": True,

@@ -20,6 +20,7 @@ from OriginAgent.agent.evolution import (
     static_gate_workflow_payload,
 )
 from OriginAgent.agent.evolution_sandbox import SandboxEvaluator
+from OriginAgent.agent.evolution_outcomes import EvolutionOutcomeStore
 from OriginAgent.agent.background_review import ReviewProposal, ReviewProposalStore
 from OriginAgent.agent.tools.runtime_status import RuntimeStatusTool
 from OriginAgent.config.schema import EvolutionConfig
@@ -59,6 +60,10 @@ def test_opportunity_signal_store_upserts_and_dedupes_evidence(tmp_path) -> None
     assert signal.seen_count == 3
     assert [item["cursor"] for item in signal.evidence_sources] == [1, 2, 3]
     assert signal.priority_score >= 0.7
+    outcomes = EvolutionOutcomeStore(tmp_path).read_all()
+    assert [event["type"] for event in outcomes] == ["signal_created", "signal_updated"]
+    assert outcomes[0]["opportunity_id"] == signal.opportunity_id
+    assert outcomes[1]["feedback_score"] == pytest.approx(signal.priority_score)
 
 
 def test_workflow_detector_requires_repeated_evidence() -> None:
@@ -129,6 +134,16 @@ async def test_runtime_status_reports_evolution_defaults(tmp_path) -> None:
     assert result["evolution"]["pending_proposals_from_evolution"] == 0
     assert result["evolution"]["proposal_count_from_evolution"] == 0
     assert result["evolution"]["auto_verified_workflows_count"] == 0
+    assert result["evolution"]["outcomes"] == {
+        "outcome_event_count": 0,
+        "outcome_type_counts": {},
+        "gate_decision_counts": {},
+        "sandbox_status_counts": {},
+        "review_status_counts": {},
+        "promotion_status_counts": {},
+        "rollback_status_counts": {},
+        "last_outcome_at": None,
+    }
     assert result["evolution"]["static_gate_issue_counts"] == {}
     assert result["evolution"]["sandbox"] == {
         "enabled": True,
@@ -161,6 +176,7 @@ async def test_runtime_status_reports_high_score_evolution_signals(tmp_path) -> 
     assert evolution["opportunity_signals_count"] == 1
     assert evolution["eligible_workflow_signals"] == 1
     assert evolution["pending_proposals_from_evolution"] == 0
+    assert evolution["outcomes"]["outcome_type_counts"] == {"signal_created": 1}
     assert evolution["high_score_signals"] == [
         {
             "kind": SIGNAL_KIND_WORKFLOW,

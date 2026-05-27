@@ -25,6 +25,11 @@ from OriginAgent.agent.evolution import (
     evolution_allows_skill_proposals,
     evolution_allows_workflow_proposals,
 )
+from OriginAgent.agent.evolution_outcomes import (
+    EvolutionOutcomeStore,
+    proposal_outcome_context,
+    safe_append_outcome,
+)
 from OriginAgent.agent.evolution_sandbox import SandboxEvaluator
 from OriginAgent.agent.facts import CONFLICT_CATEGORIES, FactStore, normalize_fact_content
 from OriginAgent.agent.memory import redact_memory_text
@@ -79,6 +84,7 @@ class CuratorService:
         self.domain_pack_manager = domain_pack_manager
         self.store = store or ReviewProposalStore(self.workspace)
         self.opportunity_signals = OpportunitySignalStore(self.workspace)
+        self.outcomes = EvolutionOutcomeStore(self.workspace)
         self.sandbox = SandboxEvaluator(self.workspace, self.evolution_config)
         self._running = 0
         self._last_result: CuratorResult | None = None
@@ -147,6 +153,7 @@ class CuratorService:
             proposals = self._build_proposals(session_key=session_key, turn_id=turn_id)
             written = await asyncio.to_thread(self.store.append_many, proposals)
             if written:
+                self._trace_written_evolution_proposals(proposals)
                 self._mark_evolution_proposals_converted(proposals)
             scan = dict(self._last_evolution_scan)
             return self._remember(CuratorResult(
@@ -351,6 +358,27 @@ class CuratorService:
                     verification_status="verified" if verified else "",
                 )
 
+    def _trace_written_evolution_proposals(self, proposals: list[ReviewProposal]) -> None:
+        for proposal in proposals:
+            if proposal.origin != AUTO_EVOLUTION_ORIGIN:
+                continue
+            record = proposal.to_json()
+            context = proposal_outcome_context(record)
+            safe_append_outcome(
+                self.outcomes,
+                "proposal_generated",
+                **context,
+                review_status=proposal.status,
+                feedback_score=proposal.confidence,
+                metadata={
+                    "proposal_type": proposal.proposal_type,
+                    "domain_id": proposal.domain_id,
+                    "origin": proposal.origin,
+                    "title": proposal.title,
+                    "created_at": proposal.created_at,
+                },
+            )
+
     def _maybe_auto_verify_workflow(self, proposal: ReviewProposal) -> bool:
         config = self.evolution_config
         if not bool(getattr(config, "auto_verify_workflows", False)):
@@ -402,6 +430,19 @@ class CuratorService:
                 proposal=proposal,
                 artifact=artifact,
                 review_event_id=str(event.get("event_id") or ""),
+            )
+            context = proposal_outcome_context(record, event)
+            safe_append_outcome(
+                self.outcomes,
+                "promoted",
+                **context,
+                review_status="applied",
+                promotion_status="verified",
+                metadata={
+                    "review_event_id": str(event.get("event_id") or ""),
+                    "auto_verified": True,
+                    "reason": "auto_evolution verified low-risk workflow proposal",
+                },
             )
             return True
         except Exception:

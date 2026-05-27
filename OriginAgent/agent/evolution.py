@@ -15,6 +15,7 @@ from typing import Any
 from filelock import FileLock
 
 from OriginAgent.agent.facts import ValidationIssue
+from OriginAgent.agent.evolution_outcomes import EvolutionOutcomeStore, safe_append_outcome
 from OriginAgent.utils.helpers import ensure_dir, truncate_text
 
 
@@ -194,6 +195,7 @@ class OpportunitySignalStore:
         with self._lock:
             by_id = {signal.opportunity_id: signal for signal in self.read_all()}
             changed: list[OpportunitySignal] = []
+            created_ids: set[str] = set()
             for candidate in candidates:
                 signal = by_id.get(candidate.opportunity_id)
                 if signal is None:
@@ -209,6 +211,7 @@ class OpportunitySignalStore:
                         risk_level=candidate.risk_level,
                     )
                     by_id[signal.opportunity_id] = signal
+                    created_ids.add(signal.opportunity_id)
                 signal.target_key = _clean_signal_text(candidate.target_key, _TARGET_MAX_CHARS) or signal.target_key
                 signal.title = _clean_signal_text(candidate.title, 160) or signal.title
                 signal.summary = _clean_signal_text(candidate.summary, 512) or signal.summary
@@ -224,7 +227,8 @@ class OpportunitySignalStore:
 
             records = self._retained_records(list(by_id.values()), retention_days, now_dt)
             self._write_all_unlocked(records)
-            return changed
+        self._trace_signal_changes(changed, created_ids=created_ids)
+        return changed
 
     def select_workflow_candidates(
         self,
@@ -392,6 +396,30 @@ class OpportunitySignalStore:
         except BaseException:
             tmp_path.unlink(missing_ok=True)
             raise
+
+    def _trace_signal_changes(self, signals: list[OpportunitySignal], *, created_ids: set[str]) -> None:
+        if not signals:
+            return
+        outcomes = EvolutionOutcomeStore(self.workspace)
+        for signal in signals:
+            event_type = "signal_created" if signal.opportunity_id in created_ids else "signal_updated"
+            safe_append_outcome(
+                outcomes,
+                event_type,
+                opportunity_id=signal.opportunity_id,
+                artifact_type=signal.kind,
+                feedback_score=signal.priority_score,
+                metadata={
+                    "kind": signal.kind,
+                    "target_key": signal.target_key,
+                    "title": signal.title,
+                    "status": signal.status,
+                    "seen_count": signal.seen_count,
+                    "risk_level": signal.risk_level,
+                    "evidence_sources_count": len(signal.evidence_sources),
+                },
+                timestamp=_parse_datetime(signal.last_seen_at),
+            )
 
 
 def detect_workflow_opportunity_candidates(
