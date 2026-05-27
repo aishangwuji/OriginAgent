@@ -179,6 +179,43 @@ Retention is bounded by:
 - `health_history_retention_days`: default `90`.
 - `max_health_history_snapshots`: default `100`.
 
+## Schema Validation
+
+v1.5 adds a release-candidate schema check for governed evolution stores. It is read-only and validates the current file contents without rewriting older records.
+
+The validator covers:
+
+- `memory/opportunity_signals.jsonl`
+- auto-evolution records in `memory/review_proposals.jsonl`
+- `memory/evolution_outcomes.jsonl`
+- `memory/evolution_dependencies.jsonl`
+- `memory/evolution_trial_logs.jsonl`
+- `memory/evolution_health_history.jsonl`
+- `memory/evolution_snapshots/**/version_metadata.json`
+
+Maintenance now includes a compact `schema_validation` summary with:
+
+- `ok`: whether any reject-level schema issue was found.
+- `record_counts`: count by governed store.
+- `issue_counts`: count by severity.
+
+Operator previews and reports surface the same summary so administrators can see schema drift before running maintenance or applying proposals. Schema validation is an observability guardrail; it does not activate artifacts, rewrite stores, or approve proposals.
+
+## Release Candidate Checklist
+
+Before treating governed evolution as ready for v2.0 control-plane work, the v1.5 release candidate should pass this end-to-end loop:
+
+1. Append repeated historical usage entries.
+2. Detect a workflow opportunity signal.
+3. Let Curator convert the high-score signal into a workflow review proposal.
+4. Verify payload `static_gate`, `sandbox`, `promotion_gate`, and `operator_insights`.
+5. Preview `retry_trial` and confirm preview does not write proposal payloads, trial logs, outcomes, or signal state.
+6. Manually apply the proposal through `ReviewProposalStore.apply`.
+7. Confirm the generated workflow remains `proposal_status=proposed`, `verification_status=unverified`, and has all execution flags disabled.
+8. Confirm outcome trace includes signal creation, gate evaluation, proposal generation, and review approval.
+9. Run evolution maintenance and confirm schema validation is healthy.
+10. Generate an operator report and confirm it still restates the hard safety boundaries.
+
 ## What Never Happens Automatically
 
 These boundaries are intentionally hard:

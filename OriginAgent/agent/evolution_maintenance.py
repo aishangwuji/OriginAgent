@@ -13,6 +13,7 @@ from OriginAgent.agent.evolution_health import evolution_health_score
 from OriginAgent.agent.evolution_health_history import EvolutionHealthHistoryStore
 from OriginAgent.agent.evolution_outcomes import EvolutionOutcomeStore
 from OriginAgent.agent.evolution_sandbox import sandbox_status_counts, trial_policy_status
+from OriginAgent.agent.evolution_schema import validate_evolution_stores
 from OriginAgent.agent.evolution_trial_logs import EvolutionTrialLogStore
 
 
@@ -107,4 +108,13 @@ def run_evolution_maintenance(
         )
     except Exception:
         logger.exception("Evolution health history maintenance failed")
+    try:
+        validation = validate_evolution_stores(Path(workspace))
+        maintenance["schema_validation"] = {
+            "ok": validation.get("ok"),
+            "record_counts": validation.get("record_counts", {}),
+            "issue_counts": validation.get("issue_counts", {}),
+        }
+    except Exception:
+        logger.exception("Evolution schema validation failed")
     return maintenance

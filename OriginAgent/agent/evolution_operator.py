@@ -14,6 +14,7 @@ from OriginAgent.agent.evolution_health import evolution_health_score
 from OriginAgent.agent.evolution_health_history import EvolutionHealthHistoryStore
 from OriginAgent.agent.evolution_outcomes import EvolutionOutcomeStore, proposal_outcome_context, safe_append_outcome
 from OriginAgent.agent.evolution_sandbox import SandboxEvaluator, sandbox_status_counts, trial_policy_status
+from OriginAgent.agent.evolution_schema import validate_evolution_stores
 from OriginAgent.agent.evolution_trial import TrialRunner
 from OriginAgent.agent.evolution_trial_logs import EvolutionTrialLogStore
 from OriginAgent.agent.evolution_dependencies import EvolutionDependencyStore
@@ -331,6 +332,7 @@ class EvolutionOperator:
         health_summary = _mapping(health.get("health"))
         history = _mapping(health.get("history"))
         recommendations = self.list_recommendations()[:_REPORT_MAX_RECOMMENDATIONS]
+        schema_validation = validate_evolution_stores(self.workspace)
         lines = [
             f"# Evolution Operator Report ({days}d)",
             "",
@@ -339,6 +341,7 @@ class EvolutionOperator:
             f"- Health trend: {history.get('trend', 'unknown')} (delta {history.get('score_delta', 0)})",
             f"- Signals: {open_signals} open, {converted_signals} converted, {suppressed_signals} suppressed",
             f"- Recent outcome events: {len(recent_events)}",
+            f"- Schema validation: {'ok' if schema_validation.get('ok') else 'attention needed'}",
             "",
             "## Recent Outcomes",
             _format_counts(outcome_type_counts),
@@ -347,6 +350,7 @@ class EvolutionOperator:
             f"- Sandbox: {_inline_counts(sandbox_counts)}",
             f"- Review: {_inline_counts(review_counts)}",
             f"- Rollback: {_inline_counts(rollback_counts)}",
+            f"- Schema issues: {_inline_counts(_mapping(schema_validation.get('issue_counts')))}",
             "",
             "## Health Reasons",
         ]
@@ -441,6 +445,7 @@ class EvolutionOperator:
             retention_days=_config_int(self.config, "health_history_retention_days", 90),
             max_records=_config_int(self.config, "max_health_history_snapshots", 100),
         )
+        schema_validation = validate_evolution_stores(self.workspace)
         return {
             "ok": True,
             "action_kind": "force_cleanup" if force_cleanup else "run_maintenance",
@@ -457,6 +462,11 @@ class EvolutionOperator:
                 },
                 "trial_log_retention": trial_log_preview,
                 "health_history_retention": health_history_preview,
+                "schema_validation": {
+                    "ok": schema_validation.get("ok"),
+                    "record_counts": schema_validation.get("record_counts", {}),
+                    "issue_counts": schema_validation.get("issue_counts", {}),
+                },
                 "would_append_health_snapshot": True,
             },
         }
