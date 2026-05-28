@@ -14,6 +14,7 @@ from OriginAgent.agent.tools.content_read import ContentReadTool
 from OriginAgent.agent.tools.context import ToolContext
 from OriginAgent.agent.tools.cron import CronTool
 from OriginAgent.agent.tools.domain_loader import DomainToolLoader
+from OriginAgent.agent.tools.evolution_control import EvolutionControlTool
 from OriginAgent.agent.tools.filesystem import EditFileTool, ListDirTool, ReadFileTool, WriteFileTool
 from OriginAgent.agent.tools.image_generation import ImageGenerationTool
 from OriginAgent.agent.tools.loader import ToolLoader
@@ -141,6 +142,7 @@ def register_default_tools(
     introspection_service: Any | None = None,
     confirmation_store: PendingConfirmationStore | None = None,
     domain_runtime_overrides: dict[str, Any] | None = None,
+    evolution_config: Any | None = None,
 ) -> None:
     """Register all default tools with the registry."""
     allowed_dir = workspace if (restrict_to_workspace or exec_config.sandbox) else None
@@ -162,9 +164,11 @@ def register_default_tools(
             background_review_service=background_review_service,
             curator_service=curator_service,
             session_search_index_service=session_search_index_service,
+            evolution_config=evolution_config,
             introspection_service=introspection_service,
         )
     )
+    registry.register(EvolutionControlTool(workspace=workspace, evolution_config=evolution_config))
     registry.register(ToolAuditSummaryTool(workspace=workspace, audit_mode=audit_config.mode))
     registry.register(CronSummaryTool(cron_service=cron_service))
     registry.register(

@@ -6,8 +6,16 @@ from unittest.mock import MagicMock
 import pytest
 
 from OriginAgent.agent.loop import AgentLoop
+from OriginAgent.agent.agent_runtime_context import set_tool_context
+from OriginAgent.agent.evolution import (
+    SIGNAL_KIND_WORKFLOW,
+    OpportunitySignalCandidate,
+    OpportunitySignalStore,
+)
+from OriginAgent.agent.evolution_control_plane import CONTROL_EVENT_DENIED, CONTROL_EVENT_EXECUTED
+from OriginAgent.agent.evolution_outcomes import EvolutionOutcomeStore
 from OriginAgent.bus.queue import MessageBus
-from OriginAgent.config.schema import Config, DomainPacksConfig, ToolAuditConfig
+from OriginAgent.config.schema import Config, DomainPacksConfig, EvolutionConfig, ToolAuditConfig
 
 RUNTIME_TOOL_NAMES = {
     "originagent_runtime_status",
@@ -157,3 +165,101 @@ async def test_runtime_status_reflects_from_config_audit_mode(tmp_path: Path) ->
     assert audit_summary["audit_mode"] == "off"
     assert audit_summary["enabled"] is False
     assert runtime_status["self_model"]["identity"]["audit_mode"] == "off"
+
+
+@pytest.mark.asyncio
+async def test_evolution_control_tool_is_registered_and_preview_is_read_only(tmp_path: Path) -> None:
+    loop = AgentLoop(
+        bus=MessageBus(),
+        provider=_provider(),
+        workspace=tmp_path,
+        model="test-model",
+    )
+
+    actions = await loop.tools.execute("originagent_evolution_control", {"operation": "list_actions"})
+    preview = await loop.tools.execute(
+        "originagent_evolution_control",
+        {
+            "operation": "preview_action",
+            "action_kind": "suppress_signal",
+            "target_id": "missing_signal",
+            "reason": "preview only",
+        },
+    )
+    outcome_stats = EvolutionOutcomeStore(tmp_path).stats()
+
+    assert loop.tools.has("originagent_evolution_control")
+    assert actions["ok"] is True
+    assert any(item["action_kind"] == "suppress_signal" for item in actions["actions"])
+    assert preview["will_write"] is False
+    assert not any(name.startswith("control_action_") for name in outcome_stats["outcome_type_counts"])
+
+
+@pytest.mark.asyncio
+async def test_evolution_control_tool_execute_respects_manual_override(tmp_path: Path) -> None:
+    loop = AgentLoop(
+        bus=MessageBus(),
+        provider=_provider(),
+        workspace=tmp_path,
+        model="test-model",
+    )
+
+    result = await loop.tools.execute(
+        "originagent_evolution_control",
+        {
+            "operation": "execute_action",
+            "action_kind": "suppress_signal",
+            "target_id": "missing_signal",
+            "reason": "not allowed",
+        },
+    )
+
+    outcome_stats = EvolutionOutcomeStore(tmp_path).stats()
+    assert result["ok"] is False
+    assert result["error"] == "manual_override_disabled"
+    assert result["will_write"] is False
+    assert outcome_stats["outcome_type_counts"][CONTROL_EVENT_DENIED] == 1
+
+
+@pytest.mark.asyncio
+async def test_evolution_control_tool_execute_records_context_actor(tmp_path: Path) -> None:
+    signal = OpportunitySignalStore(tmp_path).upsert_candidates([
+        OpportunitySignalCandidate(
+            kind=SIGNAL_KIND_WORKFLOW,
+            target_key="weekly report",
+            title="Weekly report workflow",
+            summary="Repeated weekly report steps.",
+            evidence_sources=[{"cursor": 1, "timestamp": "2026-05-20T10:00:00+00:00"}],
+        )
+    ])[0]
+    loop = AgentLoop(
+        bus=MessageBus(),
+        provider=_provider(),
+        workspace=tmp_path,
+        model="test-model",
+        evolution_config=EvolutionConfig(allow_manual_override=True),
+    )
+    set_tool_context(
+        loop.tools,
+        channel="web",
+        chat_id="chat-1",
+        session_key="session-1",
+        actor_id="operator-1",
+        trigger="user",
+    )
+
+    result = await loop.tools.execute(
+        "originagent_evolution_control",
+        {
+            "operation": "execute_action",
+            "action_kind": "suppress_signal",
+            "target_id": signal.opportunity_id,
+            "reason": "accepted suggestion",
+        },
+    )
+
+    events = EvolutionOutcomeStore(tmp_path).read_all()
+    control_event = next(event for event in events if event["type"] == CONTROL_EVENT_EXECUTED)
+    assert result["ok"] is True
+    assert control_event["metadata"]["actor"] == "operator-1"
+    assert control_event["metadata"]["source"] == "originagent_evolution_control:user"

@@ -691,6 +691,7 @@ class AgentLoop:
             introspection_service=self.introspection,
             confirmation_store=self._confirmation_store,
             domain_runtime_overrides=self._domain_runtime_overrides,
+            evolution_config=self.evolution_config,
         )
 
     def _build_tool_context(self):

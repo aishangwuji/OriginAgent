@@ -51,9 +51,45 @@ The control plane has a small permission model:
 
 `originagent_runtime_status.evolution.control_plane` reports the active control-plane version, manual override state, action count, and hard safety boundaries. `originagent_runtime_status.evolution.read_model` provides a compact UI/API-oriented view over signals, proposals, health, dependencies, and snapshots.
 
+v2.1 productizes the control plane as a dedicated tool:
+
+```text
+originagent_evolution_control
+```
+
+New integrations should prefer this tool over the generic `my` compatibility commands. `my` remains available for interactive self-inspection and operator compatibility, but `originagent_evolution_control` has a stable operation surface for UIs, CLIs, and other clients:
+
+- `status`
+- `list_actions`
+- `list_recommendations`
+- `list_signals`
+- `list_proposals`
+- `inspect_signal`
+- `inspect_proposal`
+- `preview_action`
+- `execute_action`
+- `generate_report`
+- `explain_health`
+- `validate_schema`
+
+`list_actions` returns stable `ActionDescriptor` objects using schema version `originagent.evolution.action.v1`. Each descriptor includes:
+
+- `action_id`: stable action plus target identifier when present.
+- `action_kind`: normalized control-plane action.
+- `target_type` and `target_id`: the governed object the action addresses.
+- `permission`: `read`, `maintenance`, `override`, `rollback`, or `unknown`.
+- `risk_level`: compact operator risk summary.
+- `previewable` and `executable`: whether the action supports preview and execute paths.
+- `requires_manual_override`: whether real execution needs `allow_manual_override=true`.
+- `parameters_schema`: action-specific parameter contract.
+- `suggested_my_action`: backwards-compatible `my` command shape.
+- `policy`: the current policy decision for the action.
+
+`list_recommendations` attaches the same `action_descriptor` contract to each recommendation, along with `previewable`, `executable`, `requires_manual_override`, and `suggested_next_step`. This lets a UI render actions without parsing prose.
+
 ## Control Plane Writes
 
-The `my` tool exposes a small evolution control plane:
+The `my` tool exposes a small evolution control plane for compatibility:
 
 - `suppress_signal`
 - `resume_signal`
@@ -75,6 +111,16 @@ Evolution manual override is disabled. Set evolution.allow_manual_override=true 
 This protects the evolution state from accidental mutation by ordinary task execution or by the model itself. Administrators should enable manual override only for an intentional maintenance session, then disable it again.
 
 `execute_evolution_action` is the generic v2.0 write entry point. It accepts an object value with `action_kind` plus action-specific fields such as `target_id`, `artifact_type`, `artifact_name`, `snapshot_id`, `fixtures`, `reason`, or `force_cleanup`. It still goes through the same policy checks as the named actions.
+
+`originagent_evolution_control` exposes the same policy through `execute_action`. Execute results use schema version `originagent.evolution.action_result.v1` and include the embedded `action` descriptor, `policy`, `allowed`, `will_write`, `result`, `error`, and `message`.
+
+Control-plane outcome audit events are written only on real execute paths:
+
+- `control_action_denied`: policy rejected the execution, such as missing `allow_manual_override`.
+- `control_action_executed`: a write action executed successfully.
+- `control_action_failed`: a write action was allowed but failed.
+
+Read actions do not append control events. Preview actions are strictly read-only and do not append `control_action_*` outcome events.
 
 ## Operator Loop
 

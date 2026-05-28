@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -16,7 +16,7 @@ from OriginAgent.agent.evolution_health_history import (
 )
 from OriginAgent.agent.evolution_maintenance import run_evolution_maintenance
 from OriginAgent.agent.evolution_operator import EvolutionOperator
-from OriginAgent.agent.evolution_outcomes import EvolutionOutcomeStore
+from OriginAgent.agent.evolution_outcomes import EvolutionOutcomeStore, safe_append_outcome
 from OriginAgent.agent.evolution_sandbox import sandbox_status_counts, trial_policy_status
 from OriginAgent.agent.evolution_schema import validate_evolution_stores
 from OriginAgent.agent.evolution_snapshots import EvolutionRollbackService, EvolutionSnapshotStore
@@ -62,6 +62,12 @@ WRITE_ACTIONS = frozenset({
     "rollback_artifact",
 })
 
+ACTION_SCHEMA_VERSION = "originagent.evolution.action.v1"
+ACTION_RESULT_SCHEMA_VERSION = "originagent.evolution.action_result.v1"
+CONTROL_EVENT_EXECUTED = "control_action_executed"
+CONTROL_EVENT_DENIED = "control_action_denied"
+CONTROL_EVENT_FAILED = "control_action_failed"
+
 
 @dataclass(frozen=True)
 class EvolutionPolicyDecision:
@@ -74,6 +80,30 @@ class EvolutionPolicyDecision:
     requires_manual_override: bool = False
     dry_run: bool = True
     mode: str = "conservative"
+
+    def to_json(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass(frozen=True)
+class EvolutionActionDescriptor:
+    """Stable UI/API contract for one governed evolution operator action."""
+
+    action_id: str
+    action_kind: str
+    target_type: str
+    target_id: str = ""
+    permission: str = "read"
+    risk_level: str = "low"
+    previewable: bool = True
+    executable: bool = True
+    requires_manual_override: bool = False
+    summary: str = ""
+    source: str = "control_plane"
+    parameters_schema: dict[str, Any] = field(default_factory=dict)
+    suggested_my_action: str = ""
+    policy: dict[str, Any] = field(default_factory=dict)
+    schema_version: str = ACTION_SCHEMA_VERSION
 
     def to_json(self) -> dict[str, Any]:
         return asdict(self)
@@ -200,20 +230,17 @@ class EvolutionControlPlane:
 
     def list_actions(self) -> dict[str, Any]:
         actions = []
-        for action in sorted(READ_ACTIONS | WRITE_ACTIONS | {"rollback_artifact"}):
+        for action in sorted({normalize_action_kind(item) for item in READ_ACTIONS | WRITE_ACTIONS}):
             if action == "preview_evolution_action":
                 continue
-            decision = self.policy.decide(action, execution=False)
-            actions.append({
-                "action_kind": action,
-                "permission": action_permission(action),
-                "requires_manual_override": decision.requires_manual_override,
-                "can_preview": action in PREVIEW_ACTIONS or action in READ_ACTIONS,
-                "can_execute": action in READ_ACTIONS or action in WRITE_ACTIONS,
-                "policy": decision.to_json(),
-            })
+            descriptor = self.action_descriptor(action)
+            item = descriptor.to_json()
+            item["can_preview"] = item["previewable"]
+            item["can_execute"] = item["executable"]
+            actions.append(item)
         return {
             "ok": True,
+            "schema_version": ACTION_SCHEMA_VERSION,
             "actions": actions,
             "safety_boundaries": safety_boundaries(),
         }
@@ -221,11 +248,50 @@ class EvolutionControlPlane:
     def explain_health(self) -> dict[str, Any]:
         return self.operator.explain_health()
 
-    def list_recommendations(self) -> list[dict[str, Any]]:
-        return self.operator.list_recommendations()
+    def list_recommendations(
+        self,
+        *,
+        health: dict[str, Any] | None = None,
+        health_history: dict[str, Any] | None = None,
+        outcome_stats: dict[str, Any] | None = None,
+        dependency_stats: dict[str, Any] | None = None,
+        feedback_stats: dict[str, Any] | None = None,
+        sandbox_counts: dict[str, int] | None = None,
+    ) -> list[dict[str, Any]]:
+        return [
+            self._recommendation_with_action(item)
+            for item in self.operator.list_recommendations(
+                health=health,
+                health_history=health_history,
+                outcome_stats=outcome_stats,
+                dependency_stats=dependency_stats,
+                feedback_stats=feedback_stats,
+                sandbox_counts=sandbox_counts,
+            )
+        ]
 
     def generate_report(self, *, period_days: int = 7) -> str:
         return self.operator.generate_report(period_days=period_days)
+
+    def action_descriptor(
+        self,
+        action_kind: str,
+        *,
+        target_id: str = "",
+        risk_level: str = "",
+        source: str = "control_plane",
+    ) -> EvolutionActionDescriptor:
+        """Return the stable action contract consumed by tools, CLIs, and UIs."""
+
+        action = normalize_action_kind(action_kind)
+        decision = self.policy.decide(action, execution=False)
+        return build_action_descriptor(
+            action,
+            target_id=target_id,
+            decision=decision,
+            risk_level=str(risk_level or risk_level_for_action(action)),
+            source=source,
+        )
 
     def preview_action(
         self,
@@ -287,12 +353,14 @@ class EvolutionControlPlane:
         artifact_name: str = "",
         snapshot_id: str = "",
         period_days: int = 7,
+        actor: str = "control_plane",
+        source: str = "control_plane",
     ) -> dict[str, Any]:
         action = normalize_action_kind(action_kind)
         decision = self.policy.decide(action, execution=True)
         if not decision.allowed:
             error = "unsupported_action" if decision.permission == "unknown" else "manual_override_disabled"
-            return self._with_policy(
+            result = self._with_policy(
                 self._action_result(
                     ok=False,
                     action_kind=action,
@@ -305,6 +373,14 @@ class EvolutionControlPlane:
                 decision,
                 will_execute=True,
             )
+            self._append_control_outcome(
+                CONTROL_EVENT_DENIED,
+                result,
+                decision,
+                actor=actor,
+                source=source,
+            )
+            return result
         if action in READ_ACTIONS and action not in WRITE_ACTIONS:
             return self._with_policy(
                 self._execute_read_action(action, target_id=target_id, period_days=period_days),
@@ -356,7 +432,7 @@ class EvolutionControlPlane:
                 result=EvolutionFeedbackCalibrator(self.workspace, self.config).run().to_json(),
             )
         elif action == "retry_trial":
-            retry = self.operator.retry_trial(target_id, fixtures=fixtures or {}, actor="control_plane")
+            retry = self.operator.retry_trial(target_id, fixtures=fixtures or {}, actor=actor or "control_plane")
             result = self._action_result(
                 ok=retry.ok,
                 action_kind=action,
@@ -373,7 +449,7 @@ class EvolutionControlPlane:
                 artifact_name=artifact_name or target_id,
                 snapshot_id=snapshot_id or None,
                 reason=reason,
-                actor="control_plane",
+                actor=actor or "control_plane",
                 force=force_cleanup,
             )
             result = self._action_result(
@@ -396,7 +472,15 @@ class EvolutionControlPlane:
                 error="unsupported_action",
                 message=f"Unsupported evolution control-plane action `{action_kind}`.",
             )
-        return self._with_policy(result, decision, will_execute=True)
+        result = self._with_policy(result, decision, will_execute=True)
+        self._append_control_outcome(
+            CONTROL_EVENT_EXECUTED if result.get("ok") else CONTROL_EVENT_FAILED,
+            result,
+            decision,
+            actor=actor,
+            source=source,
+        )
+        return result
 
     def _status_unchecked(self) -> dict[str, Any]:
         signal_status = OpportunitySignalStore(self.workspace).runtime_status(self.config)
@@ -453,7 +537,7 @@ class EvolutionControlPlane:
                 **health_history_policy_status(self.config),
                 **health_history,
             },
-            "operator_recommendations": self.operator.list_recommendations(
+            "operator_recommendations": self.list_recommendations(
                 health=health,
                 health_history=health_history,
                 outcome_stats=outcome_stats,
@@ -687,6 +771,69 @@ class EvolutionControlPlane:
             "read_model": {},
         }
 
+    def _recommendation_with_action(self, item: dict[str, Any]) -> dict[str, Any]:
+        recommendation = dict(item)
+        action = normalize_action_kind(str(recommendation.get("action_kind") or recommendation.get("action") or ""))
+        target_id = str(
+            recommendation.get("target_id")
+            or recommendation.get("proposal_id")
+            or recommendation.get("opportunity_id")
+            or ""
+        )
+        risk_level = str(recommendation.get("risk_level") or risk_level_for_action(action))
+        descriptor = self.action_descriptor(
+            action,
+            target_id=target_id,
+            risk_level=risk_level,
+            source=f"recommendation:{recommendation.get('code') or 'operator'}",
+        )
+        recommendation["action_descriptor"] = descriptor.to_json()
+        recommendation["previewable"] = descriptor.previewable
+        recommendation["executable"] = descriptor.executable
+        recommendation["requires_manual_override"] = bool(
+            recommendation.get("requires_manual_override") or descriptor.requires_manual_override
+        )
+        recommendation["suggested_next_step"] = (
+            "preview_action"
+            if descriptor.previewable and descriptor.requires_manual_override
+            else "execute_or_inspect"
+            if descriptor.executable
+            else "inspect"
+        )
+        return recommendation
+
+    def _append_control_outcome(
+        self,
+        event_type: str,
+        result: dict[str, Any],
+        decision: EvolutionPolicyDecision,
+        *,
+        actor: str,
+        source: str,
+    ) -> None:
+        action = normalize_action_kind(str(result.get("action_kind") or decision.action_kind))
+        metadata = {
+            "actor": str(actor or "control_plane"),
+            "source": str(source or "control_plane"),
+            "action_kind": action,
+            "target_type": str(result.get("target_type") or target_type_for_action(action)),
+            "target_id": str(result.get("target_id") or ""),
+            "policy_decision": "allowed" if decision.allowed else "denied",
+            "permission": decision.permission,
+            "requires_manual_override": decision.requires_manual_override,
+            "result_status": "succeeded" if result.get("ok") else "failed",
+            "error": str(result.get("error") or ""),
+        }
+        safe_append_outcome(
+            EvolutionOutcomeStore(self.workspace),
+            event_type,
+            opportunity_id=str(result.get("target_id") or "") if target_type_for_action(action) == "signal" else "",
+            proposal_id=str(result.get("target_id") or "") if target_type_for_action(action) == "proposal" else "",
+            artifact_type="",
+            artifact_name=str(result.get("target_id") or "") if target_type_for_action(action) == "artifact" else "",
+            metadata=metadata,
+        )
+
     @staticmethod
     def _action_result(
         *,
@@ -701,6 +848,7 @@ class EvolutionControlPlane:
         message: str = "",
     ) -> dict[str, Any]:
         return {
+            "schema_version": ACTION_RESULT_SCHEMA_VERSION,
             "ok": bool(ok),
             "action_kind": normalize_action_kind(action_kind),
             "target_type": target_type,
@@ -716,8 +864,17 @@ class EvolutionControlPlane:
     @staticmethod
     def _with_policy(result: dict[str, Any], decision: EvolutionPolicyDecision, *, will_execute: bool) -> dict[str, Any]:
         merged = dict(result)
+        action = normalize_action_kind(str(merged.get("action_kind") or decision.action_kind))
         merged["policy"] = decision.to_json()
         merged["allowed"] = decision.allowed
+        merged["schema_version"] = str(merged.get("schema_version") or ACTION_RESULT_SCHEMA_VERSION)
+        merged["action"] = build_action_descriptor(
+            action,
+            target_id=str(merged.get("target_id") or ""),
+            decision=decision,
+            risk_level=risk_level_for_action(action),
+            source="execute" if will_execute else "preview",
+        ).to_json()
         merged["requires_manual_override"] = bool(
             merged.get("requires_manual_override") or decision.requires_manual_override
         )
@@ -775,6 +932,131 @@ def target_type_for_action(action_kind: str) -> str:
     if action == "generate_evolution_report":
         return "report"
     return "system"
+
+
+def build_action_descriptor(
+    action_kind: str,
+    *,
+    target_id: str,
+    decision: EvolutionPolicyDecision,
+    risk_level: str,
+    source: str,
+) -> EvolutionActionDescriptor:
+    action = normalize_action_kind(action_kind)
+    target = str(target_id or "").strip()
+    return EvolutionActionDescriptor(
+        action_id=action_id_for(action, target),
+        action_kind=action,
+        target_type=target_type_for_action(action),
+        target_id=target,
+        permission=decision.permission,
+        risk_level=str(risk_level or risk_level_for_action(action)),
+        previewable=action in PREVIEW_ACTIONS or action in READ_ACTIONS,
+        executable=action in READ_ACTIONS or action in WRITE_ACTIONS,
+        requires_manual_override=decision.requires_manual_override,
+        summary=action_summary(action),
+        source=str(source or "control_plane"),
+        parameters_schema=action_parameters_schema(action),
+        suggested_my_action=suggested_my_action(action, target),
+        policy=decision.to_json(),
+    )
+
+
+def action_id_for(action_kind: str, target_id: str = "") -> str:
+    action = normalize_action_kind(action_kind)
+    target = str(target_id or "").strip()
+    return f"{action}:{target}" if target else action
+
+
+def risk_level_for_action(action_kind: str) -> str:
+    action = normalize_action_kind(action_kind)
+    if action == "rollback_artifact":
+        return "high"
+    if action in {"retry_trial", "suppress_signal", "resume_signal", "run_feedback_calibration"}:
+        return "medium"
+    return "low"
+
+
+def action_summary(action_kind: str) -> str:
+    action = normalize_action_kind(action_kind)
+    summaries = {
+        "status": "Return the governed evolution dashboard read model.",
+        "list_actions": "List stable control-plane action descriptors.",
+        "list_signals": "List governed evolution opportunity signals.",
+        "list_proposals": "List pending or recent auto-evolution proposals.",
+        "inspect_signal": "Inspect one opportunity signal and related operator guidance.",
+        "inspect_evolution_proposal": "Inspect one auto-evolution review proposal.",
+        "explain_evolution_health": "Explain evolution health score, trend, and recommendations.",
+        "list_evolution_recommendations": "List structured operator recommendations.",
+        "list_recommendations": "List structured operator recommendations.",
+        "generate_evolution_report": "Generate a read-only Markdown evolution report.",
+        "validate_schema": "Validate governed evolution stores without mutation.",
+        "suppress_signal": "Manually suppress an opportunity signal.",
+        "resume_signal": "Resume a manually or feedback-suppressed opportunity signal.",
+        "run_maintenance": "Run governed evolution retention and cleanup maintenance.",
+        "force_cleanup": "Run maintenance with force cleanup enabled.",
+        "run_feedback_calibration": "Apply feedback calibration to opportunity signals.",
+        "retry_trial": "Retry read-only isolated trial for an auto-evolution workflow proposal.",
+        "rollback_artifact": "Rollback a workflow or skill from a governed snapshot.",
+    }
+    return summaries.get(action, f"Unsupported evolution action `{action}`.")
+
+
+def action_parameters_schema(action_kind: str) -> dict[str, Any]:
+    action = normalize_action_kind(action_kind)
+    schema: dict[str, Any] = {
+        "type": "object",
+        "properties": {
+            "target_id": {"type": "string"},
+            "reason": {"type": "string"},
+        },
+        "additionalProperties": True,
+    }
+    if action in {"inspect_signal", "suppress_signal", "resume_signal"}:
+        schema["required"] = ["target_id"]
+    elif action in {"inspect_evolution_proposal", "retry_trial"}:
+        schema["required"] = ["target_id"]
+        schema["properties"]["fixtures"] = {
+            "type": "object",
+            "additionalProperties": {"type": "string"},
+        }
+    elif action == "rollback_artifact":
+        schema["required"] = ["artifact_type", "artifact_name"]
+        schema["properties"].update({
+            "artifact_type": {"type": "string", "enum": ["workflow", "skill"]},
+            "artifact_name": {"type": "string"},
+            "snapshot_id": {"type": "string"},
+            "force_cleanup": {"type": "boolean"},
+        })
+    elif action == "generate_evolution_report":
+        schema["properties"]["period_days"] = {"type": "integer", "minimum": 1, "maximum": 90}
+    elif action in {"run_maintenance", "force_cleanup"}:
+        schema["properties"]["force_cleanup"] = {"type": "boolean"}
+    return schema
+
+
+def suggested_my_action(action_kind: str, target_id: str = "") -> str:
+    action = normalize_action_kind(action_kind)
+    target = str(target_id or "").strip()
+    read_aliases = {
+        "status": "evolution_status",
+        "list_actions": "list_evolution_actions",
+        "list_signals": "list_evolution_signals",
+        "list_proposals": "list_evolution_proposals",
+        "list_recommendations": "list_evolution_recommendations",
+        "validate_schema": "validate_evolution_schema",
+    }
+    if action in read_aliases:
+        return f"my action={read_aliases[action]}"
+    if action in {"inspect_signal", "suppress_signal", "resume_signal"} and target:
+        return f"my action={action} key={target}"
+    if action in {"inspect_evolution_proposal", "retry_trial"} and target:
+        return f"my action={action} key={target}"
+    if action == "rollback_artifact":
+        return "my action=rollback_artifact value={artifact_type, artifact_name, snapshot_id}"
+    if action == "generate_evolution_report":
+        return "my action=generate_evolution_report value={period_days: 7}"
+    return f"my action={action}"
 
 
 def permission_summary(config: Any | None) -> dict[str, Any]:
