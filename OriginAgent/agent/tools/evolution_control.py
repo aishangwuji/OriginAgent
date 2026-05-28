@@ -45,6 +45,7 @@ class EvolutionControlTool(Tool):
                         "list_proposals",
                         "inspect_signal",
                         "inspect_proposal",
+                        "list_config_overlay",
                         "preview_action",
                         "execute_action",
                         "generate_report",
@@ -110,6 +111,8 @@ class EvolutionControlTool(Tool):
             return plane.inspect_signal(target_id)
         if op == "inspect_proposal":
             return plane.inspect_proposal(target_id)
+        if op == "list_config_overlay":
+            return plane.execute_action("list_config_overlay", actor=self._actor, source=self._source)
         if op == "explain_health":
             return plane.explain_health()
         if op == "generate_report":

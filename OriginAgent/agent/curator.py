@@ -25,6 +25,7 @@ from OriginAgent.agent.evolution import (
     evolution_allows_skill_proposals,
     evolution_allows_workflow_proposals,
 )
+from OriginAgent.agent.evolution_config_overlay import apply_config_overlay
 from OriginAgent.agent.evolution_outcomes import (
     EvolutionOutcomeStore,
     proposal_outcome_context,
@@ -131,7 +132,7 @@ class CuratorService:
             from OriginAgent.config.schema import EvolutionConfig
 
             self._evolution_config = EvolutionConfig()
-        return self._evolution_config
+        return apply_config_overlay(self.workspace, self._evolution_config)
 
     def runtime_status(self) -> dict[str, Any]:
         stats = self.store.stats(origin=CURATOR_ORIGIN)
@@ -279,10 +280,12 @@ class CuratorService:
             return []
 
         proposals: list[ReviewProposal] = []
+        sandbox = SandboxEvaluator(self.workspace, config)
+        promotion_gate = PromotionGate(config)
         for signal in signals:
             payload = build_workflow_payload_from_signal(signal, config=config)
-            payload["sandbox"] = self.sandbox.evaluate_workflow_payload(payload)
-            gate = self.promotion_gate.evaluate(payload, proposal_type="workflow")
+            payload["sandbox"] = sandbox.evaluate_workflow_payload(payload)
+            gate = promotion_gate.evaluate(payload, proposal_type="workflow")
             payload["promotion_gate"] = gate.to_json()
             payload["operator_insights"] = build_operator_insights(
                 payload,
@@ -348,9 +351,10 @@ class CuratorService:
             return []
 
         proposals: list[ReviewProposal] = []
+        promotion_gate = PromotionGate(config)
         for signal in signals:
             payload = build_skill_payload_from_signal(signal, config=config)
-            gate = self.promotion_gate.evaluate(payload, proposal_type="skill")
+            gate = promotion_gate.evaluate(payload, proposal_type="skill")
             payload["promotion_gate"] = gate.to_json()
             payload["operator_insights"] = build_operator_insights(
                 payload,

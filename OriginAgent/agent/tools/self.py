@@ -86,6 +86,7 @@ class MyTool(Tool):
         "run_feedback_calibration",
         "retry_trial",
         "rollback_artifact",
+        "clear_config_overlay",
         "execute_evolution_action",
     })
     EVOLUTION_READ_ACTIONS = frozenset({
@@ -100,6 +101,7 @@ class MyTool(Tool):
         "preview_evolution_action",
         "generate_evolution_report",
         "validate_evolution_schema",
+        "list_config_overlay",
     })
 
     @classmethod
@@ -165,7 +167,8 @@ class MyTool(Tool):
             "list_evolution_recommendations, preview_evolution_action, "
             "generate_evolution_report, retry_trial, rollback_artifact, "
             "evolution_status, list_evolution_actions, list_evolution_signals, "
-            "list_evolution_proposals, validate_evolution_schema.\n"
+            "list_evolution_proposals, validate_evolution_schema, list_config_overlay, "
+            "clear_config_overlay.\n"
             "- check (no key): full config overview — start here.\n"
             "- check (key): drill into a value. Dot-paths allowed "
             "(e.g. '_last_usage.prompt_tokens', 'web_config.enable').\n"
@@ -221,8 +224,10 @@ class MyTool(Tool):
                         "preview_evolution_action",
                         "generate_evolution_report",
                         "validate_evolution_schema",
+                        "list_config_overlay",
                         "retry_trial",
                         "rollback_artifact",
+                        "clear_config_overlay",
                         "execute_evolution_action",
                     ],
                     "description": "Action to perform",
@@ -507,6 +512,10 @@ class MyTool(Tool):
             result = plane.execute_action("validate_schema")
             self._audit("evolution_read", "validate_evolution_schema")
             return f"Evolution schema validation: {result!r}"
+        if action == "list_config_overlay":
+            result = plane.execute_action("list_config_overlay")
+            self._audit("evolution_read", "list_config_overlay")
+            return f"Evolution config overlay: {result!r}"
         return f"Unknown action: {action}"
 
     def _evolution_control(self, action: str, key: str | None, value: Any) -> str:
@@ -564,6 +573,13 @@ class MyTool(Tool):
             if not result.get("allowed", True) and result.get("message") == EVOLUTION_MANUAL_OVERRIDE_DISABLED:
                 return EVOLUTION_MANUAL_OVERRIDE_DISABLED
             return f"Evolution rollback completed: {result!r}"
+
+        if action == "clear_config_overlay":
+            result = plane.execute_action(action, reason=self._evolution_reason(value))
+            self._audit("evolution_control", "clear_config_overlay")
+            if not result.get("allowed", True) and result.get("message") == EVOLUTION_MANUAL_OVERRIDE_DISABLED:
+                return EVOLUTION_MANUAL_OVERRIDE_DISABLED
+            return f"Evolution config overlay cleared: {result!r}"
 
         if err := self._validate_key(key, "opportunity_id"):
             return err

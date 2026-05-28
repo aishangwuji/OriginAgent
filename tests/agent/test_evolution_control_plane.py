@@ -20,6 +20,7 @@ from OriginAgent.agent.evolution_control_plane import (
     EVOLUTION_MANUAL_OVERRIDE_DISABLED,
     EvolutionControlPlane,
 )
+from OriginAgent.agent.evolution_config_overlay import ConfigPatch, EvolutionConfigOverlayStore
 from OriginAgent.agent.evolution_outcomes import EvolutionOutcomeStore
 from OriginAgent.agent.evolution_snapshots import EvolutionSnapshotStore
 from OriginAgent.agent.evolution_trial_logs import EvolutionTrialLogStore
@@ -93,6 +94,10 @@ def test_control_plane_status_and_read_model(tmp_path: Path) -> None:
     assert action_map["status"]["executable"] is True
     assert action_map["status"]["suggested_my_action"] == "my action=evolution_status"
     assert action_map["validate_schema"]["suggested_my_action"] == "my action=validate_evolution_schema"
+    assert action_map["list_config_overlay"]["permission"] == "read"
+    assert action_map["list_config_overlay"]["target_type"] == "config_overlay"
+    assert action_map["clear_config_overlay"]["permission"] == "maintenance"
+    assert action_map["clear_config_overlay"]["risk_level"] == "medium"
     assert action_map["suppress_signal"]["requires_manual_override"] is True
     assert action_map["suppress_signal"]["parameters_schema"]["required"] == ["target_id"]
     assert action_map["rollback_artifact"]["permission"] == "rollback"
@@ -271,3 +276,41 @@ def test_control_plane_rollback_preview_uses_snapshot_without_writing(tmp_path: 
     assert preview["preview"]["snapshot_id"] == snapshot["snapshot_id"]
     assert preview["preview"]["would_write_artifact"] is True
     assert "rolled_back" not in outcome_stats["outcome_type_counts"]
+
+
+def test_control_plane_config_overlay_status_and_clear_policy(tmp_path: Path) -> None:
+    config = EvolutionConfig(mode="curated", dry_run=False)
+    store = EvolutionConfigOverlayStore(tmp_path)
+    store.apply_patches(
+        config,
+        [ConfigPatch("dry_run", True, "preview first")],
+        actor="unit-test",
+        source="test",
+    )
+    plane = EvolutionControlPlane(tmp_path, config)
+
+    status = plane.status()
+    listed = plane.execute_action("list_config_overlay")
+    preview = plane.preview_action("clear_config_overlay")
+    denied = plane.execute_action("clear_config_overlay", actor="operator-a", source="unit-test")
+    overlay_after_denied = EvolutionConfigOverlayStore(tmp_path).status()
+    allowed = EvolutionControlPlane(
+        tmp_path,
+        EvolutionConfig(mode="curated", dry_run=False, allow_manual_override=True),
+    ).execute_action("clear_config_overlay", actor="operator-a", source="unit-test")
+
+    assert status["policy"]["dry_run"] is True
+    assert status["policy"]["overlay_active"] is True
+    assert status["config_overlay"]["active"] is True
+    assert listed["ok"] is True
+    assert listed["policy"]["permission"] == "read"
+    assert listed["result"]["overrides"]["dry_run"] is True
+    assert preview["ok"] is True
+    assert preview["will_write"] is False
+    assert preview["preview"]["would_clear_overlay"] is True
+    assert denied["ok"] is False
+    assert denied["error"] == "manual_override_disabled"
+    assert overlay_after_denied["active"] is True
+    assert allowed["ok"] is True
+    assert allowed["will_write"] is True
+    assert EvolutionConfigOverlayStore(tmp_path).status()["active"] is False

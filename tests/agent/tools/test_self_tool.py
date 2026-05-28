@@ -21,6 +21,7 @@ from OriginAgent.agent.evolution import (
 )
 from OriginAgent.agent.evolution_outcomes import EvolutionOutcomeStore
 from OriginAgent.agent.evolution_trial_logs import EvolutionTrialLogStore
+from OriginAgent.agent.evolution_config_overlay import ConfigPatch, EvolutionConfigOverlayStore
 from OriginAgent.config.schema import EvolutionConfig
 
 
@@ -1153,6 +1154,35 @@ class TestEvolutionControlPlane:
         assert record["payload"]["trial"]["status"] == "passed"
         assert record["payload"]["operator_insights"]["trial_summary"]["status"] == "passed"
         assert outcomes["outcome_type_counts"]["trial_retried"] == 1
+
+    @pytest.mark.asyncio
+    async def test_config_overlay_read_and_clear_follow_control_policy(self, tmp_path):
+        config = EvolutionConfig(mode="curated", dry_run=False)
+        EvolutionConfigOverlayStore(tmp_path).apply_patches(
+            config,
+            [ConfigPatch("dry_run", True, "preview first")],
+            actor="unit-test",
+            source="test",
+        )
+        tool = _make_tool(_make_mock_loop(workspace=tmp_path, evolution_config=config))
+
+        listed = await tool.execute(action="list_config_overlay")
+        denied = await tool.execute(action="clear_config_overlay")
+
+        assert "Evolution config overlay" in listed
+        assert "'active': True" in listed
+        assert denied == EVOLUTION_MANUAL_OVERRIDE_DISABLED
+        assert EvolutionConfigOverlayStore(tmp_path).status()["active"] is True
+
+        allowed_tool = _make_tool(_make_mock_loop(
+            workspace=tmp_path,
+            evolution_config=EvolutionConfig(mode="curated", dry_run=False, allow_manual_override=True),
+        ))
+        cleared = await allowed_tool.execute(action="clear_config_overlay")
+
+        assert "Evolution config overlay cleared" in cleared
+        assert "'ok': True" in cleared
+        assert EvolutionConfigOverlayStore(tmp_path).status()["active"] is False
 
 
 # ---------------------------------------------------------------------------

@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from OriginAgent.agent.evolution import AUTO_EVOLUTION_ORIGIN, OpportunitySignalStore
+from OriginAgent.agent.evolution_config_overlay import EvolutionConfigOverlayStore, apply_config_overlay
 from OriginAgent.agent.evolution_dependencies import EvolutionDependencyStore
 from OriginAgent.agent.evolution_feedback import EvolutionFeedbackCalibrator, feedback_status
 from OriginAgent.agent.evolution_health import evolution_health_score
@@ -39,6 +40,7 @@ READ_ACTIONS = frozenset({
     "list_recommendations",
     "generate_evolution_report",
     "validate_schema",
+    "list_config_overlay",
 })
 PREVIEW_ACTIONS = frozenset({
     "preview_evolution_action",
@@ -51,6 +53,7 @@ PREVIEW_ACTIONS = frozenset({
     "rollback_artifact",
     "validate_schema",
     "generate_evolution_report",
+    "clear_config_overlay",
 })
 WRITE_ACTIONS = frozenset({
     "suppress_signal",
@@ -60,6 +63,7 @@ WRITE_ACTIONS = frozenset({
     "run_feedback_calibration",
     "retry_trial",
     "rollback_artifact",
+    "clear_config_overlay",
 })
 
 ACTION_SCHEMA_VERSION = "originagent.evolution.action.v1"
@@ -157,9 +161,10 @@ class EvolutionControlPlane:
 
     def __init__(self, workspace: Path, config: Any | None = None) -> None:
         self.workspace = Path(workspace)
-        self.config = config
+        self.raw_config = config
+        self.config = apply_config_overlay(self.workspace, config)
         self.policy = EvolutionPolicy(config)
-        self.operator = EvolutionOperator(self.workspace, config)
+        self.operator = EvolutionOperator(self.workspace, self.config)
 
     def status(self) -> dict[str, Any]:
         """Return the unified dashboard-ready evolution read model."""
@@ -331,6 +336,18 @@ class EvolutionControlPlane:
                 will_write=False,
                 preview={"period_days": _coerce_period_days(period_days), "would_generate_markdown": True},
             )
+        elif action == "clear_config_overlay":
+            result = self._action_result(
+                action_kind=action,
+                target_type="config_overlay",
+                target_id="evolution_config",
+                will_write=False,
+                preview={
+                    "would_clear_overlay": True,
+                    "current_overlay": EvolutionConfigOverlayStore(self.workspace).status(),
+                },
+                message="Would clear governed evolution config overlay.",
+            )
         else:
             result = self.operator.preview_action(
                 action,
@@ -462,6 +479,16 @@ class EvolutionControlPlane:
                 error=rollback.error,
                 message=rollback.message,
             )
+        elif action == "clear_config_overlay":
+            overlay = EvolutionConfigOverlayStore(self.workspace).clear(actor=actor or "control_plane", source=source)
+            result = self._action_result(
+                action_kind=action,
+                target_type="config_overlay",
+                target_id="evolution_config",
+                will_write=True,
+                result=overlay,
+                message="Governed evolution config overlay cleared.",
+            )
         else:
             result = self._action_result(
                 ok=False,
@@ -510,6 +537,7 @@ class EvolutionControlPlane:
         auto_verified = _auto_verified_workflow_count(applied_records)
         trial_log_store = EvolutionTrialLogStore(self.workspace)
         schema_validation = validate_evolution_stores(self.workspace)
+        config_overlay = EvolutionConfigOverlayStore(self.workspace).status()
         return {
             **signal_status,
             "control_plane": {
@@ -522,8 +550,10 @@ class EvolutionControlPlane:
                 "mode": str(getattr(self.config, "mode", "conservative") if self.config is not None else "conservative"),
                 "dry_run": bool(getattr(self.config, "dry_run", True) if self.config is not None else True),
                 "allow_manual_override": bool(getattr(self.config, "allow_manual_override", False) if self.config is not None else False),
+                "overlay_active": bool(config_overlay.get("active")),
                 "permissions": permission_summary(self.config),
             },
+            "config_overlay": config_overlay,
             "pending_proposals_from_evolution": proposal_stats["pending_count"],
             "proposal_count_from_evolution": proposal_stats["proposal_count"],
             "auto_verified_workflows_count": auto_verified,
@@ -603,6 +633,8 @@ class EvolutionControlPlane:
             result = self.generate_report(period_days=period_days)
         elif action == "validate_schema":
             result = validate_evolution_stores(self.workspace)
+        elif action == "list_config_overlay":
+            result = EvolutionConfigOverlayStore(self.workspace).status()
         else:
             return self._action_result(
                 ok=False,
@@ -690,7 +722,20 @@ class EvolutionControlPlane:
                 "mode": mode,
                 "dry_run": dry_run,
                 "allow_manual_override": bool(getattr(self.config, "allow_manual_override", False) if self.config is not None else False),
+                "overlay_active": False,
                 "permissions": permission_summary(self.config),
+            },
+            "config_overlay": {
+                "schema_version": "originagent.evolution.config_overlay.v1",
+                "active": False,
+                "override_count": 0,
+                "overrides": {},
+                "patch_count": 0,
+                "last_patch_at": "",
+                "last_actor": "",
+                "recent_patches": [],
+                "store_path": "memory/evolution_config_overrides.json",
+                "patch_log_path": "memory/evolution_config_patches.jsonl",
             },
             "opportunity_signals_count": 0,
             "converted_signals_count": 0,
@@ -904,9 +949,9 @@ def normalize_action_kind(value: str) -> str:
 
 def action_permission(action_kind: str) -> str:
     action = normalize_action_kind(action_kind)
-    if action in {"status", "list_actions", "list_signals", "list_proposals", "inspect_signal", "inspect_evolution_proposal", "inspect_proposal", "explain_evolution_health", "list_evolution_recommendations", "list_recommendations", "generate_evolution_report", "validate_schema"}:
+    if action in {"status", "list_actions", "list_signals", "list_proposals", "inspect_signal", "inspect_evolution_proposal", "inspect_proposal", "explain_evolution_health", "list_evolution_recommendations", "list_recommendations", "generate_evolution_report", "validate_schema", "list_config_overlay"}:
         return "read"
-    if action in {"run_maintenance", "force_cleanup", "run_feedback_calibration"}:
+    if action in {"run_maintenance", "force_cleanup", "run_feedback_calibration", "clear_config_overlay"}:
         return "maintenance"
     if action in {"suppress_signal", "resume_signal", "retry_trial"}:
         return "override"
@@ -927,6 +972,8 @@ def target_type_for_action(action_kind: str) -> str:
         return "feedback"
     if action == "rollback_artifact":
         return "artifact"
+    if action in {"list_config_overlay", "clear_config_overlay"}:
+        return "config_overlay"
     if action == "validate_schema":
         return "schema"
     if action == "generate_evolution_report":
@@ -972,7 +1019,7 @@ def risk_level_for_action(action_kind: str) -> str:
     action = normalize_action_kind(action_kind)
     if action == "rollback_artifact":
         return "high"
-    if action in {"retry_trial", "suppress_signal", "resume_signal", "run_feedback_calibration"}:
+    if action in {"retry_trial", "suppress_signal", "resume_signal", "run_feedback_calibration", "clear_config_overlay"}:
         return "medium"
     return "low"
 
@@ -991,6 +1038,7 @@ def action_summary(action_kind: str) -> str:
         "list_recommendations": "List structured operator recommendations.",
         "generate_evolution_report": "Generate a read-only Markdown evolution report.",
         "validate_schema": "Validate governed evolution stores without mutation.",
+        "list_config_overlay": "Inspect the governed self-tuning config overlay.",
         "suppress_signal": "Manually suppress an opportunity signal.",
         "resume_signal": "Resume a manually or feedback-suppressed opportunity signal.",
         "run_maintenance": "Run governed evolution retention and cleanup maintenance.",
@@ -998,6 +1046,7 @@ def action_summary(action_kind: str) -> str:
         "run_feedback_calibration": "Apply feedback calibration to opportunity signals.",
         "retry_trial": "Retry read-only isolated trial for an auto-evolution workflow proposal.",
         "rollback_artifact": "Rollback a workflow or skill from a governed snapshot.",
+        "clear_config_overlay": "Clear governed self-tuning config overrides.",
     }
     return summaries.get(action, f"Unsupported evolution action `{action}`.")
 
@@ -1045,6 +1094,7 @@ def suggested_my_action(action_kind: str, target_id: str = "") -> str:
         "list_proposals": "list_evolution_proposals",
         "list_recommendations": "list_evolution_recommendations",
         "validate_schema": "validate_evolution_schema",
+        "list_config_overlay": "list_config_overlay",
     }
     if action in read_aliases:
         return f"my action={read_aliases[action]}"
@@ -1076,7 +1126,8 @@ def safety_boundaries() -> list[str]:
         "No auto active.",
         "No auto apply proposal.",
         "No auto suppress signal.",
-        "No auto config mutation.",
+        "No auto main config mutation.",
+        "Self-tuning may only write safety-tightening governed config overlays.",
         "Trial stays read-only and isolated.",
         "Evolution-generated skills must not be always-on automatically.",
     ]

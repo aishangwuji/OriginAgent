@@ -8,6 +8,7 @@ from typing import Any
 from loguru import logger
 
 from OriginAgent.agent.evolution_dependencies import EvolutionDependencyStore
+from OriginAgent.agent.evolution_config_overlay import apply_config_overlay, self_tune_evolution_config
 from OriginAgent.agent.evolution_feedback import feedback_status
 from OriginAgent.agent.evolution_health import evolution_health_score
 from OriginAgent.agent.evolution_health_history import EvolutionHealthHistoryStore
@@ -25,6 +26,8 @@ def run_evolution_maintenance(
 ) -> dict[str, Any]:
     """Run bounded cleanup for append-only evolution stores."""
 
+    workspace = Path(workspace)
+    config = apply_config_overlay(workspace, config)
     outcome_retention_days = max(
         1,
         int(getattr(config, "outcome_retention_days", 90) if config is not None else 90),
@@ -52,10 +55,10 @@ def run_evolution_maintenance(
         0,
         int(getattr(trial_config, "max_retained_trial_logs", 10) if trial_config is not None else 10),
     )
-    outcomes = EvolutionOutcomeStore(Path(workspace))
-    dependencies = EvolutionDependencyStore(Path(workspace))
-    trial_logs = EvolutionTrialLogStore(Path(workspace))
-    health_history = EvolutionHealthHistoryStore(Path(workspace))
+    outcomes = EvolutionOutcomeStore(workspace)
+    dependencies = EvolutionDependencyStore(workspace)
+    trial_logs = EvolutionTrialLogStore(workspace)
+    health_history = EvolutionHealthHistoryStore(workspace)
     maintenance: dict[str, Any] = {
         "outcome_retention_days": outcome_retention_days,
         "outcome_archive_enabled": outcome_archive_enabled,
@@ -85,11 +88,15 @@ def run_evolution_maintenance(
     except Exception:
         logger.exception("Evolution trial log retention failed")
     try:
+        outcome_stats = outcomes.stats()
+        dependency_stats = dependencies.stats()
+        feedback_stats = feedback_status(workspace, config)
+        sandbox_counts = sandbox_status_counts(workspace)
         health = evolution_health_score(
-            outcome_stats=outcomes.stats(),
-            dependency_stats=dependencies.stats(),
-            feedback_stats=feedback_status(Path(workspace), config),
-            sandbox_counts=sandbox_status_counts(Path(workspace)),
+            outcome_stats=outcome_stats,
+            dependency_stats=dependency_stats,
+            feedback_stats=feedback_stats,
+            sandbox_counts=sandbox_counts,
             trial_status=trial_policy_status(config),
         )
         snapshot = health_history.append_snapshot(
@@ -106,10 +113,18 @@ def run_evolution_maintenance(
             max_records=max_health_history_snapshots,
             retention_days=health_history_retention_days,
         )
+        maintenance["config_self_tuning"] = self_tune_evolution_config(
+            workspace,
+            config,
+            health=health,
+            outcome_stats=outcome_stats,
+            sandbox_counts=sandbox_counts,
+            feedback_stats=feedback_stats,
+        )
     except Exception:
         logger.exception("Evolution health history maintenance failed")
     try:
-        validation = validate_evolution_stores(Path(workspace))
+        validation = validate_evolution_stores(workspace)
         maintenance["schema_validation"] = {
             "ok": validation.get("ok"),
             "record_counts": validation.get("record_counts", {}),
