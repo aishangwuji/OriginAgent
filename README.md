@@ -94,10 +94,6 @@ originagent agent
 
 > WebUI 已打包在 wheel 中。启用 WebSocket 频道后运行 `originagent gateway` 即可直接访问。
 
-<p align="center">
-  <img src="images/OriginAgent_webui.png" alt="OriginAgent webui preview" width="900">
-</p>
-
 **1. 启用 WebSocket 频道**
 
 ```json
@@ -115,10 +111,6 @@ originagent gateway
 如需开发 WebUI（Vite HMR），参见 [webui/README.md](./webui/README.md)。
 
 ## 🏗️ 架构
-
-<p align="center">
-  <img src="images/OriginAgent_arch.png" alt="OriginAgent architecture" width="800">
-</p>
 
 OriginAgent 围绕一个简洁的 Agent 循环构建：消息从聊天应用进入，LLM 决定何时调用工具，记忆和技能仅在需要时作为上下文引入。这让核心路径保持可读且易于扩展。
 
