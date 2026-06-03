@@ -1,3 +1,0 @@
-{"_type": "metadata", "key": "cli:test", "created_at": "2026-05-20T16:40:49.927631", "updated_at": "2026-05-20T16:40:50.038303", "metadata": {}, "last_consolidated": 0}
-{"role": "user", "content": "hello", "timestamp": "2026-05-20T16:40:50.029764"}
-{"role": "assistant", "content": "ok", "timestamp": "2026-05-20T16:40:50.038303"}

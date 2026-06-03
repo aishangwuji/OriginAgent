@@ -1,1 +1,0 @@
-User prefers terse answers.

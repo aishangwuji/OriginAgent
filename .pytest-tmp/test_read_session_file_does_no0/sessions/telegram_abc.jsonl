@@ -1,3 +1,0 @@
-{"_type": "metadata", "key": "telegram:abc", "created_at": "2026-05-20T16:41:28.229157", "updated_at": "2026-05-20T16:41:28.229157", "metadata": {}, "last_consolidated": 0}
-{"role": "user", "content": "hello", "timestamp": "2026-05-20T16:41:28.229157"}
-{"role": "assistant", "content": "hi back", "timestamp": "2026-05-20T16:41:28.229157"}

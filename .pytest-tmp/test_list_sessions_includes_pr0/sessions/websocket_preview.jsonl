@@ -1,3 +1,0 @@
-{"_type": "metadata", "key": "websocket:preview", "created_at": "2026-05-20T16:41:28.255181", "updated_at": "2026-05-20T16:41:28.255181", "metadata": {}, "last_consolidated": 0}
-{"role": "assistant", "content": "assistant fallback", "timestamp": "2026-05-20T16:41:28.255181"}
-{"role": "user", "content": "  hello\n\nwebui   history  ", "timestamp": "2026-05-20T16:41:28.255181"}

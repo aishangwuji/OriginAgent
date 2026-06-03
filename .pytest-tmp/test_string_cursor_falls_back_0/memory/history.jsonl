@@ -1,4 +1,0 @@
-{"cursor": 5, "timestamp": "2026-04-01 10:00", "content": "good"}
-{"cursor": 6, "timestamp": "2026-04-01 10:01", "content": "also good"}
-{"cursor": "bad", "timestamp": "2026-04-01 10:02", "content": "corrupted"}
-{"cursor": 7, "timestamp": "2026-05-20 16:40", "content": "recovered event"}

@@ -1,1 +1,0 @@
-{"event":"message","chat_id":"chat1","text":"## MCP Servers\n\nNo MCP servers are configured.\n\nAdd entries under `tools.mcp_servers` in the OriginAgent config, then restart the gateway."}

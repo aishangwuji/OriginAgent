@@ -1,5 +1,0 @@
-id: office
-name: Office
-version: 0.1.0
-capabilities:
-  - draft_docs

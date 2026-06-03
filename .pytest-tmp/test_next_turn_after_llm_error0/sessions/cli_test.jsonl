@@ -1,5 +1,0 @@
-{"_type": "metadata", "key": "cli:test", "created_at": "2026-05-20T16:41:23.390785", "updated_at": "2026-05-20T16:41:23.615062", "metadata": {}, "last_consolidated": 0}
-{"role": "user", "content": "first question", "timestamp": "2026-05-20T16:41:23.497352"}
-{"role": "assistant", "content": "[Assistant reply unavailable due to model error.]", "timestamp": "2026-05-20T16:41:23.504575"}
-{"role": "user", "content": "second question", "timestamp": "2026-05-20T16:41:23.606821"}
-{"role": "assistant", "content": "Recovered answer", "timestamp": "2026-05-20T16:41:23.615062"}

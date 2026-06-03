@@ -1,5 +1,0 @@
-{"_type": "metadata", "key": "cli:test", "created_at": "2026-05-20T16:40:31.582889", "updated_at": "2026-05-20T16:40:31.806197", "metadata": {}, "last_consolidated": 0}
-{"role": "user", "content": "previous message", "timestamp": "2026-05-20T16:40:31.582889"}
-{"role": "assistant", "content": "interrupted response", "timestamp": "2026-05-20T16:40:31.587768"}
-{"role": "user", "content": "continue", "timestamp": "2026-05-20T16:40:31.797997"}
-{"role": "assistant", "content": "ok", "timestamp": "2026-05-20T16:40:31.806197"}

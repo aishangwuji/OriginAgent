@@ -1,3 +1,0 @@
-# Office Capabilities
-
-Draft docs.

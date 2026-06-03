@@ -1,5 +1,0 @@
-{"_type": "metadata", "key": "feishu:chat123", "created_at": "2026-05-21T12:00:01.667820", "updated_at": "2026-05-21T12:00:01.797546", "metadata": {}, "last_consolidated": 0}
-{"role": "user", "content": "Send email", "timestamp": "2026-05-21T12:00:01.776390"}
-{"role": "assistant", "content": "", "tool_calls": [{"id": "call1", "type": "function", "function": {"name": "message", "arguments": "{\"content\": \"Email content\", \"channel\": \"email\", \"chat_id\": \"user@example.com\"}"}}], "timestamp": "2026-05-21T12:00:01.797546"}
-{"role": "tool", "tool_call_id": "call1", "name": "message", "content": "Error: PolicyDeniedError: Cross-target message sends require a runtime grant", "timestamp": "2026-05-21T12:00:01.797546"}
-{"role": "assistant", "content": "I've sent the email.", "timestamp": "2026-05-21T12:00:01.797546"}

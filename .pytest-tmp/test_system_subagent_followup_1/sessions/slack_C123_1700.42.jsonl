@@ -1,4 +1,0 @@
-{"_type": "metadata", "key": "slack:C123:1700.42", "created_at": "2026-05-20T16:41:03.636080", "updated_at": "2026-05-20T16:41:03.752230", "metadata": {}, "last_consolidated": 0}
-{"role": "user", "content": "thread question", "timestamp": "2026-05-20T16:41:03.636080"}
-{"role": "assistant", "content": "subagent result", "timestamp": "2026-05-20T16:41:03.638081", "sender_id": "subagent", "injected_event": "subagent_result", "subagent_task_id": "sub-1"}
-{"role": "assistant", "content": "done", "timestamp": "2026-05-20T16:41:03.752230"}

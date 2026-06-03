@@ -1,4 +1,0 @@
-{"_type": "metadata", "key": "cli:test", "created_at": "2026-05-21T11:57:58.767562", "updated_at": "2026-05-21T11:57:58.976139", "metadata": {}, "last_consolidated": 0}
-{"role": "user", "content": "old message", "timestamp": "2026-05-21T11:57:58.767562"}
-{"role": "user", "content": "Paragraph one\n\nParagraph two\n\nParagraph three", "timestamp": "2026-05-21T11:57:58.969612"}
-{"role": "assistant", "content": "ok", "timestamp": "2026-05-21T11:57:58.976139"}

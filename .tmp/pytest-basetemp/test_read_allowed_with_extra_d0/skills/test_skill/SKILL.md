@@ -1,2 +1,0 @@
-# Test Skill
-Do something.

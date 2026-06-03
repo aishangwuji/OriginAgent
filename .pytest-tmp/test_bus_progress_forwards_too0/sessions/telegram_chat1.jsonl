@@ -1,5 +1,0 @@
-{"_type": "metadata", "key": "telegram:chat1", "created_at": "2026-05-20T16:40:55.196412", "updated_at": "2026-05-20T16:40:55.320600", "metadata": {}, "last_consolidated": 0}
-{"role": "user", "content": "run ls", "timestamp": "2026-05-20T16:40:55.303111"}
-{"role": "assistant", "content": "", "tool_calls": [{"id": "tc1", "type": "function", "function": {"name": "exec", "arguments": "{\"command\": \"ls\"}"}}], "timestamp": "2026-05-20T16:40:55.320600"}
-{"role": "tool", "tool_call_id": "tc1", "name": "exec", "content": "file.txt", "timestamp": "2026-05-20T16:40:55.320600"}
-{"role": "assistant", "content": "Done", "timestamp": "2026-05-20T16:40:55.320600"}

@@ -1,3 +1,0 @@
-{"event":"message","chat_id":"da9b3605-7396-4ffb-ab8e-48ce7a2c0992","text":"hi"}
-{"event":"message","chat_id":"da9b3605-7396-4ffb-ab8e-48ce7a2c0992","text":"weather(\"get\")","kind":"tool_hint"}
-{"event":"message","chat_id":"da9b3605-7396-4ffb-ab8e-48ce7a2c0992","text":"thinking…","kind":"progress"}

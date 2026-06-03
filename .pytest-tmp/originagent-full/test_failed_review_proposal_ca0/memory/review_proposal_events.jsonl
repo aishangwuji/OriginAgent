@@ -1,1 +1,0 @@
-{"event_id": "review_event_6ec612cbce1d4df48ff8edd8af23d2a6", "proposal_id": "review_failed_terminal", "status": "failed", "created_at": "2026-05-21T03:58:05.113815+00:00", "reason": "", "fact_id": null, "skill_name": null, "skill_path": null, "workflow_name": null, "workflow_path": null, "artifact": null, "error": "skill artifact contains unsafe instructions"}

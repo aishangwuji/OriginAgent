@@ -1,2 +1,0 @@
-{"cursor": 1, "timestamp": "2026-04-01 10:05", "content": "[RAW] 2 messages\n[2026-04-01 10:04] USER: hello\n[2026-04-01 10:04] ASSISTANT: hi"}
-{"cursor": 2, "timestamp": "2026-04-01 10:06", "content": "Normal event after raw block."}

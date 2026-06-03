@@ -1,2 +1,0 @@
-# Memory
-- Project X active

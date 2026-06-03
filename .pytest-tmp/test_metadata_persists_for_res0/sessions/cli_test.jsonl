@@ -1,9 +1,0 @@
-{"_type": "metadata", "key": "cli:test", "created_at": "2026-05-20T16:40:37.258334", "updated_at": "2026-05-20T16:40:37.260239", "metadata": {"_recent_summaries": [{"text": "Summary.", "history_cursor": 1, "created_at": "2026-05-20T16:40:37.260239", "last_active": "2026-05-20T16:20:37.258334"}]}, "last_consolidated": 0}
-{"role": "user", "content": "hello user 2", "timestamp": "2026-05-20T16:40:37.258334"}
-{"role": "assistant", "content": "hello assistant 2", "timestamp": "2026-05-20T16:40:37.258334"}
-{"role": "user", "content": "hello user 3", "timestamp": "2026-05-20T16:40:37.258334"}
-{"role": "assistant", "content": "hello assistant 3", "timestamp": "2026-05-20T16:40:37.258334"}
-{"role": "user", "content": "hello user 4", "timestamp": "2026-05-20T16:40:37.258334"}
-{"role": "assistant", "content": "hello assistant 4", "timestamp": "2026-05-20T16:40:37.258334"}
-{"role": "user", "content": "hello user 5", "timestamp": "2026-05-20T16:40:37.258334"}
-{"role": "assistant", "content": "hello assistant 5", "timestamp": "2026-05-20T16:40:37.258334"}

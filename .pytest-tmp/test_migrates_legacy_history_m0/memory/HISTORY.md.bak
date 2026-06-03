@@ -1,8 +1,0 @@
-[2026-04-01 10:00] User prefers dark mode.
-
-[2026-04-01 10:05] [RAW] 2 messages
-[2026-04-01 10:04] USER: hello
-[2026-04-01 10:04] ASSISTANT: hi
-
-Legacy chunk without timestamp.
-Keep whatever content we can recover.

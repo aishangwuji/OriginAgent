@@ -1,4 +1,0 @@
----
----
-
-# Workspace Plain Skill

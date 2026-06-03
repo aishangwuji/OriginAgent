@@ -1,5 +1,0 @@
-{"event":"delta","chat_id":"76ad69cc-6aec-44d0-b282-8b68e714dc10","text":"Hello","stream_id":"s1"}
-{"event":"delta","chat_id":"76ad69cc-6aec-44d0-b282-8b68e714dc10","text":" ","stream_id":"s1"}
-{"event":"delta","chat_id":"76ad69cc-6aec-44d0-b282-8b68e714dc10","text":"world","stream_id":"s1"}
-{"event":"delta","chat_id":"76ad69cc-6aec-44d0-b282-8b68e714dc10","text":"!","stream_id":"s1"}
-{"event":"stream_end","chat_id":"76ad69cc-6aec-44d0-b282-8b68e714dc10","stream_id":"s1"}

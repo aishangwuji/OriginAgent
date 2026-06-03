@@ -1,1 +1,0 @@
-{"agents": {"defaults": {"domainPacks": {"enabled": false, "active": ["research"], "disabled": ["smart_home"], "maxCapabilityChars": 1234}}}}

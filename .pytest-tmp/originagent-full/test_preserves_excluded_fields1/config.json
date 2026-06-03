@@ -1,1 +1,0 @@
-{"agents": {"defaults": {"dream": {"cron": "5 11 * * *"}}}, "providers": {"groq": {"apiKey": "${TEST_API_KEY}"}}}

@@ -1,4 +1,0 @@
-{"event":"delta","chat_id":"b6e51ee4-b944-4815-b077-da424dc2a603","text":"Hello ","stream_id":"s1"}
-{"event":"delta","chat_id":"b6e51ee4-b944-4815-b077-da424dc2a603","text":"world","stream_id":"s1"}
-{"event":"stream_end","chat_id":"b6e51ee4-b944-4815-b077-da424dc2a603","stream_id":"s1"}
-{"event":"turn_end","chat_id":"b6e51ee4-b944-4815-b077-da424dc2a603"}

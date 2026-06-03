@@ -1,4 +1,0 @@
-{"cursor": "x", "timestamp": "2026-04-01 10:00", "content": "bad"}
-{"cursor": 2, "timestamp": "2026-04-01 10:01", "content": "good2"}
-{"cursor": null, "timestamp": "2026-04-01 10:02", "content": "also bad"}
-{"cursor": 4, "timestamp": "2026-04-01 10:03", "content": "good4"}

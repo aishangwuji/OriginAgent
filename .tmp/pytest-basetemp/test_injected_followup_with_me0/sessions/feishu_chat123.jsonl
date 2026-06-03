@@ -1,7 +1,0 @@
-{"_type": "metadata", "key": "feishu:chat123", "created_at": "2026-05-14T11:52:38.288624", "updated_at": "2026-05-14T11:52:38.340645", "metadata": {}, "last_consolidated": 0}
-{"role": "user", "content": "Start", "timestamp": "2026-05-14T11:52:38.331341"}
-{"role": "assistant", "content": "First answer", "timestamp": "2026-05-14T11:52:38.340627"}
-{"role": "user", "content": [{"type": "text", "text": "follow-up"}], "timestamp": "2026-05-14T11:52:38.340640"}
-{"role": "assistant", "content": "", "tool_calls": [{"id": "call1", "type": "function", "function": {"name": "message", "arguments": "{\"content\": \"Tool reply\", \"channel\": \"feishu\", \"chat_id\": \"chat123\"}"}}], "timestamp": "2026-05-14T11:52:38.340642"}
-{"role": "tool", "tool_call_id": "call1", "name": "message", "content": "Message sent to feishu:chat123", "timestamp": "2026-05-14T11:52:38.340643"}
-{"role": "assistant", "content": "I completed the tool steps but couldn't produce a final answer. Please try again or narrow the task.", "timestamp": "2026-05-14T11:52:38.340644"}

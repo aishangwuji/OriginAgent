@@ -1,3 +1,0 @@
-{"_type": "metadata", "key": "websocket:chat-title", "created_at": "2026-05-20T16:41:00.079202", "updated_at": "2026-05-20T16:41:00.079202", "metadata": {"webui": true, "title": "优化 WebUI 侧边栏"}, "last_consolidated": 0}
-{"role": "user", "content": "帮我优化一下 webui 的 sidebar", "timestamp": "2026-05-20T16:41:00.079202"}
-{"role": "assistant", "content": "可以，我会先调整布局和视觉层级。", "timestamp": "2026-05-20T16:41:00.079202"}

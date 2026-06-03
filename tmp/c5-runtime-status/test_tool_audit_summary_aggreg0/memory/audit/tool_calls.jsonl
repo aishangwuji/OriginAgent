@@ -1,3 +1,0 @@
-{"tool_name": "exec", "status": "policy_denied", "policy_rule": "capability_snapshot_required", "created_at": "2026-05-17T01:00:00+00:00", "actor_id_hash": "actor_hash_should_not_show", "target_hash": "target_hash_should_not_show", "event_hash": "event_hash_should_not_show", "event_id": "tool_audit_raw_id", "raw_hint": "echo super-secret-command"}
-{"tool_name": "web_fetch", "status": "error", "policy_rule": "ssrf_denied", "created_at": "2026-05-17T02:00:00+00:00", "session_key_hash": "session_hash_should_not_show", "target_hash": "url_hash_should_not_show", "raw_hint": "https://example.com/private?token=secret"}
-{"tool_name": "read_file", "status": "success", "created_at": "2026-05-17T00:00:00+00:00", "raw_hint": "C:/secret/path/file.txt"}

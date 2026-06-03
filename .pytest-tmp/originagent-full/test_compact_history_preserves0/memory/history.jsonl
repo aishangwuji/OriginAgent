@@ -1,7 +1,0 @@
-{broken json
-[]
-"not a record"
-123
-{"timestamp": "t", "content": "no cursor"}
-{"cursor": true, "timestamp": "t", "content": "bool cursor"}
-{"cursor": 5, "timestamp": "t", "content": "unprocessed"}

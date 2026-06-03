@@ -1,1 +1,0 @@
-{"event_id": "event_1", "skill_name": "alpha", "action": "activate", "created_at": "2026-05-19T00:00:00+00:00", "reason": "api_key=sk-proj-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA", "next": {"lifecycle_status": "active", "verification_status": "verified", "always": false}}
