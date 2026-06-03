@@ -10,7 +10,7 @@
   </p>
 </div>
 
-# 本项目 fork 自 [HKUDS/OriginAgent](https://github.com/HKUDS/OriginAgent)，在此基础上持续演化。
+## 本项目 fork 自 [HKUDS/OriginAgent](https://github.com/HKUDS/OriginAgent)，在此基础上持续演化。
 
 **OriginAgent** 是一个轻量级 AI Agent 运行时，基于 nanobot 核心构建。它设计运行在你的本地环境中，连接聊天频道、MCP 工具、技能包和领域能力，并通过简洁的 Agent 循环协调多轮对话中的任务执行。
 
@@ -24,7 +24,7 @@
 - **超轻量级**：稳定长运行的 Agent 行为，核心代码精简可读。
 - **研究友好**：代码库简洁到足以学习、修改和扩展。（使用Agent助手前提下）
 - **开箱即用**：聊天频道、API、记忆、MCP 都已内置。
-- 
+  
 ## 📦 安装
 
 ### 从源码安装
