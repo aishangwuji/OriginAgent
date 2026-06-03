@@ -78,6 +78,7 @@ class AgentRunSpec:
     error_message: str | None = _DEFAULT_ERROR_MESSAGE
     max_iterations_message: str | None = None
     concurrent_tools: bool = False
+    tool_concurrency_limit: int | None = None
     fail_on_tool_error: bool = False
     workspace: Path | None = None
     session_key: str | None = None
@@ -754,12 +755,26 @@ class AgentRunner:
         tool_results: list[tuple[Any, dict[str, str], BaseException | None]] = []
         for batch in batches:
             if spec.concurrent_tools and len(batch) > 1:
-                batch_results = await asyncio.gather(*(
-                    self._run_tool(
-                        spec, tool_call, external_lookup_counts, workspace_violation_counts,
-                    )
-                    for tool_call in batch
-                ))
+                limit = spec.tool_concurrency_limit
+                if limit is not None and limit > 0 and limit < len(batch):
+                    semaphore = asyncio.Semaphore(limit)
+
+                    async def _run_limited(tool_call: ToolCallRequest):
+                        async with semaphore:
+                            return await self._run_tool(
+                                spec, tool_call, external_lookup_counts, workspace_violation_counts,
+                            )
+
+                    batch_results = await asyncio.gather(*(
+                        _run_limited(tool_call) for tool_call in batch
+                    ))
+                else:
+                    batch_results = await asyncio.gather(*(
+                        self._run_tool(
+                            spec, tool_call, external_lookup_counts, workspace_violation_counts,
+                        )
+                        for tool_call in batch
+                    ))
                 tool_results.extend(batch_results)
             else:
                 batch_results = []

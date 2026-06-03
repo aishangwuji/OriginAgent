@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 import { useClient } from "@/providers/ClientProvider";
 import { toMediaAttachment } from "@/lib/media";
-import { toolTraceLinesFromEvents } from "@/lib/tool-traces";
+import { formatToolCallTrace, toolTraceLinesFromEvents } from "@/lib/tool-traces";
 import type { StreamError } from "@/lib/OriginAgent-client";
 import type {
   InboundEvent,
@@ -26,11 +26,29 @@ function normalizeToolEvents(events: unknown): ToolProgressEvent[] {
   ));
 }
 
-/** Scan upward from the bottom skipping trace rows so tool breadcrumbs don't steal the stream target. */
+function fallbackToolTraceLines(events: ToolProgressEvent[]): string[] {
+  const seen = new Set<string>();
+  const lines: string[] = [];
+  for (const event of events) {
+    const line = formatToolCallTrace(event);
+    if (!line || seen.has(line)) continue;
+    seen.add(line);
+    lines.push(line);
+  }
+  return lines;
+}
+
+/**
+ * Find the active assistant stream in the current contiguous tail.
+ *
+ * A trace row is a hard phase boundary: once tool breadcrumbs have been
+ * emitted, the next answer delta belongs to a new assistant slice *after*
+ * those traces, not to the earlier pre-tool assistant placeholder.
+ */
 function findStreamingAssistantId(prev: UIMessage[]): string | null {
   for (let i = prev.length - 1; i >= 0; i -= 1) {
     const m = prev[i];
-    if (m.kind === "trace") continue;
+    if (m.kind === "trace") break;
     if (m.role === "assistant" && m.isStreaming) return m.id;
     if (m.role === "user") break;
   }
@@ -441,21 +459,24 @@ export function useOriginAgentStream(
             if (last && last.kind === "trace" && !last.isStreaming) {
               const merged: UIMessage = {
                 ...last,
-                traces: [...(last.traces ?? [last.content]), ...lines],
+                traces: lines.length > 0
+                  ? [...(last.traces ?? [last.content]), ...lines]
+                  : (last.traces ?? [last.content]),
                 content: lines[lines.length - 1] ?? last.content,
                 toolEvents: [...(last.toolEvents ?? []), ...toolEvents],
               };
               return [...prev.slice(0, -1), merged];
             }
-            if (lines.length === 0) return prev;
+            const fallbackLines = lines.length === 0 ? fallbackToolTraceLines(toolEvents) : [];
+            const traces = lines.length > 0 ? lines : fallbackLines;
             return [
               ...prev,
               {
                 id: crypto.randomUUID(),
                 role: "tool",
                 kind: "trace",
-                content: lines[lines.length - 1],
-                traces: lines,
+                content: traces[traces.length - 1] ?? "",
+                traces,
                 toolEvents,
                 createdAt: Date.now(),
               },

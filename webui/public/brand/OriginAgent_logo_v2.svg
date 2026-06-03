@@ -1,45 +1,46 @@
-<svg width="1180" height="300" viewBox="0 0 1180 300" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="title desc">
-  <title id="title">OriginAgent logo</title>
-  <desc id="desc">OriginAgent wordmark with a friendly smart-home assistant symbol.</desc>
+<svg width="840" height="300" viewBox="0 0 840 300" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="title desc">
+  <title id="title">OriginAgent 六边中枢横版标志</title>
+  <desc id="desc">冷灰与骨白配色的六边中枢横版标志，强调结构、秩序、运行时中枢与调度之眼。</desc>
   <defs>
-    <linearGradient id="markBg" x1="35" y1="31" x2="236" y2="259" gradientUnits="userSpaceOnUse">
-      <stop stop-color="#EAF8FF"/>
-      <stop offset="0.55" stop-color="#D7F0FF"/>
-      <stop offset="1" stop-color="#BFE1FF"/>
-    </linearGradient>
-    <linearGradient id="door" x1="97" y1="125" x2="175" y2="206" gradientUnits="userSpaceOnUse">
-      <stop stop-color="#54ACF8"/>
-      <stop offset="1" stop-color="#2B73D8"/>
-    </linearGradient>
-    <linearGradient id="bubble" x1="155" y1="111" x2="231" y2="203" gradientUnits="userSpaceOnUse">
-      <stop stop-color="#FFF6D7"/>
-      <stop offset="1" stop-color="#FFD78A"/>
-    </linearGradient>
-    <linearGradient id="textGrad" x1="303" y1="88" x2="855" y2="215" gradientUnits="userSpaceOnUse">
-      <stop stop-color="#223B55"/>
-      <stop offset="0.56" stop-color="#246EA7"/>
-      <stop offset="1" stop-color="#2B73D8"/>
-    </linearGradient>
-    <filter id="markShadow" x="0" y="2" width="292" height="292" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
-      <feDropShadow dx="0" dy="14" stdDeviation="16" flood-color="#2769A9" flood-opacity="0.15"/>
-      <feDropShadow dx="0" dy="3" stdDeviation="2.5" flood-color="#2769A9" flood-opacity="0.12"/>
+    <filter id="shadow" x="0" y="0" width="302" height="302" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
+      <feDropShadow dx="0" dy="8" stdDeviation="12" flood-color="#0B0D10" flood-opacity="0.12"/>
+      <feDropShadow dx="0" dy="2" stdDeviation="3" flood-color="#0B0D10" flood-opacity="0.06"/>
     </filter>
+    <linearGradient id="shell" x1="30" y1="30" x2="270" y2="270" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#262B31"/>
+      <stop offset="1" stop-color="#13161A"/>
+    </linearGradient>
+    <linearGradient id="hub" x1="104" y1="88" x2="198" y2="186" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#D7DCE2"/>
+      <stop offset="1" stop-color="#9CA5AF"/>
+    </linearGradient>
   </defs>
-  <g filter="url(#markShadow)">
-    <rect x="30" y="25" width="240" height="240" rx="76" fill="url(#markBg)"/>
-    <path d="M79 191C98 214 126 226 157 226C189 226 218 214 235 189" stroke="#86C6F8" stroke-width="10" stroke-linecap="round" opacity="0.7"/>
-    <path d="M83 137.5C83 130.4 86.1 123.6 91.5 119L138.3 79.3C145.1 73.5 154.9 73.5 161.7 79.3L208.5 119C213.9 123.6 217 130.4 217 137.5V198C217 211.3 206.3 222 193 222H107C93.7 222 83 211.3 83 198V137.5Z" fill="white" stroke="#2D6FAE" stroke-width="9" stroke-linejoin="round"/>
-    <path d="M105 123L140.5 92.9C146 88.2 154 88.2 159.5 92.9L195 123" stroke="#2D6FAE" stroke-width="12" stroke-linecap="round" stroke-linejoin="round"/>
-    <rect x="113" y="151" width="68" height="50" rx="19" fill="url(#door)"/>
-    <circle cx="132" cy="174" r="5.5" fill="white"/>
-    <circle cx="163" cy="174" r="5.5" fill="white"/>
-    <path d="M138 190C144 195 153 195 159 190" stroke="white" stroke-width="6" stroke-linecap="round"/>
-    <path d="M180 137C202.1 137 220 153.2 220 173.2C220 186.7 211.8 198.5 199.6 204.7L202 224L184.7 211C183.1 211.2 181.6 211.3 180 211.3C157.9 211.3 140 195.1 140 175.1C140 155.1 157.9 137 180 137Z" fill="url(#bubble)" stroke="#2D6FAE" stroke-width="8" stroke-linejoin="round"/>
-    <path d="M168 174H193" stroke="#2D6FAE" stroke-width="7" stroke-linecap="round"/>
-    <path d="M180.5 162V186" stroke="#2D6FAE" stroke-width="7" stroke-linecap="round"/>
-    <path d="M70 76L76 63L82 76L95 82L82 88L76 101L70 88L57 82L70 76Z" fill="white" stroke="#5AAEF5" stroke-width="5" stroke-linejoin="round"/>
-    <path d="M224 69L228 60L232 69L241 73L232 77L228 86L224 77L215 73L224 69Z" fill="white" stroke="#5AAEF5" stroke-width="4" stroke-linejoin="round"/>
+  <g filter="url(#shadow)" transform="translate(0 -6)">
+    <rect x="30" y="30" width="240" height="240" rx="78" fill="url(#shell)" stroke="#E8E6E2" stroke-width="10"/>
+    <path d="M150 70L210 104V172L150 206L90 172V104L150 70Z" fill="#1A1E23" stroke="#E8E6E2" stroke-width="8" stroke-linejoin="round"/>
+    <path d="M150 108L178 124V154L150 170L122 154V124L150 108Z" fill="#252A30" stroke="#F4F2EE" stroke-width="6" stroke-linejoin="round"/>
+    <path d="M123 139C130 128 139 123 150 123C161 123 170 128 177 139C170 150 161 155 150 155C139 155 130 150 123 139Z" fill="#FCFBF8" stroke="#F4F2EE" stroke-width="6" stroke-linejoin="round"/>
+    <circle cx="150" cy="139" r="10" fill="#111418"/>
+    <circle cx="155" cy="134" r="3" fill="#D7DCE2"/>
+    <path d="M150 70V108" stroke="#E8E6E2" stroke-width="6" stroke-linecap="round"/>
+    <path d="M210 104L178 124" stroke="#E8E6E2" stroke-width="6" stroke-linecap="round"/>
+    <path d="M210 172L178 154" stroke="#E8E6E2" stroke-width="6" stroke-linecap="round"/>
+    <path d="M150 206V170" stroke="#E8E6E2" stroke-width="6" stroke-linecap="round"/>
+    <path d="M90 172L122 154" stroke="#E8E6E2" stroke-width="6" stroke-linecap="round"/>
+    <path d="M90 104L122 124" stroke="#E8E6E2" stroke-width="6" stroke-linecap="round"/>
+    <circle cx="150" cy="58" r="10" fill="url(#hub)" stroke="#F8F7F3" stroke-width="5"/>
+    <circle cx="218" cy="98" r="10" fill="url(#hub)" stroke="#F8F7F3" stroke-width="5"/>
+    <circle cx="218" cy="178" r="10" fill="url(#hub)" stroke="#F8F7F3" stroke-width="5"/>
+    <circle cx="150" cy="218" r="10" fill="url(#hub)" stroke="#F8F7F3" stroke-width="5"/>
+    <circle cx="82" cy="178" r="10" fill="url(#hub)" stroke="#F8F7F3" stroke-width="5"/>
+    <circle cx="82" cy="98" r="10" fill="url(#hub)" stroke="#F8F7F3" stroke-width="5"/>
+    <circle cx="150" cy="58" r="3" fill="#FFFFFF"/>
+    <circle cx="218" cy="98" r="3" fill="#FFFFFF"/>
+    <circle cx="218" cy="178" r="3" fill="#FFFFFF"/>
+    <circle cx="150" cy="218" r="3" fill="#FFFFFF"/>
+    <circle cx="82" cy="178" r="3" fill="#FFFFFF"/>
+    <circle cx="82" cy="98" r="3" fill="#FFFFFF"/>
   </g>
-  <text x="310" y="166" fill="url(#textGrad)" font-family="JetBrains Mono, Nunito, Noto Sans SC, system-ui, sans-serif" font-size="82" font-weight="800" letter-spacing="-1">OriginAgent</text>
-  <text x="314" y="213" fill="#6F8CA8" font-family="JetBrains Mono, Nunito, Noto Sans SC, system-ui, sans-serif" font-size="28" font-weight="600" letter-spacing="3">LOCAL AI HOME COMPANION</text>
+  <text x="314" y="150" fill="#171A1F" font-family="Avenir Next, Segoe UI, PingFang SC, Microsoft YaHei, sans-serif" font-size="84" font-weight="800" letter-spacing="-1.4">OriginAgent</text>
+  <text x="316" y="206" fill="#6D7580" font-family="Segoe UI, PingFang SC, Microsoft YaHei, sans-serif" font-size="29" font-weight="700" letter-spacing="1.1">六边中枢</text>
 </svg>

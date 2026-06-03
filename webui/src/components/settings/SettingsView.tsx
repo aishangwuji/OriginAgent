@@ -57,6 +57,7 @@ import {
   skillLifecycleAction,
   updateBackgroundReviewSettings,
   updateProviderSettings,
+  updateRuntimeSettings,
   updateSettings,
   updateWebSearchSettings,
   upsertHomeAssistantMcpSettings,
@@ -71,6 +72,7 @@ import type {
   McpServerSettings,
   McpServerSettingsUpdate,
   McpTransportType,
+  RuntimeSettingsUpdate,
   SettingsPayload,
   SelfModel,
   SkillLifecycleStats,
@@ -96,6 +98,7 @@ type HomeAssistantMcpFormState = {
   address: string;
   token: string;
 };
+type RuntimeSettingsForm = SettingsPayload["runtime_controls"];
 const SETTINGS_LOAD_RETRY_DELAYS_MS = [350, 900, 1600] as const;
 
 function sleep(ms: number): Promise<void> {
@@ -167,6 +170,8 @@ export function SettingsView({
     model: "",
     provider: "",
   });
+  const [runtimeForm, setRuntimeForm] = useState<RuntimeSettingsForm | null>(null);
+  const [runtimeSaving, setRuntimeSaving] = useState(false);
   const [mcpEditing, setMcpEditing] = useState<string | null>(null);
   const [mcpForms, setMcpForms] = useState<Record<string, McpFormState>>({});
   const [homeAssistantMcpForm, setHomeAssistantMcpForm] = useState<HomeAssistantMcpFormState>({
@@ -186,6 +191,7 @@ export function SettingsView({
       apiKey: prev.provider === payload.web_search.provider ? prev.apiKey ?? "" : "",
       baseUrl: payload.web_search.base_url ?? "",
     }));
+    setRuntimeForm(payload.runtime_controls);
   }, []);
 
   useEffect(() => {
@@ -230,6 +236,11 @@ export function SettingsView({
       form.provider !== settings.agent.provider
     );
   }, [form, settings]);
+
+  const runtimeDirty = useMemo(() => {
+    if (!settings || !runtimeForm) return false;
+    return JSON.stringify(runtimeForm) !== JSON.stringify(settings.runtime_controls);
+  }, [runtimeForm, settings]);
 
   const save = async () => {
     if (!dirty || saving) return;
@@ -347,6 +358,22 @@ export function SettingsView({
       setError((err as Error).message);
     } finally {
       setBackgroundReviewSaving(false);
+    }
+  };
+
+  const saveRuntimeSettings = async () => {
+    if (!settings || !runtimeForm || !runtimeDirty || runtimeSaving) return;
+    setRuntimeSaving(true);
+    try {
+      const payload = await withTokenRefresh(token, refreshToken, (freshToken) =>
+        updateRuntimeSettings(freshToken, runtimeForm as RuntimeSettingsUpdate),
+      );
+      applyPayload(payload);
+      setError(null);
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setRuntimeSaving(false);
     }
   };
 
@@ -579,10 +606,15 @@ export function SettingsView({
                   onToggleTheme={onToggleTheme}
                   form={form}
                   setForm={setForm}
+                  runtimeForm={runtimeForm}
+                  setRuntimeForm={setRuntimeForm}
                   settings={settings}
                   dirty={dirty}
                   saving={saving}
                   onSave={save}
+                  runtimeDirty={runtimeDirty}
+                  runtimeSaving={runtimeSaving}
+                  onSaveRuntime={saveRuntimeSettings}
                   onRestart={onRestart}
                   isRestarting={isRestarting}
                   onOpenByok={() => setActiveSection("byok")}
@@ -752,10 +784,15 @@ function GeneralSettings({
   onToggleTheme,
   form,
   setForm,
+  runtimeForm,
+  setRuntimeForm,
   settings,
   dirty,
   saving,
   onSave,
+  runtimeDirty,
+  runtimeSaving,
+  onSaveRuntime,
   onRestart,
   isRestarting,
   onOpenByok,
@@ -772,10 +809,15 @@ function GeneralSettings({
     model: string;
     provider: string;
   }>>;
+  runtimeForm: RuntimeSettingsForm | null;
+  setRuntimeForm: Dispatch<SetStateAction<RuntimeSettingsForm | null>>;
   settings: SettingsPayload;
   dirty: boolean;
   saving: boolean;
   onSave: () => void;
+  runtimeDirty: boolean;
+  runtimeSaving: boolean;
+  onSaveRuntime: () => void;
   onRestart?: () => void;
   isRestarting?: boolean;
   onOpenByok: () => void;
@@ -787,6 +829,73 @@ function GeneralSettings({
   const providerValue = configuredProviders.some((provider) => provider.name === form.provider)
     ? form.provider
     : "";
+  const optionLabels = {
+    providerRetryMode: [
+      { value: "standard", label: "标准" },
+      { value: "persistent", label: "持续重试" },
+    ],
+    sessionSearchBackend: [
+      { value: "auto", label: "自动选择" },
+      { value: "literal", label: "字面检索" },
+      { value: "sqlite_fts", label: "SQLite 全文检索" },
+    ],
+    execProfile: [
+      { value: "secure", label: "安全" },
+      { value: "local_dev", label: "本地开发" },
+      { value: "disabled", label: "禁用" },
+    ],
+    execShellSyntaxPolicy: [
+      { value: "restricted", label: "受限语法" },
+      { value: "shell", label: "完整 Shell 语法" },
+    ],
+    auditMode: [
+      { value: "off", label: "关闭" },
+      { value: "minimal", label: "最小" },
+      { value: "security", label: "安全重点" },
+    ],
+    runtimeProfile: [
+      { value: "default", label: "默认" },
+      { value: "safe", label: "安全" },
+      { value: "household_safe", label: "家庭安全" },
+      { value: "local_dev", label: "本地开发" },
+      { value: "automation", label: "自动化" },
+    ],
+    evolutionMode: [
+      { value: "conservative", label: "保守" },
+      { value: "curated", label: "策展" },
+      { value: "exploratory", label: "探索" },
+      { value: "aggressive", label: "激进" },
+    ],
+    deviceMode: [
+      { value: "dry_run", label: "模拟运行" },
+      { value: "real", label: "真实执行" },
+    ],
+    deviceBackend: [
+      { value: "none", label: "无" },
+      { value: "fake", label: "模拟后端" },
+      { value: "lighting_client", label: "灯光客户端" },
+    ],
+    subagentMode: [
+      { value: "normal", label: "正常" },
+      { value: "restricted", label: "限制" },
+    ],
+  };
+  const controls = runtimeForm ?? settings.runtime_controls;
+  const updateSection = <K extends keyof RuntimeSettingsForm>(
+    section: K,
+    patch: Partial<RuntimeSettingsForm[K]>,
+  ) => {
+    setRuntimeForm((prev) => {
+      const current = prev ?? settings.runtime_controls;
+      return {
+        ...current,
+        [section]: {
+          ...current[section],
+          ...patch,
+        },
+      };
+    });
+  };
   return (
     <div className="space-y-8">
       <section>
@@ -901,6 +1010,330 @@ function GeneralSettings({
               />
             </button>
           </SettingsRow>
+        </SettingsGroup>
+      </section>
+
+      <section>
+        <SettingsSectionTitle>{t("settings.sections.runtimeControls")}</SettingsSectionTitle>
+        <SettingsGroup>
+          <SettingsRow title={t("settings.rows.showReasoning")} description={t("settings.help.showReasoning")}>
+            <BooleanSwitch
+              checked={controls.channels.show_reasoning}
+              onChange={(checked) => updateSection("channels", { show_reasoning: checked })}
+            />
+          </SettingsRow>
+          <SettingsRow title={t("settings.rows.sendToolHints")} description={t("settings.help.sendToolHints")}>
+            <BooleanSwitch
+              checked={controls.channels.send_tool_hints}
+              onChange={(checked) => updateSection("channels", { send_tool_hints: checked })}
+            />
+          </SettingsRow>
+          <SettingsRow title={t("settings.rows.sendProgress")} description={t("settings.help.sendProgress")}>
+            <BooleanSwitch
+              checked={controls.channels.send_progress}
+              onChange={(checked) => updateSection("channels", { send_progress: checked })}
+            />
+          </SettingsRow>
+          <SettingsRow title={t("settings.rows.allowAgentInitiatedMessages")} description={t("settings.help.allowAgentInitiatedMessages")}>
+            <BooleanSwitch
+              checked={controls.agent.allow_agent_initiated_messages}
+              onChange={(checked) => updateSection("agent", { allow_agent_initiated_messages: checked })}
+            />
+          </SettingsRow>
+          <SettingsRow title={t("settings.rows.unifiedSession")} description={t("settings.help.unifiedSession")}>
+            <BooleanSwitch
+              checked={controls.agent.unified_session}
+              onChange={(checked) => updateSection("agent", { unified_session: checked })}
+            />
+          </SettingsRow>
+          <SettingsRow title="辅助任务路由" description="控制后台任务是否使用辅助模型路由，主要影响后台学习、审查和委派类任务。">
+            <BooleanSwitch
+              checked={controls.agent.auxiliary_enabled}
+              onChange={(checked) => updateSection("agent", { auxiliary_enabled: checked })}
+            />
+          </SettingsRow>
+          <SettingsRow title={t("settings.rows.coldArchive")} description={t("settings.help.coldArchive")}>
+            <BooleanSwitch
+              checked={controls.agent.cold_archive_enabled}
+              onChange={(checked) => updateSection("agent", { cold_archive_enabled: checked })}
+            />
+          </SettingsRow>
+          <SettingsRow title="模型重试策略" description="控制模型请求失败时的重试方式。标准模式更克制，持续重试更适合不想轻易放弃的场景。">
+            <SimpleSelect
+              value={controls.agent.provider_retry_mode}
+              options={optionLabels.providerRetryMode}
+              onChange={(value) => updateSection("agent", { provider_retry_mode: value })}
+            />
+          </SettingsRow>
+          <SettingsRow title="Dream 行龄标注" description="在 Dream 记忆整理时附带代码行的新旧提示，帮助模型理解哪些内容较新、哪些内容较旧。">
+            <BooleanSwitch
+              checked={controls.agent.dream_annotate_line_ages}
+              onChange={(checked) => updateSection("agent", { dream_annotate_line_ages: checked })}
+            />
+          </SettingsRow>
+          <SettingsRow title={t("settings.rows.webTools")} description={t("settings.help.webTools")}>
+            <BooleanSwitch
+              checked={controls.search.web_enabled}
+              onChange={(checked) => updateSection("search", { web_enabled: checked })}
+            />
+          </SettingsRow>
+          <SettingsRow title="网页抓取增强阅读" description="抓取网页时优先使用更适合阅读提取的方式，减少页面噪声，提升正文提取效果。">
+            <BooleanSwitch
+              checked={controls.search.web_fetch_use_jina_reader}
+              onChange={(checked) => updateSection("search", { web_fetch_use_jina_reader: checked })}
+            />
+          </SettingsRow>
+          <SettingsRow title="会话搜索" description="允许在本地对历史会话进行检索，便于回看之前说过的内容。">
+            <BooleanSwitch
+              checked={controls.search.session_search_enabled}
+              onChange={(checked) => updateSection("search", { session_search_enabled: checked })}
+            />
+          </SettingsRow>
+          <SettingsRow title="会话搜索后端" description="选择本地历史检索使用的实现方式。不同后端在速度、兼容性和能力上有所差异。">
+            <SimpleSelect
+              value={controls.search.session_search_backend}
+              options={optionLabels.sessionSearchBackend}
+              onChange={(value) => updateSection("search", { session_search_backend: value })}
+            />
+          </SettingsRow>
+          <SettingsRow title="会话语义检索" description="启用更偏语义理解的检索增强，让搜索不只依赖关键词完全匹配。">
+            <BooleanSwitch
+              checked={controls.search.session_search_semantic_enabled}
+              onChange={(checked) => updateSection("search", { session_search_semantic_enabled: checked })}
+            />
+          </SettingsRow>
+          <SettingsRow title="启动时重建会话索引" description="每次启动时重新构建历史会话索引，适合排查索引不一致或索引损坏的问题。">
+            <BooleanSwitch
+              checked={controls.search.session_search_rebuild_on_start}
+              onChange={(checked) => updateSection("search", { session_search_rebuild_on_start: checked })}
+            />
+          </SettingsRow>
+          <SettingsRow title={t("settings.rows.contentRead")} description={t("settings.help.contentRead")}>
+            <BooleanSwitch
+              checked={controls.search.content_read_enabled}
+              onChange={(checked) => updateSection("search", { content_read_enabled: checked })}
+            />
+          </SettingsRow>
+          <SettingsRow title="内容读取增强抓取" description="在内容读取工具可用时，优先使用更适合正文提取的抓取方式。">
+            <BooleanSwitch
+              checked={controls.search.content_read_use_jina_reader}
+              onChange={(checked) => updateSection("search", { content_read_use_jina_reader: checked })}
+            />
+          </SettingsRow>
+          <SettingsRow title={t("settings.rows.imageGeneration")} description={t("settings.help.imageGeneration")}>
+            <BooleanSwitch
+              checked={controls.media.image_generation_enabled}
+              onChange={(checked) => updateSection("media", { image_generation_enabled: checked })}
+            />
+          </SettingsRow>
+          <SettingsRow title={t("settings.rows.execEnabled")} description={t("settings.help.execEnabled")}>
+            <BooleanSwitch
+              checked={controls.execution.exec_enabled}
+              onChange={(checked) => updateSection("execution", { exec_enabled: checked })}
+            />
+          </SettingsRow>
+          <SettingsRow title={t("settings.rows.execProfile")} description={t("settings.help.execProfile")}>
+            <SimpleSelect
+              value={controls.execution.exec_profile}
+              options={optionLabels.execProfile}
+              onChange={(value) => updateSection("execution", { exec_profile: value })}
+            />
+          </SettingsRow>
+          <SettingsRow title="允许不安全执行" description="放宽 exec 工具的额外安全限制。仅建议在你明确了解风险的本地开发环境中开启。">
+            <BooleanSwitch
+              checked={controls.execution.exec_allow_unsafe_exec}
+              onChange={(checked) => updateSection("execution", { exec_allow_unsafe_exec: checked })}
+            />
+          </SettingsRow>
+          <SettingsRow title="Exec 语法范围" description="控制 exec 工具允许使用的命令语法范围。受限模式更安全，完整模式更灵活。">
+            <SimpleSelect
+              value={controls.execution.exec_shell_syntax_policy}
+              options={optionLabels.execShellSyntaxPolicy}
+              onChange={(value) => updateSection("execution", { exec_shell_syntax_policy: value })}
+            />
+          </SettingsRow>
+          <SettingsRow title="自省工具" description="启用 `my` 工具，让 Agent 可以查看自己的运行状态和部分内部信息。">
+            <BooleanSwitch
+              checked={controls.execution.my_enabled}
+              onChange={(checked) => updateSection("execution", { my_enabled: checked })}
+            />
+          </SettingsRow>
+          <SettingsRow title="自省工具允许修改" description="允许 `my` 工具不只查看状态，还能修改部分运行时状态。通常不建议默认开启。">
+            <BooleanSwitch
+              checked={controls.execution.my_allow_set}
+              onChange={(checked) => updateSection("execution", { my_allow_set: checked })}
+            />
+          </SettingsRow>
+          <SettingsRow title="限制在工作区内" description="把文件访问和命令执行尽量限制在当前工作区范围内，减少误操作和越界访问风险。">
+            <BooleanSwitch
+              checked={controls.execution.restrict_to_workspace}
+              onChange={(checked) => updateSection("execution", { restrict_to_workspace: checked })}
+            />
+          </SettingsRow>
+          <SettingsRow title={t("settings.rows.auditMode")} description={t("settings.help.auditMode")}>
+            <SimpleSelect
+              value={controls.audit.audit_mode}
+              options={optionLabels.auditMode}
+              onChange={(value) => updateSection("audit", { audit_mode: value })}
+            />
+          </SettingsRow>
+          <SettingsRow title="拒绝调用记为安全事件" description="当工具调用因策略被拒绝时，也把它记入安全审计，便于追踪风险尝试。">
+            <BooleanSwitch
+              checked={controls.audit.audit_security_on_policy_denial}
+              onChange={(checked) => updateSection("audit", { audit_security_on_policy_denial: checked })}
+            />
+          </SettingsRow>
+          <SettingsRow title={t("settings.rows.runtimeProfile")} description={t("settings.help.runtimeProfile")}>
+            <SimpleSelect
+              value={controls.runtime.profile}
+              options={optionLabels.runtimeProfile}
+              onChange={(value) => updateSection("runtime", { profile: value })}
+            />
+          </SettingsRow>
+          <SettingsRow title="Subagent 模式" description="控制子代理默认暴露给自身的能力范围。正常模式更可用，限制模式更保守。">
+            <SimpleSelect
+              value={controls.subagent.mode}
+              options={optionLabels.subagentMode}
+              onChange={(value) => updateSection("subagent", { mode: value as "normal" | "restricted" })}
+            />
+          </SettingsRow>
+          <SettingsRow title={t("settings.rows.curator")} description={t("settings.help.curator")}>
+            <BooleanSwitch
+              checked={controls.learning.curator_enabled}
+              onChange={(checked) => updateSection("learning", { curator_enabled: checked })}
+            />
+          </SettingsRow>
+          <SettingsRow title={t("settings.rows.domainPacks")} description={t("settings.help.domainPacks")}>
+            <BooleanSwitch
+              checked={controls.agent.domain_packs_enabled}
+              onChange={(checked) => updateSection("agent", { domain_packs_enabled: checked })}
+            />
+          </SettingsRow>
+          <SettingsRow title="自演化模式" description="控制系统对自学习、自优化提案的整体策略，越激进越容易尝试新变化。">
+            <SimpleSelect
+              value={controls.evolution.mode}
+              options={optionLabels.evolutionMode}
+              onChange={(value) => updateSection("evolution", { mode: value })}
+            />
+          </SettingsRow>
+          <SettingsRow title="允许人工覆盖自演化决策" description="允许人工手动覆盖系统对自演化提案的默认处理结果。">
+            <BooleanSwitch
+              checked={controls.evolution.allow_manual_override}
+              onChange={(checked) => updateSection("evolution", { allow_manual_override: checked })}
+            />
+          </SettingsRow>
+          <SettingsRow title="自演化仅演练" description="只做分析和评估，不真正落地自演化产物，适合先观察系统行为。">
+            <BooleanSwitch
+              checked={controls.evolution.dry_run}
+              onChange={(checked) => updateSection("evolution", { dry_run: checked })}
+            />
+          </SettingsRow>
+          <SettingsRow title="归档自演化结果" description="把自演化过程中的结果和结论保留下来，方便后续回顾和审计。">
+            <BooleanSwitch
+              checked={controls.evolution.outcome_archive_enabled}
+              onChange={(checked) => updateSection("evolution", { outcome_archive_enabled: checked })}
+            />
+          </SettingsRow>
+          <SettingsRow title="清理过期依赖快照" description="自动清理自演化流程中留下的过期依赖快照，减少无用残留。">
+            <BooleanSwitch
+              checked={controls.evolution.dependency_stale_cleanup_enabled}
+              onChange={(checked) => updateSection("evolution", { dependency_stale_cleanup_enabled: checked })}
+            />
+          </SettingsRow>
+          <SettingsRow title="自动验证工作流提案" description="当工作流提案满足一定置信条件时，自动进入验证流程，减少手工干预。">
+            <BooleanSwitch
+              checked={controls.evolution.auto_verify_workflows}
+              onChange={(checked) => updateSection("evolution", { auto_verify_workflows: checked })}
+            />
+          </SettingsRow>
+          <SettingsRow title="生成技能候选" description="根据重复出现的行为模式生成技能候选，供后续治理和确认。">
+            <BooleanSwitch
+              checked={controls.evolution.skill_candidates_enabled}
+              onChange={(checked) => updateSection("evolution", { skill_candidates_enabled: checked })}
+            />
+          </SettingsRow>
+          <SettingsRow title="反馈校准" description="在自演化评分中引入反馈校准，让系统更稳地判断哪些变化值得推进。">
+            <BooleanSwitch
+              checked={controls.evolution.feedback_calibration_enabled}
+              onChange={(checked) => updateSection("evolution", { feedback_calibration_enabled: checked })}
+            />
+          </SettingsRow>
+          <SettingsRow title="自演化沙箱" description="在只读沙箱中评估自演化产物，先验证，再决定是否进一步推进。">
+            <BooleanSwitch
+              checked={controls.evolution.sandbox_enabled}
+              onChange={(checked) => updateSection("evolution", { sandbox_enabled: checked })}
+            />
+          </SettingsRow>
+          <SettingsRow title="自演化试运行" description="对已通过一定验证的自演化产物进行隔离试运行，观察效果再决定是否采用。">
+            <BooleanSwitch
+              checked={controls.evolution.trial_enabled}
+              onChange={(checked) => updateSection("evolution", { trial_enabled: checked })}
+            />
+          </SettingsRow>
+          <SettingsRow title="试运行使用隔离工作区" description="让试运行在独立工作区中完成，避免直接影响主环境。">
+            <BooleanSwitch
+              checked={controls.evolution.trial_isolated_workspace}
+              onChange={(checked) => updateSection("evolution", { trial_isolated_workspace: checked })}
+            />
+          </SettingsRow>
+          <SettingsRow title="试运行仅允许只读工具" description="进一步收紧试运行权限，只允许读取类工具，避免产生修改行为。">
+            <BooleanSwitch
+              checked={controls.evolution.trial_read_only_tools_only}
+              onChange={(checked) => updateSection("evolution", { trial_read_only_tools_only: checked })}
+            />
+          </SettingsRow>
+          <SettingsRow title={t("settings.rows.heartbeat")} description={t("settings.help.heartbeat")}>
+            <BooleanSwitch
+              checked={controls.gateway.heartbeat_enabled}
+              onChange={(checked) => updateSection("gateway", { heartbeat_enabled: checked })}
+            />
+          </SettingsRow>
+          <SettingsRow title={t("settings.rows.pairing")} description={t("settings.help.pairing")}>
+            <BooleanSwitch
+              checked={controls.security.pairing_enabled}
+              onChange={(checked) => updateSection("security", { pairing_enabled: checked })}
+            />
+          </SettingsRow>
+          <SettingsRow title="允许自我批准配对" description="允许同一用户或同一会话自行批准配对请求，适合单人本地使用场景。">
+            <BooleanSwitch
+              checked={controls.security.pairing_allow_self_approve}
+              onChange={(checked) => updateSection("security", { pairing_allow_self_approve: checked })}
+            />
+          </SettingsRow>
+          <SettingsRow title="设备工具" description="启用与真实设备相关的工具注册能力，例如家庭设备或外部控制端。">
+            <BooleanSwitch
+              checked={controls.devices.device_enabled}
+              onChange={(checked) => updateSection("devices", { device_enabled: checked })}
+            />
+          </SettingsRow>
+          <SettingsRow title="灯光设备控制" description="启用面向灯光设备的专用控制能力。只有接入了对应后端时才有实际意义。">
+            <BooleanSwitch
+              checked={controls.devices.device_lighting_enabled}
+              onChange={(checked) => updateSection("devices", { device_lighting_enabled: checked })}
+            />
+          </SettingsRow>
+          <SettingsRow title="设备执行模式" description="决定设备工具只是模拟执行，还是会真正向外部设备发出操作。">
+            <SimpleSelect
+              value={controls.devices.device_mode}
+              options={optionLabels.deviceMode}
+              onChange={(value) => updateSection("devices", { device_mode: value })}
+            />
+          </SettingsRow>
+          <SettingsRow title="设备后端" description="选择设备工具实际连接的后端实现，不同后端代表不同的接入方式。">
+            <SimpleSelect
+              value={controls.devices.device_backend}
+              options={optionLabels.deviceBackend}
+              onChange={(value) => updateSection("devices", { device_backend: value })}
+            />
+          </SettingsRow>
+          {(runtimeDirty || runtimeSaving || settings.requires_restart) ? (
+            <SettingsFooter
+              dirty={runtimeDirty}
+              saving={runtimeSaving}
+              saved={settings.requires_restart && !runtimeDirty}
+              onSave={onSaveRuntime}
+            />
+          ) : null}
         </SettingsGroup>
       </section>
 
@@ -2989,5 +3422,61 @@ function SettingsFooter({
         {saving ? t("settings.actions.saving") : t("settings.actions.save")}
       </Button>
     </div>
+  );
+}
+
+function BooleanSwitch({
+  checked,
+  onChange,
+  disabled = false,
+}: {
+  checked: boolean;
+  onChange: (checked: boolean) => void;
+  disabled?: boolean;
+}) {
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={checked}
+      disabled={disabled}
+      onClick={() => onChange(!checked)}
+      className={cn(
+        "inline-flex h-7 w-12 items-center rounded-full p-0.5 transition-colors",
+        checked ? "bg-primary" : "bg-muted",
+        disabled && "opacity-60",
+      )}
+    >
+      <span
+        className={cn(
+          "h-6 w-6 rounded-full bg-background shadow-sm transition-transform",
+          checked && "translate-x-5",
+        )}
+      />
+    </button>
+  );
+}
+
+function SimpleSelect({
+  value,
+  options,
+  onChange,
+}: {
+  value: string;
+  options: Array<{ value: string; label: string }>;
+  onChange: (value: string) => void;
+}) {
+  return (
+    <select
+      value={value}
+      onChange={(event) => onChange(event.target.value)}
+      className="h-8 min-w-[180px] rounded-full border border-border bg-background px-3 text-[13px]"
+    >
+      {options.map((option) => (
+        <option key={option.value} value={option.value}>
+          {option.label}
+        </option>
+      ))}
+    </select>
   );
 }

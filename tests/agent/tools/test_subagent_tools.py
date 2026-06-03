@@ -1,6 +1,7 @@
 """Tests for subagent tool registration and wiring."""
 
 import asyncio
+import json
 import time
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -19,6 +20,7 @@ _MAX_TOOL_RESULT_CHARS = AgentDefaults().max_tool_result_chars
 async def test_subagent_exec_tool_receives_allowed_env_keys(tmp_path):
     """allowed_env_keys from ExecToolConfig must be forwarded to the subagent's ExecTool."""
     from OriginAgent.agent.subagent import SubagentManager, SubagentStatus
+    from OriginAgent.agent.subagent_policy import SubagentPolicy
     from OriginAgent.bus.queue import MessageBus
     from OriginAgent.config.schema import ExecToolConfig
 
@@ -50,8 +52,18 @@ async def test_subagent_exec_tool_receives_allowed_env_keys(tmp_path):
     status = SubagentStatus(
         task_id="sub-1", label="label", task_description="do task", started_at=time.monotonic()
     )
+    permissive = SubagentPolicy(
+        capability_snapshot=CapabilitySnapshot.user_turn(),
+        allowed_tool_names=frozenset({"exec"}),
+        allow_web=False,
+    )
     await mgr._run_subagent(
-        "sub-1", "do task", "label", {"channel": "test", "chat_id": "c1"}, status
+        "sub-1",
+        "do task",
+        "label",
+        {"channel": "test", "chat_id": "c1"},
+        status,
+        delegated_policy=permissive,
     )
 
     mgr.runner.run.assert_awaited_once()
@@ -61,6 +73,7 @@ async def test_subagent_exec_tool_receives_allowed_env_keys(tmp_path):
 async def test_subagent_uses_configured_max_iterations(tmp_path):
     """Subagents should honor the configured tool-iteration limit."""
     from OriginAgent.agent.subagent import SubagentManager, SubagentStatus
+    from OriginAgent.agent.subagent_policy import SubagentPolicy
     from OriginAgent.bus.queue import MessageBus
 
     bus = MessageBus()
@@ -89,11 +102,368 @@ async def test_subagent_uses_configured_max_iterations(tmp_path):
     status = SubagentStatus(
         task_id="sub-1", label="label", task_description="do task", started_at=time.monotonic()
     )
+    permissive = SubagentPolicy(
+        capability_snapshot=CapabilitySnapshot.user_turn(),
+        allowed_tool_names=frozenset({"read_file", "list_dir", "glob", "grep"}),
+        allow_web=False,
+    )
     await mgr._run_subagent(
-        "sub-1", "do task", "label", {"channel": "test", "chat_id": "c1"}, status
+        "sub-1",
+        "do task",
+        "label",
+        {"channel": "test", "chat_id": "c1"},
+        status,
+        delegated_policy=permissive,
     )
 
     mgr.runner.run.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_spawn_persists_subagent_task_record(tmp_path):
+    from OriginAgent.agent.subagent import SubagentManager
+    from OriginAgent.bus.queue import MessageBus
+
+    bus = MessageBus()
+    provider = MagicMock()
+    provider.get_default_model.return_value = "test-model"
+    mgr = SubagentManager(
+        provider=provider,
+        workspace=tmp_path,
+        bus=bus,
+        max_tool_result_chars=_MAX_TOOL_RESULT_CHARS,
+    )
+
+    release = asyncio.Event()
+
+    async def fake_run_subagent(*args, **kwargs):
+        await release.wait()
+
+    mgr._run_subagent = AsyncMock(side_effect=fake_run_subagent)
+
+    result = await mgr.spawn(
+        task="inspect the repository state",
+        label="inspect",
+        origin_channel="cli",
+        origin_chat_id="direct",
+        session_key="cli:direct",
+        capability_snapshot=CapabilitySnapshot.user_turn(),
+    )
+
+    assert "started" in result
+    records_path = tmp_path / "memory" / "subagents" / "tasks.jsonl"
+    rows = [json.loads(line) for line in records_path.read_text(encoding="utf-8").splitlines() if line.strip()]
+    assert rows[-1]["subagent_id"]
+    assert rows[-1]["parent_session_key"] == "cli:direct"
+    assert rows[-1]["terminal_status"] == "spawned"
+    assert rows[-1]["task_label"] == "inspect"
+
+    release.set()
+    await asyncio.gather(*mgr._running_tasks.values(), return_exceptions=True)
+
+
+@pytest.mark.asyncio
+async def test_manager_spawn_rejects_when_at_concurrency_limit(tmp_path):
+    from OriginAgent.agent.subagent import SubagentManager
+    from OriginAgent.bus.queue import MessageBus
+
+    bus = MessageBus()
+    provider = MagicMock()
+    provider.get_default_model.return_value = "test-model"
+    mgr = SubagentManager(
+        provider=provider,
+        workspace=tmp_path,
+        bus=bus,
+        max_tool_result_chars=_MAX_TOOL_RESULT_CHARS,
+    )
+
+    release = asyncio.Event()
+
+    async def fake_run_subagent(*args, **kwargs):
+        await release.wait()
+
+    mgr._run_subagent = AsyncMock(side_effect=fake_run_subagent)
+
+    first = await mgr.spawn(
+        task="first task",
+        origin_channel="cli",
+        origin_chat_id="direct",
+        session_key="cli:direct",
+        capability_snapshot=CapabilitySnapshot.user_turn(),
+    )
+    second = await mgr.spawn(
+        task="second task",
+        origin_channel="cli",
+        origin_chat_id="direct",
+        session_key="cli:direct",
+        capability_snapshot=CapabilitySnapshot.user_turn(),
+    )
+
+    assert "started" in first
+    assert "concurrency limit reached" in second
+    assert len(mgr._running_tasks) == 1
+
+    release.set()
+    await asyncio.gather(*mgr._running_tasks.values(), return_exceptions=True)
+
+
+@pytest.mark.asyncio
+async def test_subagent_persists_tool_records(tmp_path):
+    from OriginAgent.agent.subagent import SubagentManager, SubagentStatus
+    from OriginAgent.bus.queue import MessageBus
+    from OriginAgent.providers.base import LLMResponse, ToolCallRequest
+
+    bus = MessageBus()
+    provider = MagicMock()
+    provider.get_default_model.return_value = "test-model"
+    provider.chat_with_retry = AsyncMock(side_effect=[
+        LLMResponse(
+            content="thinking",
+            tool_calls=[ToolCallRequest(id="call_1", name="list_dir", arguments={"path": "."})],
+        ),
+        LLMResponse(content="done", tool_calls=[]),
+    ])
+    mgr = SubagentManager(
+        provider=provider,
+        workspace=tmp_path,
+        bus=bus,
+        max_tool_result_chars=_MAX_TOOL_RESULT_CHARS,
+    )
+    mgr._announce_result = AsyncMock()
+
+    status = SubagentStatus(
+        task_id="sub-1", label="label", task_description="do task", started_at=time.monotonic()
+    )
+    await mgr._run_subagent(
+        "sub-1",
+        "do task",
+        "label",
+        {"channel": "test", "chat_id": "c1", "session_key": "test:c1"},
+        status,
+    )
+
+    tools_path = tmp_path / "memory" / "subagents" / "tools.jsonl"
+    rows = [json.loads(line) for line in tools_path.read_text(encoding="utf-8").splitlines() if line.strip()]
+    assert rows
+    assert rows[-1]["subagent_id"] == "sub-1"
+    assert rows[-1]["tool_name"] == "list_dir"
+    assert rows[-1]["status"] in {"success", "failed"}
+    assert "path" in rows[-1]["argument_summary"]
+    assert rows[-1]["root_subagent_id"] in {None, "sub-1"}
+    assert rows[-1]["subagent_depth"] == 1
+
+
+@pytest.mark.asyncio
+async def test_cancel_by_session_persists_cancelled_record(tmp_path):
+    from OriginAgent.agent.subagent import SubagentManager
+    from OriginAgent.agent.subagent import SubagentStatus
+    from OriginAgent.bus.queue import MessageBus
+
+    bus = MessageBus()
+    provider = MagicMock()
+    provider.get_default_model.return_value = "test-model"
+    mgr = SubagentManager(
+        provider=provider,
+        workspace=tmp_path,
+        bus=bus,
+        max_tool_result_chars=_MAX_TOOL_RESULT_CHARS,
+    )
+    async def cancelled_run(_spec):
+        raise asyncio.CancelledError
+
+    mgr._announce_result = AsyncMock()
+    status = SubagentStatus(
+        task_id="sub-1",
+        label="label",
+        task_description="do task",
+        started_at=time.monotonic(),
+    )
+    with patch.object(mgr.runner, "run", new=AsyncMock(side_effect=cancelled_run)):
+        with pytest.raises(asyncio.CancelledError):
+            await mgr._run_subagent(
+                "sub-1",
+                "do task",
+                "label",
+                {"channel": "test", "chat_id": "c1", "session_key": "test:c1"},
+                status,
+            )
+
+    tasks_path = tmp_path / "memory" / "subagents" / "tasks.jsonl"
+    rows = [json.loads(line) for line in tasks_path.read_text(encoding="utf-8").splitlines() if line.strip()]
+    assert any(row["terminal_status"] == "cancelled" for row in rows)
+
+
+@pytest.mark.asyncio
+async def test_subagent_default_policy_does_not_register_spawn(tmp_path):
+    from OriginAgent.agent.subagent import SubagentManager, SubagentStatus
+    from OriginAgent.bus.queue import MessageBus
+
+    bus = MessageBus()
+    provider = MagicMock()
+    provider.get_default_model.return_value = "test-model"
+    mgr = SubagentManager(
+        provider=provider,
+        workspace=tmp_path,
+        bus=bus,
+        max_tool_result_chars=_MAX_TOOL_RESULT_CHARS,
+    )
+    mgr._announce_result = AsyncMock()
+    captured: dict[str, list[str]] = {}
+
+    async def fake_run(spec):
+        captured["tool_names"] = spec.tools.tool_names
+        return SimpleNamespace(stop_reason="done", final_content="done", error=None, tool_events=[])
+
+    mgr.runner.run = AsyncMock(side_effect=fake_run)
+    status = SubagentStatus(
+        task_id="sub-1",
+        label="label",
+        task_description="do task",
+        started_at=time.monotonic(),
+    )
+    await mgr._run_subagent(
+        "sub-1",
+        "do task",
+        "label",
+        {"channel": "test", "chat_id": "c1", "session_key": "test:c1"},
+        status,
+    )
+
+    assert "spawn" not in captured["tool_names"]
+
+
+@pytest.mark.asyncio
+async def test_subagent_nested_policy_registers_spawn(tmp_path):
+    from OriginAgent.agent.subagent import SubagentManager, SubagentStatus
+    from OriginAgent.agent.subagent_policy import SubagentPolicy
+    from OriginAgent.bus.queue import MessageBus
+
+    bus = MessageBus()
+    provider = MagicMock()
+    provider.get_default_model.return_value = "test-model"
+    mgr = SubagentManager(
+        provider=provider,
+        workspace=tmp_path,
+        bus=bus,
+        max_tool_result_chars=_MAX_TOOL_RESULT_CHARS,
+    )
+    mgr._announce_result = AsyncMock()
+    captured: dict[str, list[str]] = {}
+
+    async def fake_run(spec):
+        captured["tool_names"] = spec.tools.tool_names
+        return SimpleNamespace(stop_reason="done", final_content="done", error=None, tool_events=[])
+
+    mgr.runner.run = AsyncMock(side_effect=fake_run)
+    policy = SubagentPolicy(
+        capability_snapshot=CapabilitySnapshot.user_turn().derive_subagent(),
+        allowed_tool_names=frozenset({"read_file", "list_dir", "glob", "grep", "spawn"}),
+        allow_web=False,
+        allow_nested_spawn=True,
+        max_subagent_depth=2,
+        max_children_per_subagent=2,
+        child_allowed_tool_names=frozenset({"read_file", "grep"}),
+    )
+    status = SubagentStatus(
+        task_id="sub-1",
+        label="label",
+        task_description="do task",
+        started_at=time.monotonic(),
+        root_subagent_id="sub-1",
+        subagent_depth=1,
+    )
+    await mgr._run_subagent(
+        "sub-1",
+        "do task",
+        "label",
+        {
+            "channel": "test",
+            "chat_id": "c1",
+            "session_key": "test:c1",
+            "root_subagent_id": "sub-1",
+            "parent_subagent_id": None,
+            "subagent_depth": "1",
+        },
+        status,
+        delegated_policy=policy,
+    )
+
+    assert "spawn" in captured["tool_names"]
+
+
+@pytest.mark.asyncio
+async def test_manager_nested_spawn_rejects_depth_limit(tmp_path):
+    from OriginAgent.agent.subagent import SubagentManager
+    from OriginAgent.agent.subagent_policy import SubagentPolicy
+    from OriginAgent.bus.queue import MessageBus
+
+    bus = MessageBus()
+    provider = MagicMock()
+    provider.get_default_model.return_value = "test-model"
+    mgr = SubagentManager(
+        provider=provider,
+        workspace=tmp_path,
+        bus=bus,
+        max_tool_result_chars=_MAX_TOOL_RESULT_CHARS,
+    )
+    policy = SubagentPolicy(
+        capability_snapshot=CapabilitySnapshot.user_turn().derive_subagent(),
+        allowed_tool_names=frozenset({"read_file", "spawn"}),
+        allow_nested_spawn=True,
+        max_subagent_depth=1,
+        max_children_per_subagent=1,
+    )
+
+    result = await mgr.spawn(
+        task="nested",
+        origin_channel="cli",
+        origin_chat_id="direct",
+        session_key="cli:direct",
+        delegated_policy=policy,
+        parent_subagent_id="parent-1",
+        root_subagent_id="root-1",
+        subagent_depth=2,
+    )
+
+    assert "maximum delegated depth reached" in result
+
+
+@pytest.mark.asyncio
+async def test_manager_nested_spawn_rejects_child_limit(tmp_path):
+    from OriginAgent.agent.subagent import SubagentManager
+    from OriginAgent.agent.subagent_policy import SubagentPolicy
+    from OriginAgent.bus.queue import MessageBus
+
+    bus = MessageBus()
+    provider = MagicMock()
+    provider.get_default_model.return_value = "test-model"
+    mgr = SubagentManager(
+        provider=provider,
+        workspace=tmp_path,
+        bus=bus,
+        max_tool_result_chars=_MAX_TOOL_RESULT_CHARS,
+    )
+    mgr._child_counts["parent-1"] = 1
+    policy = SubagentPolicy(
+        capability_snapshot=CapabilitySnapshot.user_turn().derive_subagent(),
+        allowed_tool_names=frozenset({"read_file", "spawn"}),
+        allow_nested_spawn=True,
+        max_subagent_depth=2,
+        max_children_per_subagent=1,
+    )
+
+    result = await mgr.spawn(
+        task="nested",
+        origin_channel="cli",
+        origin_chat_id="direct",
+        session_key="cli:direct",
+        delegated_policy=policy,
+        parent_subagent_id="parent-1",
+        root_subagent_id="root-1",
+        subagent_depth=1,
+    )
+
+    assert "child delegation limit reached" in result
 
 
 @pytest.mark.asyncio

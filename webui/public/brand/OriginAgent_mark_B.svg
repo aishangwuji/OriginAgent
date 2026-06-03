@@ -1,0 +1,59 @@
+<svg width="512" height="512" viewBox="0 0 512 512" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="title desc">
+  <title id="title">OriginAgent mark B</title>
+  <desc id="desc">OriginAgent option B: a task-compass mark with four coordinated capability bearings around an agent core.</desc>
+  <defs>
+    <linearGradient id="bgB" x1="62" y1="58" x2="447" y2="460" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#F8FCFF"/>
+      <stop offset="0.48" stop-color="#EAF3FF"/>
+      <stop offset="1" stop-color="#D3E2FF"/>
+    </linearGradient>
+    <linearGradient id="ringB" x1="124" y1="112" x2="394" y2="398" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#183C6A"/>
+      <stop offset="0.6" stop-color="#2B78CE"/>
+      <stop offset="1" stop-color="#59BDE7"/>
+    </linearGradient>
+    <linearGradient id="accentB" x1="178" y1="154" x2="334" y2="330" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#FFF5D2"/>
+      <stop offset="1" stop-color="#FFBE5B"/>
+    </linearGradient>
+    <filter id="shadowB" x="70" y="66" width="372" height="377" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
+      <feDropShadow dx="0" dy="18" stdDeviation="20" flood-color="#214D82" flood-opacity="0.16"/>
+      <feDropShadow dx="0" dy="4" stdDeviation="4" flood-color="#214D82" flood-opacity="0.1"/>
+    </filter>
+  </defs>
+  <rect x="48" y="48" width="416" height="416" rx="132" fill="url(#bgB)"/>
+  <path d="M128 387C154 416 204 434 258 434C312 434 359 416 386 387" stroke="#9BC3EC" stroke-width="16" stroke-linecap="round" opacity="0.72"/>
+  <g filter="url(#shadowB)">
+    <circle cx="256" cy="256" r="140" fill="white" stroke="url(#ringB)" stroke-width="18"/>
+    <circle cx="256" cy="256" r="94" fill="#F6FAFF" stroke="#B5D9FF" stroke-width="10"/>
+
+    <path d="M256 126V188" stroke="#173E69" stroke-width="14" stroke-linecap="round"/>
+    <path d="M386 256H324" stroke="#173E69" stroke-width="14" stroke-linecap="round"/>
+    <path d="M256 386V324" stroke="#173E69" stroke-width="14" stroke-linecap="round"/>
+    <path d="M126 256H188" stroke="#173E69" stroke-width="14" stroke-linecap="round"/>
+
+    <path d="M256 156L283 206H229L256 156Z" fill="url(#accentB)" stroke="#173E69" stroke-width="10" stroke-linejoin="round"/>
+    <rect x="308" y="230" width="50" height="50" rx="16" fill="#DDF1FF" stroke="#173E69" stroke-width="10"/>
+    <path d="M256 356C276.987 356 294 338.987 294 318C294 297.013 276.987 280 256 280C235.013 280 218 297.013 218 318C218 338.987 235.013 356 256 356Z" fill="#EAF8FF" stroke="#173E69" stroke-width="10"/>
+    <path d="M166 230H188L204 256L188 282H166L150 256L166 230Z" fill="#DDF1FF" stroke="#173E69" stroke-width="10" stroke-linejoin="round"/>
+
+    <circle cx="256" cy="256" r="34" fill="#173E69"/>
+    <circle cx="256" cy="256" r="12" fill="#9FF3FF"/>
+
+    <path d="M256 222V290" stroke="#9BCFFF" stroke-width="8" stroke-linecap="round"/>
+    <path d="M222 256H290" stroke="#9BCFFF" stroke-width="8" stroke-linecap="round"/>
+
+    <circle cx="256" cy="126" r="18" fill="#173E69"/>
+    <circle cx="386" cy="256" r="18" fill="#173E69"/>
+    <circle cx="256" cy="386" r="18" fill="#173E69"/>
+    <circle cx="126" cy="256" r="18" fill="#173E69"/>
+
+    <circle cx="256" cy="126" r="6" fill="white"/>
+    <circle cx="386" cy="256" r="6" fill="white"/>
+    <circle cx="256" cy="386" r="6" fill="white"/>
+    <circle cx="126" cy="256" r="6" fill="white"/>
+  </g>
+
+  <path d="M118 152L126 136L134 152L150 160L134 168L126 184L118 168L102 160L118 152Z" fill="white" stroke="#5CAFE8" stroke-width="7" stroke-linejoin="round"/>
+  <path d="M381 121L387 108L393 121L406 127L393 133L387 146L381 133L368 127L381 121Z" fill="white" stroke="#5CAFE8" stroke-width="5" stroke-linejoin="round"/>
+</svg>

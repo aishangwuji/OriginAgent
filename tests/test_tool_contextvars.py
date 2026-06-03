@@ -4,11 +4,13 @@ import asyncio
 
 import pytest
 
+from OriginAgent.agent.subagent_policy import SubagentPolicy
 from OriginAgent.agent.tools.cron import CronTool
 from OriginAgent.agent.tools.message import MessageTool
 from OriginAgent.agent.tools.spawn import SpawnTool
 from OriginAgent.cron.service import CronService
 from OriginAgent.security.capabilities import CapabilitySnapshot
+from dataclasses import replace
 
 
 @pytest.mark.asyncio
@@ -191,6 +193,66 @@ async def test_spawn_tool_basic_set_context_and_execute() -> None:
     result = await tool.execute(task="do something")
     assert result == "ok: do something"
     assert seen == [("feishu", "chat-abc", "feishu:chat-abc")]
+
+
+@pytest.mark.asyncio
+async def test_spawn_tool_keeps_nested_policy_context_local() -> None:
+    seen: list[tuple[str | None, str | None, int]] = []
+    entered = asyncio.Event()
+    release = asyncio.Event()
+
+    class _Manager:
+        max_concurrent_subagents = 2
+
+        def get_running_count(self) -> int:
+            return 0
+
+        async def spawn(self, **kwargs):
+            seen.append((
+                kwargs.get("parent_subagent_id"),
+                kwargs.get("root_subagent_id"),
+                kwargs.get("subagent_depth"),
+            ))
+            return "ok"
+
+    policy = SubagentPolicy(
+        capability_snapshot=CapabilitySnapshot.user_turn().derive_subagent(),
+        allowed_tool_names=frozenset({"read_file", "spawn"}),
+        allow_nested_spawn=True,
+        max_subagent_depth=2,
+        max_children_per_subagent=2,
+    )
+    tool = SpawnTool(_Manager())
+    tool.set_capability_snapshot(
+        replace(CapabilitySnapshot.user_turn().derive_subagent(), can_spawn=True)
+    )
+
+    async def task_one() -> str:
+        tool.set_nested_policy(
+            parent_subagent_id="sub-a",
+            root_subagent_id="root-a",
+            subagent_depth=1,
+            delegated_policy=policy,
+        )
+        entered.set()
+        await release.wait()
+        return await tool.execute(task="one")
+
+    async def task_two() -> str:
+        await entered.wait()
+        tool.set_nested_policy(
+            parent_subagent_id="sub-b",
+            root_subagent_id="root-b",
+            subagent_depth=1,
+            delegated_policy=policy,
+        )
+        release.set()
+        return await tool.execute(task="two")
+
+    await asyncio.gather(task_one(), task_two())
+
+    assert ("sub-a", "root-a", 2) in seen
+    assert ("sub-b", "root-b", 2) in seen
 
 
 @pytest.mark.asyncio

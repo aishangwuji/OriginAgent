@@ -5,7 +5,7 @@ import hashlib
 import json
 import time
 from dataclasses import dataclass
-from typing import Any, Literal
+from typing import Any, Literal, Protocol
 from urllib.parse import urlparse
 
 from OriginAgent.agent.tools.audit import ToolAuditConfig, ToolAuditSink, ToolCallAuditEvent
@@ -39,6 +39,25 @@ _POLICY_DENIAL_PHRASES = (
 class ToolAuditContext:
     actor_id_hash: str | None = None
     session_key_hash: str | None = None
+    subagent_task_id: str | None = None
+    parent_session_key_hash: str | None = None
+    origin_channel: str | None = None
+    origin_chat_id_hash: str | None = None
+
+
+class ToolExecutionObserver(Protocol):
+    def on_tool_result(
+        self,
+        *,
+        name: str,
+        params: dict[str, Any],
+        status: str,
+        start: float,
+        error_kind: str | None = None,
+        policy_rule: str | None = None,
+        result: Any = None,
+    ) -> None:
+        ...
 
 
 # This list is intentionally narrow. Do not add ordinary helper tools here.
@@ -107,6 +126,7 @@ class ToolRegistry:
         audit_sink: ToolAuditSink | None = None,
         audit_config: ToolAuditConfig | None = None,
         capability_snapshot: CapabilitySnapshot | None = None,
+        execution_observer: ToolExecutionObserver | None = None,
     ):
         self._tools: dict[str, Tool] = {}
         self._cached_definitions: list[dict[str, Any]] | None = None
@@ -114,6 +134,7 @@ class ToolRegistry:
         self._audit_config = ToolAuditConfig.from_config(audit_config)
         self._capability_snapshot = capability_snapshot
         self._audit_context = ToolAuditContext()
+        self._execution_observer = execution_observer
 
     def set_capability_snapshot(self, snapshot: CapabilitySnapshot | None) -> None:
         self._capability_snapshot = snapshot
@@ -126,10 +147,18 @@ class ToolRegistry:
         *,
         actor_id: str | None = None,
         session_key: str | None = None,
+        subagent_task_id: str | None = None,
+        parent_session_key: str | None = None,
+        origin_channel: str | None = None,
+        origin_chat_id: str | None = None,
     ) -> None:
         self._audit_context = ToolAuditContext(
             actor_id_hash=_safe_hash(actor_id),
             session_key_hash=_safe_hash(session_key),
+            subagent_task_id=subagent_task_id,
+            parent_session_key_hash=_safe_hash(parent_session_key),
+            origin_channel=origin_channel,
+            origin_chat_id_hash=_safe_hash(origin_chat_id),
         )
 
     def register(self, tool: Tool) -> None:
@@ -224,7 +253,7 @@ class ToolRegistry:
         tool, params, error = self.prepare_call(name, params)
         if error:
             status = "policy_denied" if is_policy_denial_text(error) else "validation_error"
-            await self._audit_tool_call_async(
+            await self.audit_tool_result_async(
                 name=name,
                 tool=tool,
                 status=status,
@@ -240,7 +269,7 @@ class ToolRegistry:
             result = await tool.execute(**params)
             if isinstance(result, str) and result.startswith("Error"):
                 policy_denied = is_policy_denial_text(result)
-                await self._audit_tool_call_async(
+                await self.audit_tool_result_async(
                     name=name,
                     tool=tool,
                     status="policy_denied" if policy_denied else "error",
@@ -250,18 +279,18 @@ class ToolRegistry:
                     params=params,
                 )
                 return result if policy_denied else result + _RETRY_HINT
-            await self._audit_tool_call_async(
+            await self.audit_tool_result_async(
                 name=name,
                 tool=tool,
                 status="success",
                 start=start,
                 params=params,
-                result_size=_safe_result_size(result),
+                result=result,
             )
             return result
         except BaseException as e:
             if type(e).__name__ == "AskUserInterrupt":
-                await self._audit_tool_call_async(
+                await self.audit_tool_result_async(
                     name=name,
                     tool=tool,
                     status="interrupted",
@@ -275,7 +304,7 @@ class ToolRegistry:
             error_text = f"Error executing {name}: {str(e)}"
             policy_denied = is_policy_denial_exc(e)
             policy_rule = e.policy_rule if isinstance(e, PolicyDeniedError) else None
-            await self._audit_tool_call_async(
+            await self.audit_tool_result_async(
                 name=name,
                 tool=tool,
                 status="policy_denied" if policy_denied else "error",
@@ -395,6 +424,14 @@ class ToolRegistry:
                     error_kind=error_kind,
                     actor_id_hash=self._audit_context.actor_id_hash if tier == "security" else None,
                     session_key_hash=self._audit_context.session_key_hash if tier == "security" else None,
+                    subagent_task_id=self._audit_context.subagent_task_id if tier == "security" else None,
+                    parent_session_key_hash=(
+                        self._audit_context.parent_session_key_hash if tier == "security" else None
+                    ),
+                    origin_channel=self._audit_context.origin_channel if tier == "security" else None,
+                    origin_chat_id_hash=(
+                        self._audit_context.origin_chat_id_hash if tier == "security" else None
+                    ),
                     policy_rule=policy_rule if tier == "security" else None,
                     target_kind=(target_kind or summarized_kind) if tier == "security" else None,
                     target_hash=(target_hash or summarized_hash) if tier == "security" else None,
@@ -451,6 +488,15 @@ class ToolRegistry:
             params=params,
             result_size=_safe_result_size(result) if status == "success" else None,
         )
+        self._notify_execution_observer(
+            name=name,
+            params=params,
+            status=status,
+            start=start,
+            error_kind=error_kind,
+            policy_rule=policy_rule,
+            result=result,
+        )
 
     async def audit_tool_result_async(
         self,
@@ -474,6 +520,16 @@ class ToolRegistry:
             params=params,
             result_size=_safe_result_size(result) if status == "success" else None,
         )
+        await asyncio.to_thread(
+            self._notify_execution_observer,
+            name=name,
+            params=params,
+            status=status,
+            start=start,
+            error_kind=error_kind,
+            policy_rule=policy_rule,
+            result=result,
+        )
 
     @property
     def tool_names(self) -> list[str]:
@@ -485,6 +541,33 @@ class ToolRegistry:
 
     def __contains__(self, name: str) -> bool:
         return name in self._tools
+
+    def _notify_execution_observer(
+        self,
+        *,
+        name: str,
+        params: dict[str, Any],
+        status: str,
+        start: float,
+        error_kind: str | None = None,
+        policy_rule: str | None = None,
+        result: Any = None,
+    ) -> None:
+        observer = self._execution_observer
+        if observer is None:
+            return
+        try:
+            observer.on_tool_result(
+                name=name,
+                params=params,
+                status=status,
+                start=start,
+                error_kind=error_kind,
+                policy_rule=policy_rule,
+                result=result,
+            )
+        except Exception:
+            pass
 
 
 def _safe_hash(value: Any) -> str | None:

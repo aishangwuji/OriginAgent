@@ -136,6 +136,85 @@ export interface SettingsPayload {
       enabled: boolean;
     };
   };
+  runtime_controls: {
+    channels: {
+      send_progress: boolean;
+      send_tool_hints: boolean;
+      show_reasoning: boolean;
+    };
+    agent: {
+      unified_session: boolean;
+      cold_archive_enabled: boolean;
+      allow_agent_initiated_messages: boolean;
+      auxiliary_enabled: boolean;
+      domain_packs_enabled: boolean;
+      provider_retry_mode: string;
+      dream_annotate_line_ages: boolean;
+    };
+    learning: {
+      background_review_enabled: boolean;
+      curator_enabled: boolean;
+    };
+    evolution: {
+      mode: string;
+      allow_manual_override: boolean;
+      dry_run: boolean;
+      outcome_archive_enabled: boolean;
+      dependency_stale_cleanup_enabled: boolean;
+      auto_verify_workflows: boolean;
+      skill_candidates_enabled: boolean;
+      feedback_calibration_enabled: boolean;
+      sandbox_enabled: boolean;
+      trial_enabled: boolean;
+      trial_isolated_workspace: boolean;
+      trial_read_only_tools_only: boolean;
+    };
+    gateway: {
+      heartbeat_enabled: boolean;
+    };
+    security: {
+      pairing_enabled: boolean;
+      pairing_allow_self_approve: boolean;
+    };
+    search: {
+      web_enabled: boolean;
+      web_fetch_use_jina_reader: boolean;
+      session_search_enabled: boolean;
+      session_search_backend: string;
+      session_search_semantic_enabled: boolean;
+      session_search_rebuild_on_start: boolean;
+      content_read_enabled: boolean;
+      content_read_use_jina_reader: boolean;
+    };
+    execution: {
+      exec_enabled: boolean;
+      exec_profile: string;
+      exec_allow_unsafe_exec: boolean;
+      exec_shell_syntax_policy: string;
+      my_enabled: boolean;
+      my_allow_set: boolean;
+      restrict_to_workspace: boolean;
+    };
+    media: {
+      image_generation_enabled: boolean;
+    };
+    devices: {
+      device_enabled: boolean;
+      device_lighting_enabled: boolean;
+      device_mode: string;
+      device_backend: string;
+    };
+    subagent: {
+      mode: "normal" | "restricted";
+    };
+    audit: {
+      audit_mode: string;
+      audit_security_on_policy_denial: boolean;
+    };
+    runtime: {
+      profile: string;
+    };
+  };
   mcp: {
     servers: McpServerSettings[];
   };
@@ -160,6 +239,22 @@ export interface WebSearchSettingsUpdate {
   provider: string;
   apiKey?: string;
   baseUrl?: string;
+}
+
+export interface RuntimeSettingsUpdate {
+  channels?: Partial<SettingsPayload["runtime_controls"]["channels"]>;
+  agent?: Partial<SettingsPayload["runtime_controls"]["agent"]>;
+  learning?: Partial<SettingsPayload["runtime_controls"]["learning"]>;
+  evolution?: Partial<SettingsPayload["runtime_controls"]["evolution"]>;
+  gateway?: Partial<SettingsPayload["runtime_controls"]["gateway"]>;
+  security?: Partial<SettingsPayload["runtime_controls"]["security"]>;
+  search?: Partial<SettingsPayload["runtime_controls"]["search"]>;
+  execution?: Partial<SettingsPayload["runtime_controls"]["execution"]>;
+  media?: Partial<SettingsPayload["runtime_controls"]["media"]>;
+  devices?: Partial<SettingsPayload["runtime_controls"]["devices"]>;
+  subagent?: Partial<SettingsPayload["runtime_controls"]["subagent"]>;
+  audit?: Partial<SettingsPayload["runtime_controls"]["audit"]>;
+  runtime?: Partial<SettingsPayload["runtime_controls"]["runtime"]>;
 }
 
 export type McpTransportType = "stdio" | "sse" | "streamableHttp";
@@ -626,3 +721,5 @@ export type Outbound =
        * generic websocket protocol for other clients. */
       webui?: true;
     };
+
+

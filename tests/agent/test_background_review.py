@@ -243,6 +243,30 @@ async def test_agent_loop_schedules_curator_only_for_successful_user_turn(tmp_pa
 
 
 @pytest.mark.asyncio
+async def test_schedule_background_discards_completed_task(tmp_path: Path) -> None:
+    loop = AgentLoop(
+        bus=MessageBus(),
+        provider=FakeProvider(LLMResponse(content="ok", finish_reason="stop")),
+        workspace=tmp_path,
+        model="fake-model",
+    )
+
+    release = asyncio.Event()
+
+    async def _work() -> None:
+        await release.wait()
+
+    loop._schedule_background(_work())
+    assert len(loop._background_tasks) == 1
+
+    release.set()
+    await asyncio.gather(*loop._background_tasks, return_exceptions=True)
+    await asyncio.sleep(0)
+
+    assert len(loop._background_tasks) == 0
+
+
+@pytest.mark.asyncio
 async def test_reviews_command_lists_pending_proposals(tmp_path: Path) -> None:
     store = ReviewProposalStore(tmp_path)
     service = BackgroundReviewService(

@@ -30,6 +30,8 @@ from OriginAgent.agent.agent_tool_setup import (
     register_plugin_tools,
     should_register_exec,
 )
+from OriginAgent.agent.active_intents import ActiveIntentConfig, ActiveIntentService
+from OriginAgent.agent.reminders import ReminderStore
 from OriginAgent.agent.agent_turn_persist import TurnPersistManager
 from OriginAgent.agent.autocompact import AutoCompact
 from OriginAgent.agent.auxiliary_llm import AuxiliaryLLMRouter
@@ -256,6 +258,12 @@ class AgentLoop:
         evolution_config: "EvolutionConfig | None" = None,
         evolution_config_loader: Callable[[], "EvolutionConfig"] | None = None,
         cold_archive_enabled: bool = True,
+        tool_concurrency_limit: int | None = None,
+        allow_agent_initiated_messages: bool | None = None,
+        active_intent_interval_seconds: int | None = None,
+        active_intent_session_cooldown_seconds: int | None = None,
+        active_intent_intent_cooldown_seconds: int | None = None,
+        active_intent_max_messages_per_session_per_pass: int | None = None,
     ):
         from OriginAgent.config.schema import ExecToolConfig, ToolsConfig, WebToolsConfig
 
@@ -379,7 +387,9 @@ class AgentLoop:
             restrict_to_workspace=restrict_to_workspace,
             disabled_skills=disabled_skills,
             max_iterations=self.max_iterations,
+            subagent_policy_mode=defaults.subagent_policy.mode,
             grant_store=CapabilityGrantStore(workspace),
+            preset_snapshot_loader=self._preset_snapshot_loader,
         )
         self._unified_session = unified_session
         self._max_messages = max_messages if max_messages > 0 else 120
@@ -394,9 +404,10 @@ class AgentLoop:
         self._mcp_ready: asyncio.Future[bool] | None = None
         self._mcp_shutdown_event: asyncio.Event | None = None
         self._mcp_runtime_task: asyncio.Task[None] | None = None
+        self._active_intent_task: asyncio.Task[None] | None = None
         self._mcp_startup_error: BaseException | None = None
         self._active_tasks: dict[str, list[asyncio.Task]] = {}  # session_key -> tasks
-        self._background_tasks: list[asyncio.Task] = []
+        self._background_tasks: set[asyncio.Task] = set()
         self._session_locks: dict[str, asyncio.Lock] = {}
         # Per-session pending queues for mid-turn message injection.
         # When a session has an active task, new messages for that session
@@ -417,6 +428,43 @@ class AgentLoop:
             curator_service=self.curator,
         )
         self._confirmation_store = PendingConfirmationStore(workspace)
+        self._reminder_store = ReminderStore(workspace)
+        self._active_intent_config = ActiveIntentConfig(
+            enabled=(
+                defaults.allow_agent_initiated_messages
+                if allow_agent_initiated_messages is None
+                else allow_agent_initiated_messages
+            ),
+            interval_seconds=(
+                defaults.active_intent_interval_seconds
+                if active_intent_interval_seconds is None
+                else active_intent_interval_seconds
+            ),
+            session_cooldown_seconds=(
+                defaults.active_intent_session_cooldown_seconds
+                if active_intent_session_cooldown_seconds is None
+                else active_intent_session_cooldown_seconds
+            ),
+            intent_cooldown_seconds=(
+                defaults.active_intent_intent_cooldown_seconds
+                if active_intent_intent_cooldown_seconds is None
+                else active_intent_intent_cooldown_seconds
+            ),
+            max_messages_per_session_per_pass=(
+                defaults.active_intent_max_messages_per_session_per_pass
+                if active_intent_max_messages_per_session_per_pass is None
+                else active_intent_max_messages_per_session_per_pass
+            ),
+        )
+        self.active_intents = ActiveIntentService(
+            workspace=workspace,
+            bus=bus,
+            sessions=self.sessions,
+            confirmation_store=self._confirmation_store,
+            fact_store=self.context.memory.fact_store,
+            reminder_store=self._reminder_store,
+            config=self._active_intent_config,
+        )
         self.introspection = RuntimeIntrospectionService(
             loop=self,
             workspace=workspace,
@@ -425,6 +473,7 @@ class AgentLoop:
             pending_queues=self._pending_queues,
             cron_service=self.cron_service,
             confirmation_store=self._confirmation_store,
+            reminder_store=self._reminder_store,
             audit_mode=self._tool_audit_config.mode,
             runtime_profile=self._runtime_profile,
             domain_pack_manager=self.domain_packs,
@@ -437,6 +486,11 @@ class AgentLoop:
         _max = int(os.environ.get("ORIGINAGENT_MAX_CONCURRENT_REQUESTS", "3"))
         self._concurrency_gate: asyncio.Semaphore | None = (
             asyncio.Semaphore(_max) if _max > 0 else None
+        )
+        self._tool_concurrency_limit = (
+            tool_concurrency_limit
+            if tool_concurrency_limit is not None
+            else max(1, int(os.environ.get("ORIGINAGENT_MAX_CONCURRENT_TOOLS", "4")))
         )
         self.consolidator = Consolidator(
             store=self.context.memory,
@@ -1202,6 +1256,11 @@ class AgentLoop:
                         runtime_block,
                         self.context.build_internal_event_block("subagent_result", content),
                     ]
+                elif pending_msg.metadata.get("injected_event") == "active_intent":
+                    merged = [
+                        runtime_block,
+                        self.context.build_internal_event_block("active_intent", content),
+                    ]
                 else:
                     merged = [
                         runtime_block,
@@ -1251,6 +1310,7 @@ class AgentLoop:
                 hook=hook,
                 error_message="Sorry, I encountered an error calling the AI model.",
                 concurrent_tools=True,
+                tool_concurrency_limit=self._tool_concurrency_limit,
                 workspace=self.workspace,
                 session_key=session.key if session else None,
                 context_window_tokens=self.context_window_tokens,
@@ -1286,6 +1346,7 @@ class AgentLoop:
         self._running = True
         await self._connect_mcp()
         self._schedule_session_search_refresh(force=self.session_search_index.rebuild_on_start)
+        self._start_active_intent_loop()
         logger.info("Agent loop started")
 
         while self._running:
@@ -1505,6 +1566,11 @@ class AgentLoop:
 
     async def close_mcp(self) -> None:
         """Drain pending background archives, then close MCP connections."""
+        if self._active_intent_task is not None:
+            self._active_intent_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await asyncio.shield(self._active_intent_task)
+            self._active_intent_task = None
         if self._background_tasks:
             await asyncio.gather(*self._background_tasks, return_exceptions=True)
             self._background_tasks.clear()
@@ -1530,8 +1596,30 @@ class AgentLoop:
     def _schedule_background(self, coro) -> None:
         """Schedule a coroutine as a tracked background task (drained on shutdown)."""
         task = asyncio.create_task(coro)
-        self._background_tasks.append(task)
-        task.add_done_callback(self._background_tasks.remove)
+        self._background_tasks.add(task)
+        task.add_done_callback(self._background_tasks.discard)
+
+    def _start_active_intent_loop(self) -> None:
+        if not self._active_intent_config.enabled or self._active_intent_task is not None:
+            return
+        self._active_intent_task = asyncio.create_task(self._active_intent_loop())
+
+    async def _active_intent_loop(self) -> None:
+        interval = max(1, int(self._active_intent_config.interval_seconds))
+        try:
+            while self._running:
+                await asyncio.sleep(interval)
+                for session_key in self.active_intents.session_keys():
+                    active_tasks = self._active_tasks.get(session_key, [])
+                    active_count = sum(1 for task in active_tasks if not task.done())
+                    running_subagents = self.subagents.get_running_count_by_session(session_key)
+                    await self.active_intents.process_session(
+                        session_key,
+                        active_task_count=active_count,
+                        running_subagents=running_subagents,
+                    )
+        except asyncio.CancelledError:
+            raise
 
     def stop(self) -> None:
         """Stop the agent loop."""
@@ -1568,7 +1656,9 @@ class AgentLoop:
             session,
             replay_max_messages=self._max_messages,
         )
-        is_subagent = msg.sender_id == "subagent"
+        event_kind = str(msg.metadata.get("injected_event") or "").strip()
+        is_subagent = msg.sender_id == "subagent" or event_kind == "subagent_result"
+        is_active_intent = event_kind == "active_intent"
         persisted_subagent = False
         if is_subagent and self._persist_subagent_followup(session, msg):
             persisted_subagent = True
@@ -1607,14 +1697,18 @@ class AgentLoop:
 
         messages = self.context.build_messages(
             history=history_for_model,
-            current_message=None if is_subagent else msg.content,
+            current_message=None if (is_subagent or is_active_intent) else msg.content,
             channel=channel,
             chat_id=chat_id,
             current_role="user",
             sender_id=msg.sender_id,
             session_summary=pending,
             session_metadata=session.metadata,
-            internal_event=("subagent_result", msg.content) if is_subagent else None,
+            internal_event=(
+                ("subagent_result", msg.content)
+                if is_subagent
+                else ("active_intent", msg.content) if is_active_intent else None
+            ),
         )
         final_content, _, all_msgs, stop_reason, _ = await self._run_agent_loop(
             messages, session=session, channel=channel, chat_id=chat_id,
@@ -1626,7 +1720,7 @@ class AgentLoop:
             trigger=runtime_context.trigger,
             capability_snapshot=snapshot,
         )
-        save_skip = 1 + len(history_for_model) + (1 if is_subagent else 0)
+        save_skip = 1 + len(history_for_model) + (1 if (is_subagent or is_active_intent) else 0)
         self._save_turn(session, all_msgs, save_skip)
         session.enforce_file_cap(on_archive=self._archive_session_file_cap)
         self._clear_runtime_checkpoint(session)

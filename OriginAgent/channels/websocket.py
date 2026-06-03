@@ -263,9 +263,103 @@ _WEB_SEARCH_PROVIDER_BY_NAME = {
     provider["name"]: provider for provider in _WEB_SEARCH_PROVIDER_OPTIONS
 }
 
+_RUNTIME_PROFILE_OPTIONS = {"default", "safe", "household_safe", "local_dev", "automation"}
+_PROVIDER_RETRY_MODE_OPTIONS = {"standard", "persistent"}
+_EVOLUTION_MODE_OPTIONS = {"conservative", "curated", "exploratory", "aggressive"}
+_SESSION_SEARCH_BACKEND_OPTIONS = {"auto", "literal", "sqlite_fts"}
+_EXEC_PROFILE_OPTIONS = {"secure", "local_dev", "disabled"}
+_EXEC_SHELL_SYNTAX_POLICY_OPTIONS = {"restricted", "shell"}
+_DEVICE_MODE_OPTIONS = {"dry_run", "real"}
+_DEVICE_BACKEND_OPTIONS = {"none", "fake", "lighting_client"}
+_AUDIT_MODE_OPTIONS = {"off", "minimal", "security"}
+
 _MCP_SERVER_NAME_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 _MCP_SECRET_HINT = "••••"
 _HA_MCP_PATH = "/api/mcp"
+
+
+def _settings_runtime_controls_payload(config: Any) -> dict[str, Any]:
+    defaults = config.agents.defaults
+    evolution = defaults.learning.evolution
+    return {
+        "channels": {
+            "send_progress": bool(config.channels.send_progress),
+            "send_tool_hints": bool(config.channels.send_tool_hints),
+            "show_reasoning": bool(config.channels.show_reasoning),
+        },
+        "agent": {
+            "unified_session": bool(defaults.unified_session),
+            "cold_archive_enabled": bool(defaults.cold_archive_enabled),
+            "allow_agent_initiated_messages": bool(defaults.allow_agent_initiated_messages),
+            "auxiliary_enabled": bool(defaults.auxiliary.enabled),
+            "domain_packs_enabled": bool(defaults.domain_packs.enabled),
+            "provider_retry_mode": defaults.provider_retry_mode,
+            "dream_annotate_line_ages": bool(defaults.dream.annotate_line_ages),
+        },
+        "learning": {
+            "background_review_enabled": bool(defaults.learning.background_review.enabled),
+            "curator_enabled": bool(defaults.learning.curator.enabled),
+        },
+        "evolution": {
+            "mode": evolution.mode,
+            "allow_manual_override": bool(evolution.allow_manual_override),
+            "dry_run": bool(evolution.dry_run),
+            "outcome_archive_enabled": bool(evolution.outcome_archive_enabled),
+            "dependency_stale_cleanup_enabled": bool(evolution.dependency_stale_cleanup_enabled),
+            "auto_verify_workflows": bool(evolution.auto_verify_workflows),
+            "skill_candidates_enabled": bool(evolution.skill_candidates_enabled),
+            "feedback_calibration_enabled": bool(evolution.feedback_calibration_enabled),
+            "sandbox_enabled": bool(evolution.sandbox.enabled),
+            "trial_enabled": bool(evolution.trial.enabled),
+            "trial_isolated_workspace": bool(evolution.trial.isolated_workspace),
+            "trial_read_only_tools_only": bool(evolution.trial.read_only_tools_only),
+        },
+        "gateway": {
+            "heartbeat_enabled": bool(config.gateway.heartbeat.enabled),
+        },
+        "security": {
+            "pairing_enabled": bool(config.security.pairing.enabled),
+            "pairing_allow_self_approve": bool(config.security.pairing.allow_self_approve),
+        },
+        "search": {
+            "web_enabled": bool(config.tools.web.enable),
+            "web_fetch_use_jina_reader": bool(config.tools.web.fetch.use_jina_reader),
+            "session_search_enabled": bool(config.tools.session_search.enabled),
+            "session_search_backend": config.tools.session_search.backend,
+            "session_search_semantic_enabled": bool(config.tools.session_search.semantic_enabled),
+            "session_search_rebuild_on_start": bool(config.tools.session_search.rebuild_on_start),
+            "content_read_enabled": bool(config.tools.content_read.enabled),
+            "content_read_use_jina_reader": bool(config.tools.content_read.use_jina_reader),
+        },
+        "execution": {
+            "exec_enabled": bool(config.tools.exec.enable),
+            "exec_profile": config.tools.exec.profile,
+            "exec_allow_unsafe_exec": bool(config.tools.exec.allow_unsafe_exec),
+            "exec_shell_syntax_policy": config.tools.exec.shell_syntax_policy,
+            "my_enabled": bool(config.tools.my.enable),
+            "my_allow_set": bool(config.tools.my.allow_set),
+            "restrict_to_workspace": bool(config.tools.restrict_to_workspace),
+        },
+        "media": {
+            "image_generation_enabled": bool(config.tools.image_generation.enabled),
+        },
+        "devices": {
+            "device_enabled": bool(config.tools.device.enabled),
+            "device_lighting_enabled": bool(config.tools.device.lighting_enabled),
+            "device_mode": config.tools.device.mode,
+            "device_backend": config.tools.device.backend,
+        },
+        "subagent": {
+            "mode": defaults.subagent_policy.mode,
+        },
+        "audit": {
+            "audit_mode": config.tools.audit.mode,
+            "audit_security_on_policy_denial": bool(config.tools.audit.security_on_policy_denial),
+        },
+        "runtime": {
+            "profile": config.runtime.profile,
+        },
+    }
 
 
 def _mcp_masked_mapping(values: dict[str, str]) -> dict[str, str]:
@@ -770,6 +864,9 @@ class WebSocketChannel(BaseChannel):
         if got == "/api/settings/learning/background-review/update":
             return self._handle_settings_learning_background_review_update(request)
 
+        if got == "/api/settings/runtime/update":
+            return self._handle_settings_runtime_update(request)
+
         if got == "/api/settings/mcp/upsert":
             return self._handle_settings_mcp_upsert(request)
 
@@ -993,6 +1090,7 @@ class WebSocketChannel(BaseChannel):
                     "enabled": bool(defaults.learning.curator.enabled),
                 },
             },
+            "runtime_controls": _settings_runtime_controls_payload(config),
             "mcp": {
                 "servers": [
                     _mcp_server_payload(name, server)
@@ -1448,6 +1546,191 @@ class WebSocketChannel(BaseChannel):
             target.enabled = enabled
             save_config(config)
         return _http_json_response(self._settings_payload(requires_restart=False))
+
+    def _handle_settings_runtime_update(self, request: WsRequest) -> Response:
+        if not self._check_api_token(request):
+            return _http_error(401, "Unauthorized")
+        from OriginAgent.config.loader import load_config, save_config
+
+        query = _parse_query(request.path)
+        raw = _query_first(query, "config")
+        if not raw:
+            return _http_error(400, "config is required")
+        try:
+            data = json.loads(raw)
+        except json.JSONDecodeError:
+            return _http_error(400, "config must be valid JSON")
+        if not isinstance(data, dict):
+            return _http_error(400, "config must be an object")
+
+        config = load_config()
+        defaults = config.agents.defaults
+        evolution = defaults.learning.evolution
+        changed = False
+
+        def set_bool(target: Any, attr: str, value: Any) -> None:
+            nonlocal changed
+            if not isinstance(value, bool):
+                raise ValueError(f"{attr} must be true or false")
+            if getattr(target, attr) != value:
+                setattr(target, attr, value)
+                changed = True
+
+        def set_choice(target: Any, attr: str, value: Any, allowed: set[str]) -> None:
+            nonlocal changed
+            if not isinstance(value, str):
+                raise ValueError(f"{attr} must be a string")
+            candidate = value.strip()
+            if candidate not in allowed:
+                allowed_text = ", ".join(sorted(allowed))
+                raise ValueError(f"{attr} must be one of: {allowed_text}")
+            if getattr(target, attr) != candidate:
+                setattr(target, attr, candidate)
+                changed = True
+
+        try:
+            channels = data.get("channels")
+            if isinstance(channels, dict):
+                if "send_progress" in channels:
+                    set_bool(config.channels, "send_progress", channels["send_progress"])
+                if "send_tool_hints" in channels:
+                    set_bool(config.channels, "send_tool_hints", channels["send_tool_hints"])
+                if "show_reasoning" in channels:
+                    set_bool(config.channels, "show_reasoning", channels["show_reasoning"])
+
+            agent = data.get("agent")
+            if isinstance(agent, dict):
+                if "unified_session" in agent:
+                    set_bool(defaults, "unified_session", agent["unified_session"])
+                if "cold_archive_enabled" in agent:
+                    set_bool(defaults, "cold_archive_enabled", agent["cold_archive_enabled"])
+                if "allow_agent_initiated_messages" in agent:
+                    set_bool(defaults, "allow_agent_initiated_messages", agent["allow_agent_initiated_messages"])
+                if "auxiliary_enabled" in agent:
+                    set_bool(defaults.auxiliary, "enabled", agent["auxiliary_enabled"])
+                if "domain_packs_enabled" in agent:
+                    set_bool(defaults.domain_packs, "enabled", agent["domain_packs_enabled"])
+                if "provider_retry_mode" in agent:
+                    set_choice(defaults, "provider_retry_mode", agent["provider_retry_mode"], _PROVIDER_RETRY_MODE_OPTIONS)
+                if "dream_annotate_line_ages" in agent:
+                    set_bool(defaults.dream, "annotate_line_ages", agent["dream_annotate_line_ages"])
+
+            learning = data.get("learning")
+            if isinstance(learning, dict):
+                if "background_review_enabled" in learning:
+                    set_bool(defaults.learning.background_review, "enabled", learning["background_review_enabled"])
+                if "curator_enabled" in learning:
+                    set_bool(defaults.learning.curator, "enabled", learning["curator_enabled"])
+
+            evolution_cfg = data.get("evolution")
+            if isinstance(evolution_cfg, dict):
+                if "mode" in evolution_cfg:
+                    set_choice(evolution, "mode", evolution_cfg["mode"], _EVOLUTION_MODE_OPTIONS)
+                if "allow_manual_override" in evolution_cfg:
+                    set_bool(evolution, "allow_manual_override", evolution_cfg["allow_manual_override"])
+                if "dry_run" in evolution_cfg:
+                    set_bool(evolution, "dry_run", evolution_cfg["dry_run"])
+                if "outcome_archive_enabled" in evolution_cfg:
+                    set_bool(evolution, "outcome_archive_enabled", evolution_cfg["outcome_archive_enabled"])
+                if "dependency_stale_cleanup_enabled" in evolution_cfg:
+                    set_bool(evolution, "dependency_stale_cleanup_enabled", evolution_cfg["dependency_stale_cleanup_enabled"])
+                if "auto_verify_workflows" in evolution_cfg:
+                    set_bool(evolution, "auto_verify_workflows", evolution_cfg["auto_verify_workflows"])
+                if "skill_candidates_enabled" in evolution_cfg:
+                    set_bool(evolution, "skill_candidates_enabled", evolution_cfg["skill_candidates_enabled"])
+                if "feedback_calibration_enabled" in evolution_cfg:
+                    set_bool(evolution, "feedback_calibration_enabled", evolution_cfg["feedback_calibration_enabled"])
+                if "sandbox_enabled" in evolution_cfg:
+                    set_bool(evolution.sandbox, "enabled", evolution_cfg["sandbox_enabled"])
+                if "trial_enabled" in evolution_cfg:
+                    set_bool(evolution.trial, "enabled", evolution_cfg["trial_enabled"])
+                if "trial_isolated_workspace" in evolution_cfg:
+                    set_bool(evolution.trial, "isolated_workspace", evolution_cfg["trial_isolated_workspace"])
+                if "trial_read_only_tools_only" in evolution_cfg:
+                    set_bool(evolution.trial, "read_only_tools_only", evolution_cfg["trial_read_only_tools_only"])
+
+            gateway = data.get("gateway")
+            if isinstance(gateway, dict) and "heartbeat_enabled" in gateway:
+                set_bool(config.gateway.heartbeat, "enabled", gateway["heartbeat_enabled"])
+
+            security = data.get("security")
+            if isinstance(security, dict):
+                if "pairing_enabled" in security:
+                    set_bool(config.security.pairing, "enabled", security["pairing_enabled"])
+                if "pairing_allow_self_approve" in security:
+                    set_bool(config.security.pairing, "allow_self_approve", security["pairing_allow_self_approve"])
+
+            search = data.get("search")
+            if isinstance(search, dict):
+                if "web_enabled" in search:
+                    set_bool(config.tools.web, "enable", search["web_enabled"])
+                if "web_fetch_use_jina_reader" in search:
+                    set_bool(config.tools.web.fetch, "use_jina_reader", search["web_fetch_use_jina_reader"])
+                if "session_search_enabled" in search:
+                    set_bool(config.tools.session_search, "enabled", search["session_search_enabled"])
+                if "session_search_backend" in search:
+                    set_choice(config.tools.session_search, "backend", search["session_search_backend"], _SESSION_SEARCH_BACKEND_OPTIONS)
+                if "session_search_semantic_enabled" in search:
+                    set_bool(config.tools.session_search, "semantic_enabled", search["session_search_semantic_enabled"])
+                if "session_search_rebuild_on_start" in search:
+                    set_bool(config.tools.session_search, "rebuild_on_start", search["session_search_rebuild_on_start"])
+                if "content_read_enabled" in search:
+                    set_bool(config.tools.content_read, "enabled", search["content_read_enabled"])
+                if "content_read_use_jina_reader" in search:
+                    set_bool(config.tools.content_read, "use_jina_reader", search["content_read_use_jina_reader"])
+
+            execution = data.get("execution")
+            if isinstance(execution, dict):
+                if "exec_enabled" in execution:
+                    set_bool(config.tools.exec, "enable", execution["exec_enabled"])
+                if "exec_profile" in execution:
+                    set_choice(config.tools.exec, "profile", execution["exec_profile"], _EXEC_PROFILE_OPTIONS)
+                if "exec_allow_unsafe_exec" in execution:
+                    set_bool(config.tools.exec, "allow_unsafe_exec", execution["exec_allow_unsafe_exec"])
+                if "exec_shell_syntax_policy" in execution:
+                    set_choice(config.tools.exec, "shell_syntax_policy", execution["exec_shell_syntax_policy"], _EXEC_SHELL_SYNTAX_POLICY_OPTIONS)
+                if "my_enabled" in execution:
+                    set_bool(config.tools.my, "enable", execution["my_enabled"])
+                if "my_allow_set" in execution:
+                    set_bool(config.tools.my, "allow_set", execution["my_allow_set"])
+                if "restrict_to_workspace" in execution:
+                    set_bool(config.tools, "restrict_to_workspace", execution["restrict_to_workspace"])
+
+            media = data.get("media")
+            if isinstance(media, dict) and "image_generation_enabled" in media:
+                set_bool(config.tools.image_generation, "enabled", media["image_generation_enabled"])
+
+            devices = data.get("devices")
+            if isinstance(devices, dict):
+                if "device_enabled" in devices:
+                    set_bool(config.tools.device, "enabled", devices["device_enabled"])
+                if "device_lighting_enabled" in devices:
+                    set_bool(config.tools.device, "lighting_enabled", devices["device_lighting_enabled"])
+                if "device_mode" in devices:
+                    set_choice(config.tools.device, "mode", devices["device_mode"], _DEVICE_MODE_OPTIONS)
+                if "device_backend" in devices:
+                    set_choice(config.tools.device, "backend", devices["device_backend"], _DEVICE_BACKEND_OPTIONS)
+
+            subagent = data.get("subagent")
+            if isinstance(subagent, dict) and "mode" in subagent:
+                set_choice(defaults.subagent_policy, "mode", subagent["mode"], {"normal", "restricted"})
+
+            audit = data.get("audit")
+            if isinstance(audit, dict):
+                if "audit_mode" in audit:
+                    set_choice(config.tools.audit, "mode", audit["audit_mode"], _AUDIT_MODE_OPTIONS)
+                if "audit_security_on_policy_denial" in audit:
+                    set_bool(config.tools.audit, "security_on_policy_denial", audit["audit_security_on_policy_denial"])
+
+            runtime = data.get("runtime")
+            if isinstance(runtime, dict) and "profile" in runtime:
+                set_choice(config.runtime, "profile", runtime["profile"], _RUNTIME_PROFILE_OPTIONS)
+        except ValueError as exc:
+            return _http_error(400, str(exc))
+
+        if changed:
+            save_config(config)
+        return _http_json_response(self._settings_payload(requires_restart=True))
 
     def _handle_settings_mcp_upsert(self, request: WsRequest) -> Response:
         if not self._check_api_token(request):

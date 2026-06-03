@@ -507,6 +507,11 @@ class EvolutionConfig(Base):
         serialization_alias="feedbackTrendWindowDays",
     )
 
+class SubagentDefaultsConfig(Base):
+    """Subagent delegation policy configuration."""
+
+    mode: Literal["normal", "restricted"] = "normal"
+
 
 class LearningConfig(Base):
     """Agent self-improvement and review configuration."""
@@ -564,6 +569,11 @@ class AgentDefaults(Base):
         validation_alias=AliasChoices("domainPacks", "domain_packs"),
         serialization_alias="domainPacks",
     )
+    subagent_policy: SubagentDefaultsConfig = Field(
+        default_factory=SubagentDefaultsConfig,
+        validation_alias=AliasChoices("subagentPolicy", "subagent_policy"),
+        serialization_alias="subagentPolicy",
+    )
     learning: LearningConfig = Field(default_factory=LearningConfig)
     timezone: str = "Asia/Shanghai"  # IANA timezone, e.g. "Asia/Shanghai", "America/New_York"
     bot_name: str = "OriginAgent"  # Display name shown in CLI prompts (e.g. "{name} is thinking...")
@@ -585,6 +595,54 @@ class AgentDefaults(Base):
         default=120,
         ge=0,
     )  # Max messages to replay from session history (0 = use default 120, respects token budget)
+    allow_agent_initiated_messages: bool = Field(
+        default=False,
+        validation_alias=AliasChoices(
+            "allowAgentInitiatedMessages",
+            "allow_agent_initiated_messages",
+        ),
+        serialization_alias="allowAgentInitiatedMessages",
+    )
+    active_intent_interval_seconds: int = Field(
+        default=30,
+        ge=5,
+        le=3600,
+        validation_alias=AliasChoices(
+            "activeIntentIntervalSeconds",
+            "active_intent_interval_seconds",
+        ),
+        serialization_alias="activeIntentIntervalSeconds",
+    )
+    active_intent_session_cooldown_seconds: int = Field(
+        default=300,
+        ge=0,
+        le=86400,
+        validation_alias=AliasChoices(
+            "activeIntentSessionCooldownSeconds",
+            "active_intent_session_cooldown_seconds",
+        ),
+        serialization_alias="activeIntentSessionCooldownSeconds",
+    )
+    active_intent_intent_cooldown_seconds: int = Field(
+        default=300,
+        ge=0,
+        le=86400,
+        validation_alias=AliasChoices(
+            "activeIntentIntentCooldownSeconds",
+            "active_intent_intent_cooldown_seconds",
+        ),
+        serialization_alias="activeIntentIntentCooldownSeconds",
+    )
+    active_intent_max_messages_per_session_per_pass: int = Field(
+        default=1,
+        ge=1,
+        le=10,
+        validation_alias=AliasChoices(
+            "activeIntentMaxMessagesPerSessionPerPass",
+            "active_intent_max_messages_per_session_per_pass",
+        ),
+        serialization_alias="activeIntentMaxMessagesPerSessionPerPass",
+    )
     consolidation_ratio: float = Field(
         default=0.5,
         ge=0.1,

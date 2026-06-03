@@ -5,22 +5,30 @@ import json
 import time
 import uuid
 from dataclasses import dataclass, field
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from loguru import logger
 
+from OriginAgent.agent.agent_tool_setup import register_default_tools
 from OriginAgent.agent.hook import AgentHook, AgentHookContext
 from OriginAgent.agent.runner import AgentRunner, AgentRunSpec
-from OriginAgent.agent.skills import BUILTIN_SKILLS_DIR
-from OriginAgent.agent.tools.filesystem import EditFileTool, ListDirTool, ReadFileTool, WriteFileTool
+from OriginAgent.agent.subagent_policy import SubagentPolicy
+from OriginAgent.agent.subagent_provider import SubagentProviderSelector
+from OriginAgent.agent.subagent_records import (
+    JsonlSubagentRecordStore,
+    SubagentLifecycleRecord,
+    SubagentTaskRecord,
+    SubagentToolRecord,
+    summarize_payload,
+    summarize_text,
+)
 from OriginAgent.agent.tools.registry import ToolRegistry
-from OriginAgent.agent.tools.search import GlobTool, GrepTool
-from OriginAgent.agent.tools.shell import ExecTool
-from OriginAgent.agent.tools.web import WebFetchTool, WebSearchTool
+from OriginAgent.agent.tools.audit import JsonlToolAuditSink, ToolAuditConfig
 from OriginAgent.bus.events import InboundMessage
 from OriginAgent.bus.queue import MessageBus
-from OriginAgent.config.schema import AgentDefaults, ExecToolConfig, WebToolsConfig
+from OriginAgent.config.schema import AgentDefaults, ExecToolConfig, ToolsConfig, WebToolsConfig
 from OriginAgent.providers.base import LLMProvider
 from OriginAgent.security.capabilities import CapabilitySnapshot, intersect_capability_snapshots
 from OriginAgent.security.grants import CapabilityGrantStore
@@ -44,6 +52,9 @@ class SubagentStatus:
     usage: dict = field(default_factory=dict)          # token usage
     stop_reason: str | None = None
     error: str | None = None
+    root_subagent_id: str | None = None
+    parent_subagent_id: str | None = None
+    subagent_depth: int = 1
 
 
 class _SubagentHook(AgentHook):
@@ -89,6 +100,9 @@ class SubagentManager:
         disabled_skills: list[str] | None = None,
         max_iterations: int | None = None,
         grant_store: CapabilityGrantStore | None = None,
+        preset_snapshot_loader: Callable[[str], Any] | None = None,
+        delegated_model_preset: str | None = None,
+        subagent_policy_mode: str = "normal",
     ):
         defaults = AgentDefaults()
         self.provider = provider
@@ -108,15 +122,27 @@ class SubagentManager:
         )
         self.grant_store = grant_store
         self.max_concurrent_subagents = defaults.max_concurrent_subagents
+        self.tools_config = ToolsConfig()
+        self._tool_audit_config = ToolAuditConfig.from_config(self.tools_config.audit)
+        self._subagent_policy_mode = subagent_policy_mode
+        self._provider_selector = SubagentProviderSelector(
+            provider=provider,
+            model=self.model,
+            preset_snapshot_loader=preset_snapshot_loader,
+            delegated_preset=delegated_model_preset,
+        )
         self.runner = AgentRunner(provider)
+        self.records = JsonlSubagentRecordStore(workspace)
         self._running_tasks: dict[str, asyncio.Task[None]] = {}
         self._task_statuses: dict[str, SubagentStatus] = {}
         self._session_tasks: dict[str, set[str]] = {}  # session_key -> {task_id, ...}
+        self._child_counts: dict[str, int] = {}
 
     def set_provider(self, provider: LLMProvider, model: str) -> None:
         self.provider = provider
         self.model = model
         self.runner.provider = provider
+        self._provider_selector.set_runtime(provider, model)
 
     async def spawn(
         self,
@@ -129,6 +155,10 @@ class SubagentManager:
         capability_snapshot: CapabilitySnapshot | None = None,
         parent_capability_snapshot: CapabilitySnapshot | None = None,
         grant_id: str | None = None,
+        delegated_policy: SubagentPolicy | None = None,
+        parent_subagent_id: str | None = None,
+        root_subagent_id: str | None = None,
+        subagent_depth: int = 1,
     ) -> str:
         """Spawn a subagent to execute a task in the background.
 
@@ -138,12 +168,47 @@ class SubagentManager:
         as a compatibility alias for existing internal callers and has the same
         parent-snapshot meaning.
         """
+        if self.get_running_count() >= self.max_concurrent_subagents:
+            return (
+                "Cannot spawn subagent: concurrency limit reached "
+                f"({self.max_concurrent_subagents}). Please wait for a running subagent to finish."
+            )
+        if delegated_policy is not None:
+            if subagent_depth > delegated_policy.max_subagent_depth:
+                return (
+                    "Cannot spawn nested subagent: maximum delegated depth reached "
+                    f"({delegated_policy.max_subagent_depth})."
+                )
+            if parent_subagent_id is not None:
+                child_limit = delegated_policy.max_children_per_subagent
+                current_children = self._child_counts.get(parent_subagent_id, 0)
+                if child_limit >= 0 and current_children >= child_limit:
+                    return (
+                        "Cannot spawn nested subagent: child delegation limit reached "
+                        f"({current_children}/{child_limit})."
+                    )
         task_id = str(uuid.uuid4())[:8]
         display_label = label or task[:30] + ("..." if len(task) > 30 else "")
-        origin = {"channel": origin_channel, "chat_id": origin_chat_id, "session_key": session_key}
-        effective_snapshot = self._snapshot_for_spawn(
-            parent_snapshot=parent_capability_snapshot or capability_snapshot,
-            grant_id=grant_id,
+        resolved_root = root_subagent_id or task_id
+        origin = {
+            "channel": origin_channel,
+            "chat_id": origin_chat_id,
+            "session_key": session_key,
+            "root_subagent_id": resolved_root,
+            "parent_subagent_id": parent_subagent_id,
+            "subagent_depth": str(subagent_depth),
+        }
+        policy = delegated_policy or SubagentPolicy.from_config(
+            parent_capability_snapshot or capability_snapshot,
+            mode=self._subagent_policy_mode,
+        )
+        effective_snapshot = (
+            policy.capability_snapshot
+            if delegated_policy is not None
+            else self._snapshot_for_spawn(
+                parent_snapshot=parent_capability_snapshot or capability_snapshot,
+                grant_id=grant_id,
+            )
         )
 
         status = SubagentStatus(
@@ -151,8 +216,40 @@ class SubagentManager:
             label=display_label,
             task_description=task,
             started_at=time.monotonic(),
+            root_subagent_id=resolved_root,
+            parent_subagent_id=parent_subagent_id,
+            subagent_depth=subagent_depth,
         )
         self._task_statuses[task_id] = status
+        self.records.append_task(SubagentTaskRecord(
+            subagent_id=task_id,
+            root_subagent_id=resolved_root,
+            parent_subagent_id=parent_subagent_id,
+            subagent_depth=subagent_depth,
+            parent_session_key=session_key,
+            origin_channel=origin_channel,
+            origin_chat_id=origin_chat_id,
+            origin_message_id=origin_message_id,
+            task_label=display_label,
+            task_summary=summarize_text(task),
+            delegated_profile_summary="pending",
+            allowed_tools_summary=[],
+            provider_summary="pending",
+            isolation_mode="shared_process",
+            terminal_status="spawned",
+            started_at=self._utcnow(),
+        ))
+        self.records.append_lifecycle(SubagentLifecycleRecord(
+            subagent_id=task_id,
+            root_subagent_id=resolved_root,
+            parent_subagent_id=parent_subagent_id,
+            subagent_depth=subagent_depth,
+            parent_session_key=session_key,
+            state="spawned",
+            detail=summarize_text(display_label, max_chars=120),
+        ))
+        if parent_subagent_id is not None:
+            self._child_counts[parent_subagent_id] = self._child_counts.get(parent_subagent_id, 0) + 1
 
         bg_task = asyncio.create_task(
             self._run_subagent(
@@ -163,6 +260,7 @@ class SubagentManager:
                 status,
                 origin_message_id,
                 effective_snapshot,
+                policy,
             )
         )
         self._running_tasks[task_id] = bg_task
@@ -217,68 +315,131 @@ class SubagentManager:
         status: SubagentStatus,
         origin_message_id: str | None = None,
         capability_snapshot: CapabilitySnapshot | None = None,
+        delegated_policy: SubagentPolicy | None = None,
     ) -> None:
         """Execute the subagent task and announce the result."""
         logger.info("Subagent [{}] starting task: {}", task_id, label)
+        last_phase = "running"
 
         async def _on_checkpoint(payload: dict) -> None:
+            nonlocal last_phase
             status.phase = payload.get("phase", status.phase)
             status.iteration = payload.get("iteration", status.iteration)
+            phase = str(payload.get("phase") or "").strip()
+            if phase and phase != last_phase and phase in {"awaiting_tools", "tools_completed", "final_response"}:
+                self.records.append_lifecycle(SubagentLifecycleRecord(
+                    subagent_id=task_id,
+                    root_subagent_id=status.root_subagent_id,
+                    parent_subagent_id=status.parent_subagent_id,
+                    subagent_depth=status.subagent_depth,
+                    parent_session_key=origin.get("session_key"),
+                    state=phase,  # type: ignore[arg-type]
+                    detail=f"iteration={status.iteration}",
+                ))
+                last_phase = phase
 
         try:
-            # Build subagent tools (no message tool, no spawn tool)
-            # Public spawn() passes an explicit snapshot; this fallback keeps
-            # direct internal callers read-only instead of tool-less.
-            snapshot = capability_snapshot or CapabilitySnapshot.user_turn().derive_subagent()
-            tools = ToolRegistry(capability_snapshot=snapshot)
-            allowed_dir = self.workspace if (self.restrict_to_workspace or self.exec_config.sandbox) else None
-            extra_read = [BUILTIN_SKILLS_DIR] if allowed_dir else None
-            # Subagent gets its own FileStates so its read-dedup cache is
-            # isolated from the parent loop's sessions (issue #3571).
-            from OriginAgent.agent.tools.file_state import FileStates
-            file_states = FileStates()
-            if snapshot.can_read_files:
-                tools.register(ReadFileTool(workspace=self.workspace, allowed_dir=allowed_dir, extra_allowed_dirs=extra_read, file_states=file_states))
-                tools.register(ListDirTool(workspace=self.workspace, allowed_dir=allowed_dir, file_states=file_states))
-                tools.register(GlobTool(workspace=self.workspace, allowed_dir=allowed_dir, file_states=file_states))
-                tools.register(GrepTool(workspace=self.workspace, allowed_dir=allowed_dir, file_states=file_states))
-            if snapshot.can_write_files:
-                tools.register(WriteFileTool(workspace=self.workspace, allowed_dir=allowed_dir, file_states=file_states))
-                tools.register(EditFileTool(workspace=self.workspace, allowed_dir=allowed_dir, file_states=file_states))
-            if (
-                self.exec_config.enable
-                and self.exec_config.profile != "disabled"
-                and snapshot.can_exec
-            ):
-                tools.register(ExecTool(
-                    working_dir=str(self.workspace),
-                    timeout=self.exec_config.timeout,
-                    restrict_to_workspace=self.restrict_to_workspace,
-                    sandbox=self.exec_config.sandbox,
-                    path_append=self.exec_config.path_append,
-                    allowed_env_keys=self.exec_config.allowed_env_keys,
-                    allow_patterns=self.exec_config.allow_patterns,
-                    deny_patterns=self.exec_config.deny_patterns,
-                    security_profile=self.exec_config.profile,
-                    allow_unsafe_exec=self.exec_config.allow_unsafe_exec,
-                    shell_syntax_policy=self.exec_config.shell_syntax_policy,
-                ))
-            if self.web_config.enable:
-                tools.register(
-                    WebSearchTool(
-                        config=self.web_config.search,
-                        proxy=self.web_config.proxy,
-                        user_agent=self.web_config.user_agent,
-                    )
-                )
-                tools.register(
-                    WebFetchTool(
-                        config=self.web_config.fetch,
-                        proxy=self.web_config.proxy,
-                        user_agent=self.web_config.user_agent,
-                        content_read_config=self.content_read_config,
-                    )
-                )
+            policy = delegated_policy or SubagentPolicy.from_config(
+                capability_snapshot,
+                mode=self._subagent_policy_mode,
+            )
+            snapshot = policy.capability_snapshot
+            provider_selection = self._provider_selector.select()
+            self.runner.provider = provider_selection.provider
+            tools = ToolRegistry(
+                audit_sink=JsonlToolAuditSink(self.workspace),
+                audit_config=self._tool_audit_config,
+                capability_snapshot=snapshot,
+                execution_observer=_SubagentToolObserver(
+                    records=self.records,
+                    subagent_id=task_id,
+                    root_subagent_id=status.root_subagent_id,
+                    parent_subagent_id=status.parent_subagent_id,
+                    subagent_depth=status.subagent_depth,
+                    parent_session_key=origin.get("session_key"),
+                ),
+            )
+            tools.set_audit_context(
+                actor_id="subagent",
+                session_key=origin.get("session_key"),
+                subagent_task_id=task_id,
+                parent_session_key=origin.get("session_key"),
+                origin_channel=origin.get("channel"),
+                origin_chat_id=origin.get("chat_id"),
+            )
+            self.records.append_lifecycle(SubagentLifecycleRecord(
+                subagent_id=task_id,
+                root_subagent_id=status.root_subagent_id,
+                parent_subagent_id=status.parent_subagent_id,
+                subagent_depth=status.subagent_depth,
+                parent_session_key=origin.get("session_key"),
+                state="running",
+                detail=summarize_text(
+                    ",".join(sorted(policy.allowed_tool_names)) or "delegated",
+                    max_chars=120,
+                ),
+            ))
+            self.records.append_task(SubagentTaskRecord(
+                subagent_id=task_id,
+                root_subagent_id=status.root_subagent_id,
+                parent_subagent_id=status.parent_subagent_id,
+                subagent_depth=status.subagent_depth,
+                parent_session_key=origin.get("session_key"),
+                origin_channel=origin.get("channel"),
+                origin_chat_id=origin.get("chat_id"),
+                origin_message_id=origin_message_id,
+                task_label=label,
+                task_summary=summarize_text(task),
+                delegated_profile_summary=self.records.delegated_profile_summary(
+                    capability_snapshot=snapshot,
+                    allow_web=policy.allow_web,
+                    allowed_tool_names=policy.allowed_tool_names,
+                ),
+                allowed_tools_summary=self.records.allowed_tools_summary(policy.allowed_tool_names),
+                provider_summary=provider_selection.provider_summary,
+                isolation_mode="shared_process",
+                terminal_status="running",
+                started_at=self._utcnow(),
+            ))
+            register_default_tools(
+                tools,
+                workspace=self.workspace,
+                bus=self.bus,
+                config=self.tools_config,
+                web_config=(self.web_config if policy.allow_web else WebToolsConfig(enable=False)),
+                exec_config=self.exec_config,
+                restrict_to_workspace=self.restrict_to_workspace,
+                sessions=None,
+                pending_queues={},
+                cron_service=None,
+                audit_config=self._tool_audit_config,
+                domain_pack_manager=None,
+                background_review_service=None,
+                curator_service=None,
+                session_search_index_service=None,
+                subagent_manager=self,
+                file_state_store=None,
+                provider_snapshot_loader=None,
+                image_generation_provider_configs={},
+                timezone="UTC",
+                runtime_profile="automation",
+                introspection_service=None,
+                confirmation_store=None,
+                domain_runtime_overrides=None,
+                evolution_config=None,
+                allowed_tool_names=(
+                    frozenset(set(policy.allowed_tool_names) | {"spawn"})
+                    if policy.allow_nested_spawn
+                    else policy.allowed_tool_names
+                ),
+            )
+            self._configure_spawn_tool(
+                tools=tools,
+                origin=origin,
+                origin_message_id=origin_message_id,
+                policy=policy,
+                status=status,
+            )
             system_prompt = self._build_subagent_prompt()
             messages: list[dict[str, Any]] = [
                 {"role": "system", "content": system_prompt},
@@ -288,7 +449,7 @@ class SubagentManager:
             result = await self.runner.run(AgentRunSpec(
                 initial_messages=messages,
                 tools=tools,
-                model=self.model,
+                model=provider_selection.model,
                 max_iterations=self.max_iterations,
                 max_tool_result_chars=self.max_tool_result_chars,
                 hook=_SubagentHook(task_id, status),
@@ -299,15 +460,49 @@ class SubagentManager:
             ))
             status.phase = "done"
             status.stop_reason = result.stop_reason
+            if result.tool_events:
+                self.records.append_lifecycle(SubagentLifecycleRecord(
+                    subagent_id=task_id,
+                    root_subagent_id=status.root_subagent_id,
+                    parent_subagent_id=status.parent_subagent_id,
+                    subagent_depth=status.subagent_depth,
+                    parent_session_key=origin.get("session_key"),
+                    state="tools_completed",
+                    detail=summarize_text(result.stop_reason or "tools completed", max_chars=120),
+                ))
 
             if result.stop_reason == "tool_error":
                 status.tool_events = list(result.tool_events)
+                self._record_terminal_task(
+                    task_id=task_id,
+                    label=label,
+                    task=task,
+                    origin=origin,
+                    origin_message_id=origin_message_id,
+                    terminal_status="failed",
+                    stop_reason=result.stop_reason,
+                    failure_summary=self._format_partial_progress(result),
+                    policy=policy,
+                    provider_summary=provider_selection.provider_summary,
+                )
                 await self._announce_result(
                     task_id, label, task,
                     self._format_partial_progress(result),
                     origin, "error", origin_message_id,
                 )
             elif result.stop_reason == "error":
+                self._record_terminal_task(
+                    task_id=task_id,
+                    label=label,
+                    task=task,
+                    origin=origin,
+                    origin_message_id=origin_message_id,
+                    terminal_status="failed",
+                    stop_reason=result.stop_reason,
+                    failure_summary=result.error or "subagent execution failed",
+                    policy=policy,
+                    provider_summary=provider_selection.provider_summary,
+                )
                 await self._announce_result(
                     task_id, label, task,
                     result.error or "Error: subagent execution failed.",
@@ -316,13 +511,100 @@ class SubagentManager:
             else:
                 final_result = result.final_content or "Task completed but no final response was generated."
                 logger.info("Subagent [{}] completed successfully", task_id)
+                self.records.append_lifecycle(SubagentLifecycleRecord(
+                    subagent_id=task_id,
+                    root_subagent_id=status.root_subagent_id,
+                    parent_subagent_id=status.parent_subagent_id,
+                    subagent_depth=status.subagent_depth,
+                    parent_session_key=origin.get("session_key"),
+                    state="final_response",
+                    detail=summarize_text(final_result, max_chars=120),
+                ))
+                self._record_terminal_task(
+                    task_id=task_id,
+                    label=label,
+                    task=task,
+                    origin=origin,
+                    origin_message_id=origin_message_id,
+                    terminal_status="completed",
+                    stop_reason=result.stop_reason,
+                    failure_summary=None,
+                    policy=policy,
+                    provider_summary=provider_selection.provider_summary,
+                )
                 await self._announce_result(task_id, label, task, final_result, origin, "ok", origin_message_id)
 
+        except asyncio.CancelledError:
+            status.phase = "error"
+            status.error = "cancelled"
+            self.records.append_lifecycle(SubagentLifecycleRecord(
+                subagent_id=task_id,
+                root_subagent_id=status.root_subagent_id,
+                parent_subagent_id=status.parent_subagent_id,
+                subagent_depth=status.subagent_depth,
+                parent_session_key=origin.get("session_key"),
+                state="cancelled",
+                detail="cancelled",
+            ))
+            self.records.append_task(SubagentTaskRecord(
+                subagent_id=task_id,
+                root_subagent_id=status.root_subagent_id,
+                parent_subagent_id=status.parent_subagent_id,
+                subagent_depth=status.subagent_depth,
+                parent_session_key=origin.get("session_key"),
+                origin_channel=origin.get("channel"),
+                origin_chat_id=origin.get("chat_id"),
+                origin_message_id=origin_message_id,
+                task_label=label,
+                task_summary=summarize_text(task),
+                delegated_profile_summary="cancelled",
+                allowed_tools_summary=[],
+                provider_summary="inherit:cancelled",
+                isolation_mode="shared_process",
+                terminal_status="cancelled",
+                stop_reason="cancelled",
+                failure_summary="cancelled",
+                started_at=self._utcnow(),
+                ended_at=self._utcnow(),
+            ))
+            raise
         except Exception as e:
             status.phase = "error"
             status.error = str(e)
+            self.records.append_lifecycle(SubagentLifecycleRecord(
+                subagent_id=task_id,
+                root_subagent_id=status.root_subagent_id,
+                parent_subagent_id=status.parent_subagent_id,
+                subagent_depth=status.subagent_depth,
+                parent_session_key=origin.get("session_key"),
+                state="failed",
+                detail=summarize_text(str(e), max_chars=120),
+            ))
+            self.records.append_task(SubagentTaskRecord(
+                subagent_id=task_id,
+                root_subagent_id=status.root_subagent_id,
+                parent_subagent_id=status.parent_subagent_id,
+                subagent_depth=status.subagent_depth,
+                parent_session_key=origin.get("session_key"),
+                origin_channel=origin.get("channel"),
+                origin_chat_id=origin.get("chat_id"),
+                origin_message_id=origin_message_id,
+                task_label=label,
+                task_summary=summarize_text(task),
+                delegated_profile_summary="failed",
+                allowed_tools_summary=[],
+                provider_summary=f"inherit:{self.model}",
+                isolation_mode="shared_process",
+                terminal_status="failed",
+                stop_reason="error",
+                failure_summary=summarize_text(str(e), max_chars=240),
+                started_at=self._utcnow(),
+                ended_at=self._utcnow(),
+            ))
             logger.exception("Subagent [{}] failed", task_id)
             await self._announce_result(task_id, label, task, f"Error: {e}", origin, "error", origin_message_id)
+        finally:
+            self.runner.provider = self.provider
 
     async def _announce_result(
         self,
@@ -429,6 +711,153 @@ class SubagentManager:
             1 for tid in tids
             if tid in self._running_tasks and not self._running_tasks[tid].done()
         )
+
+    def runtime_status(self) -> dict[str, Any]:
+        summary = self.records.recent_task_summary()
+        summary["subagent_running_count"] = self.get_running_count()
+        return summary
+
+    @staticmethod
+    def _utcnow() -> str:
+        return datetime.now(timezone.utc).isoformat()
+
+    def _record_terminal_task(
+        self,
+        *,
+        task_id: str,
+        label: str,
+        task: str,
+        origin: dict[str, str],
+        origin_message_id: str | None,
+        terminal_status: str,
+        stop_reason: str | None,
+        failure_summary: str | None,
+        policy: SubagentPolicy,
+        provider_summary: str,
+    ) -> None:
+        terminal_state = "completed" if terminal_status == "completed" else "failed"
+        self.records.append_lifecycle(SubagentLifecycleRecord(
+            subagent_id=task_id,
+            root_subagent_id=origin.get("root_subagent_id"),
+            parent_subagent_id=origin.get("parent_subagent_id"),
+            subagent_depth=int(origin.get("subagent_depth", "1")),
+            parent_session_key=origin.get("session_key"),
+            state=terminal_state,  # type: ignore[arg-type]
+            detail=summarize_text(stop_reason or terminal_status, max_chars=120),
+        ))
+        self.records.append_task(SubagentTaskRecord(
+            subagent_id=task_id,
+            root_subagent_id=origin.get("root_subagent_id"),
+            parent_subagent_id=origin.get("parent_subagent_id"),
+            subagent_depth=int(origin.get("subagent_depth", "1")),
+            parent_session_key=origin.get("session_key"),
+            origin_channel=origin.get("channel"),
+            origin_chat_id=origin.get("chat_id"),
+            origin_message_id=origin_message_id,
+            task_label=label,
+            task_summary=summarize_text(task),
+            delegated_profile_summary=self.records.delegated_profile_summary(
+                capability_snapshot=policy.capability_snapshot,
+                allow_web=policy.allow_web,
+                allowed_tool_names=policy.allowed_tool_names,
+            ),
+            allowed_tools_summary=self.records.allowed_tools_summary(policy.allowed_tool_names),
+            provider_summary=provider_summary,
+            isolation_mode="shared_process",
+            terminal_status=terminal_status,  # type: ignore[arg-type]
+            stop_reason=stop_reason,
+            failure_summary=summarize_text(failure_summary, max_chars=240) if failure_summary else None,
+            started_at=None,
+            ended_at=self._utcnow(),
+        ))
+
+    def _configure_spawn_tool(
+        self,
+        *,
+        tools: ToolRegistry,
+        origin: dict[str, str],
+        origin_message_id: str | None,
+        policy: SubagentPolicy,
+        status: SubagentStatus,
+    ) -> None:
+        tool = tools.get("spawn")
+        if tool is None:
+            return
+        if hasattr(tool, "set_context"):
+            tool.set_context(
+                origin.get("channel") or "cli",
+                origin.get("chat_id") or "direct",
+                effective_key=origin.get("session_key"),
+            )
+        if hasattr(tool, "set_origin_message_id"):
+            tool.set_origin_message_id(origin_message_id)
+        if hasattr(tool, "set_capability_snapshot"):
+            tool.set_capability_snapshot(policy.capability_snapshot)
+        if hasattr(tool, "set_nested_policy"):
+            tool.set_nested_policy(
+                parent_subagent_id=status.task_id,
+                root_subagent_id=status.root_subagent_id or status.task_id,
+                subagent_depth=status.subagent_depth,
+                delegated_policy=policy,
+            )
+
+
+class _SubagentToolObserver:
+    def __init__(
+        self,
+        *,
+        records: JsonlSubagentRecordStore,
+        subagent_id: str,
+        root_subagent_id: str | None,
+        parent_subagent_id: str | None,
+        subagent_depth: int,
+        parent_session_key: str | None,
+    ) -> None:
+        self._records = records
+        self._subagent_id = subagent_id
+        self._root_subagent_id = root_subagent_id
+        self._parent_subagent_id = parent_subagent_id
+        self._subagent_depth = subagent_depth
+        self._parent_session_key = parent_session_key
+
+    def on_tool_result(
+        self,
+        *,
+        name: str,
+        params: dict[str, Any],
+        status: str,
+        start: float,
+        error_kind: str | None = None,
+        policy_rule: str | None = None,
+        result: Any = None,
+    ) -> None:
+        now = datetime.now(timezone.utc)
+        duration_ms = max(0, int((time.monotonic() - start) * 1000))
+        started_at = (now - timedelta(milliseconds=duration_ms)).isoformat()
+        mapped_status = {
+            "success": "success",
+            "policy_denied": "denied",
+            "interrupted": "interrupted",
+        }.get(status, "failed")
+        self._records.append_tool(SubagentToolRecord(
+            subagent_id=self._subagent_id,
+            root_subagent_id=self._root_subagent_id,
+            parent_subagent_id=self._parent_subagent_id,
+            subagent_depth=self._subagent_depth,
+            parent_session_key=self._parent_session_key,
+            tool_name=name,
+            status=mapped_status,  # type: ignore[arg-type]
+            started_at=started_at,
+            ended_at=now.isoformat(),
+            duration_ms=duration_ms,
+            argument_summary=summarize_payload(params),
+            result_summary=summarize_payload(result) if status == "success" else summarize_text(
+                policy_rule or error_kind or status,
+                max_chars=200,
+            ),
+            policy_rule=policy_rule,
+            error_kind=error_kind,
+        ))
 
 
 def _raise_grant_denied(policy_rule: str) -> None:

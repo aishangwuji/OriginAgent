@@ -1,0 +1,57 @@
+<svg width="1240" height="320" viewBox="0 0 1240 320" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="title desc">
+  <title id="title">OriginAgent logo A</title>
+  <desc id="desc">OriginAgent option A logo: origin-core orchestration symbol with a precise wordmark.</desc>
+  <defs>
+    <linearGradient id="bgA_logo" x1="38" y1="28" x2="256" y2="274" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#F3FBFF"/>
+      <stop offset="0.52" stop-color="#DDF1FF"/>
+      <stop offset="1" stop-color="#BFDFFF"/>
+    </linearGradient>
+    <linearGradient id="ringA_logo" x1="96" y1="78" x2="220" y2="224" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#1D4F86"/>
+      <stop offset="0.52" stop-color="#2E7FD8"/>
+      <stop offset="1" stop-color="#53C3E8"/>
+    </linearGradient>
+    <linearGradient id="nodeA_logo" x1="116" y1="103" x2="220" y2="220" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#FFF7D7"/>
+      <stop offset="1" stop-color="#FFC86A"/>
+    </linearGradient>
+    <linearGradient id="textA" x1="314" y1="82" x2="884" y2="210" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#153554"/>
+      <stop offset="0.56" stop-color="#2067A8"/>
+      <stop offset="1" stop-color="#2E7FD8"/>
+    </linearGradient>
+    <filter id="shadowA_logo" x="0" y="0" width="302" height="300" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
+      <feDropShadow dx="0" dy="16" stdDeviation="18" flood-color="#225B94" flood-opacity="0.16"/>
+      <feDropShadow dx="0" dy="4" stdDeviation="3" flood-color="#225B94" flood-opacity="0.12"/>
+    </filter>
+  </defs>
+  <g filter="url(#shadowA_logo)">
+    <rect x="30" y="30" width="240" height="240" rx="78" fill="url(#bgA_logo)"/>
+    <path d="M80 218C98 239 126 250 158 250C189 250 216 239 233 217" stroke="#86BFE9" stroke-width="10" stroke-linecap="round" opacity="0.75"/>
+
+    <path d="M107 90C86 101 71 124 67 151" stroke="url(#ringA_logo)" stroke-width="16" stroke-linecap="round"/>
+    <path d="M68 184C76 226 113 256 157 256C197 256 230 232 242 197" stroke="url(#ringA_logo)" stroke-width="16" stroke-linecap="round"/>
+    <path d="M220 97C236 109 247 126 252 149" stroke="url(#ringA_logo)" stroke-width="16" stroke-linecap="round"/>
+
+    <circle cx="157" cy="151" r="47" fill="white" stroke="#153D66" stroke-width="10"/>
+    <circle cx="157" cy="151" r="18" fill="#153D66"/>
+    <circle cx="157" cy="151" r="6" fill="#9FEEFF"/>
+
+    <path d="M157 134V93" stroke="#1F69AF" stroke-width="8" stroke-linecap="round"/>
+    <path d="M141 160L109 194" stroke="#1F69AF" stroke-width="8" stroke-linecap="round"/>
+    <path d="M173 160L206 194" stroke="#1F69AF" stroke-width="8" stroke-linecap="round"/>
+
+    <circle cx="157" cy="84" r="14" fill="url(#nodeA_logo)" stroke="#153D66" stroke-width="6"/>
+    <circle cx="97" cy="205" r="14" fill="url(#nodeA_logo)" stroke="#153D66" stroke-width="6"/>
+    <circle cx="217" cy="205" r="14" fill="url(#nodeA_logo)" stroke="#153D66" stroke-width="6"/>
+
+    <path d="M151 84H163" stroke="#153D66" stroke-width="5.5" stroke-linecap="round"/>
+    <path d="M97 199V211" stroke="#153D66" stroke-width="5.5" stroke-linecap="round"/>
+    <path d="M91 205H103" stroke="#153D66" stroke-width="5.5" stroke-linecap="round"/>
+    <path d="M211 199L223 211" stroke="#153D66" stroke-width="5.5" stroke-linecap="round"/>
+  </g>
+
+  <text x="314" y="156" fill="url(#textA)" font-family="Avenir Next, Nunito, Segoe UI, PingFang SC, Microsoft YaHei, sans-serif" font-size="84" font-weight="800" letter-spacing="-1.5">OriginAgent</text>
+  <text x="316" y="212" fill="#63839E" font-family="Segoe UI, PingFang SC, Microsoft YaHei, sans-serif" font-size="29" font-weight="700" letter-spacing="1.2">本地智能体中枢</text>
+</svg>

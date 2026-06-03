@@ -9,6 +9,7 @@ from typing import Any
 
 from OriginAgent.agent.confirmation import PendingConfirmationStore
 from OriginAgent.agent.introspection.service import RuntimeIntrospectionService
+from OriginAgent.agent.reminders import ReminderStore
 from OriginAgent.agent.tools.base import Tool
 from OriginAgent.cron.service import CronService
 
@@ -25,6 +26,7 @@ class RuntimeStatusTool(Tool):
         pending_queues: dict[str, Any],
         cron_service: CronService | None = None,
         confirmation_store: PendingConfirmationStore | None = None,
+        reminder_store: ReminderStore | None = None,
         audit_mode: str = "minimal",
         runtime_profile: str = "default",
         domain_pack_manager: Any | None = None,
@@ -40,6 +42,7 @@ class RuntimeStatusTool(Tool):
         self._pending_queues = pending_queues
         self._cron_service = cron_service
         self._confirmation_store = confirmation_store
+        self._reminder_store = reminder_store
         self._audit_mode = audit_mode
         self._runtime_profile = runtime_profile
         self._domain_pack_manager = domain_pack_manager
@@ -69,6 +72,7 @@ class RuntimeStatusTool(Tool):
             pending_queues=self._pending_queues,
             cron_service=self._cron_service,
             confirmation_store=self._confirmation_store,
+            reminder_store=self._reminder_store,
             audit_mode=self._audit_mode,
             runtime_profile=self._runtime_profile,
             domain_pack_manager=self._domain_pack_manager,

@@ -659,6 +659,10 @@ async def test_settings_api_returns_safe_subset_and_updates_whitelist(
         assert body["web_search"]["provider"] == "brave"
         assert body["web_search"]["api_key_hint"] == "brav••••cret"
         assert body["learning"]["background_review"]["enabled"] is False
+        assert body["runtime_controls"]["channels"]["show_reasoning"] is True
+        assert body["runtime_controls"]["search"]["web_enabled"] is True
+        assert body["runtime_controls"]["execution"]["exec_profile"] == "secure"
+        assert body["runtime_controls"]["subagent"]["mode"] == "normal"
         assert body["mcp"]["servers"] == [
             {
                 "name": "github",
@@ -723,15 +727,47 @@ async def test_settings_api_returns_safe_subset_and_updates_whitelist(
         assert learning_updated.json()["requires_restart"] is False
         assert learning_updated.json()["learning"]["background_review"]["enabled"] is True
 
+        runtime_updated = await _http_get(
+            "http://127.0.0.1:"
+            f"{port}/api/settings/runtime/update?config="
+            + quote(json.dumps({
+                "channels": {"show_reasoning": False},
+                "agent": {"allow_agent_initiated_messages": True},
+                "search": {"web_enabled": False},
+                "execution": {"exec_profile": "disabled"},
+                "subagent": {"mode": "restricted"},
+                "audit": {"audit_mode": "security"},
+                "runtime": {"profile": "safe"},
+            })),
+            headers={"Authorization": "Bearer tok"},
+        )
+        assert runtime_updated.status_code == 200
+        runtime_body = runtime_updated.json()
+        assert runtime_body["requires_restart"] is True
+        assert runtime_body["runtime_controls"]["channels"]["show_reasoning"] is False
+        assert runtime_body["runtime_controls"]["agent"]["allow_agent_initiated_messages"] is True
+        assert runtime_body["runtime_controls"]["search"]["web_enabled"] is False
+        assert runtime_body["runtime_controls"]["execution"]["exec_profile"] == "disabled"
+        assert runtime_body["runtime_controls"]["subagent"]["mode"] == "restricted"
+        assert runtime_body["runtime_controls"]["audit"]["audit_mode"] == "security"
+        assert runtime_body["runtime_controls"]["runtime"]["profile"] == "safe"
+
         saved = load_config(config_path)
         assert saved.agents.defaults.model == "openrouter/test"
         assert saved.agents.defaults.provider == "openrouter"
         assert saved.agents.defaults.learning.background_review.enabled is True
+        assert saved.agents.defaults.allow_agent_initiated_messages is True
+        assert saved.runtime.profile == "safe"
+        assert saved.channels.show_reasoning is False
         assert saved.providers.openrouter.api_key == "sk-or-test"
         assert saved.providers.openrouter.api_base == "https://openrouter.ai/api/v1"
         assert saved.tools.web.search.provider == "searxng"
         assert saved.tools.web.search.api_key == ""
         assert saved.tools.web.search.base_url == "https://search.example.com"
+        assert saved.tools.web.enable is False
+        assert saved.tools.exec.profile == "disabled"
+        assert saved.agents.defaults.subagent_policy.mode == "restricted"
+        assert saved.tools.audit.mode == "security"
     finally:
         await channel.stop()
         await server_task

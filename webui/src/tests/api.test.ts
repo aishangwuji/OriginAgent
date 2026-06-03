@@ -20,6 +20,7 @@ import {
   skillLifecycleAction,
   updateBackgroundReviewSettings,
   updateProviderSettings,
+  updateRuntimeSettings,
   updateSettings,
   updateWebSearchSettings,
   upsertHomeAssistantMcpSettings,
@@ -119,6 +120,20 @@ describe("webui API helpers", () => {
 
     expect(fetch).toHaveBeenCalledWith(
       "/api/settings/learning/background-review/update?enabled=true",
+      expect.objectContaining({
+        headers: { Authorization: "Bearer tok" },
+      }),
+    );
+  });
+
+  it("serializes runtime settings updates as encoded JSON", async () => {
+    await updateRuntimeSettings("tok", {
+      channels: { show_reasoning: false },
+      execution: { exec_profile: "disabled" },
+    });
+
+    expect(fetch).toHaveBeenCalledWith(
+      expect.stringContaining("/api/settings/runtime/update?config="),
       expect.objectContaining({
         headers: { Authorization: "Bearer tok" },
       }),

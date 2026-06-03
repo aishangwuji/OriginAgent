@@ -1,0 +1,30 @@
+<svg width="1240" height="320" viewBox="0 0 1240 320" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="title desc">
+  <title id="title">OriginAgent 黑白方案二横版</title>
+  <desc id="desc">罗盘十字黑白横版标志，强调 OriginAgent 的任务导航与能力调度。</desc>
+  <defs>
+    <filter id="shadow" x="0" y="0" width="302" height="302" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
+      <feDropShadow dx="0" dy="12" stdDeviation="14" flood-color="#000000" flood-opacity="0.1"/>
+      <feDropShadow dx="0" dy="4" stdDeviation="3" flood-color="#000000" flood-opacity="0.06"/>
+    </filter>
+  </defs>
+  <g filter="url(#shadow)">
+    <rect x="30" y="30" width="240" height="240" rx="78" fill="white" stroke="#101010" stroke-width="10"/>
+    <circle cx="150" cy="150" r="80" fill="white" stroke="#101010" stroke-width="8"/>
+    <circle cx="150" cy="150" r="50" fill="white" stroke="#101010" stroke-width="6"/>
+
+    <path d="M150 64L168 100H132L150 64Z" fill="#101010"/>
+    <path d="M236 150L200 168V132L236 150Z" fill="#101010"/>
+    <path d="M150 236L132 200H168L150 236Z" fill="#101010"/>
+    <path d="M64 150L100 132V168L64 150Z" fill="#101010"/>
+
+    <path d="M150 100V132" stroke="#101010" stroke-width="8" stroke-linecap="round"/>
+    <path d="M168 150H200" stroke="#101010" stroke-width="8" stroke-linecap="round"/>
+    <path d="M150 168V200" stroke="#101010" stroke-width="8" stroke-linecap="round"/>
+    <path d="M100 150H132" stroke="#101010" stroke-width="8" stroke-linecap="round"/>
+
+    <rect x="132" y="132" width="36" height="36" rx="10" fill="#101010"/>
+  </g>
+
+  <text x="314" y="156" fill="#111111" font-family="Avenir Next, Segoe UI, PingFang SC, Microsoft YaHei, sans-serif" font-size="84" font-weight="800" letter-spacing="-1.4">OriginAgent</text>
+  <text x="316" y="212" fill="#666666" font-family="Segoe UI, PingFang SC, Microsoft YaHei, sans-serif" font-size="29" font-weight="700" letter-spacing="1.1">罗盘十字</text>
+</svg>

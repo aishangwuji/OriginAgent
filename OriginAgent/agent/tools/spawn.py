@@ -3,6 +3,7 @@
 from contextvars import ContextVar
 from typing import TYPE_CHECKING, Any
 
+from OriginAgent.agent.subagent_policy import SubagentPolicy
 from OriginAgent.agent.tools.base import Tool, tool_parameters
 from OriginAgent.agent.tools.schema import StringSchema, tool_parameters_schema
 from OriginAgent.security.capabilities import CapabilitySnapshot
@@ -35,6 +36,22 @@ class SpawnTool(Tool):
             "spawn_capability_snapshot",
             default=None,
         )
+        self._parent_subagent_id: ContextVar[str | None] = ContextVar(
+            "spawn_parent_subagent_id",
+            default=None,
+        )
+        self._root_subagent_id: ContextVar[str | None] = ContextVar(
+            "spawn_root_subagent_id",
+            default=None,
+        )
+        self._subagent_depth: ContextVar[int] = ContextVar(
+            "spawn_subagent_depth",
+            default=0,
+        )
+        self._delegated_policy: ContextVar[SubagentPolicy | None] = ContextVar(
+            "spawn_delegated_policy",
+            default=None,
+        )
 
     def set_context(self, channel: str, chat_id: str, effective_key: str | None = None) -> None:
         """Set the origin context for subagent announcements."""
@@ -48,6 +65,19 @@ class SpawnTool(Tool):
 
     def set_capability_snapshot(self, snapshot: CapabilitySnapshot | None) -> None:
         self._capability_snapshot.set(snapshot)
+
+    def set_nested_policy(
+        self,
+        *,
+        parent_subagent_id: str | None,
+        root_subagent_id: str | None,
+        subagent_depth: int,
+        delegated_policy: SubagentPolicy | None,
+    ) -> None:
+        self._parent_subagent_id.set(parent_subagent_id)
+        self._root_subagent_id.set(root_subagent_id)
+        self._subagent_depth.set(subagent_depth)
+        self._delegated_policy.set(delegated_policy)
 
     @property
     def name(self) -> str:
@@ -88,6 +118,8 @@ class SpawnTool(Tool):
                 f"({running}/{limit} running). Wait for a running subagent "
                 f"to complete before spawning a new one."
             )
+        delegated_policy = self._delegated_policy.get()
+        child_policy = delegated_policy.child_policy() if delegated_policy is not None else None
         return await self._manager.spawn(
             task=task,
             label=label,
@@ -97,4 +129,8 @@ class SpawnTool(Tool):
             origin_message_id=self._origin_message_id.get(),
             parent_capability_snapshot=snapshot,
             grant_id=None,
+            delegated_policy=child_policy,
+            parent_subagent_id=self._parent_subagent_id.get(),
+            root_subagent_id=self._root_subagent_id.get(),
+            subagent_depth=self._subagent_depth.get() + 1,
         )

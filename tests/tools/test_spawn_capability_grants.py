@@ -296,8 +296,26 @@ async def test_exec_registration_follows_effective_snapshot_and_profile(tmp_path
         exec_config=ExecToolConfig(profile="local_dev", allow_unsafe_exec=True, sandbox=""),
     )
     local_tools = await _run_subagent_and_capture_tools(local_dev, allowed_snapshot)
-    assert "exec" in local_tools
+    assert "exec" not in local_tools
 
     denied_snapshot = replace(allowed_snapshot, can_exec=False)
     denied_tools = await _run_subagent_and_capture_tools(local_dev, denied_snapshot)
     assert "exec" not in denied_tools
+
+
+@pytest.mark.asyncio
+async def test_subagent_default_policy_uses_shared_read_only_toolset(tmp_path: Path) -> None:
+    manager = _manager(tmp_path)
+    snapshot = CapabilitySnapshot.user_turn().derive_subagent()
+
+    tool_names = await _run_subagent_and_capture_tools(manager, snapshot)
+
+    assert set(tool_names) == {"read_file", "list_dir", "glob", "grep"}
+    assert "web_search" not in tool_names
+    assert "web_fetch" not in tool_names
+    assert "write_file" not in tool_names
+    assert "edit_file" not in tool_names
+    assert "exec" not in tool_names
+    assert "message" not in tool_names
+    assert "spawn" not in tool_names
+    assert "cron" not in tool_names

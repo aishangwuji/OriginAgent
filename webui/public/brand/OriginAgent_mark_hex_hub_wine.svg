@@ -1,0 +1,48 @@
+<svg width="512" height="512" viewBox="0 0 512 512" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="title desc">
+  <title id="title">OriginAgent 六边中枢 酒红米白版</title>
+  <desc id="desc">酒红与米白配色的六边中枢标志，整体更有人文感和仪式感，但依旧保持系统秩序。</desc>
+  <defs>
+    <filter id="shadow" x="34" y="34" width="444" height="444" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
+      <feDropShadow dx="0" dy="16" stdDeviation="16" flood-color="#18090D" flood-opacity="0.22"/>
+      <feDropShadow dx="0" dy="4" stdDeviation="4" flood-color="#18090D" flood-opacity="0.12"/>
+    </filter>
+    <linearGradient id="shell" x1="52" y1="52" x2="460" y2="460" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#5A1828"/>
+      <stop offset="1" stop-color="#2B0D16"/>
+    </linearGradient>
+    <linearGradient id="hub" x1="172" y1="124" x2="340" y2="300" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#F1DAB5"/>
+      <stop offset="1" stop-color="#D0A56A"/>
+    </linearGradient>
+  </defs>
+  <g filter="url(#shadow)">
+    <rect x="52" y="52" width="408" height="408" rx="128" fill="url(#shell)" stroke="#F1E5D4" stroke-width="16"/>
+    <path d="M256 100L358 156V268L256 324L154 268V156L256 100Z" fill="#41111D" stroke="#F1E5D4" stroke-width="14" stroke-linejoin="round"/>
+    <path d="M256 164L302 190V242L256 268L210 242V190L256 164Z" fill="#5B1828" stroke="#F7EFE4" stroke-width="10" stroke-linejoin="round"/>
+
+    <path d="M212 218C224 202 239 194 256 194C273 194 288 202 300 218C288 234 273 242 256 242C239 242 224 234 212 218Z" fill="#FFF8F0" stroke="#F7EFE4" stroke-width="10" stroke-linejoin="round"/>
+    <circle cx="256" cy="218" r="18" fill="#2B0D16"/>
+    <circle cx="264" cy="210" r="6" fill="#F1DAB5"/>
+
+    <path d="M256 100V164" stroke="#F1E5D4" stroke-width="10" stroke-linecap="round"/>
+    <path d="M358 156L302 190" stroke="#F1E5D4" stroke-width="10" stroke-linecap="round"/>
+    <path d="M358 268L302 242" stroke="#F1E5D4" stroke-width="10" stroke-linecap="round"/>
+    <path d="M256 324V268" stroke="#F1E5D4" stroke-width="10" stroke-linecap="round"/>
+    <path d="M154 268L210 242" stroke="#F1E5D4" stroke-width="10" stroke-linecap="round"/>
+    <path d="M154 156L210 190" stroke="#F1E5D4" stroke-width="10" stroke-linecap="round"/>
+
+    <circle cx="256" cy="86" r="18" fill="url(#hub)" stroke="#FFF7ED" stroke-width="8"/>
+    <circle cx="368" cy="150" r="18" fill="url(#hub)" stroke="#FFF7ED" stroke-width="8"/>
+    <circle cx="368" cy="274" r="18" fill="url(#hub)" stroke="#FFF7ED" stroke-width="8"/>
+    <circle cx="256" cy="338" r="18" fill="url(#hub)" stroke="#FFF7ED" stroke-width="8"/>
+    <circle cx="144" cy="274" r="18" fill="url(#hub)" stroke="#FFF7ED" stroke-width="8"/>
+    <circle cx="144" cy="150" r="18" fill="url(#hub)" stroke="#FFF7ED" stroke-width="8"/>
+
+    <circle cx="256" cy="86" r="5" fill="#FFFDF8"/>
+    <circle cx="368" cy="150" r="5" fill="#FFFDF8"/>
+    <circle cx="368" cy="274" r="5" fill="#FFFDF8"/>
+    <circle cx="256" cy="338" r="5" fill="#FFFDF8"/>
+    <circle cx="144" cy="274" r="5" fill="#FFFDF8"/>
+    <circle cx="144" cy="150" r="5" fill="#FFFDF8"/>
+  </g>
+</svg>

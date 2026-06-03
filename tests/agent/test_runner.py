@@ -1189,6 +1189,74 @@ async def test_runner_does_not_batch_exclusive_read_only_tools():
 
 
 @pytest.mark.asyncio
+async def test_runner_applies_tool_concurrency_limit():
+    from OriginAgent.agent.runner import AgentRunSpec, AgentRunner
+
+    class _CountingTool(Tool):
+        def __init__(self, name: str, active: dict[str, int], peak: dict[str, int]) -> None:
+            self._name = name
+            self._active = active
+            self._peak = peak
+
+        @property
+        def name(self) -> str:
+            return self._name
+
+        @property
+        def description(self) -> str:
+            return self._name
+
+        @property
+        def parameters(self) -> dict:
+            return {"type": "object", "properties": {}, "required": []}
+
+        @property
+        def read_only(self) -> bool:
+            return True
+
+        @property
+        def concurrency_safe(self) -> bool:
+            return True
+
+        async def execute(self, **kwargs):
+            self._active["count"] += 1
+            self._peak["count"] = max(self._peak["count"], self._active["count"])
+            try:
+                await asyncio.sleep(0.03)
+                return self._name
+            finally:
+                self._active["count"] -= 1
+
+    tools = ToolRegistry()
+    active = {"count": 0}
+    peak = {"count": 0}
+    for idx in range(3):
+        tools.register(_CountingTool(f"read_{idx}", active, peak))
+
+    runner = AgentRunner(MagicMock())
+    await runner._execute_tools(
+        AgentRunSpec(
+            initial_messages=[],
+            tools=tools,
+            model="test-model",
+            max_iterations=1,
+            max_tool_result_chars=_MAX_TOOL_RESULT_CHARS,
+            concurrent_tools=True,
+            tool_concurrency_limit=2,
+        ),
+        [
+            ToolCallRequest(id="ro1", name="read_0", arguments={}),
+            ToolCallRequest(id="ro2", name="read_1", arguments={}),
+            ToolCallRequest(id="ro3", name="read_2", arguments={}),
+        ],
+        {},
+        {},
+    )
+
+    assert peak["count"] == 2
+
+
+@pytest.mark.asyncio
 async def test_runner_blocks_repeated_external_fetches():
     from OriginAgent.agent.runner import AgentRunSpec, AgentRunner
 

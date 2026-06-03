@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from OriginAgent.agent.confirmation import PendingConfirmationStore
+from OriginAgent.agent.reminders import ReminderStore
 from OriginAgent.agent.domain_pack_governance import summarize_domain_pack_governance
 from OriginAgent.agent.self_model import SelfModelService
 from OriginAgent.agent.skills import SkillsLoader
@@ -30,6 +31,7 @@ class RuntimeIntrospectionService:
         pending_queues: dict[str, Any],
         cron_service: Any | None = None,
         confirmation_store: PendingConfirmationStore | None = None,
+        reminder_store: ReminderStore | None = None,
         audit_mode: str = "minimal",
         runtime_profile: str = "default",
         domain_pack_manager: Any | None = None,
@@ -45,6 +47,7 @@ class RuntimeIntrospectionService:
         self._pending_queues = pending_queues
         self._cron_service = cron_service
         self._confirmation_store = confirmation_store
+        self._reminder_store = reminder_store
         self._audit_mode = audit_mode
         self._runtime_profile = runtime_profile
         self._domain_pack_manager = domain_pack_manager
@@ -105,6 +108,8 @@ class RuntimeIntrospectionService:
         skill_status = self._skill_lifecycle_status(self._workspace, self._domain_pack_manager)
         session_search_status = self._session_search_status(self._session_search_index_service)
         evolution_status = self._evolution_status(self._workspace, self._evolution_config)
+        subagent_status = self._subagent_status(self._loop)
+        reminder_status = self._reminder_status(self._reminder_store)
         self_model = SelfModelService(
             self._workspace,
             registry=self._registry,
@@ -134,6 +139,8 @@ class RuntimeIntrospectionService:
             **skill_status,
             **workflow_status,
             **session_search_status,
+            **subagent_status,
+            **reminder_status,
             "evolution": evolution_status,
             "self_model": self_model,
         }
@@ -182,6 +189,25 @@ class RuntimeIntrospectionService:
             return dict(service.runtime_status())
         except Exception:
             return dict(defaults)
+
+    @staticmethod
+    def _reminder_status(store: ReminderStore | None) -> dict[str, Any]:
+        if store is None:
+            return {
+                "reminder_total": 0,
+                "reminder_status_counts": {},
+                "reminder_due_count": 0,
+                "reminder_last_fired_at": None,
+            }
+        try:
+            return store.stats()
+        except Exception:
+            return {
+                "reminder_total": 0,
+                "reminder_status_counts": {},
+                "reminder_due_count": 0,
+                "reminder_last_fired_at": None,
+            }
 
     @staticmethod
     def _workflow_artifact_status(workspace: Path) -> dict[str, Any]:
@@ -347,6 +373,24 @@ class RuntimeIntrospectionService:
                 "eligible_skill_signals": 0,
                 "high_score_signals": [],
             }
+
+    @staticmethod
+    def _subagent_status(loop: Any | None) -> dict[str, Any]:
+        defaults = {
+            "subagent_task_total": 0,
+            "subagent_recent_task_count": 0,
+            "subagent_terminal_status_counts": {},
+            "subagent_recent_tasks": [],
+            "subagent_last_task_at": None,
+            "subagent_running_count": 0,
+        }
+        subagents = getattr(loop, "subagents", None) if loop is not None else None
+        if subagents is None or not hasattr(subagents, "runtime_status"):
+            return defaults
+        try:
+            return {**defaults, **dict(subagents.runtime_status())}
+        except Exception:
+            return defaults
 
 
 def _safe_len(value: Any) -> int:

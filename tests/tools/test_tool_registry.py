@@ -215,6 +215,30 @@ async def test_execute_audits_success_without_params_or_result() -> None:
 
 
 @pytest.mark.asyncio
+async def test_execute_notifies_execution_observer() -> None:
+    class Observer:
+        def __init__(self) -> None:
+            self.calls: list[dict[str, Any]] = []
+
+        def on_tool_result(self, **kwargs: Any) -> None:
+            self.calls.append(kwargs)
+
+    observer = Observer()
+    registry = ToolRegistry(execution_observer=observer)
+    registry.register(_FakeTool("example", result={"ok": True}))
+
+    result = await registry.execute("example", {"token": "secret"})
+
+    assert result == {"ok": True}
+    assert len(observer.calls) == 1
+    call = observer.calls[0]
+    assert call["name"] == "example"
+    assert call["status"] == "success"
+    assert call["params"] == {"token": "secret"}
+    assert call["result"] == {"ok": True}
+
+
+@pytest.mark.asyncio
 async def test_execute_audits_validation_error() -> None:
     sink = InMemoryToolAuditSink()
     registry = ToolRegistry(audit_sink=sink)

@@ -65,6 +65,10 @@ class ToolCallAuditEvent:
     error_kind: str | None = None
     actor_id_hash: str | None = None
     session_key_hash: str | None = None
+    subagent_task_id: str | None = None
+    parent_session_key_hash: str | None = None
+    origin_channel: str | None = None
+    origin_chat_id_hash: str | None = None
     target_kind: str | None = None
     target_hash: str | None = None
     policy_rule: str | None = None

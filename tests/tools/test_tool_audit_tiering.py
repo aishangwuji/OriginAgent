@@ -175,3 +175,33 @@ async def test_security_mode_records_summary_for_ordinary_success() -> None:
     assert event.result_size is not None
     assert "example.com" not in str(event.to_dict())
     assert "secret" not in str(event.to_dict())
+
+
+@pytest.mark.asyncio
+async def test_security_mode_records_subagent_audit_context() -> None:
+    sink = InMemoryToolAuditSink()
+    registry = ToolRegistry(
+        audit_sink=sink,
+        audit_config=ToolAuditConfig(mode="security"),
+        capability_snapshot=CapabilitySnapshot.user_turn(),
+    )
+    registry.set_audit_context(
+        actor_id="subagent",
+        session_key="system:subagent",
+        subagent_task_id="sub-123",
+        parent_session_key="slack:C123:1700.42",
+        origin_channel="slack",
+        origin_chat_id="C123",
+    )
+    registry.register(_FakeTool("read_file"))
+
+    assert await registry.execute("read_file", {"path": "README.md"}) == "ok"
+
+    event = sink.events[0]
+    assert event.subagent_task_id == "sub-123"
+    assert event.parent_session_key_hash is not None
+    assert event.origin_channel == "slack"
+    assert event.origin_chat_id_hash is not None
+    serialized = str(event.to_dict())
+    assert "slack:C123:1700.42" not in serialized
+    assert "C123" not in serialized

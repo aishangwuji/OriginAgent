@@ -9,6 +9,7 @@ import type {
   ReviewDecisionResult,
   ReviewProposal,
   ReviewProposalStats,
+  RuntimeSettingsUpdate,
   SettingsPayload,
   SettingsUpdate,
   SelfModel,
@@ -397,6 +398,19 @@ export async function updateBackgroundReviewSettings(
   query.set("enabled", enabled ? "true" : "false");
   return request<SettingsPayload>(
     `${base}/api/settings/learning/background-review/update?${query}`,
+    token,
+  );
+}
+
+export async function updateRuntimeSettings(
+  token: string,
+  update: RuntimeSettingsUpdate,
+  base: string = "",
+): Promise<SettingsPayload> {
+  const query = new URLSearchParams();
+  query.set("config", JSON.stringify(update));
+  return request<SettingsPayload>(
+    `${base}/api/settings/runtime/update?${query}`,
     token,
   );
 }

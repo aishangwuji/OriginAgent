@@ -1,0 +1,58 @@
+<svg width="512" height="512" viewBox="0 0 512 512" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="title desc">
+  <title id="title">OriginAgent mark A</title>
+  <desc id="desc">OriginAgent option A: an origin-core orchestration mark with a central hub, execution rails, and local workspace nodes.</desc>
+  <defs>
+    <linearGradient id="bgA" x1="76" y1="64" x2="430" y2="454" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#F3FBFF"/>
+      <stop offset="0.52" stop-color="#DDF1FF"/>
+      <stop offset="1" stop-color="#BFDFFF"/>
+    </linearGradient>
+    <linearGradient id="ringA" x1="150" y1="123" x2="364" y2="385" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#1D4F86"/>
+      <stop offset="0.52" stop-color="#2E7FD8"/>
+      <stop offset="1" stop-color="#53C3E8"/>
+    </linearGradient>
+    <linearGradient id="railA" x1="187" y1="178" x2="342" y2="337" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#123C66"/>
+      <stop offset="1" stop-color="#2E7FD8"/>
+    </linearGradient>
+    <linearGradient id="nodeA" x1="180" y1="152" x2="341" y2="333" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#FFF7D7"/>
+      <stop offset="1" stop-color="#FFC86A"/>
+    </linearGradient>
+    <filter id="shadowA" x="66" y="63" width="379" height="385" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
+      <feDropShadow dx="0" dy="18" stdDeviation="20" flood-color="#225B94" flood-opacity="0.18"/>
+      <feDropShadow dx="0" dy="5" stdDeviation="4" flood-color="#225B94" flood-opacity="0.12"/>
+    </filter>
+  </defs>
+  <rect x="48" y="48" width="416" height="416" rx="132" fill="url(#bgA)"/>
+  <path d="M130 377C157 408 204 426 256 426C312 426 360 405 386 373" stroke="#86BFE9" stroke-width="16" stroke-linecap="round" opacity="0.75"/>
+  <g filter="url(#shadowA)">
+    <path d="M182 124C145 144 118 184 112 231" stroke="url(#ringA)" stroke-width="28" stroke-linecap="round"/>
+    <path d="M113 284C126 358 190 412 267 412C336 412 395 369 417 306" stroke="url(#ringA)" stroke-width="28" stroke-linecap="round"/>
+    <path d="M361 136C388 157 408 188 416 225" stroke="url(#ringA)" stroke-width="28" stroke-linecap="round"/>
+
+    <circle cx="256" cy="256" r="82" fill="white" stroke="#153D66" stroke-width="16"/>
+    <circle cx="256" cy="256" r="30" fill="#153D66"/>
+    <circle cx="256" cy="256" r="10" fill="#9FEEFF"/>
+
+    <path d="M256 226V154" stroke="url(#railA)" stroke-width="14" stroke-linecap="round"/>
+    <path d="M228 270L172 328" stroke="url(#railA)" stroke-width="14" stroke-linecap="round"/>
+    <path d="M286 270L344 328" stroke="url(#railA)" stroke-width="14" stroke-linecap="round"/>
+
+    <circle cx="256" cy="138" r="24" fill="url(#nodeA)" stroke="#153D66" stroke-width="10"/>
+    <circle cx="154" cy="346" r="24" fill="url(#nodeA)" stroke="#153D66" stroke-width="10"/>
+    <circle cx="358" cy="346" r="24" fill="url(#nodeA)" stroke="#153D66" stroke-width="10"/>
+
+    <path d="M246 138H266" stroke="#153D66" stroke-width="9" stroke-linecap="round"/>
+    <path d="M154 336V356" stroke="#153D66" stroke-width="9" stroke-linecap="round"/>
+    <path d="M144 346H164" stroke="#153D66" stroke-width="9" stroke-linecap="round"/>
+    <path d="M348 336L368 356" stroke="#153D66" stroke-width="9" stroke-linecap="round"/>
+
+    <path d="M171 187C192 168 221 156 256 156C292 156 323 168 344 189" stroke="#A2D9FF" stroke-width="12" stroke-linecap="round" opacity="0.9"/>
+    <path d="M171 325C192 344 221 356 256 356C292 356 321 344 342 326" stroke="#A2D9FF" stroke-width="12" stroke-linecap="round" opacity="0.9"/>
+  </g>
+
+  <path d="M116 161L125 142L134 161L153 170L134 179L125 198L116 179L97 170L116 161Z" fill="white" stroke="#57AFEA" stroke-width="7" stroke-linejoin="round"/>
+  <path d="M380 117L386 104L392 117L405 123L392 129L386 142L380 129L367 123L380 117Z" fill="white" stroke="#57AFEA" stroke-width="5" stroke-linejoin="round"/>
+</svg>

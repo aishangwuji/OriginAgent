@@ -7,6 +7,8 @@
 .env
 .web
 .orion
+.tmp/
+.uv-cache/
 
 # webui (monorepo frontend)
 webui/node_modules/

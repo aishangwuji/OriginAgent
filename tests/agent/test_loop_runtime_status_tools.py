@@ -6,6 +6,8 @@ from unittest.mock import MagicMock
 import pytest
 
 from OriginAgent.agent.loop import AgentLoop
+from OriginAgent.agent.reminders import ReminderRecord, ReminderStore
+from OriginAgent.agent.subagent_records import SubagentTaskRecord
 from OriginAgent.agent.agent_runtime_context import set_tool_context
 from OriginAgent.agent.evolution import (
     SIGNAL_KIND_WORKFLOW,
@@ -118,6 +120,69 @@ async def test_runtime_status_reports_confirmation_store_available(tmp_path: Pat
 
     assert result["confirmation_available"] is True
     assert result["self_model"]["runtime"]["confirmation_available"] is True
+
+
+@pytest.mark.asyncio
+async def test_runtime_status_reports_subagent_summary(tmp_path: Path) -> None:
+    loop = AgentLoop(
+        bus=MessageBus(),
+        provider=_provider(),
+        workspace=tmp_path,
+        model="test-model",
+    )
+    loop.subagents.records.append_task(SubagentTaskRecord(
+        subagent_id="sub-1",
+        root_subagent_id="sub-1",
+        parent_subagent_id=None,
+        subagent_depth=1,
+        parent_session_key="cli:direct",
+        origin_channel="cli",
+        origin_chat_id="direct",
+        origin_message_id=None,
+        task_label="inspect",
+        task_summary="inspect repository",
+        delegated_profile_summary="read=on, write=off",
+        allowed_tools_summary=["read_file", "grep"],
+        provider_summary="inherit:test-model",
+        isolation_mode="shared_process",
+        terminal_status="completed",
+        stop_reason="done",
+        started_at="2026-05-28T00:00:00+00:00",
+        ended_at="2026-05-28T00:00:01+00:00",
+    ))
+
+    result = await loop.tools.execute("originagent_runtime_status", {})
+
+    assert result["subagent_task_total"] == 1
+    assert result["subagent_recent_task_count"] == 1
+    assert result["subagent_terminal_status_counts"]["completed"] == 1
+    assert result["subagent_recent_tasks"][0]["subagent_id"] == "sub-1"
+
+
+@pytest.mark.asyncio
+async def test_runtime_status_reports_reminder_summary(tmp_path: Path) -> None:
+    loop = AgentLoop(
+        bus=MessageBus(),
+        provider=_provider(),
+        workspace=tmp_path,
+        model="test-model",
+    )
+    store = ReminderStore(tmp_path)
+    store.upsert(ReminderRecord.create(
+        session_key="cli:direct",
+        channel="cli",
+        chat_id="direct",
+        content="Ping me now",
+        due_at="2026-05-28T00:00:00+00:00",
+        reminder_id="rem-1",
+    ))
+    store.mark_fired("rem-1")
+
+    result = await loop.tools.execute("originagent_runtime_status", {})
+
+    assert result["reminder_total"] == 1
+    assert result["reminder_status_counts"]["fired"] == 1
+    assert result["reminder_last_fired_at"] is not None
 
 
 @pytest.mark.parametrize("mode", ["off", "minimal", "security"])

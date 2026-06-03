@@ -2,6 +2,7 @@ import { act, renderHook } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { describe, expect, it, vi } from "vitest";
 
+import { countToolCalls } from "@/components/thread/AgentActivityCluster";
 import { useOriginAgentStream } from "@/hooks/useOriginAgentStream";
 import type { InboundEvent, GoalStateWsPayload } from "@/lib/types";
 import { ClientProvider } from "@/providers/ClientProvider";
@@ -236,6 +237,34 @@ describe("useOriginAgentStream", () => {
       'read_file({"path":"a"})',
     ]);
     expect(result.current.messages[0].toolEvents).toHaveLength(2);
+  });
+
+  it("preserves tool-only progress frames so activity counters do not stay at zero", () => {
+    const fake = fakeClient();
+    const { result } = renderHook(() => useOriginAgentStream("chat-tool-only", EMPTY_MESSAGES), {
+      wrapper: wrap(fake.client),
+    });
+
+    act(() => {
+      fake.emit("chat-tool-only", {
+        event: "message",
+        chat_id: "chat-tool-only",
+        text: "",
+        kind: "progress",
+        tool_events: [
+          { phase: "end", call_id: "call_9", name: "read_file", arguments: { path: "docs/a.md" } },
+        ],
+      });
+    });
+
+    expect(result.current.messages).toHaveLength(1);
+    expect(result.current.messages[0]).toMatchObject({
+      role: "tool",
+      kind: "trace",
+      traces: ['read_file({"path":"docs/a.md"})'],
+    });
+    expect(result.current.messages[0].toolEvents).toHaveLength(1);
+    expect(countToolCalls(result.current.messages)).toBe(1);
   });
 
   it("accumulates reasoning_delta chunks on a placeholder until reasoning_end", () => {
@@ -481,6 +510,66 @@ describe("useOriginAgentStream", () => {
       kind: "trace",
       traces: ["web_search({\"query\":\"hermes\"})"],
     });
+  });
+
+  it("starts a fresh final assistant slice after tool traces instead of appending below the earlier reasoning stream", () => {
+    const fake = fakeClient();
+    const { result } = renderHook(() => useOriginAgentStream("chat-final-after-tools", EMPTY_MESSAGES), {
+      wrapper: wrap(fake.client),
+    });
+
+    act(() => {
+      fake.emit("chat-final-after-tools", {
+        event: "reasoning_delta",
+        chat_id: "chat-final-after-tools",
+        text: "先搜索一下。",
+      });
+      fake.emit("chat-final-after-tools", {
+        event: "reasoning_end",
+        chat_id: "chat-final-after-tools",
+      });
+      fake.emit("chat-final-after-tools", {
+        event: "message",
+        chat_id: "chat-final-after-tools",
+        text: "web_search({\"query\":\"originagent\"})",
+        kind: "tool_hint",
+      });
+      fake.emit("chat-final-after-tools", {
+        event: "delta",
+        chat_id: "chat-final-after-tools",
+        text: "最终答案",
+      });
+      fake.emit("chat-final-after-tools", {
+        event: "stream_end",
+        chat_id: "chat-final-after-tools",
+      });
+      fake.emit("chat-final-after-tools", {
+        event: "turn_end",
+        chat_id: "chat-final-after-tools",
+      });
+    });
+
+    expect(result.current.messages).toHaveLength(3);
+    expect(result.current.messages.map((message) => message.kind ?? "message")).toEqual([
+      "message",
+      "trace",
+      "message",
+    ]);
+    expect(result.current.messages[0]).toMatchObject({
+      role: "assistant",
+      content: "",
+      reasoning: "先搜索一下。",
+    });
+    expect(result.current.messages[1]).toMatchObject({
+      role: "tool",
+      kind: "trace",
+      traces: ["web_search({\"query\":\"originagent\"})"],
+    });
+    expect(result.current.messages[2]).toMatchObject({
+      role: "assistant",
+      content: "最终答案",
+    });
+    expect(result.current.messages[2].reasoning).toBeUndefined();
   });
 
   it("absorbs non-streamed final answers into the preceding reasoning placeholder", () => {
