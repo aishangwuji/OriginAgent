@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import Any, Literal
 
 import yaml
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, ValidationError, field_validator
 
 
 class DomainPackManifestError(Exception):
@@ -24,6 +25,7 @@ ALLOWED_TOOL_PERMISSIONS: frozenset[str] = frozenset(
         "mcp:read",
     }
 )
+_DEVICE_PERMISSION_RE = re.compile(r"^device:[a-z0-9_-]+$")
 
 
 class ToolDeclaration(BaseModel, extra="forbid"):
@@ -43,12 +45,9 @@ class ToolDeclaration(BaseModel, extra="forbid"):
     @field_validator("permissions")
     @classmethod
     def _validate_permissions(cls, v: list[str]) -> list[str]:
-        import re
-
         allowed = ALLOWED_TOOL_PERMISSIONS
-        device_re = re.compile(r"^device:[a-z0-9_-]+$")
         for perm in v:
-            if perm not in allowed and not device_re.fullmatch(perm):
+            if perm not in allowed and not _DEVICE_PERMISSION_RE.fullmatch(perm):
                 raise ValueError(f"unsupported permission: {perm}")
         return v
 
@@ -66,16 +65,16 @@ class RuntimeDeclaration(BaseModel, extra="forbid"):
 
 
 class ActivationConfig(BaseModel, extra="forbid"):
-    triggers: list[str] = []
+    triggers: list[str] = Field(default_factory=list)
 
 
 class RequiresConfig(BaseModel, extra="forbid"):
-    bins: list[str] = []
-    env: list[str] = []
+    bins: list[str] = Field(default_factory=list)
+    env: list[str] = Field(default_factory=list)
 
 
 class DependenciesConfig(BaseModel, extra="forbid"):
-    packs: list[str] = []
+    packs: list[str] = Field(default_factory=list)
 
 
 class SourceInfoConfig(BaseModel, extra="forbid"):
@@ -84,54 +83,45 @@ class SourceInfoConfig(BaseModel, extra="forbid"):
     installed_at: str = ""
 
 
+def _coerce_string_list(v: object) -> list[str]:
+    """Coerce a YAML list of strings-or-dicts to a plain string list."""
+    if not isinstance(v, list):
+        return []
+    result: list[str] = []
+    for item in v:
+        if isinstance(item, str):
+            result.append(item)
+        elif isinstance(item, dict):
+            sid = str(item.get("id") or item.get("name") or "").strip()
+            if sid:
+                result.append(sid)
+    return result
+
+
 class DomainPackManifest(BaseModel, extra="forbid"):
     id: str = Field(min_length=1, pattern=r"^[a-z0-9_-]+$")
     name: str = Field(min_length=1)
     version: str = Field(default="0.1.0", pattern=r"^\d+\.\d+\.\d+$")
     enabled: bool = True
     description: str = ""
-    capabilities: list[str] = []
-    activation: ActivationConfig = ActivationConfig()
-    requires: RequiresConfig = RequiresConfig()
-    dependencies: DependenciesConfig = DependenciesConfig()
-    skills: list[str] = []
-    tools: list[ToolDeclaration] = []
+    capabilities: list[str] = Field(default_factory=list)
+    activation: ActivationConfig = Field(default_factory=ActivationConfig)
+    requires: RequiresConfig = Field(default_factory=RequiresConfig)
+    dependencies: DependenciesConfig = Field(default_factory=DependenciesConfig)
+    skills: list[str] = Field(default_factory=list)
+    tools: list[ToolDeclaration] = Field(default_factory=list)
     runtime: RuntimeDeclaration | None = None
     source: SourceInfoConfig | None = None
     verification_status: str = "unknown"
-    workflows: list[str] = []
-    policies: list[str] = []
-    schemas: list[str] = []
-    evals: list[dict[str, str]] = []
+    workflows: list[str] = Field(default_factory=list)
+    policies: list[str] = Field(default_factory=list)
+    schemas: list[str] = Field(default_factory=list)
+    evals: list[dict[str, str]] = Field(default_factory=list)
 
-    @field_validator("skills", mode="before")
+    @field_validator("skills", "workflows", "policies", "schemas", mode="before")
     @classmethod
-    def _coerce_skills(cls, v: object) -> list[str]:
-        if not isinstance(v, list):
-            return []
-        result: list[str] = []
-        for item in v:
-            if isinstance(item, str):
-                result.append(item)
-            elif isinstance(item, dict):
-                sid = item.get("id") or item.get("name") or ""
-                result.append(str(sid).strip())
-        return result
-
-    @field_validator("workflows", "policies", "schemas", mode="before")
-    @classmethod
-    def _coerce_str_lists(cls, v: object) -> list[str]:
-        if not isinstance(v, list):
-            return []
-        result: list[str] = []
-        for item in v:
-            if isinstance(item, str):
-                result.append(item)
-            elif isinstance(item, dict):
-                sid = str(item.get("id") or item.get("name") or "").strip()
-                if sid:
-                    result.append(sid)
-        return result
+    def _coerce_str_list(cls, v: object) -> list[str]:
+        return _coerce_string_list(v)
 
     @field_validator("evals", mode="before")
     @classmethod
@@ -165,6 +155,5 @@ class DomainPackManifest(BaseModel, extra="forbid"):
     def from_dict(cls, raw: dict[str, object]) -> "DomainPackManifest":
         try:
             return cls.model_validate(raw)
-        except Exception as exc:
-            msg = str(exc)
-            raise DomainPackManifestError(msg) from exc
+        except ValidationError as exc:
+            raise DomainPackManifestError(str(exc)) from exc
