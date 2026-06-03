@@ -1,8 +1,6 @@
-![cover-v5-optimized](./images/GitHub_README.png)
 
 <div align="center">
   <p>
-    <a href="https://pypi.org/project/OriginAgent/"><img src="https://img.shields.io/pypi/v/OriginAgent" alt="PyPI"></a>
     <a href="https://pepy.tech/project/OriginAgent"><img src="https://static.pepy.tech/badge/OriginAgent" alt="Downloads"></a>
     <img src="https://img.shields.io/badge/python-%E2%89%A53.11-blue" alt="Python">
     <img src="https://img.shields.io/badge/license-MIT-green" alt="License">
@@ -24,10 +22,9 @@
 ## 💡 Key Features
 
 - **超轻量级**：稳定长运行的 Agent 行为，核心代码精简可读。
-- **研究友好**：代码库简洁到足以学习、修改和扩展。
+- **研究友好**：代码库简洁到足以学习、修改和扩展。（使用Agent助手前提下）
 - **开箱即用**：聊天频道、API、记忆、MCP 都已内置。
-- **可 Hack**：从源码级文档快速上手，无需依赖庞大的手册页。
-
+- 
 ## 📦 安装
 
 ### 从源码安装（推荐，获取最新功能）
@@ -40,19 +37,12 @@ pip install -e .
 
 安装后即可在命令行使用 `originagent` 命令（或 `OriginAgent`）。
 
-### 从 PyPI 安装
-
-```bash
-pip install originagent
-```
 
 ### 使用 `uv`
 
 ```bash
-# 通过 uv tool 安装（全局可用）
-uv tool install originagent
 
-# 或在项目内使用 uv 管理依赖
+# 在项目内使用 uv 管理依赖
 cd OriginAgent
 uv sync --all-extras
 originagent gateway
