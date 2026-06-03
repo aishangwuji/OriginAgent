@@ -1,0 +1,21 @@
+"""Runtime contribution for the {{ pack_name }} domain pack."""
+
+from __future__ import annotations
+
+from typing import Any
+
+from OriginAgent.agent.domain_packs import DomainRuntimeBuildContext, DomainRuntimeContribution
+
+
+def build_runtime_contribution(context: DomainRuntimeBuildContext) -> DomainRuntimeContribution:
+    """Build the runtime contribution for the {{ pack_name }} domain pack."""
+    return DomainRuntimeContribution(
+        tool_context={
+            "domain": "{{ pack_id }}",
+        },
+        safety_gates=(),
+        permission_resolvers=(),
+        context_fragments=(
+            "{{ pack_name }} domain pack is active.",
+        ),
+    )

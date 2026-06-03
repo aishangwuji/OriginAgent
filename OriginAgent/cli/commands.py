@@ -1797,5 +1797,305 @@ def _login_github_copilot() -> None:
         raise typer.Exit(1)
 
 
+# ============================================================================
+# Domain Pack Commands
+# ============================================================================
+
+domain_app = typer.Typer(help="Manage domain packs")
+app.add_typer(domain_app, name="domain")
+
+
+@domain_app.command("init")
+def domain_init(
+    pack_id: str = typer.Argument(..., help="Domain pack ID (e.g. office)"),
+    name: str | None = typer.Option(None, "--name", "-n", help="Human-readable pack name"),
+    description: str = typer.Option("", "--description", "-d", help="Pack description"),
+    include_tools: bool = typer.Option(True, "--tools/--no-tools", help="Include tools/ template"),
+    include_runtime: bool = typer.Option(True, "--runtime/--no-runtime", help="Include runtime/ template"),
+    include_skills: bool = typer.Option(True, "--skills/--no-skills", help="Include skills/ template"),
+    include_workflows: bool = typer.Option(True, "--workflows/--no-workflows", help="Include workflows/ template"),
+    include_evals: bool = typer.Option(False, "--evals/--no-evals", help="Include evals/ template"),
+    include_tests: bool = typer.Option(True, "--tests/--no-tests", help="Include tests/ template"),
+) -> None:
+    """Scaffold a new domain pack directory from built-in templates."""
+    from pathlib import Path
+
+    from OriginAgent.agent.domain_pack_scaffold import scaffold_domain_pack
+
+    result = scaffold_domain_pack(
+        pack_id=pack_id,
+        pack_name=name or pack_id.title(),
+        pack_description=description,
+        include_tools=include_tools,
+        include_runtime=include_runtime,
+        include_skills=include_skills,
+        include_workflows=include_workflows,
+        include_evals=include_evals,
+        include_tests=include_tests,
+    )
+    console = Console()
+    console.print(f"[green]Domain pack '{pack_id}' created at {result}[/green]")
+    console.print()
+    console.print("[bold]Next steps:[/bold]")
+    console.print(f"  1. cd {result}")
+    console.print("  2. Edit domain_pack.yaml and CAPABILITIES.md")
+    console.print("  3. Run originagent domain validate .")
+    console.print("  4. Run originagent domain install .")
+    console.print("  5. Run originagent domain activate [pack_id]")
+    console.print()
+    console.print("See docs/domain-pack-development.md for details.")
+
+
+@domain_app.command("validate")
+def domain_validate(
+    pack_path: str = typer.Argument(".", help="Path to domain pack directory"),
+) -> None:
+    """Validate a domain pack's structure and manifest."""
+    from pathlib import Path
+
+    from OriginAgent.agent.domain_packs import DomainPackRuntimeConfig, DomainPackValidator
+
+    resolved = Path(pack_path).resolve()
+    if not resolved.is_dir():
+        console = Console()
+        console.print(f"[red]Error: {pack_path} is not a directory[/red]")
+        raise typer.Exit(code=1)
+
+    validator = DomainPackValidator(runtime_config=DomainPackRuntimeConfig(), strict_declarations=True)
+    pack = validator.validate_pack(resolved, source="workspace")
+
+    console = Console()
+    table = Table(title=f"Domain Pack: {pack.id}")
+    table.add_column("Field", style="cyan")
+    table.add_column("Value")
+    table.add_row("ID", pack.id)
+    table.add_row("Name", pack.name)
+    table.add_row("Version", pack.version)
+    table.add_row("Status", pack.status)
+    if pack.unavailable_reason:
+        table.add_row("Reason", pack.unavailable_reason)
+    table.add_row("Validation", pack.validation_summary)
+    caps_exists = str(pack.capabilities_path.exists()) if pack.capabilities_path else "False"
+    table.add_row("CAPABILITIES.md", caps_exists)
+    table.add_row("Skills", str(len(pack.skills)))
+    table.add_row("Tools", str(len(pack.tools)))
+    table.add_row("Workflows", str(len(pack.workflows)))
+    console.print(table)
+
+
+@domain_app.command("list")
+def domain_list(
+    config_path: str | None = typer.Option(None, "--config", "-c", help="Path to config file"),
+) -> None:
+    """List all discovered domain packs."""
+    from pathlib import Path
+
+    from OriginAgent.agent.domain_packs import DomainPackManager
+    from OriginAgent.config.loader import load_config, set_config_path
+
+    resolved_config = Path(config_path).expanduser().resolve() if config_path else None
+    if resolved_config is not None:
+        set_config_path(resolved_config)
+
+    config = load_config(resolved_config)
+    workspace = config.workspace_path
+    manager = DomainPackManager(workspace, config=config.agents.defaults.domain_packs)
+
+    packs = manager.list_packs()
+    table = Table(title="Domain Packs")
+    table.add_column("ID", style="cyan")
+    table.add_column("Name")
+    table.add_column("Version")
+    table.add_column("Source")
+    table.add_column("Status")
+    table.add_column("Active")
+
+    for pack in packs:
+        active_mark = "✓" if pack.active else ""
+        table.add_row(pack.id, pack.name, pack.version, pack.source, pack.status, active_mark)
+
+    console = Console()
+    console.print(table)
+
+
+@domain_app.command("install")
+def domain_install(
+    source_path: str = typer.Argument(..., help="Path to domain pack source directory"),
+    reason: str = typer.Option("", "--reason", "-r", help="Reason for installation"),
+    config_path: str | None = typer.Option(None, "--config", "-c", help="Path to config file"),
+) -> None:
+    """Install a domain pack from a source directory into your workspace."""
+    from pathlib import Path
+
+    from OriginAgent.agent.domain_pack_governance import DomainPackGovernanceService
+    from OriginAgent.config.loader import load_config, set_config_path
+
+    resolved_config = Path(config_path).expanduser().resolve() if config_path else None
+    if resolved_config is not None:
+        set_config_path(resolved_config)
+    config = load_config(resolved_config)
+    workspace = config.workspace_path
+    service = DomainPackGovernanceService(workspace)
+    result = service.install(source_path, reason=reason)
+
+    console = Console()
+    if result.ok:
+        console.print(f"[green]✓ {result.message}[/green]")
+    else:
+        console.print(f"[red]✗ {result.message}[/red]")
+        if result.error:
+            console.print(f"  Error: {result.error}")
+        raise typer.Exit(code=1)
+
+
+@domain_app.command("activate")
+def domain_activate(
+    pack_id: str = typer.Argument(..., help="Domain pack ID to activate"),
+    reason: str = typer.Option("", "--reason", "-r", help="Reason for activation"),
+    config_path: str | None = typer.Option(None, "--config", "-c", help="Path to config file"),
+) -> None:
+    """Activate a domain pack in the agent configuration."""
+    from pathlib import Path
+
+    from OriginAgent.agent.domain_pack_governance import DomainPackGovernanceService
+    from OriginAgent.config.loader import load_config, set_config_path
+
+    resolved_config = Path(config_path).expanduser().resolve() if config_path else None
+    if resolved_config is not None:
+        set_config_path(resolved_config)
+    config = load_config(resolved_config)
+    workspace = config.workspace_path
+    service = DomainPackGovernanceService(workspace)
+    result = service.set_active(pack_id, active=True, reason=reason)
+
+    console = Console()
+    if result.ok:
+        console.print(f"[green]✓ {result.message}[/green]")
+    else:
+        console.print(f"[red]✗ {result.message}[/red]")
+
+
+@domain_app.command("deactivate")
+def domain_deactivate(
+    pack_id: str = typer.Argument(..., help="Domain pack ID to deactivate"),
+    reason: str = typer.Option("", "--reason", "-r", help="Reason for deactivation"),
+    config_path: str | None = typer.Option(None, "--config", "-c", help="Path to config file"),
+) -> None:
+    """Deactivate a domain pack in the agent configuration."""
+    from pathlib import Path
+
+    from OriginAgent.agent.domain_pack_governance import DomainPackGovernanceService
+    from OriginAgent.config.loader import load_config, set_config_path
+
+    resolved_config = Path(config_path).expanduser().resolve() if config_path else None
+    if resolved_config is not None:
+        set_config_path(resolved_config)
+    config = load_config(resolved_config)
+    workspace = config.workspace_path
+    service = DomainPackGovernanceService(workspace)
+    result = service.set_active(pack_id, active=False, reason=reason)
+
+    console = Console()
+    if result.ok:
+        console.print(f"[green]✓ {result.message}[/green]")
+    else:
+        console.print(f"[red]✗ {result.message}[/red]")
+
+
+@domain_app.command("uninstall")
+def domain_uninstall(
+    pack_id: str = typer.Argument(..., help="Domain pack ID to uninstall"),
+    reason: str = typer.Option("", "--reason", "-r", help="Reason for uninstallation"),
+    config_path: str | None = typer.Option(None, "--config", "-c", help="Path to config file"),
+) -> None:
+    """Uninstall a workspace domain pack."""
+    from pathlib import Path
+
+    from OriginAgent.agent.domain_pack_governance import DomainPackGovernanceService
+    from OriginAgent.config.loader import load_config, set_config_path
+
+    resolved_config = Path(config_path).expanduser().resolve() if config_path else None
+    if resolved_config is not None:
+        set_config_path(resolved_config)
+    config = load_config(resolved_config)
+    workspace = config.workspace_path
+    service = DomainPackGovernanceService(workspace)
+    result = service.uninstall(pack_id, reason=reason)
+
+    console = Console()
+    if result.ok:
+        console.print(f"[green]✓ {result.message}[/green]")
+    else:
+        console.print(f"[red]✗ {result.message}[/red]")
+
+
+@domain_app.command("upgrade")
+def domain_upgrade(
+    pack_id: str = typer.Argument(..., help="Domain pack ID to upgrade"),
+    source_path: str = typer.Argument(..., help="Path to new source directory"),
+    reason: str = typer.Option("", "--reason", "-r", help="Reason for upgrade"),
+    config_path: str | None = typer.Option(None, "--config", "-c", help="Path to config file"),
+) -> None:
+    """Upgrade an installed workspace domain pack from a new source."""
+    from pathlib import Path
+
+    from OriginAgent.agent.domain_pack_governance import DomainPackGovernanceService
+    from OriginAgent.config.loader import load_config, set_config_path
+
+    resolved_config = Path(config_path).expanduser().resolve() if config_path else None
+    if resolved_config is not None:
+        set_config_path(resolved_config)
+    config = load_config(resolved_config)
+    workspace = config.workspace_path
+    service = DomainPackGovernanceService(workspace)
+    result = service.upgrade(pack_id, source_path, reason=reason)
+
+    console = Console()
+    if result.ok:
+        console.print(f"[green]✓ {result.message}[/green]")
+    else:
+        console.print(f"[red]✗ {result.message}[/red]")
+
+
+@domain_app.command("info")
+def domain_info(
+    pack_id: str = typer.Argument(..., help="Domain pack ID"),
+    config_path: str | None = typer.Option(None, "--config", "-c", help="Path to config file"),
+) -> None:
+    """Show detailed information about a domain pack."""
+    from pathlib import Path
+
+    from OriginAgent.agent.domain_pack_governance import DomainPackGovernanceService
+    from OriginAgent.config.loader import load_config, set_config_path
+
+    resolved_config = Path(config_path).expanduser().resolve() if config_path else None
+    if resolved_config is not None:
+        set_config_path(resolved_config)
+    config = load_config(resolved_config)
+    workspace = config.workspace_path
+    service = DomainPackGovernanceService(workspace)
+    record = service.get_record(pack_id)
+
+    console = Console()
+    if record is None:
+        console.print(f"[red]Domain pack '{pack_id}' not found.[/red]")
+        raise typer.Exit(code=1)
+
+    table = Table(title=f"Domain Pack: {record['id']}")
+    table.add_column("Field", style="cyan")
+    table.add_column("Value")
+    table.add_row("Name", record.get("name", ""))
+    table.add_row("Version", record.get("version", ""))
+    table.add_row("Source", record.get("source", ""))
+    table.add_row("Status", record.get("status", ""))
+    table.add_row("Active", "✓" if record.get("active") else "")
+    table.add_row("Enabled", "✓" if record.get("enabled") else "")
+    table.add_row("Validation", record.get("validation_summary", ""))
+    table.add_row("Skills", str(len(record.get("skills", []))))
+    table.add_row("Tools", str(len(record.get("tools", []))))
+    table.add_row("Workflows", str(len(record.get("workflows", []))))
+    console.print(table)
+
+
 if __name__ == "__main__":
     app()
