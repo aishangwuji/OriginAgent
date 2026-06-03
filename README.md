@@ -1,7 +1,6 @@
 
 <div align="center">
   <p>
-    <a href="https://pepy.tech/project/OriginAgent"><img src="https://static.pepy.tech/badge/OriginAgent" alt="Downloads"></a>
     <img src="https://img.shields.io/badge/python-%E2%89%A53.11-blue" alt="Python">
     <img src="https://img.shields.io/badge/license-MIT-green" alt="License">
     <a href="https://github.com/aishangwuji/OriginAgent/graphs/commit-activity" target="_blank">
