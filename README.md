@@ -26,7 +26,7 @@
 - 
 ## 📦 安装
 
-### 从源码安装（推荐，获取最新功能）
+### 从源码安装
 
 ```bash
 git clone https://github.com/aishangwuji/OriginAgent.git
