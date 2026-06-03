@@ -1,0 +1,45 @@
+{
+  "version": 1,
+  "jobs": [
+    {
+      "id": "a175a2b3",
+      "name": "missing-grant",
+      "enabled": true,
+      "schedule": {
+        "kind": "every",
+        "atMs": null,
+        "everyMs": 60000,
+        "expr": null,
+        "tz": null
+      },
+      "payload": {
+        "kind": "agent_turn",
+        "message": "hello",
+        "deliver": false,
+        "channel": null,
+        "to": null,
+        "channelMeta": {},
+        "sessionKey": null,
+        "capabilitySnapshot": {},
+        "grantId": "missing-secret"
+      },
+      "state": {
+        "nextRunAtMs": 1778988912615,
+        "lastRunAtMs": 1778988852609,
+        "lastStatus": "error",
+        "lastError": "Capability grant is missing, expired, or revoked.",
+        "runHistory": [
+          {
+            "runAtMs": 1778988852609,
+            "status": "error",
+            "durationMs": 6,
+            "error": "Capability grant is missing, expired, or revoked."
+          }
+        ]
+      },
+      "createdAtMs": 1778988852604,
+      "updatedAtMs": 1778988852615,
+      "deleteAfterRun": false
+    }
+  ]
+}

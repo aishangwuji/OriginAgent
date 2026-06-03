@@ -1,0 +1,4 @@
+{"_type": "metadata", "key": "websocket:chat1"}
+{"role": "user", "content": "alpha", "timestamp": "2026-05-18T09:00:00"}
+{"role": "assistant", "content": "alpha alpha", "timestamp": "2026-05-18T09:00:00"}
+{"role": "assistant", "content": "alpha newest", "timestamp": "2026-05-19T09:00:00"}

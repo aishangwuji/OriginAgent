@@ -1,0 +1,384 @@
+{
+  "agents": {
+    "defaults": {
+      "workspace": "D:\\Demo\\OpenHome\\OpenHome\\.pytest-tmp\\originagent-full\\test_onboard_wizard_preserves_0\\workspace",
+      "model": "deepseek-chat",
+      "modelPreset": null,
+      "provider": "deepseek",
+      "maxTokens": 8192,
+      "contextWindowTokens": 65536,
+      "contextBlockLimit": null,
+      "temperature": 0.1,
+      "maxToolIterations": 200,
+      "maxConcurrentSubagents": 1,
+      "maxToolResultChars": 16000,
+      "providerRetryMode": "standard",
+      "toolHintMaxLength": 40,
+      "reasoningEffort": null,
+      "fallbackModels": [],
+      "auxiliary": {
+        "enabled": true,
+        "paymentCooldownS": 1800,
+        "transientCooldownS": 60,
+        "tasks": {}
+      },
+      "domainPacks": {
+        "enabled": true,
+        "disabled": [],
+        "active": [],
+        "maxCapabilityChars": 4000
+      },
+      "learning": {
+        "backgroundReview": {
+          "enabled": false,
+          "maxRecentMessages": 12,
+          "maxPromptChars": 16000,
+          "maxProposalsPerTurn": 8,
+          "maxConcurrentReviews": 1,
+          "allowedProposalTypes": [
+            "memory",
+            "fact",
+            "skill",
+            "workflow"
+          ]
+        },
+        "curator": {
+          "enabled": false,
+          "maxProposalsPerRun": 12
+        }
+      },
+      "timezone": "Asia/Shanghai",
+      "botName": "OriginAgent",
+      "botIcon": "OA",
+      "unifiedSession": false,
+      "disabledSkills": [],
+      "idleCompactAfterMinutes": 0,
+      "maxMessages": 120,
+      "consolidationRatio": 0.5,
+      "dream": {
+        "intervalH": 2,
+        "modelOverride": null,
+        "maxBatchSize": 20,
+        "maxIterations": 15,
+        "annotateLineAges": true
+      }
+    }
+  },
+  "channels": {
+    "sendProgress": true,
+    "sendToolHints": false,
+    "showReasoning": true,
+    "sendMaxRetries": 3,
+    "transcriptionProvider": "groq",
+    "transcriptionLanguage": null
+  },
+  "providers": {
+    "custom": {
+      "apiKey": null,
+      "apiBase": null,
+      "extraHeaders": null,
+      "extraBody": null
+    },
+    "azureOpenai": {
+      "apiKey": null,
+      "apiBase": null,
+      "extraHeaders": null,
+      "extraBody": null
+    },
+    "bedrock": {
+      "apiKey": null,
+      "apiBase": null,
+      "extraHeaders": null,
+      "extraBody": null,
+      "region": null,
+      "profile": null
+    },
+    "anthropic": {
+      "apiKey": null,
+      "apiBase": null,
+      "extraHeaders": null,
+      "extraBody": null
+    },
+    "openai": {
+      "apiKey": null,
+      "apiBase": null,
+      "extraHeaders": null,
+      "extraBody": null
+    },
+    "openrouter": {
+      "apiKey": null,
+      "apiBase": null,
+      "extraHeaders": null,
+      "extraBody": null
+    },
+    "huggingface": {
+      "apiKey": null,
+      "apiBase": null,
+      "extraHeaders": null,
+      "extraBody": null
+    },
+    "deepseek": {
+      "apiKey": null,
+      "apiBase": null,
+      "extraHeaders": null,
+      "extraBody": null
+    },
+    "groq": {
+      "apiKey": null,
+      "apiBase": null,
+      "extraHeaders": null,
+      "extraBody": null
+    },
+    "zhipu": {
+      "apiKey": null,
+      "apiBase": null,
+      "extraHeaders": null,
+      "extraBody": null
+    },
+    "dashscope": {
+      "apiKey": null,
+      "apiBase": null,
+      "extraHeaders": null,
+      "extraBody": null
+    },
+    "vllm": {
+      "apiKey": null,
+      "apiBase": null,
+      "extraHeaders": null,
+      "extraBody": null
+    },
+    "ollama": {
+      "apiKey": null,
+      "apiBase": null,
+      "extraHeaders": null,
+      "extraBody": null
+    },
+    "lmStudio": {
+      "apiKey": null,
+      "apiBase": null,
+      "extraHeaders": null,
+      "extraBody": null
+    },
+    "ovms": {
+      "apiKey": null,
+      "apiBase": null,
+      "extraHeaders": null,
+      "extraBody": null
+    },
+    "gemini": {
+      "apiKey": null,
+      "apiBase": null,
+      "extraHeaders": null,
+      "extraBody": null
+    },
+    "moonshot": {
+      "apiKey": null,
+      "apiBase": null,
+      "extraHeaders": null,
+      "extraBody": null
+    },
+    "minimax": {
+      "apiKey": null,
+      "apiBase": null,
+      "extraHeaders": null,
+      "extraBody": null
+    },
+    "minimaxAnthropic": {
+      "apiKey": null,
+      "apiBase": null,
+      "extraHeaders": null,
+      "extraBody": null
+    },
+    "mistral": {
+      "apiKey": null,
+      "apiBase": null,
+      "extraHeaders": null,
+      "extraBody": null
+    },
+    "stepfun": {
+      "apiKey": null,
+      "apiBase": null,
+      "extraHeaders": null,
+      "extraBody": null
+    },
+    "xiaomiMimo": {
+      "apiKey": null,
+      "apiBase": null,
+      "extraHeaders": null,
+      "extraBody": null
+    },
+    "longcat": {
+      "apiKey": null,
+      "apiBase": null,
+      "extraHeaders": null,
+      "extraBody": null
+    },
+    "aihubmix": {
+      "apiKey": null,
+      "apiBase": null,
+      "extraHeaders": null,
+      "extraBody": null
+    },
+    "siliconflow": {
+      "apiKey": null,
+      "apiBase": null,
+      "extraHeaders": null,
+      "extraBody": null
+    },
+    "volcengine": {
+      "apiKey": null,
+      "apiBase": null,
+      "extraHeaders": null,
+      "extraBody": null
+    },
+    "volcengineCodingPlan": {
+      "apiKey": null,
+      "apiBase": null,
+      "extraHeaders": null,
+      "extraBody": null
+    },
+    "byteplus": {
+      "apiKey": null,
+      "apiBase": null,
+      "extraHeaders": null,
+      "extraBody": null
+    },
+    "byteplusCodingPlan": {
+      "apiKey": null,
+      "apiBase": null,
+      "extraHeaders": null,
+      "extraBody": null
+    },
+    "qianfan": {
+      "apiKey": null,
+      "apiBase": null,
+      "extraHeaders": null,
+      "extraBody": null
+    },
+    "nvidia": {
+      "apiKey": null,
+      "apiBase": null,
+      "extraHeaders": null,
+      "extraBody": null
+    },
+    "atomicChat": {
+      "apiKey": null,
+      "apiBase": null,
+      "extraHeaders": null,
+      "extraBody": null
+    }
+  },
+  "api": {
+    "host": "127.0.0.1",
+    "port": 8900,
+    "timeout": 120.0
+  },
+  "gateway": {
+    "host": "127.0.0.1",
+    "port": 18790,
+    "heartbeat": {
+      "enabled": true,
+      "intervalS": 1800,
+      "keepRecentMessages": 8
+    }
+  },
+  "runtime": {
+    "profile": "default"
+  },
+  "security": {
+    "pairing": {
+      "enabled": false,
+      "ttlSeconds": 600,
+      "allowSelfApprove": false,
+      "approvalChannels": [
+        "cli",
+        "websocket"
+      ]
+    }
+  },
+  "tools": {
+    "sessionSearch": {
+      "enabled": true,
+      "backend": "auto",
+      "semanticEnabled": true,
+      "maxToolRefreshMs": 500,
+      "rebuildOnStart": false
+    },
+    "web": {
+      "enable": true,
+      "proxy": null,
+      "userAgent": null,
+      "search": {
+        "provider": "duckduckgo",
+        "apiKey": "",
+        "baseUrl": "",
+        "maxResults": 5,
+        "timeout": 30
+      },
+      "fetch": {
+        "useJinaReader": true
+      }
+    },
+    "contentRead": {
+      "enabled": true,
+      "providers": [
+        "generic",
+        "rss",
+        "github",
+        "hackernews"
+      ],
+      "maxChars": 50000,
+      "useJinaReader": true,
+      "rssEntryLimit": 10,
+      "hackernewsCommentLimit": 20
+    },
+    "exec": {
+      "enable": true,
+      "profile": "secure",
+      "allowUnsafeExec": false,
+      "shellSyntaxPolicy": "restricted",
+      "timeout": 60,
+      "pathAppend": "",
+      "sandbox": "",
+      "allowedEnvKeys": [],
+      "allowPatterns": [],
+      "denyPatterns": []
+    },
+    "my": {
+      "enable": true,
+      "allowSet": false
+    },
+    "imageGeneration": {
+      "enabled": false,
+      "provider": "openrouter",
+      "model": "openai/gpt-5.4-image-2",
+      "defaultAspectRatio": "1:1",
+      "defaultImageSize": "1K",
+      "maxImagesPerTurn": 4,
+      "saveDir": "generated"
+    },
+    "device": {
+      "enabled": false,
+      "lightingEnabled": false,
+      "mode": "dry_run",
+      "backend": "none"
+    },
+    "audit": {
+      "mode": "minimal",
+      "securityTools": [
+        "exec",
+        "message",
+        "web_fetch",
+        "cron",
+        "spawn",
+        "originagent_device_*",
+        "mcp_*"
+      ],
+      "securityOnPolicyDenial": true
+    },
+    "restrictToWorkspace": false,
+    "mcpServers": {},
+    "ssrfWhitelist": []
+  },
+  "modelPresets": {}
+}

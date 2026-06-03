@@ -1,0 +1,1 @@
+{"event_id": "review_event_4a6d44b62b8c4f95b84c16ede318cd83", "proposal_id": "review_bad_workflow", "status": "failed", "created_at": "2026-05-21T03:58:05.069065+00:00", "reason": "", "fact_id": null, "skill_name": null, "skill_path": null, "workflow_name": null, "workflow_path": null, "artifact": null, "error": "workflow artifact contains unsafe instructions"}

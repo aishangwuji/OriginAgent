@@ -1,0 +1,6 @@
+id: missing_bin
+name: Demo
+version: 0.1.0
+requires:
+  bins:
+    - definitely-not-originagent-bin

@@ -1,0 +1,3 @@
+{"cursor": 1, "timestamp": "2026-04-01 10:00", "content": "valid1"}
+{"cursor": "bad", "timestamp": "2026-04-01 10:01", "content": "corrupted"}
+{"cursor": 3, "timestamp": "2026-04-01 10:02", "content": "valid3"}

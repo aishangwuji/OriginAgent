@@ -1,0 +1,19 @@
+schema_version: 1
+name: command-workflow
+description: A command-applied review workflow.
+kind: manual_guide
+execution:
+  auto_run: false
+  creates_cron: false
+  calls_tools: false
+body: Use this workflow as a manual command review checklist.
+steps: []
+metadata:
+  OpenHome:
+    proposal_status: proposed
+    verification_status: unverified
+    review_proposal_id: review_workflow_apply
+    domain_id: core
+    created_by: background_review
+    source_session: websocket:chat1
+    source_turn_id: turn-1

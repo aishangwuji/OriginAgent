@@ -1,0 +1,3 @@
+{"event":"user","chat_id":"t-cmd","text":"/mcp"}
+{"event":"message","chat_id":"t-cmd","text":"## MCP Servers\n\nNo MCP servers are configured."}
+{"event":"turn_end","chat_id":"t-cmd"}

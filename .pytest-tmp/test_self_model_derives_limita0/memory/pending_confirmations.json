@@ -1,0 +1,26 @@
+{
+  "confirmations": [
+    {
+      "action": "test_action",
+      "action_payload": {},
+      "confirmation_id": "confirmation_secret",
+      "consumed_at": null,
+      "created_at": "2026-05-20T08:41:28.015414+00:00",
+      "decision_reason": "",
+      "expires_at": "2026-05-20T08:46:28.015414+00:00",
+      "idempotency_key": null,
+      "kind": "action_confirmation",
+      "metadata": {},
+      "presence_status": "unknown",
+      "prompt": "Need confirmation for token [REDACTED_SECRET]",
+      "related_fact_ids": [],
+      "requested_by": "user",
+      "requires_presence_empty": false,
+      "risk": "high",
+      "scope": "general",
+      "status": "pending",
+      "trigger": "user_initiated",
+      "uses_facts": []
+    }
+  ]
+}

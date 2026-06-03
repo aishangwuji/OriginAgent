@@ -1,0 +1,4 @@
+{"cursor": 100, "timestamp": "2026-04-01 10:00", "content": "high"}
+{"cursor": 5,   "timestamp": "2026-04-01 10:01", "content": "out of order"}
+{"cursor": "poison", "timestamp": "2026-04-01 10:02", "content": "tail corrupt"}
+{"cursor": 101, "timestamp": "2026-05-21 11:58", "content": "safe next"}

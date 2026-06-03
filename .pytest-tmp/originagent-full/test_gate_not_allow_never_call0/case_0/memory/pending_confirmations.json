@@ -1,0 +1,26 @@
+{
+  "confirmations": [
+    {
+      "action": "turn_on",
+      "action_payload": {},
+      "confirmation_id": "confirmation_1ddc70b30625",
+      "consumed_at": null,
+      "created_at": "2026-05-15T12:00:00+00:00",
+      "decision_reason": "ask_confirmation reason",
+      "expires_at": "2026-05-15T12:10:00+00:00",
+      "idempotency_key": null,
+      "kind": "action_confirmation",
+      "metadata": {},
+      "presence_status": "unknown",
+      "prompt": "Occupancy is unknown, so 'turn_on' (home.living_room.light) will not run automatically. Continue now?",
+      "related_fact_ids": [],
+      "requested_by": "alice",
+      "requires_presence_empty": false,
+      "risk": "low",
+      "scope": "home.living_room.light",
+      "status": "pending",
+      "trigger": "user_initiated",
+      "uses_facts": []
+    }
+  ]
+}

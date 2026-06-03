@@ -1,0 +1,85 @@
+{
+  "version": 1,
+  "jobs": [
+    {
+      "id": "ea764650",
+      "name": "heartbeat",
+      "enabled": true,
+      "schedule": {
+        "kind": "every",
+        "atMs": null,
+        "everyMs": 100,
+        "expr": null,
+        "tz": null
+      },
+      "payload": {
+        "kind": "agent_turn",
+        "message": "tick",
+        "deliver": false,
+        "channel": null,
+        "to": null,
+        "channelMeta": {},
+        "sessionKey": null,
+        "capabilitySnapshot": {},
+        "grantId": null
+      },
+      "state": {
+        "nextRunAtMs": 1778988568198,
+        "lastRunAtMs": 1778988568098,
+        "lastStatus": "ok",
+        "lastError": null,
+        "runHistory": [
+          {
+            "runAtMs": 1778988568098,
+            "status": "ok",
+            "durationMs": 0,
+            "error": null
+          }
+        ]
+      },
+      "createdAtMs": 1778988567979,
+      "updatedAtMs": 1778988568098,
+      "deleteAfterRun": false
+    },
+    {
+      "id": "b2b2bd53",
+      "name": "external",
+      "enabled": true,
+      "schedule": {
+        "kind": "every",
+        "atMs": null,
+        "everyMs": 100,
+        "expr": null,
+        "tz": null
+      },
+      "payload": {
+        "kind": "agent_turn",
+        "message": "ping",
+        "deliver": false,
+        "channel": null,
+        "to": null,
+        "channelMeta": {},
+        "sessionKey": null,
+        "capabilitySnapshot": {},
+        "grantId": null
+      },
+      "state": {
+        "nextRunAtMs": 1778988568252,
+        "lastRunAtMs": 1778988568152,
+        "lastStatus": "ok",
+        "lastError": null,
+        "runHistory": [
+          {
+            "runAtMs": 1778988568152,
+            "status": "ok",
+            "durationMs": 0,
+            "error": null
+          }
+        ]
+      },
+      "createdAtMs": 1778988568050,
+      "updatedAtMs": 1778988568152,
+      "deleteAfterRun": false
+    }
+  ]
+}

@@ -1,0 +1,57 @@
+{
+  "version": 1,
+  "jobs": [
+    {
+      "id": "f65fc3e1",
+      "name": "fast",
+      "enabled": true,
+      "schedule": {
+        "kind": "every",
+        "atMs": null,
+        "everyMs": 100,
+        "expr": null,
+        "tz": null
+      },
+      "payload": {
+        "kind": "agent_turn",
+        "message": "hello",
+        "deliver": false,
+        "channel": null,
+        "to": null,
+        "channelMeta": {},
+        "sessionKey": null,
+        "capabilitySnapshot": {},
+        "grantId": null
+      },
+      "state": {
+        "nextRunAtMs": 1778988568036,
+        "lastRunAtMs": 1778988567936,
+        "lastStatus": "ok",
+        "lastError": null,
+        "runHistory": [
+          {
+            "runAtMs": 1778988567719,
+            "status": "ok",
+            "durationMs": 0,
+            "error": null
+          },
+          {
+            "runAtMs": 1778988567824,
+            "status": "ok",
+            "durationMs": 0,
+            "error": null
+          },
+          {
+            "runAtMs": 1778988567936,
+            "status": "ok",
+            "durationMs": 0,
+            "error": null
+          }
+        ]
+      },
+      "createdAtMs": 1778988567607,
+      "updatedAtMs": 1778988567936,
+      "deleteAfterRun": false
+    }
+  ]
+}

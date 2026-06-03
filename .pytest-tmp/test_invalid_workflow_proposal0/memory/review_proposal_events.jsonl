@@ -1,0 +1,1 @@
+{"event_id": "review_event_f5848a81231b42d790d1ef4b3c303975", "proposal_id": "review_bad_workflow", "status": "failed", "created_at": "2026-05-20T08:40:38.967241+00:00", "reason": "", "fact_id": null, "skill_name": null, "skill_path": null, "workflow_name": null, "workflow_path": null, "artifact": null, "error": "workflow name must not contain path traversal or drive prefixes"}

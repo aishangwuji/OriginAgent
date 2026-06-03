@@ -1,0 +1,36 @@
+{
+  "version": 1,
+  "jobs": [
+    {
+      "id": "399f0567",
+      "name": "Failed job",
+      "enabled": true,
+      "schedule": {
+        "kind": "cron",
+        "atMs": null,
+        "everyMs": null,
+        "expr": "0 9 * * *",
+        "tz": "UTC"
+      },
+      "payload": {
+        "kind": "agent_turn",
+        "message": "test",
+        "deliver": false,
+        "channel": null,
+        "to": null,
+        "channelMeta": {},
+        "sessionKey": null
+      },
+      "state": {
+        "nextRunAtMs": 1778749200000,
+        "lastRunAtMs": 1773673200000,
+        "lastStatus": "error",
+        "lastError": "timeout",
+        "runHistory": []
+      },
+      "createdAtMs": 1778730766281,
+      "updatedAtMs": 1778730766281,
+      "deleteAfterRun": false
+    }
+  ]
+}

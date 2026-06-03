@@ -1,0 +1,21 @@
+id: research
+name: Research
+version: 0.1.0
+
+skills:
+  - source-synthesis
+  - Missing Skill
+  - missing-file
+tools:
+  - id: research_search
+    module: tools.search
+    class: ResearchSearchTool
+    permissions: []
+    audit: minimal
+  - id: bad-prefix
+    module: tools.search
+    class: ResearchSearchTool
+    permissions: []
+  - id: research_missing_permissions
+    module: tools.search
+    class: ResearchSearchTool

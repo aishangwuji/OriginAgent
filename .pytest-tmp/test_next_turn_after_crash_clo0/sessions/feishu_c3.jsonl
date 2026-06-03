@@ -1,0 +1,5 @@
+{"_type": "metadata", "key": "feishu:c3", "created_at": "2026-05-20T16:41:01.935929", "updated_at": "2026-05-20T16:41:02.043453", "metadata": {}, "last_consolidated": 0}
+{"role": "user", "content": "old question", "timestamp": "2026-05-20T16:41:01.935929"}
+{"role": "assistant", "content": "Error: Task interrupted before a response was generated.", "timestamp": "2026-05-20T16:41:01.937810"}
+{"role": "user", "content": "new question", "timestamp": "2026-05-20T16:41:02.038968"}
+{"role": "assistant", "content": "new answer", "timestamp": "2026-05-20T16:41:02.043453"}

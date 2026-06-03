@@ -1,0 +1,29 @@
+schema_version: 1
+name: reusable-restart-checklist
+description: Check service status before restarting.
+kind: manual_guide
+execution:
+  auto_run: false
+  creates_cron: false
+  calls_tools: false
+body: 'Check service status before restarting.
+
+
+  ## Rationale
+
+  This process came up repeatedly.
+
+
+  ## Evidence
+
+  - Run status before restart.'
+steps: []
+metadata:
+  OriginAgent:
+    proposal_status: proposed
+    verification_status: unverified
+    review_proposal_id: review_legacy_workflow
+    domain_id: core
+    created_by: background_review
+    source_session: websocket:chat1
+    source_turn_id: turn-1

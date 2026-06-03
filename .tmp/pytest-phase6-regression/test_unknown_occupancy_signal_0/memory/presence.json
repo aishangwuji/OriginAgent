@@ -1,0 +1,20 @@
+{
+  "people": {
+    "alice": {
+      "confidence": 0.95,
+      "expires_at": null,
+      "person_id": "alice",
+      "role": "resident",
+      "source": "manual",
+      "status": "away",
+      "updated_at": "2026-05-16T12:27:08.070425"
+    }
+  },
+  "unknown_occupancy": {
+    "confidence": 0.9,
+    "expires_at": "2026-05-15T11:00:00+00:00",
+    "source": "door_sensor",
+    "status": "unknown",
+    "updated_at": "2026-05-16T12:27:08.101538"
+  }
+}

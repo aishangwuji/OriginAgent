@@ -1,0 +1,26 @@
+{
+  "confirmations": [
+    {
+      "action": "alert",
+      "action_payload": {},
+      "confirmation_id": "confirmation_56d395e3293d",
+      "consumed_at": null,
+      "created_at": "2026-05-15T12:00:00+00:00",
+      "decision_reason": "notification only",
+      "expires_at": "2026-05-16T12:00:00+00:00",
+      "idempotency_key": null,
+      "kind": "notify_only",
+      "metadata": {},
+      "presence_status": "unknown",
+      "prompt": "我会通知你：'alert' (home.entry.lock)。",
+      "related_fact_ids": [],
+      "requested_by": null,
+      "requires_presence_empty": false,
+      "risk": "low",
+      "scope": "home.entry.lock",
+      "status": "notified",
+      "trigger": "user_initiated",
+      "uses_facts": []
+    }
+  ]
+}

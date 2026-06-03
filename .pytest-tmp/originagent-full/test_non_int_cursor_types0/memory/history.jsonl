@@ -1,0 +1,5 @@
+{"cursor": 3, "timestamp": "2026-04-01 10:00", "content": "valid"}
+{"cursor": 3.5, "timestamp": "2026-04-01 10:01", "content": "float"}
+{"cursor": null, "timestamp": "2026-04-01 10:02", "content": "null"}
+{"cursor": [1,2], "timestamp": "2026-04-01 10:03", "content": "list"}
+{"cursor": 4, "timestamp": "2026-05-21 11:58", "content": "handles weird types"}

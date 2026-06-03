@@ -1,0 +1,9 @@
+{"_type": "metadata", "key": "cli:expired_idle", "created_at": "2026-05-20T16:40:35.362908", "updated_at": "2026-05-20T16:40:35.369684", "metadata": {"_recent_summaries": [{"text": "Summary.", "history_cursor": 1, "created_at": "2026-05-20T16:40:35.369684", "last_active": "2026-05-20T16:20:35.362908"}]}, "last_consolidated": 0}
+{"role": "user", "content": "old_a user 2", "timestamp": "2026-05-20T16:40:35.362908"}
+{"role": "assistant", "content": "old_a assistant 2", "timestamp": "2026-05-20T16:40:35.362908"}
+{"role": "user", "content": "old_a user 3", "timestamp": "2026-05-20T16:40:35.362908"}
+{"role": "assistant", "content": "old_a assistant 3", "timestamp": "2026-05-20T16:40:35.362908"}
+{"role": "user", "content": "old_a user 4", "timestamp": "2026-05-20T16:40:35.362908"}
+{"role": "assistant", "content": "old_a assistant 4", "timestamp": "2026-05-20T16:40:35.362908"}
+{"role": "user", "content": "old_a user 5", "timestamp": "2026-05-20T16:40:35.362908"}
+{"role": "assistant", "content": "old_a assistant 5", "timestamp": "2026-05-20T16:40:35.362908"}

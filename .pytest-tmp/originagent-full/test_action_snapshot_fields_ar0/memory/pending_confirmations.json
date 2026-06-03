@@ -1,0 +1,31 @@
+{
+  "confirmations": [
+    {
+      "action": "unlock",
+      "action_payload": {
+        "nested": "{\"safe\":\"ok\"}",
+        "note": "password=[REDACTED_SECRET]"
+      },
+      "confirmation_id": "confirmation_dda8a5545cd9",
+      "consumed_at": null,
+      "created_at": "2026-05-15T12:00:00+00:00",
+      "decision_reason": "high-risk user action needs confirmation with unknown occupancy",
+      "expires_at": "2026-05-15T12:02:00+00:00",
+      "idempotency_key": "idem-1",
+      "kind": "action_confirmation",
+      "metadata": {},
+      "presence_status": "unknown",
+      "prompt": "This action requires confirming the space is empty, but that is not established. Continue with 'unlock' (home.entry.lock) just this once?",
+      "related_fact_ids": [],
+      "requested_by": null,
+      "requires_presence_empty": true,
+      "risk": "high",
+      "scope": "home.entry.lock",
+      "status": "pending",
+      "trigger": "user_initiated",
+      "uses_facts": [
+        "fact_policy"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,6 @@
+id: missing_env
+name: Demo
+version: 0.1.0
+requires:
+  env:
+    - OPENHOME_TEST_MISSING_ENV

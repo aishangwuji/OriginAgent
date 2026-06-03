@@ -1,0 +1,38 @@
+{
+  "version": 1,
+  "jobs": [
+    {
+      "id": "29a5c21d",
+      "name": "granted",
+      "enabled": true,
+      "schedule": {
+        "kind": "every",
+        "atMs": null,
+        "everyMs": 60000,
+        "expr": null,
+        "tz": null
+      },
+      "payload": {
+        "kind": "agent_turn",
+        "message": "hello",
+        "deliver": false,
+        "channel": null,
+        "to": null,
+        "channelMeta": {},
+        "sessionKey": null,
+        "capabilitySnapshot": {},
+        "grantId": "grant-secret-1"
+      },
+      "state": {
+        "nextRunAtMs": 1779336056690,
+        "lastRunAtMs": null,
+        "lastStatus": null,
+        "lastError": null,
+        "runHistory": []
+      },
+      "createdAtMs": 1779335996690,
+      "updatedAtMs": 1779335996690,
+      "deleteAfterRun": false
+    }
+  ]
+}

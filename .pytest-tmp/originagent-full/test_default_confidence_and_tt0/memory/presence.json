@@ -1,0 +1,13 @@
+{
+  "people": {
+    "alice": {
+      "confidence": 0.7,
+      "expires_at": "2026-05-15T12:20:00+00:00",
+      "person_id": "alice",
+      "role": "resident",
+      "source": "wifi_presence",
+      "status": "home",
+      "updated_at": "2026-05-15T12:00:00+00:00"
+    }
+  }
+}

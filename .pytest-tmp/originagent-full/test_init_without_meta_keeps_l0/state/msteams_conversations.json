@@ -1,0 +1,7 @@
+{
+  "conv-legacy": {
+    "service_url": "https://smba.trafficmanager.net/amer/",
+    "conversation_id": "conv-legacy",
+    "conversation_type": "personal"
+  }
+}

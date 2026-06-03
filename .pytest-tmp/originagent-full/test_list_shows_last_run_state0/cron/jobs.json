@@ -1,0 +1,38 @@
+{
+  "version": 1,
+  "jobs": [
+    {
+      "id": "f22e8dba",
+      "name": "Stateful job",
+      "enabled": true,
+      "schedule": {
+        "kind": "cron",
+        "atMs": null,
+        "everyMs": null,
+        "expr": "0 9 * * *",
+        "tz": "UTC"
+      },
+      "payload": {
+        "kind": "agent_turn",
+        "message": "test",
+        "deliver": false,
+        "channel": null,
+        "to": null,
+        "channelMeta": {},
+        "sessionKey": null,
+        "capabilitySnapshot": {},
+        "grantId": null
+      },
+      "state": {
+        "nextRunAtMs": 1779354000000,
+        "lastRunAtMs": 1773673200000,
+        "lastStatus": "ok",
+        "lastError": null,
+        "runHistory": []
+      },
+      "createdAtMs": 1779335980612,
+      "updatedAtMs": 1779335980612,
+      "deleteAfterRun": false
+    }
+  ]
+}

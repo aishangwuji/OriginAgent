@@ -1,0 +1,13 @@
+{
+  "people": {
+    "guest": {
+      "confidence": 0.95,
+      "expires_at": null,
+      "person_id": "guest",
+      "role": "guest",
+      "source": "manual",
+      "status": "away",
+      "updated_at": "2026-05-16T12:27:07.992155"
+    }
+  }
+}

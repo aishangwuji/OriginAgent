@@ -1,0 +1,6 @@
+{"event":"delta","chat_id":"28b07930-201d-4ba8-b832-027db26f44bf","text":"A1","stream_id":"sa"}
+{"event":"delta","chat_id":"28b07930-201d-4ba8-b832-027db26f44bf","text":"B1","stream_id":"sb"}
+{"event":"delta","chat_id":"28b07930-201d-4ba8-b832-027db26f44bf","text":"A2","stream_id":"sa"}
+{"event":"stream_end","chat_id":"28b07930-201d-4ba8-b832-027db26f44bf","stream_id":"sa"}
+{"event":"delta","chat_id":"28b07930-201d-4ba8-b832-027db26f44bf","text":"B2","stream_id":"sb"}
+{"event":"stream_end","chat_id":"28b07930-201d-4ba8-b832-027db26f44bf","stream_id":"sb"}

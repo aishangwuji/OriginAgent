@@ -1,0 +1,7 @@
+{"_type": "metadata", "key": "cli:multi", "created_at": "2026-05-21T11:58:33.083833", "updated_at": "2026-05-21T11:58:33.405249", "metadata": {}, "last_consolidated": 0}
+{"role": "assistant", "content": "subagent result 0", "timestamp": "2026-05-21T11:58:33.083833", "sender_id": "subagent", "injected_event": "subagent_result", "subagent_task_id": "sub-0"}
+{"role": "assistant", "content": "ack", "timestamp": "2026-05-21T11:58:33.188011"}
+{"role": "assistant", "content": "subagent result 1", "timestamp": "2026-05-21T11:58:33.190013", "sender_id": "subagent", "injected_event": "subagent_result", "subagent_task_id": "sub-1"}
+{"role": "assistant", "content": "ack", "timestamp": "2026-05-21T11:58:33.299912"}
+{"role": "assistant", "content": "subagent result 2", "timestamp": "2026-05-21T11:58:33.302142", "sender_id": "subagent", "injected_event": "subagent_result", "subagent_task_id": "sub-2"}
+{"role": "assistant", "content": "ack", "timestamp": "2026-05-21T11:58:33.405249"}

@@ -1,0 +1,13 @@
+{
+  "people": {
+    "alice": {
+      "confidence": 0.95,
+      "expires_at": null,
+      "person_id": "alice",
+      "role": "resident",
+      "source": "manual",
+      "status": "home",
+      "updated_at": "2026-05-20T08:40:23.500550+00:00"
+    }
+  }
+}

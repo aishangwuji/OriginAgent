@@ -1,0 +1,25 @@
+0000000000000000000000000000000000000000 bd0ba745dd016e923853575ffff45e4eed8fa482 ASWJ <122414131+aishangwuji@users.noreply.github.com> 1778554678 +0800	clone: from https://github.com/HKUDS/nanobot.git
+bd0ba745dd016e923853575ffff45e4eed8fa482 aaf456a55f551160b2a5277ad188054f2c8f507e ASWJ <122414131+aishangwuji@users.noreply.github.com> 1778752002 +0800	commit: harden memory reliability
+aaf456a55f551160b2a5277ad188054f2c8f507e 314e8d1cc725a34fb0dfd13cf1fc4f13487b6830 ASWJ <122414131+aishangwuji@users.noreply.github.com> 1778752418 +0800	commit (amend): harden memory reliability
+314e8d1cc725a34fb0dfd13cf1fc4f13487b6830 6df1d6150521195ed2fb6b7a3ce3257366aa75d7 ASWJ <122414131+aishangwuji@users.noreply.github.com> 1778810690 +0800	commit: harden memory hygiene and continuity
+6df1d6150521195ed2fb6b7a3ce3257366aa75d7 e200397364f52b06c90e90400bb3de0884a02b26 ASWJ <122414131+aishangwuji@users.noreply.github.com> 1778811173 +0800	commit (amend): harden memory hygiene and continuity
+e200397364f52b06c90e90400bb3de0884a02b26 3b861b1bae5944591789117cf6cb02bcaefb0ad7 ASWJ <122414131+aishangwuji@users.noreply.github.com> 1778813732 +0800	commit: add structured fact store for memory
+3b861b1bae5944591789117cf6cb02bcaefb0ad7 dc71a73c754ec109cf26315be1e003ede99a21e2 ASWJ <122414131+aishangwuji@users.noreply.github.com> 1778814487 +0800	commit (amend): add structured fact store for memory
+dc71a73c754ec109cf26315be1e003ede99a21e2 bb393d93d125a5d10cd7572dc77e445c21d303ca ASWJ <122414131+aishangwuji@users.noreply.github.com> 1778827620 +0800	commit: route dream memory updates through fact proposals
+bb393d93d125a5d10cd7572dc77e445c21d303ca 7bcd021fd45dce2027ed45367f918928dfb7b692 ASWJ <122414131+aishangwuji@users.noreply.github.com> 1778832468 +0800	commit: add presence-aware action safety gate
+7bcd021fd45dce2027ed45367f918928dfb7b692 d664cb37ada722d7c8c4f939d162ccdedaa17f76 ASWJ <122414131+aishangwuji@users.noreply.github.com> 1778832933 +0800	commit: fix presence safety edge cases
+d664cb37ada722d7c8c4f939d162ccdedaa17f76 80490a07f59b429e5c91466107145b84fded562e ASWJ <122414131+aishangwuji@users.noreply.github.com> 1778834686 +0800	commit: add presence evidence adapters
+80490a07f59b429e5c91466107145b84fded562e be2586e4c035c70df00387995c31ff39c36c16bd ASWJ <122414131+aishangwuji@users.noreply.github.com> 1778835081 +0800	commit: fix weak presence evidence overwrite
+be2586e4c035c70df00387995c31ff39c36c16bd c31716e51bc5b65361b5a4b715c1b57522f8beb2 ASWJ <122414131+aishangwuji@users.noreply.github.com> 1778836053 +0800	commit: add low-friction action confirmations
+c31716e51bc5b65361b5a4b715c1b57522f8beb2 409b4f7490d7cc119d1f3f3e66403538855ee37f ASWJ <122414131+aishangwuji@users.noreply.github.com> 1778836791 +0800	commit: fix confirmation reply safety
+409b4f7490d7cc119d1f3f3e66403538855ee37f 0930aa1b4b1ef94977e8053c545f7f556aa3f33e ASWJ <122414131+aishangwuji@users.noreply.github.com> 1778838379 +0800	commit: add safety-gated action runtime
+0930aa1b4b1ef94977e8053c545f7f556aa3f33e ef7968afa9a0306f5bb0bd56eb5e2e653aa2b710 ASWJ <122414131+aishangwuji@users.noreply.github.com> 1778848374 +0800	commit: fix action runtime confirmation failures
+ef7968afa9a0306f5bb0bd56eb5e2e653aa2b710 e51a72349b851ecfc16ff2edc30a9fd37672505a ASWJ <122414131+aishangwuji@users.noreply.github.com> 1778900387 +0800	commit: add confirmed action resume
+e51a72349b851ecfc16ff2edc30a9fd37672505a e975bc6bb6a2000e66be406e7248cf0ccc94063e ASWJ <122414131+aishangwuji@users.noreply.github.com> 1778901418 +0800	commit: add household permission model
+e975bc6bb6a2000e66be406e7248cf0ccc94063e 6383ecca7e0335682144585e82aabecca25f7588 ASWJ <122414131+aishangwuji@users.noreply.github.com> 1778903329 +0800	commit: add audit explainability logs
+6383ecca7e0335682144585e82aabecca25f7588 3557fca4b2984481d660f7722cd264dc3128acaf ASWJ <122414131+aishangwuji@users.noreply.github.com> 1778903685 +0800	commit: fix audit expiry logging on resume
+3557fca4b2984481d660f7722cd264dc3128acaf 4be08fe9ff6644a15f28d0b7997ad1ffd4ebba98 ASWJ <122414131+aishangwuji@users.noreply.github.com> 1778905726 +0800	commit: add typed device action schema
+4be08fe9ff6644a15f28d0b7997ad1ffd4ebba98 01c9340cea41780341bb7dbd0c59a929496556f0 ASWJ <122414131+aishangwuji@users.noreply.github.com> 1778910269 +0800	commit: add low-risk lighting device pilot
+01c9340cea41780341bb7dbd0c59a929496556f0 d27a56a17697bea34dcebd126b5ebbf1f320e9da ASWJ <122414131+aishangwuji@users.noreply.github.com> 1778920672 +0800	commit: enforce typed markers in low-risk backend
+d27a56a17697bea34dcebd126b5ebbf1f320e9da fbed25b13dbe1cf345242c99d76b68413d13fd03 ASWJ <122414131+aishangwuji@users.noreply.github.com> 1778921157 +0800	commit: add local lighting pilot harness
+fbed25b13dbe1cf345242c99d76b68413d13fd03 515b48cef165f7ac2cf740a7a60598ae59e59226 ASWJ <122414131+aishangwuji@users.noreply.github.com> 1778921621 +0800	commit: polish lighting pilot demo output

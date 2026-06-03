@@ -1,0 +1,5 @@
+{"_type": "metadata", "key": "test:mixed", "created_at": "2026-05-21T11:58:47.814481", "updated_at": "2026-05-21T11:58:47.814481", "metadata": {}, "last_consolidated": 0}
+BROKEN
+{"role": "user", "content": "msg1"}
+{"role": "assistant", "content": "broken
+{"role": "user", "content": "msg2"}

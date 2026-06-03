@@ -1,0 +1,1 @@
+{"event_id": "review_event_492c1200d348465a9a30495918c49287", "proposal_id": "review_bad_skill", "status": "failed", "created_at": "2026-05-21T03:58:04.912672+00:00", "reason": "", "fact_id": null, "skill_name": null, "skill_path": null, "workflow_name": null, "workflow_path": null, "artifact": null, "error": "skill name must match ^[a-z0-9][a-z0-9-]{0,63}$"}

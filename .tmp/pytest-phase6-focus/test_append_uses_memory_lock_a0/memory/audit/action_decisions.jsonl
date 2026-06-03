@@ -1,0 +1,1 @@
+{"action": null, "action_id": "action_1", "actor_id": null, "confirmation_id": null, "created_at": "2026-05-16T12:00:00+00:00", "decision": "denied", "event_id": "audit_c3be1ad5f032", "event_type": "action_decision", "metadata": {}, "reason": "no", "risk": null, "scope": null, "trigger": null}

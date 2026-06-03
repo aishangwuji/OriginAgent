@@ -1,0 +1,2 @@
+{"_type": "metadata", "key": "websocket:c-media", "created_at": "2026-05-20T16:41:00.693232", "updated_at": "2026-05-20T16:41:00.804622", "metadata": {"pending_user_turn": true}, "last_consolidated": 0}
+{"role": "user", "content": "look", "timestamp": "2026-05-20T16:41:00.804622", "media": ["D:\\Demo\\OpenHome\\OpenHome\\.pytest-tmp\\test_process_message_persists_1\\uuid-1.png", "D:\\Demo\\OpenHome\\OpenHome\\.pytest-tmp\\test_process_message_persists_1\\uuid-2.png"]}

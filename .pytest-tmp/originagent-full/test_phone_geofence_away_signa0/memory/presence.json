@@ -1,0 +1,22 @@
+{
+  "people": {
+    "alice": {
+      "confidence": 0.85,
+      "expires_at": "2026-05-21T04:27:49.745261+00:00",
+      "person_id": "alice",
+      "role": "admin",
+      "source": "phone_geofence",
+      "status": "away",
+      "updated_at": "2026-05-21T03:57:49.745261+00:00"
+    },
+    "bob": {
+      "confidence": 0.85,
+      "expires_at": "2026-05-21T04:27:49.749255+00:00",
+      "person_id": "bob",
+      "role": "resident",
+      "source": "phone_geofence",
+      "status": "away",
+      "updated_at": "2026-05-21T03:57:49.749255+00:00"
+    }
+  }
+}

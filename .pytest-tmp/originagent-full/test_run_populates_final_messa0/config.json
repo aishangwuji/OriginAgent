@@ -1,0 +1,1 @@
+{"providers": {"openrouter": {"apiKey": "sk-test-key"}}, "agents": {"defaults": {"provider": "openrouter", "model": "openai/gpt-4.1"}}}

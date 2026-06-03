@@ -1,0 +1,1 @@
+{"providers": {"groq": {"apiKey": "${TEST_API_KEY}"}}}

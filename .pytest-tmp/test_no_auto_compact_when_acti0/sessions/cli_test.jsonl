@@ -1,0 +1,4 @@
+{"_type": "metadata", "key": "cli:test", "created_at": "2026-05-20T16:40:29.886637", "updated_at": "2026-05-20T16:40:30.106802", "metadata": {}, "last_consolidated": 0}
+{"role": "user", "content": "recent message", "timestamp": "2026-05-20T16:40:29.886637"}
+{"role": "user", "content": "new msg", "timestamp": "2026-05-20T16:40:30.099079"}
+{"role": "assistant", "content": "ok", "timestamp": "2026-05-20T16:40:30.106802"}

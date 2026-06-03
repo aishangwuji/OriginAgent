@@ -1,0 +1,8 @@
+id: research
+name: Research
+version: 0.1.0
+tools:
+  - id: research_search
+    module: tools.search
+    class: ResearchSearchTool
+    permissions: []

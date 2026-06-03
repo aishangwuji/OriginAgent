@@ -1,0 +1,32 @@
+{
+  "confirmations": [
+    {
+      "action": "unlock",
+      "action_payload": {
+        "level": "1",
+        "nested": "{\"safe\":\"ok\"}",
+        "note": "password=[REDACTED_SECRET]"
+      },
+      "confirmation_id": "confirmation_94a047dd0e96",
+      "consumed_at": "2030-01-01T12:00:00+00:00",
+      "created_at": "2030-01-01T12:00:00+00:00",
+      "decision_reason": "ask_confirmation reason",
+      "expires_at": "2030-01-01T12:02:00+00:00",
+      "idempotency_key": "resume-1",
+      "kind": "action_confirmation",
+      "metadata": {},
+      "presence_status": "unknown",
+      "prompt": "这个动作需要确认家中无人，但我现在无法确认。是否仅本次继续'unlock' (home.entry.lock)？",
+      "related_fact_ids": [],
+      "requested_by": "alice",
+      "requires_presence_empty": true,
+      "risk": "high",
+      "scope": "home.entry.lock",
+      "status": "confirmed_once",
+      "trigger": "user_initiated",
+      "uses_facts": [
+        "fact_policy"
+      ]
+    }
+  ]
+}

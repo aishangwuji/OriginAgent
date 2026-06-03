@@ -1,0 +1,10 @@
+{
+  "conv-123": {
+    "service_url": "https://smba.trafficmanager.net/amer/",
+    "conversation_id": "conv-123",
+    "bot_id": "28:bot-id",
+    "activity_id": "activity-1",
+    "conversation_type": "personal",
+    "tenant_id": "tenant-id"
+  }
+}

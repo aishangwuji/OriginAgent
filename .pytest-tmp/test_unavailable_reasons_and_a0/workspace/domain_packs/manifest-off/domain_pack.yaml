@@ -1,0 +1,4 @@
+id: manifest_off
+name: Demo
+version: 0.1.0
+enabled: false

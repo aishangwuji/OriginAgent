@@ -1,0 +1,26 @@
+{
+  "confirmations": [
+    {
+      "action": "unlock",
+      "action_payload": {},
+      "confirmation_id": "confirmation_00cfacde96a4",
+      "consumed_at": null,
+      "created_at": "2026-05-15T12:00:00+00:00",
+      "decision_reason": "high-risk user action needs confirmation with unknown occupancy",
+      "expires_at": "2026-05-15T12:02:00+00:00",
+      "idempotency_key": null,
+      "kind": "action_confirmation",
+      "metadata": {},
+      "presence_status": "unknown",
+      "prompt": "Occupancy is unknown, so 'unlock' (home.entry.lock) will not run automatically. Continue now?",
+      "related_fact_ids": [],
+      "requested_by": null,
+      "requires_presence_empty": false,
+      "risk": "high",
+      "scope": "home.entry.lock",
+      "status": "rejected",
+      "trigger": "user_initiated",
+      "uses_facts": []
+    }
+  ]
+}

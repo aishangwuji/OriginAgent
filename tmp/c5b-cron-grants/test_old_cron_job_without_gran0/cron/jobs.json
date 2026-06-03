@@ -1,0 +1,1 @@
+{"version": 1, "jobs": [{"id": "old", "name": "old", "enabled": true, "schedule": {"kind": "every", "everyMs": 60000}, "payload": {"kind": "agent_turn", "message": "hello", "capabilitySnapshot": {"can_exec": true}}, "state": {}, "createdAtMs": 1, "updatedAtMs": 1}]}

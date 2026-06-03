@@ -1,0 +1,14 @@
+{"event":"user","chat_id":"chat-1","text":"hello"}
+{"event":"message","chat_id":"chat-1","text":"hello\n\n1. Yes\n2. No","buttons":[["Yes","No"]],"button_prompt":"hello","media":["/tmp/a.png"],"reply_to":"m1"}
+{"event":"message","chat_id":"chat-1","text":"video","media":["D:\\Demo\\OpenHome\\OpenHome\\.pytest-tmp\\originagent-full\\test_send_stages_external_medi0\\clip.mp4"],"media_urls":[{"url":"/api/media/6WF-LmoLFeigMpmGas3opw/d2Vic29ja2V0L2I4ZjczZTQ0N2NkMi1jbGlwLm1wNA","name":"clip.mp4"}]}
+{"event":"message","chat_id":"chat-1","text":"hello"}
+{"event":"delta","chat_id":"chat-1","text":"chunk","stream_id":"s1"}
+{"event":"delta","chat_id":"chat-1","text":"part","stream_id":"sid"}
+{"event":"stream_end","chat_id":"chat-1","stream_id":"sid"}
+{"event":"message","chat_id":"chat-1","text":"progress panel","agent_ui":{"kind":"panel","data":{"version":1,"event":"tick","id":"r1"}},"kind":"progress"}
+{"event":"reasoning_delta","chat_id":"chat-1","text":"step-by-step thinking","stream_id":"r1"}
+{"event":"reasoning_end","chat_id":"chat-1","stream_id":"r1"}
+{"event":"reasoning_delta","chat_id":"chat-1","text":"thinking"}
+{"event":"reasoning_end","chat_id":"chat-1"}
+{"event":"turn_end","chat_id":"chat-1"}
+{"event":"message","chat_id":"chat-1","text":"hello"}

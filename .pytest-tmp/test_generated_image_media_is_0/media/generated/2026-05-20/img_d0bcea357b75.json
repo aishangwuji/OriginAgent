@@ -1,0 +1,10 @@
+{
+  "id": "img_d0bcea357b75",
+  "path": "D:\\Demo\\OpenHome\\OpenHome\\.pytest-tmp\\test_generated_image_media_is_0\\media\\generated\\2026-05-20\\img_d0bcea357b75.png",
+  "mime": "image/png",
+  "prompt": "draw a tiny icon",
+  "model": "openai/gpt-5.4-image-2",
+  "provider": "openrouter",
+  "source_images": [],
+  "created_at": "2026-05-20T16:40:54.818736+08:00"
+}

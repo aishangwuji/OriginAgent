@@ -1,0 +1,10 @@
+{
+  "people": {},
+  "unknown_occupancy": {
+    "confidence": 0.8,
+    "expires_at": null,
+    "source": "system",
+    "status": "unknown",
+    "updated_at": "2026-05-20T08:41:20.728575+00:00"
+  }
+}

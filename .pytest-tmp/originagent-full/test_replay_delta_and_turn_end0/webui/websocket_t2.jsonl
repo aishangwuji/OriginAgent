@@ -1,0 +1,6 @@
+{"event":"user","chat_id":"t2","text":"q"}
+{"event":"reasoning_delta","chat_id":"t2","text":"think"}
+{"event":"reasoning_end","chat_id":"t2"}
+{"event":"delta","chat_id":"t2","text":"a"}
+{"event":"stream_end","chat_id":"t2"}
+{"event":"turn_end","chat_id":"t2","latency_ms":42}

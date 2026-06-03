@@ -1,0 +1,2 @@
+{"action": null, "action_id": "action_1", "actor_id": null, "confirmation_id": "confirmation_1", "created_at": "2026-05-16T12:00:00+00:00", "decision": "pending_confirmation", "event_hash": "6b6081a20d48e8df60b25df774d6f84649fe844dbab5cad01bf996a90ff97b88", "event_id": "audit_3f321551dcd5", "event_type": "action_decision", "metadata": {}, "prev_hash": null, "reason": "needs confirmation", "risk": null, "scope": null, "trigger": null}
+{not json}

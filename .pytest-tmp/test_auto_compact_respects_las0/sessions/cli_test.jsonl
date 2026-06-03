@@ -1,0 +1,9 @@
+{"_type": "metadata", "key": "cli:test", "created_at": "2026-05-20T16:40:28.688353", "updated_at": "2026-05-20T16:40:28.690359", "metadata": {"_recent_summaries": [{"text": "Summary.", "history_cursor": 1, "created_at": "2026-05-20T16:40:28.690359", "last_active": "2026-05-20T16:40:28.688353"}]}, "last_consolidated": 0}
+{"role": "user", "content": "msg user 10", "timestamp": "2026-05-20T16:40:28.688353"}
+{"role": "assistant", "content": "msg assistant 10", "timestamp": "2026-05-20T16:40:28.688353"}
+{"role": "user", "content": "msg user 11", "timestamp": "2026-05-20T16:40:28.688353"}
+{"role": "assistant", "content": "msg assistant 11", "timestamp": "2026-05-20T16:40:28.688353"}
+{"role": "user", "content": "msg user 12", "timestamp": "2026-05-20T16:40:28.688353"}
+{"role": "assistant", "content": "msg assistant 12", "timestamp": "2026-05-20T16:40:28.688353"}
+{"role": "user", "content": "msg user 13", "timestamp": "2026-05-20T16:40:28.688353"}
+{"role": "assistant", "content": "msg assistant 13", "timestamp": "2026-05-20T16:40:28.688353"}

@@ -1,0 +1,26 @@
+{
+  "confirmations": [
+    {
+      "action": "turn_on",
+      "action_payload": {},
+      "confirmation_id": "confirmation_d08b59059278",
+      "consumed_at": null,
+      "created_at": "2026-05-15T12:00:00+00:00",
+      "decision_reason": "notify_only reason",
+      "expires_at": "2026-05-16T12:00:00+00:00",
+      "idempotency_key": null,
+      "kind": "notify_only",
+      "metadata": {},
+      "presence_status": "unknown",
+      "prompt": "I will notify you about 'turn_on' (home.living_room.light).",
+      "related_fact_ids": [],
+      "requested_by": "alice",
+      "requires_presence_empty": false,
+      "risk": "low",
+      "scope": "home.living_room.light",
+      "status": "notified",
+      "trigger": "user_initiated",
+      "uses_facts": []
+    }
+  ]
+}

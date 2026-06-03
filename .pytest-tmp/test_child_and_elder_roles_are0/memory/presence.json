@@ -1,0 +1,22 @@
+{
+  "people": {
+    "grandparent": {
+      "confidence": 0.95,
+      "expires_at": null,
+      "person_id": "grandparent",
+      "role": "elder",
+      "source": "manual",
+      "status": "away",
+      "updated_at": "2026-05-20T08:41:20.712086+00:00"
+    },
+    "kid": {
+      "confidence": 0.95,
+      "expires_at": null,
+      "person_id": "kid",
+      "role": "child",
+      "source": "manual",
+      "status": "away",
+      "updated_at": "2026-05-20T08:41:20.707030+00:00"
+    }
+  }
+}

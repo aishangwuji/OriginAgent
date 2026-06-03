@@ -1,0 +1,21 @@
+{
+  "version": 1,
+  "grants": [
+    {
+      "grant_id": "expired-secret",
+      "created_by": "admin",
+      "created_at": "2026-05-17T03:51:58.484857+00:00",
+      "expires_at": "2026-05-16T03:51:58.484832+00:00",
+      "revoked_at": null,
+      "source": "test",
+      "can_exec": false,
+      "can_read_files": false,
+      "can_write_files": false,
+      "can_send_cross_target": false,
+      "can_create_cron": false,
+      "can_spawn": false,
+      "allowed_device_domains": [],
+      "allowed_mcp_scopes": []
+    }
+  ]
+}

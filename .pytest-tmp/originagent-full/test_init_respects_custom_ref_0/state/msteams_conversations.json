@@ -1,0 +1,10 @@
+{
+  "conv-fresh": {
+    "service_url": "https://smba.trafficmanager.net/amer/",
+    "conversation_id": "conv-fresh",
+    "bot_id": null,
+    "activity_id": null,
+    "conversation_type": "personal",
+    "tenant_id": null
+  }
+}
