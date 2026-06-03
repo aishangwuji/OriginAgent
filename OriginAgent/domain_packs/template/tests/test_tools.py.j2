@@ -1,12 +1,45 @@
-"""Tests for domain pack tools."""
+"""Tests for the {{ pack_name }} domain pack tools."""
 
 from __future__ import annotations
 
-from OriginAgent.agent.tools.base import Tool, ToolContext
+from pathlib import Path
+
+from types import SimpleNamespace
+
+import pytest
+
+from OriginAgent.agent.tools.registry import ToolRegistry
+from OriginAgent.agent.tools.domain_loader import DomainToolLoader
+from OriginAgent.agent.domain_packs import DomainPackManager
+from OriginAgent.config.schema import DomainPacksConfig
 
 
-def test_example_tool_import() -> None:
-    """Verify the example tool module is importable."""
-    from tools.example_tool import {{ class_name }}  # type: ignore[import-untyped]
+@pytest.fixture
+def pack_manager(tmp_path) -> DomainPackManager:
+    """Create a DomainPackManager pointing at this pack."""
+    import shutil
+    here = Path(__file__).resolve().parent.parent
+    target = tmp_path / "domain_packs" / "{{ pack_id }}"
+    shutil.copytree(here, target)
+    return DomainPackManager(
+        tmp_path,
+        config=DomainPacksConfig(active=["{{ pack_id }}"]),
+    )
 
-    assert issubclass({{ class_name }}, Tool)
+
+def test_tool_is_loaded_and_registered(pack_manager: DomainPackManager) -> None:
+    registry = ToolRegistry()
+    loader = DomainToolLoader(pack_manager)
+    registered = loader.load(SimpleNamespace(), registry)
+    assert "{{ tool_id_prefix }}_example_action" in registered
+    assert registry.has("{{ tool_id_prefix }}_example_action")
+
+
+@pytest.mark.asyncio
+async def test_tool_execution(pack_manager: DomainPackManager) -> None:
+    registry = ToolRegistry()
+    DomainToolLoader(pack_manager).load(SimpleNamespace(), registry)
+    tool = registry.get("{{ tool_id_prefix }}_example_action")
+    assert tool is not None
+    result = await tool.execute(param="hello")
+    assert result["status"] == "success"
