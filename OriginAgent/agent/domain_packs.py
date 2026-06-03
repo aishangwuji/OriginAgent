@@ -2,16 +2,14 @@
 
 from __future__ import annotations
 
-import os
 import re
-import shutil
 import importlib.util
 import sys
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Literal
 
-import yaml
+from OriginAgent.agent.domain_pack_schema import DomainPackManifest, DomainPackManifestError
 
 BUILTIN_DOMAIN_PACKS_DIR = Path(__file__).parent.parent / "domain_packs"
 _IGNORED_PACK_DIR_NAMES = {"__pycache__"}
@@ -19,19 +17,6 @@ _DOMAIN_ID_RE = re.compile(r"^[a-z0-9_-]+$")
 _TOOL_ID_RE = re.compile(r"^[a-z0-9_]{1,64}$")
 _MODULE_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)*$")
 _CLASS_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
-_VERIFICATION_STATUSES = {"unknown", "unverified", "verified"}
-_ALLOWED_EVAL_KINDS = frozenset({"manifest", "skill", "tool", "workflow"})
-_ALLOWED_TOOL_PERMISSIONS = frozenset(
-    {
-        "read_files",
-        "write_files",
-        "exec",
-        "send_cross_target",
-        "create_cron",
-        "spawn",
-        "mcp:read",
-    }
-)
 
 DomainPackStatus = Literal["available", "unavailable", "invalid"]
 DomainDeclarationStatus = Literal["available", "skipped"]
@@ -238,23 +223,9 @@ class DomainPackValidator:
             return self._invalid(pack_dir.name, pack_dir, source, "missing domain_pack.yaml")
 
         try:
-            raw = yaml.safe_load(manifest_path.read_text(encoding="utf-8"))
-        except (OSError, yaml.YAMLError) as exc:
-            return self._invalid(pack_dir.name, pack_dir, source, f"invalid domain_pack.yaml: {exc}")
-
-        if not isinstance(raw, dict):
-            return self._invalid(pack_dir.name, pack_dir, source, "domain_pack.yaml must be a mapping")
-
-        pack_id = str(raw.get("id") or "").strip()
-        name = str(raw.get("name") or "").strip()
-        version = str(raw.get("version") or "").strip()
-        if not pack_id:
-            return self._invalid(pack_dir.name, pack_dir, source, "missing required field: id", raw)
-        if not _DOMAIN_ID_RE.fullmatch(pack_id):
-            return self._invalid(pack_id, pack_dir, source, "id must match ^[a-z0-9_-]+$", raw)
-        missing = [field_name for field_name, value in (("name", name), ("version", version)) if not value]
-        if missing:
-            return self._invalid(pack_id, pack_dir, source, "missing required field(s): " + ", ".join(missing), raw)
+            manifest = DomainPackManifest.from_yaml(manifest_path)
+        except DomainPackManifestError as exc:
+            return self._invalid(pack_dir.name, pack_dir, source, str(exc))
 
         errors: list[str] = []
         capabilities_path = pack_dir / "CAPABILITIES.md"
@@ -272,22 +243,28 @@ class DomainPackValidator:
                 status = "unavailable"
                 reason = f"cannot read CAPABILITIES.md: {exc}"
 
-        source_info = self._parse_source_info(raw.get("source"), source, errors)
-        verification_status = self._parse_verification_status(raw.get("verification_status"), errors)
-        requires = self._parse_requires(raw.get("requires"))
-        dependencies = self._parse_dependencies(raw.get("dependencies"), errors)
-        skills, skill_errors = self._parse_skills(raw.get("skills"), pack_dir, pack_id)
-        workflows, workflow_errors = self._parse_workflows(raw.get("workflows"), pack_dir)
-        policies, policy_errors = self._parse_file_section(raw.get("policies"), pack_dir, "policies")
-        schemas, schema_errors = self._parse_file_section(raw.get("schemas"), pack_dir, "schemas")
-        tools, tool_errors = self._parse_tools(raw.get("tools"), pack_dir)
-        runtime, runtime_errors = self._parse_runtime(raw.get("runtime"), pack_dir)
-        evals, eval_errors = self._parse_evals(
-            raw.get("evals"),
+        source_info = DomainPackSourceInfo(
+            kind=("builtin" if source == "builtin" else "local_copy"),
+            installed_from=str(manifest.source.installed_from if manifest.source else ""),
+            installed_at=str(manifest.source.installed_at if manifest.source else ""),
+        )
+        verification_status = manifest.verification_status
+        requires = DomainPackRequires(
+            bins=tuple(manifest.requires.bins),
+            env=tuple(manifest.requires.env),
+        )
+        dependencies = DomainPackDependencies(packs=tuple(manifest.dependencies.packs))
+        skills, skill_errors = self._validate_skills(manifest, pack_dir)
+        workflows, workflow_errors = self._validate_workflows(manifest, pack_dir)
+        policies, policy_errors = self._validate_file_list(manifest.policies, pack_dir, "policies")
+        schemas, schema_errors = self._validate_file_list(manifest.schemas, pack_dir, "schemas")
+        tools, tool_errors = self._validate_tools(manifest, pack_dir)
+        runtime, runtime_errors = self._validate_runtime(manifest, pack_dir)
+        evals, eval_errors = self._validate_evals(
+            manifest,
             skills=skills,
             workflows=workflows,
             tools=tools,
-            errors=errors,
         )
         errors.extend(skill_errors)
         errors.extend(workflow_errors)
@@ -297,17 +274,17 @@ class DomainPackValidator:
         errors.extend(runtime_errors)
         errors.extend(eval_errors)
 
-        if raw.get("enabled") is False:
+        if not manifest.enabled:
             status = "unavailable"
             reason = "disabled by manifest"
 
-        enabled = pack_id not in set(self.runtime_config.disabled)
+        enabled = manifest.id not in set(self.runtime_config.disabled)
         if not enabled:
             status = "unavailable"
             reason = "disabled by config"
 
         if status == "available":
-            missing_requirements = self._missing_requirements(requires)
+            missing_requirements = self._missing_requirements(manifest)
             if missing_requirements:
                 status = "unavailable"
                 reason = "missing requirement(s): " + ", ".join(missing_requirements)
@@ -316,22 +293,22 @@ class DomainPackValidator:
             status = "invalid"
             reason = errors[0]
 
-        active_requested = pack_id in set(self.runtime_config.active)
+        active_requested = manifest.id in set(self.runtime_config.active)
         active = active_requested and status == "available"
         validation_summary = "Domain pack is valid." if not errors else "; ".join(errors[:5])
         return DomainPack(
-            id=pack_id,
-            name=name,
-            version=version,
+            id=manifest.id,
+            name=manifest.name,
+            version=manifest.version,
             path=pack_dir,
             source=source,
             status=status,
             active=active,
             enabled=enabled,
             active_requested=active_requested,
-            description=str(raw.get("description") or "").strip(),
-            capabilities=tuple(_string_list(raw.get("capabilities"))),
-            triggers=tuple(_string_list(_activation_triggers(raw.get("activation")))),
+            description=manifest.description,
+            capabilities=tuple(manifest.capabilities),
+            triggers=tuple(manifest.activation.triggers),
             requires=requires,
             dependencies=dependencies,
             unavailable_reason=reason,
@@ -345,473 +322,231 @@ class DomainPackValidator:
             tools=tuple(tools),
             runtime=runtime,
             evals=tuple(evals),
-            manifest=raw,
+            manifest=manifest.model_dump(),
             verification_status=verification_status,
             source_info=source_info,
         )
 
     @staticmethod
-    def _parse_requires(raw: Any) -> DomainPackRequires:
-        if not isinstance(raw, dict):
-            return DomainPackRequires()
-        return DomainPackRequires(
-            bins=tuple(_string_list(raw.get("bins"))),
-            env=tuple(_string_list(raw.get("env"))),
-        )
+    def _missing_requirements(manifest: DomainPackManifest) -> list[str]:
+        import os, shutil
 
-    @staticmethod
-    def _missing_requirements(requires: DomainPackRequires) -> list[str]:
         missing: list[str] = []
-        missing.extend(f"CLI: {command}" for command in requires.bins if not shutil.which(command))
-        missing.extend(f"ENV: {name}" for name in requires.env if not os.environ.get(name))
+        missing.extend(f"CLI: {cmd}" for cmd in manifest.requires.bins if not shutil.which(cmd))
+        missing.extend(f"ENV: {name}" for name in manifest.requires.env if not os.environ.get(name))
         return missing
 
-    def _parse_dependencies(self, raw: Any, errors: list[str]) -> DomainPackDependencies:
-        if raw is None:
-            return DomainPackDependencies()
-        if not isinstance(raw, dict):
-            errors.append("dependencies must be a mapping")
-            return DomainPackDependencies()
-        packs = []
-        for value in _string_list(raw.get("packs")):
-            pack_id = value.strip()
-            if not _DOMAIN_ID_RE.fullmatch(pack_id):
-                errors.append(f"dependencies.packs contains invalid id `{pack_id}`")
-                continue
-            packs.append(pack_id)
-        return DomainPackDependencies(packs=tuple(packs))
-
-    def _parse_source_info(
+    def _validate_skills(
         self,
-        raw: Any,
-        source: str,
-        errors: list[str],
-    ) -> DomainPackSourceInfo:
-        default_kind: DomainPackSourceKind = "builtin" if source == "builtin" else "local_copy"
-        if raw is None:
-            return DomainPackSourceInfo(kind=default_kind)
-        if not isinstance(raw, dict):
-            errors.append("source must be a mapping")
-            return DomainPackSourceInfo(kind=default_kind)
-        kind = str(raw.get("kind") or default_kind).strip()
-        if kind not in {"builtin", "local_copy"}:
-            errors.append("source.kind must be builtin or local_copy")
-            kind = default_kind
-        return DomainPackSourceInfo(
-            kind=kind,
-            installed_from=str(raw.get("installed_from") or "").strip(),
-            installed_at=str(raw.get("installed_at") or "").strip(),
-        )
-
-    def _parse_verification_status(self, raw: Any, errors: list[str]) -> str:
-        if raw is None:
-            return "unknown"
-        value = str(raw).strip().lower()
-        if value not in _VERIFICATION_STATUSES:
-            errors.append("verification_status must be unknown, unverified, or verified")
-            return "unknown"
-        return value
-
-    def _parse_skills(
-        self,
-        raw: Any,
+        manifest: DomainPackManifest,
         pack_dir: Path,
-        pack_id: str,
     ) -> tuple[list[DomainSkillDeclaration], list[str]]:
         declarations: list[DomainSkillDeclaration] = []
         errors: list[str] = []
-        if raw is None:
-            return declarations, errors
-        if not isinstance(raw, list):
-            return [
-                DomainSkillDeclaration(
-                    id="skills",
-                    virtual_id="",
+        for skill_id in manifest.skills:
+            stripped = skill_id.strip()
+            virtual_id = f"domain:{manifest.id}/{stripped}" if stripped else ""
+            if not stripped or not _DOMAIN_ID_RE.fullmatch(stripped):
+                errors.append(f"{stripped or 'skills'}: skill id must match ^[a-z0-9_-]+$")
+                declarations.append(DomainSkillDeclaration(
+                    id=stripped or f"skill[{len(declarations)}]",
+                    virtual_id=virtual_id,
                     status="skipped",
-                    unavailable_reason="skills must be a list",
-                )
-            ], ["skills must be a list"]
-        for index, item in enumerate(raw):
-            skill_id = ""
-            if isinstance(item, str):
-                skill_id = item.strip()
-            elif isinstance(item, dict):
-                skill_id = str(item.get("id") or item.get("name") or "").strip()
-            label = skill_id or f"skill[{index}]"
-            virtual_id = f"domain:{pack_id}/{skill_id}" if skill_id else ""
-            if not skill_id or not _DOMAIN_ID_RE.fullmatch(skill_id):
-                reason = "skill id must match ^[a-z0-9_-]+$"
-                declarations.append(
-                    DomainSkillDeclaration(
-                        id=label,
-                        virtual_id=virtual_id,
-                        status="skipped",
-                        unavailable_reason=reason,
-                    )
-                )
-                errors.append(reason if label.startswith("skill[") else f"{label}: {reason}")
+                    unavailable_reason="skill id must match ^[a-z0-9_-]+$",
+                ))
                 continue
-            skill_path = pack_dir / "skills" / skill_id / "SKILL.md"
+            skill_path = pack_dir / "skills" / stripped / "SKILL.md"
             if not skill_path.exists():
-                reason = "missing SKILL.md"
-                declarations.append(
-                    DomainSkillDeclaration(
-                        id=skill_id,
-                        virtual_id=virtual_id,
-                        path=skill_path,
-                        status="skipped",
-                        unavailable_reason=reason,
-                    )
-                )
-                errors.append(f"{skill_id}: {reason}")
+                errors.append(f"{stripped}: missing SKILL.md")
+                declarations.append(DomainSkillDeclaration(
+                    id=stripped, virtual_id=virtual_id, path=skill_path,
+                    status="skipped", unavailable_reason="missing SKILL.md",
+                ))
                 continue
-            declarations.append(
-                DomainSkillDeclaration(id=skill_id, virtual_id=virtual_id, path=skill_path)
-            )
+            declarations.append(DomainSkillDeclaration(
+                id=stripped, virtual_id=virtual_id, path=skill_path,
+            ))
         return declarations, errors
 
-    def _parse_workflows(
+    def _validate_tools(
         self,
-        raw: Any,
+        manifest: DomainPackManifest,
+        pack_dir: Path,
+    ) -> tuple[list[DomainToolDeclaration], list[str]]:
+        declarations: list[DomainToolDeclaration] = []
+        errors: list[str] = []
+        for tool_decl in manifest.tools:
+            module_path = _domain_tool_module_path(pack_dir, tool_decl.module)
+            tool_id = tool_decl.id
+            if not _TOOL_ID_RE.fullmatch(tool_id):
+                declarations.append(DomainToolDeclaration(
+                    id=tool_id, module=tool_decl.module, class_name=tool_decl.class_name,
+                    module_path=module_path, permissions=tuple(tool_decl.permissions),
+                    audit=tool_decl.audit, status="skipped",
+                    unavailable_reason="tool id must match ^[a-z0-9_]{1,64}$",
+                ))
+                errors.append(f"{tool_id}: tool id must match ^[a-z0-9_]{1,64}$")
+                continue
+            if module_path is None or not module_path.exists():
+                declarations.append(DomainToolDeclaration(
+                    id=tool_id, module=tool_decl.module, class_name=tool_decl.class_name,
+                    module_path=module_path, permissions=tuple(tool_decl.permissions),
+                    audit=tool_decl.audit, status="skipped",
+                    unavailable_reason="missing tool module file",
+                ))
+                errors.append(f"{tool_id}: missing tool module file")
+                continue
+            declarations.append(DomainToolDeclaration(
+                id=tool_id, module=tool_decl.module, class_name=tool_decl.class_name,
+                module_path=module_path, permissions=tuple(tool_decl.permissions),
+                audit=tool_decl.audit,
+            ))
+        return declarations, errors
+
+    def _validate_runtime(
+        self,
+        manifest: DomainPackManifest,
+        pack_dir: Path,
+    ) -> tuple[DomainRuntimeDeclaration | None, list[str]]:
+        if manifest.runtime is None:
+            return None, []
+        module_path = _domain_runtime_module_path(pack_dir, manifest.runtime.module)
+        if module_path is None or not module_path.exists():
+            return (
+                DomainRuntimeDeclaration(
+                    module=manifest.runtime.module, factory=manifest.runtime.factory,
+                    module_path=module_path, status="skipped",
+                    unavailable_reason="missing runtime module file",
+                ),
+                ["runtime: missing runtime module file"],
+            )
+        return (
+            DomainRuntimeDeclaration(
+                module=manifest.runtime.module, factory=manifest.runtime.factory,
+                module_path=module_path,
+            ),
+            [],
+        )
+
+    def _validate_workflows(
+        self,
+        manifest: DomainPackManifest,
         pack_dir: Path,
     ) -> tuple[list[DomainWorkflowDeclaration], list[str]]:
         from OriginAgent.agent.workflow_artifacts import validate_workflow_artifact_dir
 
         declarations: list[DomainWorkflowDeclaration] = []
         errors: list[str] = []
-        if raw is None:
-            return declarations, errors
-        if not isinstance(raw, list):
-            return [
-                DomainWorkflowDeclaration(
-                    id="workflows",
+        for wf_id in manifest.workflows:
+            stripped = wf_id.strip()
+            if not stripped or not _DOMAIN_ID_RE.fullmatch(stripped):
+                errors.append(f"{stripped or 'workflows'}: workflow id must match ^[a-z0-9_-]+$")
+                declarations.append(DomainWorkflowDeclaration(
+                    id=stripped or f"workflow[{len(declarations)}]",
                     status="skipped",
-                    unavailable_reason="workflows must be a list",
-                )
-            ], ["workflows must be a list"]
-        for index, item in enumerate(raw):
-            workflow_id = ""
-            if isinstance(item, str):
-                workflow_id = item.strip()
-            elif isinstance(item, dict):
-                workflow_id = str(item.get("id") or item.get("name") or "").strip()
-            label = workflow_id or f"workflow[{index}]"
-            if not workflow_id or not _DOMAIN_ID_RE.fullmatch(workflow_id):
-                reason = "workflow id must match ^[a-z0-9_-]+$"
-                declarations.append(
-                    DomainWorkflowDeclaration(
-                        id=label,
-                        status="skipped",
-                        unavailable_reason=reason,
-                    )
-                )
-                errors.append(reason if label.startswith("workflow[") else f"{label}: {reason}")
+                    unavailable_reason="workflow id must match ^[a-z0-9_-]+$",
+                ))
                 continue
-            workflow_file = pack_dir / "workflows" / workflow_id / "workflow.yaml"
-            workflow_dir = workflow_file.parent
-            if not workflow_file.exists():
-                reason = "missing workflow.yaml"
-                declarations.append(
-                    DomainWorkflowDeclaration(
-                        id=workflow_id,
-                        path=workflow_file,
-                        status="skipped",
-                        unavailable_reason=reason,
-                    )
-                )
-                errors.append(f"{workflow_id}: {reason}")
+            wf_path = pack_dir / "workflows" / stripped / "workflow.yaml"
+            if not wf_path.exists():
+                errors.append(f"{stripped}: missing workflow.yaml")
+                declarations.append(DomainWorkflowDeclaration(
+                    id=stripped, path=wf_path, status="skipped",
+                    unavailable_reason="missing workflow.yaml",
+                ))
                 continue
-            valid, message = validate_workflow_artifact_dir(
-                workflow_dir,
-                workspace=pack_dir,
-                expected_name=workflow_id,
+            valid, msg = validate_workflow_artifact_dir(
+                wf_path.parent, workspace=pack_dir, expected_name=stripped,
             )
             if not valid:
-                declarations.append(
-                    DomainWorkflowDeclaration(
-                        id=workflow_id,
-                        path=workflow_file,
-                        status="skipped",
-                        unavailable_reason=message,
-                    )
-                )
-                errors.append(f"{workflow_id}: {message}")
+                errors.append(f"{stripped}: {msg}")
+                declarations.append(DomainWorkflowDeclaration(
+                    id=stripped, path=wf_path, status="skipped", unavailable_reason=msg,
+                ))
                 continue
-            declarations.append(DomainWorkflowDeclaration(id=workflow_id, path=workflow_file))
+            declarations.append(DomainWorkflowDeclaration(id=stripped, path=wf_path))
         return declarations, errors
 
-    def _parse_file_section(
+    def _validate_file_list(
         self,
-        raw: Any,
+        file_ids: list[str],
         pack_dir: Path,
         section: str,
     ) -> tuple[list[DomainFileDeclaration], list[str]]:
         declarations: list[DomainFileDeclaration] = []
         errors: list[str] = []
-        if raw is None:
-            return declarations, errors
-        if not isinstance(raw, list):
-            return [
-                DomainFileDeclaration(
-                    id=section,
+        for file_id in file_ids:
+            stripped = file_id.strip()
+            if not stripped or not _DOMAIN_ID_RE.fullmatch(stripped):
+                errors.append(f"{stripped or section}: {section} id must match ^[a-z0-9_-]+$")
+                declarations.append(DomainFileDeclaration(
+                    id=stripped or f"{section}[{len(declarations)}]",
                     status="skipped",
-                    unavailable_reason=f"{section} must be a list",
-                )
-            ], [f"{section} must be a list"]
-        for index, item in enumerate(raw):
-            file_id = ""
-            rel_path: str | None = None
-            if isinstance(item, str):
-                file_id = item.strip()
-                rel_path = f"{section}/{file_id}"
-            elif isinstance(item, dict):
-                file_id = str(item.get("id") or item.get("name") or "").strip()
-                rel_path = str(item.get("path") or f"{section}/{file_id}").strip()
-            label = file_id or f"{section}[{index}]"
-            if not file_id or not _DOMAIN_ID_RE.fullmatch(file_id):
-                reason = f"{section} id must match ^[a-z0-9_-]+$"
-                declarations.append(
-                    DomainFileDeclaration(id=label, status="skipped", unavailable_reason=reason)
-                )
-                errors.append(reason if label.startswith(f"{section}[") else f"{label}: {reason}")
+                    unavailable_reason=f"{section} id must match ^[a-z0-9_-]+$",
+                ))
                 continue
-            path = _pack_relative_path(pack_dir, rel_path or "")
+            path = _pack_relative_path(pack_dir, f"{section}/{stripped}")
             if path is None:
-                reason = f"{section} path must stay inside the pack root"
-                declarations.append(
-                    DomainFileDeclaration(
-                        id=file_id,
-                        status="skipped",
-                        unavailable_reason=reason,
-                    )
-                )
-                errors.append(f"{file_id}: {reason}")
+                declarations.append(DomainFileDeclaration(
+                    id=stripped, status="skipped",
+                    unavailable_reason=f"{section} path must stay inside the pack root",
+                ))
+                errors.append(f"{stripped}: {section} path must stay inside the pack root")
                 continue
             if not path.exists():
-                reason = f"missing declared {section[:-1] if section.endswith('s') else section} path"
-                declarations.append(
-                    DomainFileDeclaration(
-                        id=file_id,
-                        path=path,
-                        status="skipped",
-                        unavailable_reason=reason,
-                    )
-                )
-                errors.append(f"{file_id}: {reason}")
+                declarations.append(DomainFileDeclaration(
+                    id=stripped, path=path, status="skipped",
+                    unavailable_reason=f"missing declared {section.rstrip('s')} path",
+                ))
+                errors.append(f"{stripped}: missing declared {section.rstrip('s')} path")
                 continue
-            declarations.append(DomainFileDeclaration(id=file_id, path=path))
+            declarations.append(DomainFileDeclaration(id=stripped, path=path))
         return declarations, errors
 
-    def _parse_tools(
+    def _validate_evals(
         self,
-        raw: Any,
-        pack_dir: Path,
-    ) -> tuple[list[DomainToolDeclaration], list[str]]:
-        declarations: list[DomainToolDeclaration] = []
-        errors: list[str] = []
-        if raw is None:
-            return declarations, errors
-        if not isinstance(raw, list):
-            return [
-                DomainToolDeclaration(
-                    id="tools",
-                    module="",
-                    class_name="",
-                    status="skipped",
-                    unavailable_reason="tools must be a list",
-                )
-            ], ["tools must be a list"]
-        for index, item in enumerate(raw):
-            if not isinstance(item, dict):
-                reason = "tool declaration must be a mapping"
-                declarations.append(
-                    DomainToolDeclaration(
-                        id=f"tool[{index}]",
-                        module="",
-                        class_name="",
-                        status="skipped",
-                        unavailable_reason=reason,
-                    )
-                )
-                errors.append(reason)
-                continue
-            declaration = self._parse_tool(item, pack_dir, index)
-            declarations.append(declaration)
-            if declaration.status == "skipped":
-                errors.append(f"{declaration.id}: {declaration.unavailable_reason}")
-        return declarations, errors
-
-    def _parse_tool(
-        self,
-        raw: dict[str, Any],
-        pack_dir: Path,
-        index: int,
-    ) -> DomainToolDeclaration:
-        tool_id = str(raw.get("id") or "").strip()
-        module = str(raw.get("module") or "").strip()
-        class_name = str(raw.get("class") or raw.get("class_name") or "").strip()
-        label = tool_id or f"tool[{index}]"
-        permissions_present = "permissions" in raw
-        permissions = tuple(_string_list(raw.get("permissions")))
-        audit = str(raw.get("audit") or "minimal").strip()
-        module_path = _domain_tool_module_path(pack_dir, module)
-
-        reason = ""
-        if not tool_id:
-            reason = "missing required field: id"
-        elif not _TOOL_ID_RE.fullmatch(tool_id):
-            reason = "tool id must match ^[a-z0-9_]{1,64}$"
-        elif not module:
-            reason = "missing required field: module"
-        elif not _valid_domain_tool_module(module):
-            reason = "module must be a dotted path under tools"
-        elif module_path is None or not module_path.exists():
-            reason = "missing tool module file"
-        elif not class_name:
-            reason = "missing required field: class"
-        elif not _CLASS_RE.fullmatch(class_name):
-            reason = "class must be a valid Python identifier"
-        elif not permissions_present:
-            reason = "missing permissions"
-        elif any(not _is_allowed_tool_permission(permission) for permission in permissions):
-            reason = "unsupported permission(s): " + ", ".join(
-                permission for permission in permissions if not _is_allowed_tool_permission(permission)
-            )
-        elif audit not in {"minimal", "security"}:
-            reason = "audit must be minimal or security"
-
-        if reason:
-            return DomainToolDeclaration(
-                id=label,
-                module=module,
-                class_name=class_name,
-                permissions=permissions,
-                audit="security" if audit == "security" else "minimal",
-                module_path=module_path,
-                status="skipped",
-                unavailable_reason=reason,
-            )
-        return DomainToolDeclaration(
-            id=tool_id,
-            module=module,
-            class_name=class_name,
-            permissions=permissions,
-            audit="security" if audit == "security" else "minimal",
-            module_path=module_path,
-        )
-
-    def _parse_runtime(
-        self,
-        raw: Any,
-        pack_dir: Path,
-    ) -> tuple[DomainRuntimeDeclaration | None, list[str]]:
-        if raw is None:
-            return None, []
-        if not isinstance(raw, dict):
-            return (
-                DomainRuntimeDeclaration(
-                    module="",
-                    status="skipped",
-                    unavailable_reason="runtime must be a mapping",
-                ),
-                ["runtime must be a mapping"],
-            )
-        module = str(raw.get("module") or "").strip()
-        factory = str(raw.get("factory") or "build_runtime_contribution").strip()
-        module_path = _domain_runtime_module_path(pack_dir, module)
-        reason = ""
-        if not module:
-            reason = "missing required field: module"
-        elif not _valid_domain_runtime_module(module):
-            reason = "module must be a dotted path under runtime"
-        elif module_path is None or not module_path.exists():
-            reason = "missing runtime module file"
-        elif not _CLASS_RE.fullmatch(factory):
-            reason = "factory must be a valid Python identifier"
-        if reason:
-            return (
-                DomainRuntimeDeclaration(
-                    module=module,
-                    factory=factory,
-                    module_path=module_path,
-                    status="skipped",
-                    unavailable_reason=reason,
-                ),
-                [f"runtime: {reason}"],
-            )
-        return (
-            DomainRuntimeDeclaration(
-                module=module,
-                factory=factory,
-                module_path=module_path,
-            ),
-            [],
-        )
-
-    def _parse_evals(
-        self,
-        raw: Any,
+        manifest: DomainPackManifest,
         *,
         skills: list[DomainSkillDeclaration],
         workflows: list[DomainWorkflowDeclaration],
         tools: list[DomainToolDeclaration],
-        errors: list[str],
     ) -> tuple[list[DomainEvalDeclaration], list[str]]:
         declarations: list[DomainEvalDeclaration] = []
-        local_errors: list[str] = []
-        if raw is None:
-            return declarations, local_errors
-        if not isinstance(raw, list):
-            return [
-                DomainEvalDeclaration(
-                    id="evals",
-                    kind="",
-                    status="skipped",
-                    unavailable_reason="evals must be a list",
-                )
-            ], ["evals must be a list"]
+        errors: list[str] = []
+        allowed_kinds = {"manifest", "skill", "tool", "workflow"}
         known_targets = {
-            "skill": {item.id for item in skills},
-            "workflow": {item.id for item in workflows},
-            "tool": {item.id for item in tools},
+            "skill": {s.id for s in skills},
+            "workflow": {w.id for w in workflows},
+            "tool": {t.id for t in tools},
         }
-        for index, item in enumerate(raw):
-            if not isinstance(item, dict):
-                declarations.append(
-                    DomainEvalDeclaration(
-                        id=f"eval[{index}]",
-                        kind="",
-                        status="skipped",
-                        unavailable_reason="eval declaration must be a mapping",
-                    )
-                )
-                local_errors.append("eval declaration must be a mapping")
-                continue
-            eval_id = str(item.get("id") or "").strip()
-            kind = str(item.get("kind") or "").strip().lower()
-            target = str(item.get("target") or "").strip()
-            label = eval_id or f"eval[{index}]"
-            reason = ""
+        for eval_decl in manifest.evals:
+            eval_id = eval_decl.get("id", "")
+            kind = eval_decl.get("kind", "").lower()
+            target = eval_decl.get("target", "")
             if not eval_id or not _DOMAIN_ID_RE.fullmatch(eval_id):
-                reason = "eval id must match ^[a-z0-9_-]+$"
-            elif kind not in _ALLOWED_EVAL_KINDS:
-                reason = "eval kind must be one of manifest, skill, tool, workflow"
-            elif target and kind in known_targets and target not in known_targets[kind]:
-                reason = f"eval target `{target}` was not declared under {kind}s"
-            if reason:
-                declarations.append(
-                    DomainEvalDeclaration(
-                        id=label,
-                        kind=kind,
-                        target=target,
-                        status="skipped",
-                        unavailable_reason=reason,
-                    )
-                )
-                local_errors.append(f"{label}: {reason}")
+                errors.append(f"{eval_id or 'evals'}: eval id must match ^[a-z0-9_-]+$")
+                declarations.append(DomainEvalDeclaration(
+                    id=eval_id or f"eval[{len(declarations)}]",
+                    kind=kind, status="skipped",
+                    unavailable_reason="eval id must match ^[a-z0-9_-]+$",
+                ))
+                continue
+            if kind not in allowed_kinds:
+                errors.append(f"{eval_id}: eval kind must be one of manifest, skill, tool, workflow")
+                declarations.append(DomainEvalDeclaration(
+                    id=eval_id, kind=kind, status="skipped",
+                    unavailable_reason="eval kind must be one of manifest, skill, tool, workflow",
+                ))
+                continue
+            if target and kind in known_targets and target not in known_targets[kind]:
+                errors.append(f"{eval_id}: eval target `{target}` was not declared under {kind}s")
+                declarations.append(DomainEvalDeclaration(
+                    id=eval_id, kind=kind, target=target, status="skipped",
+                    unavailable_reason=f"eval target `{target}` was not declared under {kind}s",
+                ))
                 continue
             declarations.append(DomainEvalDeclaration(id=eval_id, kind=kind, target=target))
-        return declarations, local_errors
+        return declarations, errors
 
     @staticmethod
     def _invalid(
@@ -1064,22 +799,6 @@ class DomainPackManager:
         )
 
 
-def _string_list(value: Any) -> list[str]:
-    if value is None:
-        return []
-    if isinstance(value, (str, int, float, bool)):
-        return [str(value)]
-    if not isinstance(value, list):
-        return []
-    return [str(item) for item in value if isinstance(item, (str, int, float, bool))]
-
-
-def _activation_triggers(value: Any) -> Any:
-    if not isinstance(value, dict):
-        return None
-    return value.get("triggers")
-
-
 def _declaration_summary(
     items: tuple[
         DomainSkillDeclaration
@@ -1169,7 +888,3 @@ def _pack_relative_path(pack_dir: Path, relative_path: str) -> Path | None:
     return candidate
 
 
-def _is_allowed_tool_permission(permission: str) -> bool:
-    if permission in _ALLOWED_TOOL_PERMISSIONS:
-        return True
-    return bool(re.fullmatch(r"device:[a-z0-9_-]+", permission))

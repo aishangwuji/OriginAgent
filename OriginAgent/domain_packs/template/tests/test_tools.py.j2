@@ -1,0 +1,12 @@
+"""Tests for domain pack tools."""
+
+from __future__ import annotations
+
+from OriginAgent.agent.tools.base import Tool, ToolContext
+
+
+def test_example_tool_import() -> None:
+    """Verify the example tool module is importable."""
+    from tools.example_tool import {{ class_name }}  # type: ignore[import-untyped]
+
+    assert issubclass({{ class_name }}, Tool)

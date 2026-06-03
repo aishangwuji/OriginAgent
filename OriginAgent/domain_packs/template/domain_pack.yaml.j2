@@ -1,0 +1,33 @@
+id: {{ pack_id }}
+name: {{ pack_name }}
+version: 0.1.0
+description: {{ pack_description }}
+
+capabilities:
+  - your_capability_here
+
+skills:{% if include_skills %}
+  - example-skill{% endif %}
+
+tools:{% if include_tools %}
+  - id: {{ tool_id_prefix }}_example
+    module: tools.example_tool
+    class: {{ class_name }}
+    permissions:
+      - read_files
+    audit: minimal{% endif %}
+
+runtime:{% if include_runtime %}
+  module: runtime.contribution
+  factory: build_runtime_contribution{% endif %}
+
+workflows:{% if include_workflows %}
+  - example-workflow{% endif %}
+
+evals:{% if include_evals %}
+  - id: manifest-check
+    kind: manifest{% endif %}
+
+activation:
+  triggers:
+    - {{ pack_id }}

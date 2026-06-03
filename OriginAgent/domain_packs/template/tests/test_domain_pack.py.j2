@@ -1,0 +1,14 @@
+"""Tests for the {{ pack_name }} domain pack."""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+
+def test_domain_pack_manifest_exists(pack_dir: Path) -> None:
+    assert (pack_dir / "domain_pack.yaml").exists()
+    assert (pack_dir / "CAPABILITIES.md").exists()
+
+
+def test_domain_pack_init_py_exists(pack_dir: Path) -> None:
+    assert (pack_dir / "__init__.py").exists()

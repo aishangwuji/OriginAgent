@@ -1,0 +1,20 @@
+"""Example tool for {{ pack_name }} domain pack."""
+
+from __future__ import annotations
+
+from OriginAgent.agent.tools.base import Tool, ToolContext, ToolResponse
+
+
+class {{ class_name }}(Tool):
+    """Example tool scaffolded for the {{ pack_name }} domain pack."""
+
+    @property
+    def id(self) -> str:
+        return "{{ tool_id_prefix }}_example"
+
+    @property
+    def description(self) -> str:
+        return "Example tool for {{ pack_name }} domain pack."
+
+    async def run(self, ctx: ToolContext) -> ToolResponse:
+        return ToolResponse(output=f"Hello from {{ pack_name }} tool!")
