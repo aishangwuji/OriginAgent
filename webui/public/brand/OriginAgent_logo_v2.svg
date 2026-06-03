@@ -1,0 +1,46 @@
+<svg width="840" height="300" viewBox="0 0 840 300" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="title desc">
+  <title id="title">OriginAgent 六边中枢横版标志</title>
+  <desc id="desc">冷灰与骨白配色的六边中枢横版标志，强调结构、秩序、运行时中枢与调度之眼。</desc>
+  <defs>
+    <filter id="shadow" x="0" y="0" width="302" height="302" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
+      <feDropShadow dx="0" dy="8" stdDeviation="12" flood-color="#0B0D10" flood-opacity="0.12"/>
+      <feDropShadow dx="0" dy="2" stdDeviation="3" flood-color="#0B0D10" flood-opacity="0.06"/>
+    </filter>
+    <linearGradient id="shell" x1="30" y1="30" x2="270" y2="270" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#262B31"/>
+      <stop offset="1" stop-color="#13161A"/>
+    </linearGradient>
+    <linearGradient id="hub" x1="104" y1="88" x2="198" y2="186" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#D7DCE2"/>
+      <stop offset="1" stop-color="#9CA5AF"/>
+    </linearGradient>
+  </defs>
+  <g filter="url(#shadow)" transform="translate(0 -6)">
+    <rect x="30" y="30" width="240" height="240" rx="78" fill="url(#shell)" stroke="#E8E6E2" stroke-width="10"/>
+    <path d="M150 70L210 104V172L150 206L90 172V104L150 70Z" fill="#1A1E23" stroke="#E8E6E2" stroke-width="8" stroke-linejoin="round"/>
+    <path d="M150 108L178 124V154L150 170L122 154V124L150 108Z" fill="#252A30" stroke="#F4F2EE" stroke-width="6" stroke-linejoin="round"/>
+    <path d="M123 139C130 128 139 123 150 123C161 123 170 128 177 139C170 150 161 155 150 155C139 155 130 150 123 139Z" fill="#FCFBF8" stroke="#F4F2EE" stroke-width="6" stroke-linejoin="round"/>
+    <circle cx="150" cy="139" r="10" fill="#111418"/>
+    <circle cx="155" cy="134" r="3" fill="#D7DCE2"/>
+    <path d="M150 70V108" stroke="#E8E6E2" stroke-width="6" stroke-linecap="round"/>
+    <path d="M210 104L178 124" stroke="#E8E6E2" stroke-width="6" stroke-linecap="round"/>
+    <path d="M210 172L178 154" stroke="#E8E6E2" stroke-width="6" stroke-linecap="round"/>
+    <path d="M150 206V170" stroke="#E8E6E2" stroke-width="6" stroke-linecap="round"/>
+    <path d="M90 172L122 154" stroke="#E8E6E2" stroke-width="6" stroke-linecap="round"/>
+    <path d="M90 104L122 124" stroke="#E8E6E2" stroke-width="6" stroke-linecap="round"/>
+    <circle cx="150" cy="58" r="10" fill="url(#hub)" stroke="#F8F7F3" stroke-width="5"/>
+    <circle cx="218" cy="98" r="10" fill="url(#hub)" stroke="#F8F7F3" stroke-width="5"/>
+    <circle cx="218" cy="178" r="10" fill="url(#hub)" stroke="#F8F7F3" stroke-width="5"/>
+    <circle cx="150" cy="218" r="10" fill="url(#hub)" stroke="#F8F7F3" stroke-width="5"/>
+    <circle cx="82" cy="178" r="10" fill="url(#hub)" stroke="#F8F7F3" stroke-width="5"/>
+    <circle cx="82" cy="98" r="10" fill="url(#hub)" stroke="#F8F7F3" stroke-width="5"/>
+    <circle cx="150" cy="58" r="3" fill="#FFFFFF"/>
+    <circle cx="218" cy="98" r="3" fill="#FFFFFF"/>
+    <circle cx="218" cy="178" r="3" fill="#FFFFFF"/>
+    <circle cx="150" cy="218" r="3" fill="#FFFFFF"/>
+    <circle cx="82" cy="178" r="3" fill="#FFFFFF"/>
+    <circle cx="82" cy="98" r="3" fill="#FFFFFF"/>
+  </g>
+  <text x="314" y="150" fill="#171A1F" font-family="Avenir Next, Segoe UI, PingFang SC, Microsoft YaHei, sans-serif" font-size="84" font-weight="800" letter-spacing="-1.4">OriginAgent</text>
+  <text x="316" y="206" fill="#6D7580" font-family="Segoe UI, PingFang SC, Microsoft YaHei, sans-serif" font-size="29" font-weight="700" letter-spacing="1.1">六边中枢</text>
+</svg>

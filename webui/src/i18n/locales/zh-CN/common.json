@@ -1,0 +1,755 @@
+{
+  "app": {
+    "brand": "OriginAgent",
+    "loading": {
+      "connecting": "正在连接 OriginAgent…",
+      "boot": "正在加载 OriginAgent…"
+    },
+    "error": {
+      "title": "无法连接到 OriginAgent",
+      "gatewayHint": "请确认 gateway 已启动（`originagent gateway`），并且当前页面与 gateway 运行在同一台机器上。"
+    },
+    "system": {
+      "section": "系统",
+      "restartHint": "重启 OriginAgent 以应用运行时更改。",
+      "restart": "重启 OriginAgent",
+      "restarting": "正在重启..."
+    },
+    "restart": {
+      "completed": "重启已完成，用时 {{seconds}} 秒。"
+    },
+    "documentTitle": {
+      "base": "OriginAgent",
+      "chat": "{{title}} · OriginAgent"
+    },
+    "meta": {
+      "description": "OriginAgent Web UI —— 与你的 OriginAgent 工作区对话。"
+    }
+  },
+  "sidebar": {
+    "navigation": "侧边栏导航",
+    "globalActions": "全局操作",
+    "collapse": "收起侧边栏",
+    "toggleTheme": "切换主题",
+    "home": "首页",
+    "newChat": "新建对话",
+    "searchAria": "搜索会话",
+    "searchPlaceholder": "搜索会话",
+    "searchResults": "搜索结果",
+    "noSearchResults": "没有匹配的会话。",
+    "recent": "最近对话",
+    "refreshSessions": "刷新会话",
+    "reviews": "学习审核",
+    "settings": "设置",
+    "language": {
+      "label": "语言",
+      "ariaLabel": "切换语言"
+    }
+  },
+  "settings": {
+    "backToChat": "返回对话",
+    "sidebar": {
+      "title": "设置",
+      "ariaLabel": "设置分区"
+    },
+    "nav": {
+      "general": "通用",
+      "self": "自我认知",
+      "byok": "BYOK",
+      "mcp": "MCP",
+      "skills": "技能",
+      "domains": "领域包"
+    },
+    "sections": {
+      "interface": "界面",
+      "ai": "AI",
+      "learning": "学习",
+      "runtimeControls": "运行控制",
+      "system": "系统"
+    },
+    "rows": {
+      "theme": "主题",
+      "language": "语言",
+      "provider": "提供商",
+      "model": "模型",
+      "backgroundReview": "后台回顾",
+      "showReasoning": "显示推理",
+      "sendToolHints": "发送工具提示",
+      "sendProgress": "发送进度",
+      "allowAgentInitiatedMessages": "Agent 主动消息",
+      "unifiedSession": "统一会话",
+      "coldArchive": "冷归档",
+      "webTools": "Web 工具",
+      "contentRead": "内容读取",
+      "imageGeneration": "图片生成",
+      "execEnabled": "Exec 工具",
+      "execProfile": "Exec 配置",
+      "auditMode": "审计模式",
+      "runtimeProfile": "运行时配置",
+      "curator": "策展器",
+      "domainPacks": "领域包",
+      "heartbeat": "心跳",
+      "pairing": "配对",
+      "restart": "重启 OriginAgent",
+      "configPath": "配置路径"
+    },
+    "help": {
+      "theme": "在浅色和深色外观之间切换。",
+      "language": "选择 WebUI 使用的语言。",
+      "provider": "选择新模型请求使用的服务提供商。",
+      "model": "设置 OriginAgent 默认使用的模型名称。",
+      "backgroundReview": "在成功回合后生成待审核学习提案。默认关闭，避免产生意外 LLM 成本。",
+      "showReasoning": "在支持的通道中展示模型推理内容。",
+      "sendToolHints": "执行期间流式显示轻量级工具调用提示。",
+      "sendProgress": "在 Agent 工作期间发送进度更新。",
+      "allowAgentInitiatedMessages": "允许空闲会话的主动提醒和提示消息。",
+      "unifiedSession": "在不同通道和设备之间共享同一个会话。",
+      "coldArchive": "将裁剪后的会话消息保存在本地冷归档中。",
+      "webTools": "在运行时启用 Web 搜索和抓取工具。",
+      "contentRead": "启用 RSS、GitHub、Hacker News 等结构化内容读取器。",
+      "imageGeneration": "在对话回合中启用图片生成工具。",
+      "execEnabled": "注册 exec 工具以执行 shell 命令。",
+      "execProfile": "选择 exec 使用的安全配置。",
+      "auditMode": "选择运行时保留多少工具审计数据。",
+      "runtimeProfile": "选择启动时应用的运行时安全配置。",
+      "curator": "启用确定性的 curator 提案生成。",
+      "domainPacks": "启用领域包发现以及 prompt/tool 注入。",
+      "heartbeat": "启用网关心跳服务。",
+      "pairing": "要求通道访问前先完成发送者配对/审批。",
+      "configPath": "当前网关正在使用的配置文件。"
+    },
+    "values": {
+      "light": "浅色",
+      "dark": "深色",
+      "notAvailable": "不可用"
+    },
+    "status": {
+      "loading": "正在加载设置...",
+      "loadError": "无法加载设置",
+      "unsaved": "有未保存的更改。",
+      "savedRestart": "已保存。重启 OriginAgent 后生效。"
+    },
+    "actions": {
+      "save": "保存",
+      "saving": "保存中",
+      "edit": "编辑",
+      "cancel": "取消"
+    },
+    "byok": {
+      "description": "自带 provider key。OriginAgent 会从当前 config 读取这些值，只有已配置的 provider 才能在通用设置里选择。",
+      "configured": "已配置",
+      "notConfigured": "未配置",
+      "configuredSection": "已配置",
+      "notConfiguredSection": "未配置",
+      "showMore": "再显示 {{count}} 个",
+      "showLess": "收起",
+      "apiKey": "API key",
+      "apiBase": "API base",
+      "apiKeyPlaceholder": "输入 API key",
+      "apiKeyConfiguredPlaceholder": "留空则保留当前 key",
+      "configuredKeyHint": "已配置的 key",
+      "apiBasePlaceholder": "使用 provider 默认地址",
+      "apiKeyRequired": "需要 API key 才能配置此 provider。",
+      "showApiKey": "显示 API key",
+      "hideApiKey": "隐藏 API key",
+      "noConfiguredProviders": "没有已配置的 provider",
+      "configureFirst": "请先在 BYOK 里配置 provider。",
+      "openByok": "打开 BYOK",
+      "tabs": {
+        "ariaLabel": "BYOK 凭证类型",
+        "llm": "LLM",
+        "webSearch": "Web Search"
+      },
+      "webSearch": {
+        "provider": "搜索 provider",
+        "providerHelp": "选择 web search 工具使用的后端。",
+        "selectProvider": "选择 provider",
+        "credentials": "凭证",
+        "noCredentialRequired": "无需 key",
+        "noCredentialHelp": "DuckDuckGo 不需要保存 API key。",
+        "apiKeyHelp": "保存到 config 后只显示掩码提示。",
+        "baseUrl": "Base URL",
+        "baseUrlHelp": "SearXNG 需要你自己的实例地址。",
+        "baseUrlPlaceholder": "https://search.example.com",
+        "apiKeyRequired": "这个搜索 provider 需要 API key。",
+        "baseUrlRequired": "SearXNG 需要 Base URL。",
+        "missingCredential": "填写所需凭证后才能保存。",
+        "saveHint": "改动会应用到新的 web search 请求。"
+      }
+    },
+    "mcp": {
+      "description": "不用手改 config.json，在这里配置 MCP server。改动会保存到当前 OriginAgent 配置文件。",
+      "quickConfig": "快速配置",
+      "add": "添加 MCP",
+      "newServer": "新建 MCP server",
+      "editServer": "编辑 MCP server",
+      "configuredServers": "已配置 server",
+      "empty": "还没有配置 MCP server。",
+      "restartRequired": "已保存。重启 OriginAgent 后会连接更新后的 MCP server。",
+      "editorHelp": "编辑时，env/header 中保留掩码或留空会沿用旧值。",
+      "name": "Server 名称",
+      "command": "命令",
+      "commandHelp": "用于启动 stdio MCP server 的可执行命令。",
+      "args": "参数",
+      "argsHelp": "每行一个参数。",
+      "env": "环境变量",
+      "envHelp": "每行一个 KEY=value。已有掩码值会被保留。",
+      "url": "URL",
+      "headers": "Headers",
+      "headersHelp": "每行一个 KEY=value。已有掩码值会被保留。",
+      "enabledTools": "启用工具",
+      "enabledToolsHelp": "每行一个工具名。使用 * 表示全部允许。",
+      "timeout": "超时时间（秒）",
+      "delete": "删除 MCP server",
+      "transport": {
+        "stdio": "stdio",
+        "sse": "SSE",
+        "streamableHttp": "HTTP"
+      },
+      "homeAssistant": {
+        "title": "Home Assistant",
+        "description": "只填 HA 地址和长期访问令牌，OriginAgent 会自动配置 MCP 地址、认证 Header 和本地访问白名单。",
+        "address": "HA 地址",
+        "addressHelp": "可以粘贴 http://localhost:8123 或浏览器里的 /home/0 地址。",
+        "token": "长期访问令牌",
+        "tokenHelp": "在 Home Assistant 个人资料的安全页面创建。",
+        "tokenHelpExisting": "已保存令牌。留空会继续使用旧令牌。",
+        "tokenPlaceholder": "粘贴 Home Assistant 长期访问令牌",
+        "saveHint": "保存后会注册为 HTTP MCP，并在重启 OriginAgent 后生效。",
+        "save": "保存 HA MCP",
+        "validation": {
+          "addressRequired": "请填写 Home Assistant 地址。",
+          "tokenRequired": "请填写 Home Assistant 长期访问令牌。"
+        }
+      },
+      "validation": {
+        "nameRequired": "请填写 MCP server 名称。",
+        "commandRequired": "stdio MCP server 需要填写命令。",
+        "urlRequired": "HTTP MCP server 需要填写 URL。"
+      }
+    },
+    "skills": {
+      "description": "治理由学习审核提案生成的 workspace skills。候选 skill 需要先验证、再启用，才会成为可靠能力。",
+      "loading": "正在加载 skills...",
+      "empty": "没有匹配的 skill。",
+      "noSelection": "选择一个 skill 查看生命周期状态。",
+      "reason": "生命周期备注",
+      "reasonPlaceholder": "可选：记录这次生命周期变更的原因。",
+      "stats": {
+        "total": "总数",
+        "workspace": "Workspace",
+        "unverified": "未验证",
+        "always": "Always 自动加载"
+      },
+      "filters": {
+        "title": "筛选",
+        "allSources": "全部来源",
+        "allStatuses": "全部状态"
+      },
+      "source": {
+        "workspace": "Workspace",
+        "builtin": "内置",
+        "domain": "领域包"
+      },
+      "status": {
+        "proposed": "候选",
+        "active": "启用",
+        "deprecated": "废弃",
+        "rejected": "拒绝",
+        "unknown": "未知"
+      },
+      "verification": {
+        "unverified": "未验证",
+        "verified": "已验证",
+        "rejected": "已拒绝",
+        "unknown": "未知"
+      },
+      "fields": {
+        "version": "版本",
+        "domain": "领域",
+        "reviewed": "审核时间",
+        "always": "Always",
+        "lastEvent": "最近事件"
+      },
+      "values": {
+        "yes": "是",
+        "no": "否"
+      },
+      "actions": {
+        "verify": "验证",
+        "activate": "启用",
+        "deprecate": "废弃",
+        "reject": "拒绝",
+        "alwaysOn": "Always on",
+        "alwaysOff": "Always off"
+      },
+      "confirm": {
+        "activate": "确认启用这个已验证 skill，让它进入正常发现范围？",
+        "alwaysOn": "确认把这个 skill always 加载到系统提示词？只应对高度可信 skill 使用。"
+      }
+    },
+    "domains": {
+      "description": "治理当前 workspace 中的本地领域包。Workspace pack 可以安装、升级、评估、启用和卸载；builtin pack 保持只读。",
+      "loading": "正在加载领域包...",
+      "empty": "没有匹配的领域包。",
+      "noSelection": "选择一个领域包查看治理状态。",
+      "reason": "治理备注",
+      "reasonPlaceholder": "可选：记录这次领域包操作的原因。",
+      "overrideWarning": "这个 workspace pack 覆盖了同 id 的 builtin pack。",
+      "stats": {
+        "workspace": "Workspace",
+        "builtin": "内置",
+        "active": "已激活",
+        "overrides": "覆盖"
+      },
+      "filters": {
+        "title": "筛选",
+        "allSources": "全部来源",
+        "allStatuses": "全部状态"
+      },
+      "install": {
+        "title": "安装本地领域包",
+        "description": "把本地领域包目录复制进 workspace 治理目录。",
+        "placeholder": "D:/path/to/domain-pack"
+      },
+      "upgrade": {
+        "placeholder": "D:/path/to/new-pack-version"
+      },
+      "source": {
+        "workspace": "Workspace",
+        "builtin": "内置"
+      },
+      "status": {
+        "available": "可用",
+        "unavailable": "不可用",
+        "invalid": "无效"
+      },
+      "values": {
+        "enabled": "已启用",
+        "disabled": "已禁用"
+      },
+      "fields": {
+        "version": "版本",
+        "verification": "验证状态",
+        "skills": "Skills",
+        "workflows": "Workflows",
+        "active": "已激活",
+        "enabled": "已启用",
+        "lastEval": "最近评估",
+        "checks": "检查项",
+        "warnings": "警告",
+        "errors": "错误"
+      },
+      "actions": {
+        "install": "安装",
+        "upgrade": "升级",
+        "enable": "启用",
+        "disable": "禁用",
+        "activate": "激活",
+        "deactivate": "停用",
+        "eval": "评估",
+        "uninstall": "卸载"
+      },
+      "confirm": {
+        "activate": "确认把这个领域包激活到运行时发现范围？",
+        "uninstall": "确认从治理中卸载这个 workspace 领域包？"
+      },
+      "validation": {
+        "upgradePathRequired": "升级时必须提供源路径。"
+      }
+    },
+    "self": {
+      "description": "从当前运行态、治理对象和待审核信号汇总出的只读能力认知视图。",
+      "loading": "正在加载自我认知...",
+      "stats": {
+        "activeDomains": "已激活领域",
+        "verifiedSkills": "已验证技能",
+        "workflows": "Workflow",
+        "pendingReviews": "待审核提案",
+        "pendingConfirmations": "待确认项",
+        "limitations": "限制项"
+      },
+      "sections": {
+        "identity": "身份",
+        "runtime": "运行态",
+        "domains": "领域包",
+        "skills": "技能",
+        "workflows": "Workflow",
+        "reviewsConfirmations": "审核与确认",
+        "limitations": "已知限制"
+      },
+      "fields": {
+        "agent": "Agent",
+        "workspace": "Workspace",
+        "runtimeProfile": "运行配置",
+        "auditMode": "审计模式",
+        "registeredTools": "已注册工具",
+        "activeSessions": "活跃会话",
+        "pendingQueues": "待处理队列",
+        "cron": "可用 Cron",
+        "confirmation": "可用确认",
+        "backgroundReview": "后台审核",
+        "curator": "整理器",
+        "pendingReviews": "待审核提案",
+        "pendingConfirmations": "待确认项",
+        "expiredConfirmations": "已过期确认",
+        "pendingHistory": "待处理历史",
+        "reviewOrigins": "提案来源",
+        "reviewTypes": "提案类型",
+        "confirmationRisks": "确认风险等级"
+      },
+      "badges": {
+        "active": "已激活"
+      },
+      "empty": {
+        "section": "暂时没有可显示的内容。",
+        "none": "无",
+        "limitations": "当前没有限制项。"
+      },
+      "workflowStatus": {
+        "available": "可用",
+        "invalid": "无效",
+        "unknown": "未知"
+      },
+      "verification": {
+        "unverified": "未验证",
+        "verified": "已验证",
+        "unknown": "未知"
+      },
+      "limitationStatus": {
+        "info": "信息",
+        "warning": "警告",
+        "error": "错误"
+      }
+    }
+  },
+  "reviews": {
+    "title": "学习提案审核",
+    "backToChat": "返回对话",
+    "loading": "正在加载审核提案...",
+    "empty": "没有匹配的审核提案。",
+    "noSelection": "选择一个提案进行审核。",
+    "untitled": "未命名提案",
+    "confidence": "置信度 {{value}}",
+    "appliedFact": "事实 {{id}}",
+    "appliedSkill": "技能 {{path}}",
+    "appliedWorkflow": "Workflow {{path}}",
+    "unsupportedApply": "这个提案在 P10 中仅供审核，或已经进入终态，不能再直接应用。",
+    "reasonLabel": "审核备注",
+    "reasonPlaceholder": "可选：说明为什么应用、拒绝或延期这个提案。",
+    "noEvidence": "这个提案没有保存证据片段。",
+    "stats": {
+      "total": "共 {{count}} 条",
+      "pending": "{{count}} 条待审核"
+    },
+    "filters": {
+      "status": "按状态筛选",
+      "type": "按类型筛选",
+      "origin": "按来源筛选",
+      "all": "全部",
+      "allTypes": "全部类型",
+      "allOrigins": "全部来源"
+    },
+    "origins": {
+      "background_review": "背景审核",
+      "curator": "整理器"
+    },
+    "status": {
+      "pending": "待审核",
+      "applied": "已应用",
+      "rejected": "已拒绝",
+      "deferred": "已延期",
+      "failed": "失败",
+      "saved": "已保存"
+    },
+    "types": {
+      "memory": "记忆",
+      "fact": "事实",
+      "skill": "Skill",
+      "workflow": "Workflow",
+      "promote_skill": "提升 Skill",
+      "deprecate_skill": "废弃 Skill",
+      "merge_skill": "合并 Skill",
+      "archive_workflow": "归档 Workflow",
+      "move_to_domain": "迁移到领域包",
+      "fact_conflict": "事实冲突"
+    },
+    "sections": {
+      "context": "上下文",
+      "evidence": "证据"
+    },
+    "fields": {
+      "origin": "来源",
+      "subject": "对象",
+      "suggestedAction": "建议动作",
+      "session": "会话",
+      "created": "创建时间",
+      "rationale": "理由",
+      "reviewReason": "审核备注"
+    },
+    "actions": {
+      "refresh": "刷新",
+      "apply": "应用",
+      "reject": "拒绝",
+      "defer": "延期"
+    },
+    "confirmApply": {
+      "title": "应用这个提案？",
+      "description": "OriginAgent 会把已批准的记忆或事实写入受控 facts store，并重新生成 MEMORY.md。",
+      "skillDescription": "OriginAgent 会把 {{name}} 写成 proposed/unverified workspace skill，位置是 {{path}}。它会被发现，但不会 always 自动加载。",
+      "promoteSkillDescription": "OriginAgent 会提升 {{name}}：如有需要先完成 verify，再把位于 {{path}} 的 workspace skill 激活。",
+      "deprecateSkillDescription": "OriginAgent 会把位于 {{path}} 的 workspace skill {{name}} 标记为 deprecated，它将不再出现在正常的 skill 发现结果中。",
+      "skillPathPending": "workspace/skills/<safe-name>/SKILL.md",
+      "workflowDescription": "OriginAgent 会把 {{name}} 写成 proposed/unverified 手动 workflow，位置是 {{path}}。它不会创建自动化、运行工具或创建计划任务。",
+      "workflowPathPending": "workspace/workflows/<safe-name>/workflow.yaml",
+      "cancel": "取消",
+      "confirm": "应用"
+    }
+  },
+  "chat": {
+    "fallbackTitle": "对话 {{id}}",
+    "pendingTitle": "新对话",
+    "loading": "加载中…",
+    "noSessions": "还没有会话。",
+    "actions": "“{{title}}” 的会话操作",
+    "delete": "删除",
+    "newChat": "新建对话",
+    "groups": {
+      "today": "今天",
+      "yesterday": "昨天",
+      "earlier": "更早"
+    }
+  },
+  "deleteConfirm": {
+    "title": "删除这个对话？",
+    "description": "此操作无法撤销。",
+    "cancel": "取消",
+    "confirm": "删除"
+  },
+  "connection": {
+    "idle": "空闲",
+    "connecting": "连接中…",
+    "open": "已连接",
+    "reconnecting": "重连中…",
+    "closed": "已断开",
+    "error": "连接出错"
+  },
+  "thread": {
+    "loadingConversation": "正在加载对话…",
+    "empty": {
+      "greeting": "我可以帮你做什么？",
+      "quickActions": {
+        "plan": {
+          "title": "创建项目计划",
+          "prompt": "帮我为接下来要做的事情写一份简洁的项目计划。"
+        },
+        "analyze": {
+          "title": "分析这些数据",
+          "prompt": "帮我分析这些数据，并指出最重要的模式。"
+        },
+        "brainstorm": {
+          "title": "头脑风暴想法",
+          "prompt": "围绕这个问题头脑风暴几个实用方案，并说明取舍。"
+        },
+        "code": {
+          "title": "编写代码",
+          "prompt": "帮我为这个任务写代码，先从最小可用改动开始。"
+        },
+        "summarize": {
+          "title": "总结这份文档",
+          "prompt": "帮我总结这份文档，并列出关键要点。"
+        },
+        "more": {
+          "title": "更多",
+          "prompt": "展示几个你在这个工作区里可以帮我的实用方式。"
+        }
+      },
+      "imageQuickActions": {
+        "icon": {
+          "title": "设计应用图标",
+          "prompt": "生成一个干净的 1:1 OriginAgent 应用图标：友好的机器人，简洁矢量风格，蓝白柔和配色，不要文字。"
+        },
+        "sticker": {
+          "title": "制作贴纸",
+          "prompt": "生成一张可爱的贴纸风小机器人助手图片，背景像透明贴纸，表情活泼有趣。"
+        },
+        "poster": {
+          "title": "创建海报",
+          "prompt": "生成一张个人 AI 助手的精致海报概念图，现代构图，视觉层级清晰，适合落地页展示。"
+        },
+        "product": {
+          "title": "产品样机",
+          "prompt": "生成一张对话式 AI Web 应用的干净产品样机图，极简界面，高级光影，真实设备边框。"
+        },
+        "portrait": {
+          "title": "风格化头像",
+          "prompt": "生成一个友好的 AI 伙伴风格化头像，柔和光线，细节丰富但亲切，现代插画风格。"
+        },
+        "edit": {
+          "title": "编辑图片",
+          "prompt": "帮我编辑一张图片。先让我上传或指定要编辑的图片，然后生成编辑后的结果。"
+        }
+      }
+    },
+    "header": {
+      "toggleSidebar": "切换侧边栏",
+      "newChat": "从顶部新建对话",
+      "toggleTheme": "从顶部切换主题",
+      "settings": "打开设置"
+    },
+    "composer": {
+      "placeholderThread": "输入消息…",
+      "placeholderHero": "问任何问题...",
+      "placeholderOpening": "正在打开新对话…",
+      "placeholderStreaming": "模型正在回复…",
+      "inputAria": "消息输入框",
+      "sendHint": "Enter 发送 · Shift+Enter 换行",
+      "runRuntimeTitle": "运行中 · {{elapsed}}",
+      "goalStateStrip": "目标 · {{label}}",
+      "goalStateFallback": "目标",
+      "goalStateExpandAria": "查看完整目标",
+      "goalStateSheetTitle": "目标",
+      "send": "发送消息",
+      "stop": "停止响应",
+      "attachImage": "添加图片",
+      "imageMode": {
+        "label": "图片生成",
+        "toggle": "切换图片生成模式",
+        "placeholder": "描述或编辑图片…",
+        "aspectAria": "图片画幅",
+        "aspectLabel": "图片画幅",
+        "aspect": {
+          "auto": "自动",
+          "1_1": "方形 1:1",
+          "3_4": "竖版 3:4",
+          "9_16": "故事版 9:16",
+          "4_3": "横版 4:3",
+          "16_9": "宽屏 16:9"
+        }
+      },
+      "tools": {
+        "search": "搜索",
+        "reason": "推理",
+        "deepResearch": "深度研究",
+        "voice": "语音输入"
+      },
+      "slash": {
+        "ariaLabel": "斜杠命令",
+        "label": "命令",
+        "navigateHint": "↑↓ 选择",
+        "selectHint": "Enter 执行 · Tab 填入",
+        "closeHint": "Esc 关闭",
+        "commands": {
+          "new": {
+            "title": "新建对话",
+            "description": "停止当前任务，并开始一个新的对话。"
+          },
+          "stop": {
+            "title": "停止当前任务",
+            "description": "取消这个对话中正在运行的 agent 回合。"
+          },
+          "restart": {
+            "title": "重启 OriginAgent",
+            "description": "原地重启 bot 进程。"
+          },
+          "status": {
+            "title": "查看状态",
+            "description": "显示运行时、provider 和 channel 状态。"
+          },
+          "history": {
+            "title": "查看对话历史",
+            "description": "打印最近 N 条已持久化的对话消息。"
+          },
+          "dream": {
+            "title": "运行 Dream",
+            "description": "手动触发记忆整理。"
+          },
+          "dream_log": {
+            "title": "查看 Dream 日志",
+            "description": "查看上一次 Dream 整理改变了什么。"
+          },
+          "dream_restore": {
+            "title": "恢复记忆",
+            "description": "将记忆恢复到之前的 Dream 快照。"
+          },
+          "goal": {
+            "title": "长期目标",
+            "description": "让助手把当前请求当作需要多步骤持续推进的目标。"
+          },
+          "model": {
+            "title": "切换模型",
+            "description": "查看或切换当前运行时模型预设。"
+          },
+          "mcp": {
+            "title": "查看 MCP",
+            "description": "列出当前配置的 MCP 服务器和已注册能力。"
+          },
+          "skill": {
+            "title": "查看 Skills",
+            "description": "列出当前 agent 可用的 skills 及来源。"
+          },
+          "help": {
+            "title": "查看帮助",
+            "description": "列出可用的斜杠命令。"
+          }
+        }
+      },
+      "encoding": "处理中…",
+      "remove": "移除附件",
+      "normalizedSizeHint": "{{orig}} → {{current}}（已自动压缩）",
+      "imageRejected": {
+        "unsupported_type": "不支持的文件类型",
+        "too_many_images": "每条消息最多 {{max}} 张图片",
+        "magic_mismatch": "文件看起来不像真实的图片",
+        "decode_failed": "无法解码这张图片",
+        "too_large": "图片太大，请换一张小一点的",
+        "io": "无法读取该文件"
+      },
+      "goalStateCloseAria": "关闭目标"
+    },
+    "scrollToBottom": "滚动到底部"
+  },
+  "message": {
+    "streaming": "流式输出中",
+    "assistantTyping": "助手正在输入",
+    "toolSingle": "正在使用工具",
+    "toolMany": "已使用 {{count}} 个工具",
+    "toolSummary": "{{count}} 个工具",
+    "toolSummaryMany": "{{count}} 个工具",
+    "reasoningTools": "推理 · {{count}} 个工具",
+    "reasoningToolsSingular": "推理 · 1 个工具",
+    "reasoning": "思考过程",
+    "reasoningStreaming": "正在思考…",
+    "reasoningSummary": "推理",
+    "agentActivitySummary": "{{reasoning}} 步 · {{tools}} 次工具调用",
+    "agentActivityToolsOnly": "{{tools}} 次工具调用",
+    "agentActivityLiveSummary": "进行中… · {{reasoning}} 步 · {{tools}} 次工具调用",
+    "agentActivityLiveToolsOnly": "进行中… · {{tools}} 次工具调用",
+    "imageAttachment": "图片附件",
+    "copyReply": "复制回复",
+    "copiedReply": "已复制回复",
+    "turnLatencyTitle": "本轮耗时（端到端）"
+  },
+  "lightbox": {
+    "title": "图片预览",
+    "open": "查看图片",
+    "prev": "上一张",
+    "next": "下一张",
+    "close": "关闭预览"
+  },
+  "code": {
+    "fallbackLanguage": "代码",
+    "copyAria": "复制代码",
+    "copy": "复制",
+    "copied": "已复制"
+  },
+  "common": {
+    "dismiss": "关闭"
+  },
+  "errors": {
+    "messageTooBig": {
+      "title": "消息过大",
+      "body": "服务端因超过大小限制拒收了上一条消息。可移除部分图片或使用更小的图片后重试。"
+    }
+  }
+}

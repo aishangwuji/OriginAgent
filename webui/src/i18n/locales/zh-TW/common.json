@@ -1,0 +1,586 @@
+{
+  "app": {
+    "brand": "OriginAgent",
+    "loading": {
+      "connecting": "正在連線到 OriginAgent…",
+      "boot": "正在載入 OriginAgent…"
+    },
+    "error": {
+      "title": "無法連線到 OriginAgent",
+      "gatewayHint": "請確認 gateway 已啟動（`originagent gateway`），並且目前頁面與 gateway 在同一台機器上開啟。"
+    },
+    "system": {
+      "section": "系統",
+      "restartHint": "重新啟動 OriginAgent 以套用執行階段變更。",
+      "restart": "重新啟動 OriginAgent",
+      "restarting": "正在重新啟動..."
+    },
+    "restart": {
+      "completed": "重新啟動已完成，耗時 {{seconds}} 秒。"
+    },
+    "documentTitle": {
+      "base": "OriginAgent",
+      "chat": "{{title}} · OriginAgent"
+    },
+    "meta": {
+      "description": "OriginAgent Web UI —— 與你的 OriginAgent 工作區對話。"
+    }
+  },
+  "sidebar": {
+    "collapse": "收合側邊欄",
+    "toggleTheme": "切換主題",
+    "newChat": "新增對話",
+    "recent": "最近對話",
+    "refreshSessions": "重新整理會話",
+    "reviews": "學習審核",
+    "settings": "設定",
+    "language": {
+      "label": "語言",
+      "ariaLabel": "切換語言"
+    }
+  },
+  "settings": {
+    "backToChat": "返回對話",
+    "sidebar": {
+      "title": "設定",
+      "ariaLabel": "設定分區"
+    },
+    "nav": {
+      "general": "一般",
+      "self": "自我認知",
+      "byok": "BYOK",
+      "mcp": "MCP",
+      "skills": "技能",
+      "domains": "領域包"
+    },
+    "sections": {
+      "interface": "介面",
+      "ai": "AI",
+      "learning": "學習",
+      "runtimeControls": "執行控制",
+      "system": "系統"
+    },
+    "rows": {
+      "theme": "主題",
+      "language": "語言",
+      "provider": "提供者",
+      "model": "模型",
+      "backgroundReview": "背景回顧",
+      "showReasoning": "顯示推理",
+      "sendToolHints": "傳送工具提示",
+      "sendProgress": "傳送進度",
+      "allowAgentInitiatedMessages": "Agent 主動訊息",
+      "unifiedSession": "統一會話",
+      "coldArchive": "冷封存",
+      "webTools": "Web 工具",
+      "contentRead": "內容讀取",
+      "imageGeneration": "圖片生成",
+      "execEnabled": "Exec 工具",
+      "execProfile": "Exec 設定",
+      "auditMode": "審計模式",
+      "runtimeProfile": "執行時設定",
+      "curator": "策展器",
+      "domainPacks": "領域包",
+      "heartbeat": "心跳",
+      "pairing": "配對",
+      "restart": "重新啟動 OriginAgent",
+      "configPath": "設定檔路徑"
+    },
+    "help": {
+      "theme": "在淺色與深色外觀之間切換。",
+      "language": "選擇 WebUI 使用的語言。",
+      "provider": "選擇新模型請求使用的服務提供者。",
+      "model": "設定 OriginAgent 預設使用的模型名稱。",
+      "backgroundReview": "在成功回合後產生待審核學習提案。預設關閉，以避免意外的 LLM 成本。",
+      "showReasoning": "在支援的通道中顯示模型推理內容。",
+      "sendToolHints": "執行期間串流顯示輕量工具呼叫提示。",
+      "sendProgress": "在 Agent 工作期間傳送進度更新。",
+      "allowAgentInitiatedMessages": "允許空閒會話的主動提醒與提示訊息。",
+      "unifiedSession": "在不同通道與裝置之間共用同一個會話。",
+      "coldArchive": "將裁剪後的會話訊息保存在本機冷封存中。",
+      "webTools": "在執行時啟用 Web 搜尋與抓取工具。",
+      "contentRead": "啟用 RSS、GitHub、Hacker News 等結構化內容讀取器。",
+      "imageGeneration": "在對話回合中啟用圖片生成工具。",
+      "execEnabled": "註冊 exec 工具以執行 shell 指令。",
+      "execProfile": "選擇 exec 使用的安全設定。",
+      "auditMode": "選擇執行時保留多少工具審計資料。",
+      "runtimeProfile": "選擇啟動時套用的執行時安全設定。",
+      "curator": "啟用確定性的 curator 提案生成。",
+      "domainPacks": "啟用領域包發現以及 prompt/tool 注入。",
+      "heartbeat": "啟用閘道心跳服務。",
+      "pairing": "要求通道存取前先完成發送者配對/核准。",
+      "configPath": "目前閘道正在使用的設定檔。"
+    },
+    "values": {
+      "light": "淺色",
+      "dark": "深色",
+      "notAvailable": "不可用"
+    },
+    "status": {
+      "loading": "正在載入設定...",
+      "loadError": "無法載入設定",
+      "unsaved": "有未儲存的變更。",
+      "savedRestart": "已儲存。重新啟動 OriginAgent 後生效。"
+    },
+    "actions": {
+      "save": "儲存",
+      "saving": "儲存中",
+      "edit": "編輯",
+      "cancel": "取消"
+    },
+    "byok": {
+      "description": "自帶 provider key。OriginAgent 會從目前 config 讀取這些值，只有已設定的 provider 才能在一般設定中選擇。",
+      "configured": "已設定",
+      "notConfigured": "未設定",
+      "configuredSection": "已設定",
+      "notConfiguredSection": "未設定",
+      "showMore": "再顯示 {{count}} 個",
+      "showLess": "收合",
+      "apiKey": "API key",
+      "apiBase": "API base",
+      "apiKeyPlaceholder": "輸入 API key",
+      "apiKeyConfiguredPlaceholder": "留空則保留目前 key",
+      "configuredKeyHint": "已設定的 key",
+      "apiBasePlaceholder": "使用 provider 預設地址",
+      "apiKeyRequired": "需要 API key 才能設定此 provider。",
+      "showApiKey": "顯示 API key",
+      "hideApiKey": "隱藏 API key",
+      "noConfiguredProviders": "沒有已設定的 provider",
+      "configureFirst": "請先在 BYOK 設定 provider。",
+      "openByok": "開啟 BYOK",
+      "tabs": {
+        "ariaLabel": "BYOK 憑證類型",
+        "llm": "LLM",
+        "webSearch": "Web Search"
+      },
+      "webSearch": {
+        "provider": "搜尋 provider",
+        "providerHelp": "選擇 web search 工具使用的後端。",
+        "selectProvider": "選擇 provider",
+        "credentials": "憑證",
+        "noCredentialRequired": "不需要 key",
+        "noCredentialHelp": "DuckDuckGo 不需要儲存 API key。",
+        "apiKeyHelp": "儲存到 config 後只顯示遮罩提示。",
+        "baseUrl": "Base URL",
+        "baseUrlHelp": "SearXNG 需要你自己的實例網址。",
+        "baseUrlPlaceholder": "https://search.example.com",
+        "apiKeyRequired": "此搜尋 provider 需要 API key。",
+        "baseUrlRequired": "SearXNG 需要 Base URL。",
+        "missingCredential": "填寫必要憑證後才能儲存。",
+        "saveHint": "變更會套用到新的 web search 請求。"
+      }
+    },
+    "mcp": {
+      "description": "不用手動編輯 config.json，在這裡設定 MCP server。變更會儲存到目前 OriginAgent 設定檔。",
+      "quickConfig": "快速設定",
+      "add": "新增 MCP",
+      "newServer": "新增 MCP server",
+      "editServer": "編輯 MCP server",
+      "configuredServers": "已設定 server",
+      "empty": "尚未設定 MCP server。",
+      "restartRequired": "已儲存。重啟 OriginAgent 後會連接更新後的 MCP server。",
+      "editorHelp": "編輯時，env/header 中保留遮罩或留空會沿用舊值。",
+      "name": "Server 名稱",
+      "command": "命令",
+      "commandHelp": "用於啟動 stdio MCP server 的可執行命令。",
+      "args": "參數",
+      "argsHelp": "每行一個參數。",
+      "env": "環境變數",
+      "envHelp": "每行一個 KEY=value。已有遮罩值會被保留。",
+      "url": "URL",
+      "headers": "Headers",
+      "headersHelp": "每行一個 KEY=value。已有遮罩值會被保留。",
+      "enabledTools": "啟用工具",
+      "enabledToolsHelp": "每行一個工具名。使用 * 表示全部允許。",
+      "timeout": "逾時秒數",
+      "delete": "刪除 MCP server",
+      "transport": {
+        "stdio": "stdio",
+        "sse": "SSE",
+        "streamableHttp": "HTTP"
+      },
+      "homeAssistant": {
+        "title": "Home Assistant",
+        "description": "只填 HA 地址和長期存取權杖，OriginAgent 會自動設定 MCP 地址、認證 Header 和本機存取白名單。",
+        "address": "HA 地址",
+        "addressHelp": "可以貼上 http://localhost:8123 或瀏覽器裡的 /home/0 地址。",
+        "token": "長期存取權杖",
+        "tokenHelp": "在 Home Assistant 個人資料的安全頁面建立。",
+        "tokenHelpExisting": "已儲存權杖。留空會繼續使用舊權杖。",
+        "tokenPlaceholder": "貼上 Home Assistant 長期存取權杖",
+        "saveHint": "儲存後會註冊為 HTTP MCP，並在重啟 OriginAgent 後生效。",
+        "save": "儲存 HA MCP",
+        "validation": {
+          "addressRequired": "請填寫 Home Assistant 地址。",
+          "tokenRequired": "請填寫 Home Assistant 長期存取權杖。"
+        }
+      },
+      "validation": {
+        "nameRequired": "請填寫 MCP server 名稱。",
+        "commandRequired": "stdio MCP server 需要填寫命令。",
+        "urlRequired": "HTTP MCP server 需要填寫 URL。"
+      }
+    },
+    "skills": {
+      "description": "Govern workspace skills created by reviewed learning proposals. Proposed skills stay manual until they are verified and activated.",
+      "loading": "Loading skills...",
+      "empty": "No matching skills.",
+      "noSelection": "Select a skill to inspect lifecycle state.",
+      "reason": "Lifecycle note",
+      "reasonPlaceholder": "Optional reason for this lifecycle change.",
+      "stats": {
+        "total": "Total",
+        "workspace": "Workspace",
+        "unverified": "Unverified",
+        "always": "Always loaded"
+      },
+      "filters": {
+        "title": "Filters",
+        "allSources": "All sources",
+        "allStatuses": "All statuses"
+      },
+      "source": {
+        "workspace": "Workspace",
+        "builtin": "Built-in",
+        "domain": "Domain"
+      },
+      "status": {
+        "proposed": "Proposed",
+        "active": "Active",
+        "deprecated": "Deprecated",
+        "rejected": "Rejected",
+        "unknown": "Unknown"
+      },
+      "verification": {
+        "unverified": "Unverified",
+        "verified": "Verified",
+        "rejected": "Rejected",
+        "unknown": "Unknown"
+      },
+      "fields": {
+        "version": "Version",
+        "domain": "Domain",
+        "reviewed": "Reviewed",
+        "always": "Always",
+        "lastEvent": "Last event"
+      },
+      "values": {
+        "yes": "Yes",
+        "no": "No"
+      },
+      "actions": {
+        "verify": "Verify",
+        "activate": "Activate",
+        "deprecate": "Deprecate",
+        "reject": "Reject",
+        "alwaysOn": "Always on",
+        "alwaysOff": "Always off"
+      },
+      "confirm": {
+        "activate": "Activate this verified skill for normal discovery?",
+        "alwaysOn": "Always load this skill into the system prompt? Use only for highly trusted skills."
+      }
+    }
+  },
+  "reviews": {
+    "title": "學習提案審核",
+    "backToChat": "返回對話",
+    "loading": "正在載入審核提案...",
+    "empty": "沒有符合條件的審核提案。",
+    "noSelection": "選擇一個提案進行審核。",
+    "untitled": "未命名提案",
+    "confidence": "信心度 {{value}}",
+    "appliedFact": "事實 {{id}}",
+    "appliedSkill": "技能 {{path}}",
+    "appliedWorkflow": "Workflow {{path}}",
+    "unsupportedApply": "本階段可以套用 memory、fact、skill 和 workflow 提案。",
+    "reasonLabel": "審核備註",
+    "reasonPlaceholder": "選填：說明為什麼套用、拒絕或延期這個提案。",
+    "noEvidence": "這個提案沒有保存證據片段。",
+    "stats": {
+      "total": "共 {{count}} 筆",
+      "pending": "{{count}} 筆待審核"
+    },
+    "filters": {
+      "status": "依狀態篩選",
+      "type": "依類型篩選",
+      "all": "全部",
+      "allTypes": "全部類型",
+      "origin": "Filter by origin",
+      "allOrigins": "All origins"
+    },
+    "status": {
+      "pending": "待審核",
+      "applied": "已套用",
+      "rejected": "已拒絕",
+      "deferred": "已延期",
+      "failed": "失敗",
+      "saved": "已保存"
+    },
+    "types": {
+      "memory": "記憶",
+      "fact": "事實",
+      "skill": "Skill",
+      "workflow": "Workflow",
+      "promote_skill": "Promote skill",
+      "deprecate_skill": "Deprecate skill",
+      "merge_skill": "Merge skill",
+      "archive_workflow": "Archive workflow",
+      "move_to_domain": "Move to domain",
+      "fact_conflict": "Fact conflict"
+    },
+    "sections": {
+      "context": "上下文",
+      "evidence": "證據"
+    },
+    "fields": {
+      "session": "會話",
+      "created": "建立時間",
+      "rationale": "理由",
+      "reviewReason": "審核備註",
+      "origin": "Origin",
+      "subject": "Subject",
+      "suggestedAction": "Suggested action"
+    },
+    "actions": {
+      "refresh": "重新整理",
+      "apply": "套用",
+      "reject": "拒絕",
+      "defer": "延期"
+    },
+    "confirmApply": {
+      "title": "套用這個提案？",
+      "description": "OriginAgent 會把已批准的記憶或事實寫入受控 facts store，並重新生成 MEMORY.md。",
+      "skillDescription": "OriginAgent 會把 {{name}} 寫成 proposed/unverified workspace skill，位置是 {{path}}。它會被發現，但不會 always 自動載入。",
+      "skillPathPending": "workspace/skills/<safe-name>/SKILL.md",
+      "workflowDescription": "OriginAgent 會把 {{name}} 寫成 proposed/unverified 手動 workflow，位置是 {{path}}。它不會建立自動化、執行工具或建立排程任務。",
+      "workflowPathPending": "workspace/workflows/<safe-name>/workflow.yaml",
+      "cancel": "取消",
+      "confirm": "套用",
+      "promoteSkillDescription": "OriginAgent will promote {{name}} by verifying it if needed and activating the workspace skill at {{path}}.",
+      "deprecateSkillDescription": "OriginAgent will mark workspace skill {{name}} as deprecated at {{path}}. It will stop appearing in normal skill discovery."
+    },
+    "origins": {
+      "background_review": "Background review",
+      "curator": "Curator"
+    }
+  },
+  "chat": {
+    "fallbackTitle": "對話 {{id}}",
+    "loading": "載入中…",
+    "noSessions": "目前還沒有會話。",
+    "actions": "「{{title}}」的會話操作",
+    "delete": "刪除",
+    "newChat": "新增對話"
+  },
+  "deleteConfirm": {
+    "title": "刪除這個對話？",
+    "description": "此操作無法復原。",
+    "cancel": "取消",
+    "confirm": "刪除"
+  },
+  "connection": {
+    "idle": "閒置",
+    "connecting": "連線中…",
+    "open": "已連線",
+    "reconnecting": "重新連線中…",
+    "closed": "已中斷",
+    "error": "連線錯誤"
+  },
+  "thread": {
+    "loadingConversation": "正在載入對話…",
+    "empty": {
+      "description": "你可以提問、延續本地工作，或是開始新的執行緒。",
+      "greeting": "我可以幫你做什麼？",
+      "quickActions": {
+        "plan": {
+          "title": "建立專案計畫",
+          "prompt": "幫我為接下來要做的事情寫一份簡潔的專案計畫。"
+        },
+        "analyze": {
+          "title": "分析這些資料",
+          "prompt": "幫我分析這些資料，並指出最重要的模式。"
+        },
+        "brainstorm": {
+          "title": "腦力激盪想法",
+          "prompt": "圍繞這個問題腦力激盪幾個實用方案，並說明取捨。"
+        },
+        "code": {
+          "title": "撰寫程式碼",
+          "prompt": "幫我為這個任務撰寫程式碼，先從最小可用改動開始。"
+        },
+        "summarize": {
+          "title": "總結這份文件",
+          "prompt": "幫我總結這份文件，並列出關鍵重點。"
+        },
+        "more": {
+          "title": "更多",
+          "prompt": "展示幾個你在這個工作區裡可以幫我的實用方式。"
+        }
+      },
+      "imageQuickActions": {
+        "icon": {
+          "title": "設計應用程式圖示",
+          "prompt": "生成一個乾淨的 1:1 OriginAgent 應用程式圖示：友善的機器人、簡潔向量風格、柔和藍白配色，不要文字。"
+        },
+        "sticker": {
+          "title": "製作貼圖",
+          "prompt": "生成一張可愛貼圖風格的小型機器人助理圖片，背景像透明貼紙，表情活潑有趣。"
+        },
+        "poster": {
+          "title": "建立海報",
+          "prompt": "生成一張個人 AI 助理的精緻海報概念圖，現代構圖、清楚的視覺層級，適合登陸頁展示。"
+        },
+        "product": {
+          "title": "產品樣機",
+          "prompt": "生成一張對話式 AI Web 應用的乾淨產品樣機圖，極簡介面、高級光影、真實裝置邊框。"
+        },
+        "portrait": {
+          "title": "風格化頭像",
+          "prompt": "生成一個友善 AI 夥伴的風格化頭像，柔和光線、細節豐富但親切，現代插畫風格。"
+        },
+        "edit": {
+          "title": "編輯圖片",
+          "prompt": "幫我編輯一張圖片。先請我上傳或指定要編輯的圖片，然後生成編輯後的結果。"
+        }
+      }
+    },
+    "header": {
+      "toggleSidebar": "切換側邊欄"
+    },
+    "composer": {
+      "placeholderThread": "輸入訊息…",
+      "placeholderHero": "你在想什麼？",
+      "placeholderOpening": "正在開啟新對話…",
+      "placeholderStreaming": "模型正在回覆…",
+      "inputAria": "訊息輸入框",
+      "sendHint": "Enter 送出 · Shift+Enter 換行",
+      "runRuntimeTitle": "執行中 · {{elapsed}}",
+      "goalStateStrip": "目標 · {{label}}",
+      "goalStateFallback": "目標",
+      "goalStateExpandAria": "查看完整目標",
+      "goalStateSheetTitle": "目標",
+      "send": "送出訊息",
+      "stop": "停止回覆",
+      "attachImage": "附加圖片",
+      "imageMode": {
+        "label": "圖片生成",
+        "toggle": "切換圖片生成模式",
+        "placeholder": "描述或編輯圖片…",
+        "aspectAria": "圖片畫幅",
+        "aspectLabel": "圖片畫幅",
+        "aspect": {
+          "auto": "自動",
+          "1_1": "方形 1:1",
+          "3_4": "直式 3:4",
+          "9_16": "故事版 9:16",
+          "4_3": "橫式 4:3",
+          "16_9": "寬螢幕 16:9"
+        }
+      },
+      "encoding": "處理中…",
+      "remove": "移除附件",
+      "normalizedSizeHint": "{{orig}} → {{current}}（已自動壓縮）",
+      "imageRejected": {
+        "unsupported_type": "不支援的檔案類型",
+        "too_many_images": "每則訊息最多 {{max}} 張圖片",
+        "magic_mismatch": "檔案看起來不像真正的圖片",
+        "decode_failed": "無法解碼這張圖片",
+        "too_large": "圖片太大，請換一張小一點的",
+        "io": "無法讀取這個檔案"
+      },
+      "slash": {
+        "ariaLabel": "斜線命令",
+        "label": "命令",
+        "navigateHint": "↑↓ 選擇",
+        "selectHint": "Enter 執行 · Tab 填入",
+        "closeHint": "Esc 關閉",
+        "commands": {
+          "new": {
+            "title": "新增對話",
+            "description": "停止目前任務，並開始新的對話。"
+          },
+          "stop": {
+            "title": "停止目前任務",
+            "description": "取消這個對話中正在執行的 agent 回合。"
+          },
+          "restart": {
+            "title": "重新啟動 OriginAgent",
+            "description": "原地重新啟動 bot 進程。"
+          },
+          "status": {
+            "title": "查看狀態",
+            "description": "顯示執行環境、provider 和 channel 狀態。"
+          },
+          "history": {
+            "title": "查看對話歷史",
+            "description": "列印最近 N 則已持久化的對話訊息。"
+          },
+          "dream": {
+            "title": "執行 Dream",
+            "description": "手動觸發記憶整理。"
+          },
+          "dream_log": {
+            "title": "查看 Dream 日誌",
+            "description": "查看上一次 Dream 整理變更了什麼。"
+          },
+          "dream_restore": {
+            "title": "恢復記憶",
+            "description": "將記憶恢復到之前的 Dream 快照。"
+          },
+          "goal": {
+            "title": "長期目標",
+            "description": "請助理把這則請求當成需要多步驟持續推進的目標。"
+          },
+          "help": {
+            "title": "查看說明",
+            "description": "列出可用的斜線命令。"
+          }
+        }
+      },
+      "goalStateCloseAria": "關閉目標"
+    },
+    "scrollToBottom": "捲動到底部"
+  },
+  "message": {
+    "streaming": "串流輸出中",
+    "assistantTyping": "助理正在輸入",
+    "toolSingle": "正在使用工具",
+    "toolMany": "已使用 {{count}} 個工具",
+    "toolSummary": "{{count}} 個工具",
+    "toolSummaryMany": "{{count}} 個工具",
+    "reasoningTools": "推理 · {{count}} 個工具",
+    "reasoningToolsSingular": "推理 · 1 個工具",
+    "reasoning": "思考過程",
+    "reasoningStreaming": "正在思考…",
+    "reasoningSummary": "推理",
+    "agentActivitySummary": "{{reasoning}} 步 · {{tools}} 次工具呼叫",
+    "agentActivityToolsOnly": "{{tools}} 次工具呼叫",
+    "agentActivityLiveSummary": "進行中… · {{reasoning}} 步 · {{tools}} 次工具呼叫",
+    "agentActivityLiveToolsOnly": "進行中… · {{tools}} 次工具呼叫",
+    "imageAttachment": "圖片附件",
+    "turnLatencyTitle": "本輪耗時（端到端）"
+  },
+  "lightbox": {
+    "title": "圖片預覽",
+    "open": "檢視圖片",
+    "prev": "上一張",
+    "next": "下一張",
+    "close": "關閉預覽"
+  },
+  "code": {
+    "fallbackLanguage": "程式碼",
+    "copyAria": "複製程式碼",
+    "copy": "複製",
+    "copied": "已複製"
+  },
+  "common": {
+    "dismiss": "關閉"
+  },
+  "errors": {
+    "messageTooBig": {
+      "title": "訊息過大",
+      "body": "伺服器因超過大小限制拒收了上一則訊息。可移除部分圖片或改用較小的圖片後再試。"
+    }
+  }
+}

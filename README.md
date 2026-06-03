@@ -1,3 +1,4 @@
+![cover-v5-optimized](./images/GitHub_README.png)
 
 <div align="center">
   <p>

@@ -1,0 +1,272 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>OriginAgent 对称黑白稿</title>
+    <style>
+      :root {
+        color-scheme: light;
+        --bg: #f2f2ef;
+        --panel: rgba(255, 255, 255, 0.86);
+        --border: rgba(0, 0, 0, 0.1);
+        --text: #111111;
+        --muted: #666666;
+        --shadow: 0 22px 54px rgba(0, 0, 0, 0.08);
+      }
+
+      * { box-sizing: border-box; }
+
+      body {
+        margin: 0;
+        min-height: 100vh;
+        font-family: "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+        color: var(--text);
+        background:
+          radial-gradient(circle at 15% 18%, rgba(0,0,0,0.04), transparent 24%),
+          radial-gradient(circle at 82% 16%, rgba(0,0,0,0.03), transparent 20%),
+          linear-gradient(180deg, #fbfbf8 0%, var(--bg) 100%);
+      }
+
+      .shell {
+        width: min(1220px, calc(100vw - 40px));
+        margin: 0 auto;
+        padding: 34px 0 56px;
+      }
+
+      .eyebrow {
+        display: inline-flex;
+        align-items: center;
+        padding: 8px 14px;
+        border-radius: 999px;
+        border: 1px solid var(--border);
+        background: rgba(255,255,255,0.7);
+        font-size: 13px;
+        font-weight: 700;
+        letter-spacing: 0.08em;
+      }
+
+      h1 {
+        margin: 18px 0 10px;
+        font-size: clamp(34px, 5vw, 58px);
+        line-height: 1.02;
+        letter-spacing: -0.045em;
+      }
+
+      .lead {
+        max-width: 800px;
+        margin: 0 0 28px;
+        color: var(--muted);
+        font-size: 16px;
+        line-height: 1.8;
+      }
+
+      .grid {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 20px;
+      }
+
+      .card {
+        border-radius: 28px;
+        border: 1px solid var(--border);
+        background: var(--panel);
+        box-shadow: var(--shadow);
+        overflow: hidden;
+        backdrop-filter: blur(12px);
+      }
+
+      .content {
+        padding: 22px 20px 24px;
+      }
+
+      .tag {
+        display: inline-flex;
+        align-items: center;
+        padding: 6px 10px;
+        border-radius: 999px;
+        background: #121212;
+        color: white;
+        font-size: 12px;
+        font-weight: 800;
+        letter-spacing: 0.05em;
+      }
+
+      h2 {
+        margin: 14px 0 8px;
+        font-size: 28px;
+        line-height: 1.06;
+        letter-spacing: -0.03em;
+      }
+
+      .summary {
+        min-height: 84px;
+        margin: 0;
+        color: var(--muted);
+        font-size: 14px;
+        line-height: 1.72;
+      }
+
+      .logo-stage, .mark-stage {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        border-radius: 22px;
+        border: 1px solid rgba(0,0,0,0.08);
+      }
+
+      .logo-stage {
+        margin-top: 18px;
+        min-height: 170px;
+        background: linear-gradient(180deg, #ffffff, #f5f5f2);
+      }
+
+      .logo-stage img {
+        width: min(100%, 520px);
+        height: auto;
+      }
+
+      .mark-row {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 12px;
+        margin-top: 14px;
+      }
+
+      .mark-stage {
+        min-height: 140px;
+        padding: 14px;
+      }
+
+      .mark-stage img {
+        width: 88px;
+        height: 88px;
+      }
+
+      .light { background: linear-gradient(180deg, #ffffff, #f2f2ef); }
+      .dark { background: linear-gradient(180deg, #171717, #050505); }
+      .paper { background: linear-gradient(180deg, #fcfcfa, #ece8df); }
+
+      .notes {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        margin-top: 16px;
+      }
+
+      .notes span {
+        display: inline-flex;
+        align-items: center;
+        padding: 7px 10px;
+        border-radius: 999px;
+        border: 1px solid rgba(0,0,0,0.08);
+        background: rgba(255,255,255,0.74);
+        color: var(--muted);
+        font-size: 12px;
+        font-weight: 700;
+      }
+
+      .footer {
+        margin-top: 24px;
+        color: var(--muted);
+        font-size: 14px;
+        line-height: 1.7;
+      }
+
+      @media (max-width: 1040px) {
+        .grid { grid-template-columns: 1fr; }
+      }
+
+      @media (max-width: 640px) {
+        .shell { width: min(100vw - 20px, 1220px); }
+        .mark-row { grid-template-columns: 1fr; }
+      }
+    </style>
+  </head>
+  <body>
+    <main class="shell">
+      <div class="eyebrow">第二轮 · 严格对称黑白结构稿</div>
+      <h1>先只看“形”，不看色</h1>
+      <p class="lead">
+        这一轮全部去掉默认品牌色，只保留黑白和极少量灰阶。
+        目标是先判断哪一种结构最能代表 OriginAgent：更像原点中枢、任务罗盘，还是工具网络。
+      </p>
+
+      <section class="grid">
+        <article class="card">
+          <div class="content">
+            <span class="tag">方案一</span>
+            <h2>同心原点</h2>
+            <p class="summary">
+              完全径向对称。中心核像原点，外圈像本地工作区边界，四个端口表达外部任务进入与结果回收。
+            </p>
+            <div class="logo-stage">
+              <img src="./OriginAgent_logo_origin_core_bw.svg" alt="同心原点横版" />
+            </div>
+            <div class="mark-row">
+              <div class="mark-stage light"><img src="./OriginAgent_mark_origin_core_bw.svg" alt="同心原点浅底" /></div>
+              <div class="mark-stage dark"><img src="./OriginAgent_mark_origin_core_bw.svg" alt="同心原点深底" /></div>
+              <div class="mark-stage paper"><img src="./OriginAgent_mark_origin_core_bw.svg" alt="同心原点纸面底" /></div>
+            </div>
+            <div class="notes">
+              <span>最像 Origin</span>
+              <span>中枢感强</span>
+              <span>缩小稳定</span>
+            </div>
+          </div>
+        </article>
+
+        <article class="card">
+          <div class="content">
+            <span class="tag">方案二</span>
+            <h2>罗盘十字</h2>
+            <p class="summary">
+              完全十字对称。更强调任务推进、方向判断与路径选择，图形冲击力更直接，也更像一个决策引擎。
+            </p>
+            <div class="logo-stage">
+              <img src="./OriginAgent_logo_compass_cross_bw.svg" alt="罗盘十字横版" />
+            </div>
+            <div class="mark-row">
+              <div class="mark-stage light"><img src="./OriginAgent_mark_compass_cross_bw.svg" alt="罗盘十字浅底" /></div>
+              <div class="mark-stage dark"><img src="./OriginAgent_mark_compass_cross_bw.svg" alt="罗盘十字深底" /></div>
+              <div class="mark-stage paper"><img src="./OriginAgent_mark_compass_cross_bw.svg" alt="罗盘十字纸面底" /></div>
+            </div>
+            <div class="notes">
+              <span>方向感最强</span>
+              <span>记忆点直接</span>
+              <span>更像任务系统</span>
+            </div>
+          </div>
+        </article>
+
+        <article class="card">
+          <div class="content">
+            <span class="tag">方案三</span>
+            <h2>六边中枢</h2>
+            <p class="summary">
+              六向严格对称。整体更像一个稳定的工具网络与运行时骨架，强调编排、结构化和多能力连接。
+            </p>
+            <div class="logo-stage">
+              <img src="./OriginAgent_logo_hex_hub_bw.svg" alt="六边中枢横版" />
+            </div>
+            <div class="mark-row">
+              <div class="mark-stage light"><img src="./OriginAgent_mark_hex_hub_bw.svg" alt="六边中枢浅底" /></div>
+              <div class="mark-stage dark"><img src="./OriginAgent_mark_hex_hub_bw.svg" alt="六边中枢深底" /></div>
+              <div class="mark-stage paper"><img src="./OriginAgent_mark_hex_hub_bw.svg" alt="六边中枢纸面底" /></div>
+            </div>
+            <div class="notes">
+              <span>结构最稳定</span>
+              <span>系统感强</span>
+              <span>更像 runtime</span>
+            </div>
+          </div>
+        </article>
+      </section>
+
+      <p class="footer">
+        这三版都还没有进入正式替换阶段，只是供你选结构方向。
+        你确定其中一版后，我再只围绕那一版做非蓝色配色与细节精修。
+      </p>
+    </main>
+  </body>
+</html>

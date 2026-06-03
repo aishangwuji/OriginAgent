@@ -1,0 +1,30 @@
+<svg width="1240" height="320" viewBox="0 0 1240 320" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="title desc">
+  <title id="title">OriginAgent 黑白方案一横版</title>
+  <desc id="desc">同心原点黑白横版标志，强调 OriginAgent 的中心原点与本地中枢属性。</desc>
+  <defs>
+    <filter id="shadow" x="0" y="0" width="302" height="302" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
+      <feDropShadow dx="0" dy="12" stdDeviation="14" flood-color="#000000" flood-opacity="0.1"/>
+      <feDropShadow dx="0" dy="4" stdDeviation="3" flood-color="#000000" flood-opacity="0.06"/>
+    </filter>
+  </defs>
+  <g filter="url(#shadow)">
+    <rect x="30" y="30" width="240" height="240" rx="78" fill="white" stroke="#101010" stroke-width="10"/>
+    <circle cx="150" cy="150" r="80" fill="white" stroke="#101010" stroke-width="8"/>
+    <circle cx="150" cy="150" r="54" fill="white" stroke="#101010" stroke-width="6"/>
+    <circle cx="150" cy="150" r="26" fill="#101010"/>
+    <circle cx="150" cy="150" r="7" fill="white"/>
+
+    <path d="M150 97V70" stroke="#101010" stroke-width="6" stroke-linecap="round"/>
+    <path d="M203 150H230" stroke="#101010" stroke-width="6" stroke-linecap="round"/>
+    <path d="M150 203V230" stroke="#101010" stroke-width="6" stroke-linecap="round"/>
+    <path d="M97 150H70" stroke="#101010" stroke-width="6" stroke-linecap="round"/>
+
+    <circle cx="150" cy="60" r="13" fill="white" stroke="#101010" stroke-width="6"/>
+    <circle cx="240" cy="150" r="13" fill="white" stroke="#101010" stroke-width="6"/>
+    <circle cx="150" cy="240" r="13" fill="white" stroke="#101010" stroke-width="6"/>
+    <circle cx="60" cy="150" r="13" fill="white" stroke="#101010" stroke-width="6"/>
+  </g>
+
+  <text x="314" y="156" fill="#111111" font-family="Avenir Next, Segoe UI, PingFang SC, Microsoft YaHei, sans-serif" font-size="84" font-weight="800" letter-spacing="-1.4">OriginAgent</text>
+  <text x="316" y="212" fill="#666666" font-family="Segoe UI, PingFang SC, Microsoft YaHei, sans-serif" font-size="29" font-weight="700" letter-spacing="1.1">同心原点</text>
+</svg>

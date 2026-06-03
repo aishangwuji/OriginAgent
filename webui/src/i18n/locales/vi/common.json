@@ -1,0 +1,546 @@
+{
+  "app": {
+    "brand": "OriginAgent",
+    "loading": {
+      "connecting": "Đang kết nối tới OriginAgent…",
+      "boot": "Đang tải OriginAgent…"
+    },
+    "error": {
+      "title": "Không thể kết nối tới OriginAgent",
+      "gatewayHint": "Hãy chắc chắn gateway đang chạy (`originagent gateway`) và trang này được mở trên cùng máy."
+    },
+    "system": {
+      "section": "Hệ thống",
+      "restartHint": "Khởi động lại OriginAgent để áp dụng thay đổi runtime.",
+      "restart": "Khởi động lại OriginAgent",
+      "restarting": "Đang khởi động lại..."
+    },
+    "restart": {
+      "completed": "Khởi động lại hoàn tất sau {{seconds}} giây."
+    },
+    "documentTitle": {
+      "base": "OriginAgent",
+      "chat": "{{title}} · OriginAgent"
+    },
+    "meta": {
+      "description": "Giao diện web OriginAgent — trò chuyện với workspace OriginAgent của bạn."
+    }
+  },
+  "sidebar": {
+    "collapse": "Thu gọn thanh bên",
+    "toggleTheme": "Chuyển giao diện",
+    "newChat": "Cuộc trò chuyện mới",
+    "recent": "Gần đây",
+    "refreshSessions": "Làm mới phiên",
+    "reviews": "Reviews",
+    "settings": "Cài đặt",
+    "language": {
+      "label": "Ngôn ngữ",
+      "ariaLabel": "Đổi ngôn ngữ"
+    }
+  },
+  "settings": {
+    "backToChat": "Quay lại trò chuyện",
+    "sidebar": {
+      "title": "Cài đặt",
+      "ariaLabel": "Các mục cài đặt"
+    },
+    "nav": {
+      "general": "Chung",
+      "byok": "BYOK",
+      "mcp": "MCP",
+      "skills": "Skills"
+    },
+    "sections": {
+      "interface": "Giao diện",
+      "ai": "AI",
+      "system": "Hệ thống"
+    },
+    "rows": {
+      "theme": "Giao diện",
+      "language": "Ngôn ngữ",
+      "provider": "Nhà cung cấp",
+      "model": "Mô hình",
+      "restart": "Khởi động lại OriginAgent",
+      "configPath": "Đường dẫn cấu hình"
+    },
+    "help": {
+      "theme": "Chuyển giữa giao diện sáng và tối.",
+      "language": "Chọn ngôn ngữ dùng trong WebUI.",
+      "provider": "Chọn nhà cung cấp cho các yêu cầu mô hình mới.",
+      "model": "Đặt tên mô hình mặc định mà OriginAgent sử dụng.",
+      "configPath": "Tệp cấu hình gateway hiện đang dùng."
+    },
+    "values": {
+      "light": "Sáng",
+      "dark": "Tối",
+      "notAvailable": "Không khả dụng"
+    },
+    "status": {
+      "loading": "Đang tải cài đặt...",
+      "loadError": "Không thể tải cài đặt",
+      "unsaved": "Có thay đổi chưa lưu.",
+      "savedRestart": "Đã lưu. Khởi động lại OriginAgent để áp dụng."
+    },
+    "actions": {
+      "save": "Lưu",
+      "saving": "Đang lưu",
+      "edit": "Sửa",
+      "cancel": "Hủy"
+    },
+    "byok": {
+      "description": "Dùng key provider của riêng bạn. OriginAgent đọc các giá trị này từ config hiện tại, và chỉ provider đã cấu hình mới có thể chọn trong Chung.",
+      "configured": "Đã cấu hình",
+      "notConfigured": "Chưa cấu hình",
+      "configuredSection": "Đã cấu hình",
+      "notConfiguredSection": "Chưa cấu hình",
+      "showMore": "Hiển thị thêm {{count}}",
+      "showLess": "Thu gọn",
+      "apiKey": "API key",
+      "apiBase": "API base",
+      "apiKeyPlaceholder": "Nhập API key",
+      "apiKeyConfiguredPlaceholder": "Để trống để giữ key hiện tại",
+      "configuredKeyHint": "Key đã cấu hình",
+      "apiBasePlaceholder": "Dùng mặc định của provider",
+      "apiKeyRequired": "Cần API key để cấu hình provider này.",
+      "showApiKey": "Hiển thị API key",
+      "hideApiKey": "Ẩn API key",
+      "noConfiguredProviders": "Chưa có provider đã cấu hình",
+      "configureFirst": "Hãy cấu hình provider trong BYOK trước.",
+      "openByok": "Mở BYOK",
+      "tabs": {
+        "ariaLabel": "Loại thông tin xác thực BYOK",
+        "llm": "LLM",
+        "webSearch": "Web Search"
+      },
+      "webSearch": {
+        "provider": "Search provider",
+        "providerHelp": "Chọn backend mà công cụ web search sẽ dùng.",
+        "selectProvider": "Chọn provider",
+        "credentials": "Thông tin xác thực",
+        "noCredentialRequired": "Không cần key",
+        "noCredentialHelp": "DuckDuckGo hoạt động mà không cần lưu API key.",
+        "apiKeyHelp": "Được lưu trong config và chỉ hiện dạng che sau khi lưu.",
+        "baseUrl": "Base URL",
+        "baseUrlHelp": "SearXNG cần URL instance của bạn.",
+        "baseUrlPlaceholder": "https://search.example.com",
+        "apiKeyRequired": "Provider tìm kiếm này cần API key.",
+        "baseUrlRequired": "SearXNG cần Base URL.",
+        "missingCredential": "Thêm thông tin bắt buộc trước khi lưu.",
+        "saveHint": "Thay đổi áp dụng cho các yêu cầu web search mới."
+      }
+    },
+    "mcp": {
+      "description": "Configure MCP servers without editing config.json by hand. Changes are saved to the current OriginAgent config.",
+      "quickConfig": "Quick config",
+      "add": "Add MCP",
+      "newServer": "New MCP server",
+      "editServer": "Edit MCP server",
+      "configuredServers": "Configured servers",
+      "empty": "No MCP servers configured.",
+      "restartRequired": "Saved. Restart OriginAgent to connect the updated MCP servers.",
+      "editorHelp": "Leave masked or empty env/header values unchanged when editing.",
+      "name": "Server name",
+      "command": "Command",
+      "commandHelp": "Executable used to start a stdio MCP server.",
+      "args": "Arguments",
+      "argsHelp": "One argument per line.",
+      "env": "Environment",
+      "envHelp": "One KEY=value per line. Existing masked values are preserved.",
+      "url": "URL",
+      "headers": "Headers",
+      "headersHelp": "One KEY=value per line. Existing masked values are preserved.",
+      "enabledTools": "Enabled tools",
+      "enabledToolsHelp": "One tool name per line. Use * to allow all tools.",
+      "timeout": "Timeout seconds",
+      "delete": "Delete MCP server",
+      "transport": {
+        "stdio": "stdio",
+        "sse": "SSE",
+        "streamableHttp": "HTTP"
+      },
+      "homeAssistant": {
+        "title": "Home Assistant",
+        "description": "Enter the HA address and long-lived access token. OriginAgent will configure the MCP URL, auth header, and local access whitelist.",
+        "address": "HA address",
+        "addressHelp": "You can paste http://localhost:8123 or the /home/0 URL from your browser.",
+        "token": "Long-lived access token",
+        "tokenHelp": "Create one from your Home Assistant profile security page.",
+        "tokenHelpExisting": "A token is already saved. Leave blank to keep using it.",
+        "tokenPlaceholder": "Paste Home Assistant long-lived access token",
+        "saveHint": "Saved as an HTTP MCP server and applied after restarting OriginAgent.",
+        "save": "Save HA MCP",
+        "validation": {
+          "addressRequired": "Home Assistant address is required.",
+          "tokenRequired": "Home Assistant long-lived access token is required."
+        }
+      },
+      "validation": {
+        "nameRequired": "MCP server name is required.",
+        "commandRequired": "Command is required for stdio MCP servers.",
+        "urlRequired": "URL is required for HTTP MCP servers."
+      }
+    },
+    "skills": {
+      "description": "Govern workspace skills created by reviewed learning proposals. Proposed skills stay manual until they are verified and activated.",
+      "loading": "Loading skills...",
+      "empty": "No matching skills.",
+      "noSelection": "Select a skill to inspect lifecycle state.",
+      "reason": "Lifecycle note",
+      "reasonPlaceholder": "Optional reason for this lifecycle change.",
+      "stats": {
+        "total": "Total",
+        "workspace": "Workspace",
+        "unverified": "Unverified",
+        "always": "Always loaded"
+      },
+      "filters": {
+        "title": "Filters",
+        "allSources": "All sources",
+        "allStatuses": "All statuses"
+      },
+      "source": {
+        "workspace": "Workspace",
+        "builtin": "Built-in",
+        "domain": "Domain"
+      },
+      "status": {
+        "proposed": "Proposed",
+        "active": "Active",
+        "deprecated": "Deprecated",
+        "rejected": "Rejected",
+        "unknown": "Unknown"
+      },
+      "verification": {
+        "unverified": "Unverified",
+        "verified": "Verified",
+        "rejected": "Rejected",
+        "unknown": "Unknown"
+      },
+      "fields": {
+        "version": "Version",
+        "domain": "Domain",
+        "reviewed": "Reviewed",
+        "always": "Always",
+        "lastEvent": "Last event"
+      },
+      "values": {
+        "yes": "Yes",
+        "no": "No"
+      },
+      "actions": {
+        "verify": "Verify",
+        "activate": "Activate",
+        "deprecate": "Deprecate",
+        "reject": "Reject",
+        "alwaysOn": "Always on",
+        "alwaysOff": "Always off"
+      },
+      "confirm": {
+        "activate": "Activate this verified skill for normal discovery?",
+        "alwaysOn": "Always load this skill into the system prompt? Use only for highly trusted skills."
+      }
+    }
+  },
+  "reviews": {
+    "title": "Learning Reviews",
+    "backToChat": "Back to chat",
+    "loading": "Loading reviews...",
+    "empty": "No matching review proposals.",
+    "noSelection": "Select a proposal to review.",
+    "untitled": "Untitled proposal",
+    "confidence": "Confidence {{value}}",
+    "appliedFact": "Fact {{id}}",
+    "appliedSkill": "Skill {{path}}",
+    "appliedWorkflow": "Workflow {{path}}",
+    "unsupportedApply": "Only memory, fact, skill, and workflow proposals can be applied in this phase.",
+    "reasonLabel": "Review note",
+    "reasonPlaceholder": "Optional reason for applying, rejecting, or deferring this proposal.",
+    "noEvidence": "No evidence snippets were stored for this proposal.",
+    "stats": {
+      "total": "{{count}} total",
+      "pending": "{{count}} pending"
+    },
+    "filters": {
+      "status": "Filter by status",
+      "type": "Filter by type",
+      "all": "All",
+      "allTypes": "All types",
+      "origin": "Filter by origin",
+      "allOrigins": "All origins"
+    },
+    "status": {
+      "pending": "Pending",
+      "applied": "Applied",
+      "rejected": "Rejected",
+      "deferred": "Deferred",
+      "failed": "Failed",
+      "saved": "Saved"
+    },
+    "types": {
+      "memory": "Memory",
+      "fact": "Fact",
+      "skill": "Skill",
+      "workflow": "Workflow",
+      "promote_skill": "Promote skill",
+      "deprecate_skill": "Deprecate skill",
+      "merge_skill": "Merge skill",
+      "archive_workflow": "Archive workflow",
+      "move_to_domain": "Move to domain",
+      "fact_conflict": "Fact conflict"
+    },
+    "sections": {
+      "context": "Context",
+      "evidence": "Evidence"
+    },
+    "fields": {
+      "session": "Session",
+      "created": "Created",
+      "rationale": "Rationale",
+      "reviewReason": "Review note",
+      "origin": "Origin",
+      "subject": "Subject",
+      "suggestedAction": "Suggested action"
+    },
+    "actions": {
+      "refresh": "Refresh",
+      "apply": "Apply",
+      "reject": "Reject",
+      "defer": "Defer"
+    },
+    "confirmApply": {
+      "title": "Apply this proposal?",
+      "description": "OriginAgent will write this approved memory or fact into the controlled facts store and rebuild MEMORY.md.",
+      "skillDescription": "OriginAgent will write {{name}} as a proposed, unverified workspace skill at {{path}}. It will be discoverable but not always loaded.",
+      "skillPathPending": "workspace/skills/<safe-name>/SKILL.md",
+      "workflowDescription": "OriginAgent will write {{name}} as a proposed, unverified manual workflow at {{path}}. It will not create automation, run tools, or schedule jobs.",
+      "workflowPathPending": "workspace/workflows/<safe-name>/workflow.yaml",
+      "cancel": "Cancel",
+      "confirm": "Apply",
+      "promoteSkillDescription": "OriginAgent will promote {{name}} by verifying it if needed and activating the workspace skill at {{path}}.",
+      "deprecateSkillDescription": "OriginAgent will mark workspace skill {{name}} as deprecated at {{path}}. It will stop appearing in normal skill discovery."
+    },
+    "origins": {
+      "background_review": "Background review",
+      "curator": "Curator"
+    }
+  },
+  "chat": {
+    "fallbackTitle": "Trò chuyện {{id}}",
+    "loading": "Đang tải…",
+    "noSessions": "Chưa có phiên nào.",
+    "actions": "Tác vụ cho cuộc trò chuyện {{title}}",
+    "delete": "Xóa",
+    "newChat": "Cuộc trò chuyện mới"
+  },
+  "deleteConfirm": {
+    "title": "Xóa cuộc trò chuyện này?",
+    "description": "Không thể hoàn tác thao tác này.",
+    "cancel": "Hủy",
+    "confirm": "Xóa"
+  },
+  "connection": {
+    "idle": "Rảnh",
+    "connecting": "Đang kết nối…",
+    "open": "Đã kết nối",
+    "reconnecting": "Đang kết nối lại…",
+    "closed": "Đã ngắt kết nối",
+    "error": "Lỗi kết nối"
+  },
+  "thread": {
+    "loadingConversation": "Đang tải cuộc trò chuyện…",
+    "empty": {
+      "description": "Hãy đặt câu hỏi, tiếp tục công việc cục bộ hoặc bắt đầu một luồng mới.",
+      "greeting": "Tôi có thể giúp gì cho bạn?",
+      "quickActions": {
+        "plan": {
+          "title": "Tạo kế hoạch dự án",
+          "prompt": "Tạo một kế hoạch dự án ngắn gọn cho việc tôi nên xây dựng tiếp theo."
+        },
+        "analyze": {
+          "title": "Phân tích dữ liệu này",
+          "prompt": "Giúp tôi phân tích dữ liệu này và chỉ ra các mẫu quan trọng nhất."
+        },
+        "brainstorm": {
+          "title": "Động não ý tưởng",
+          "prompt": "Động não vài ý tưởng thực tế và các đánh đổi cho vấn đề này."
+        },
+        "code": {
+          "title": "Viết mã",
+          "prompt": "Giúp tôi viết mã cho nhiệm vụ này, bắt đầu từ thay đổi hữu ích nhỏ nhất."
+        },
+        "summarize": {
+          "title": "Tóm tắt tài liệu này",
+          "prompt": "Tóm tắt tài liệu này và liệt kê các ý chính."
+        },
+        "more": {
+          "title": "Thêm",
+          "prompt": "Cho tôi xem vài cách hữu ích mà bạn có thể giúp trong workspace này."
+        }
+      },
+      "imageQuickActions": {
+        "icon": {
+          "title": "Thiết kế biểu tượng app",
+          "prompt": "Tạo một biểu tượng ứng dụng 1:1 gọn gàng cho OriginAgent: robot thân thiện, phong cách vector đơn giản, bảng màu xanh trắng dịu, không có chữ."
+        },
+        "sticker": {
+          "title": "Tạo sticker",
+          "prompt": "Tạo một hình kiểu sticker dễ thương của trợ lý robot nhỏ, nền trông như trong suốt, biểu cảm và vui nhộn."
+        },
+        "poster": {
+          "title": "Tạo poster",
+          "prompt": "Tạo một ý tưởng poster chỉn chu cho trợ lý AI cá nhân, bố cục hiện đại, phân cấp thị giác rõ, phù hợp cho landing page."
+        },
+        "product": {
+          "title": "Mockup sản phẩm",
+          "prompt": "Tạo một hình mockup sản phẩm gọn gàng cho ứng dụng web AI hội thoại, giao diện tối giản, ánh sáng cao cấp, khung thiết bị chân thực."
+        },
+        "portrait": {
+          "title": "Chân dung cách điệu",
+          "prompt": "Tạo chân dung cách điệu của một người bạn đồng hành AI thân thiện, ánh sáng mềm, chi tiết nhưng dễ gần, phong cách minh họa hiện đại."
+        },
+        "edit": {
+          "title": "Chỉnh sửa ảnh",
+          "prompt": "Giúp tôi chỉnh sửa một ảnh. Trước tiên hãy yêu cầu tôi tải lên hoặc chỉ định ảnh, rồi tạo kết quả đã chỉnh sửa."
+        }
+      }
+    },
+    "header": {
+      "toggleSidebar": "Bật/tắt thanh bên"
+    },
+    "composer": {
+      "placeholderThread": "Nhập tin nhắn…",
+      "placeholderHero": "Bạn đang nghĩ gì?",
+      "placeholderOpening": "Đang mở cuộc trò chuyện mới…",
+      "placeholderStreaming": "Mô hình đang trả lời…",
+      "inputAria": "Ô nhập tin nhắn",
+      "sendHint": "Enter để gửi · Shift+Enter để xuống dòng",
+      "runRuntimeTitle": "Đang chạy · {{elapsed}}",
+      "goalStateStrip": "Mục tiêu · {{label}}",
+      "goalStateFallback": "Mục tiêu",
+      "goalStateExpandAria": "Xem đầy đủ mục tiêu",
+      "goalStateSheetTitle": "Mục tiêu",
+      "send": "Gửi tin nhắn",
+      "stop": "Dừng phản hồi",
+      "attachImage": "Đính kèm ảnh",
+      "imageMode": {
+        "label": "Tạo ảnh",
+        "toggle": "Bật/tắt chế độ tạo ảnh",
+        "placeholder": "Mô tả hoặc chỉnh sửa ảnh…",
+        "aspectAria": "Tỷ lệ khung hình ảnh",
+        "aspectLabel": "Tỷ lệ ảnh",
+        "aspect": {
+          "auto": "Tự động",
+          "1_1": "Vuông 1:1",
+          "3_4": "Dọc 3:4",
+          "9_16": "Story 9:16",
+          "4_3": "Ngang 4:3",
+          "16_9": "Rộng 16:9"
+        }
+      },
+      "encoding": "Đang xử lý…",
+      "remove": "Xóa tệp đính kèm",
+      "normalizedSizeHint": "{{orig}} → {{current}} (tự động)",
+      "imageRejected": {
+        "unsupported_type": "Loại tệp không được hỗ trợ",
+        "too_many_images": "Tối đa {{max}} ảnh mỗi tin nhắn",
+        "magic_mismatch": "Tệp này không phải là một ảnh thực",
+        "decode_failed": "Không thể giải mã ảnh này",
+        "too_large": "Ảnh quá lớn — hãy thử ảnh nhỏ hơn",
+        "io": "Không thể đọc tệp này"
+      },
+      "slash": {
+        "ariaLabel": "Lệnh slash",
+        "label": "lệnh",
+        "navigateHint": "↑↓ Chọn",
+        "selectHint": "Enter Chạy · Tab Chèn",
+        "closeHint": "Esc Đóng",
+        "commands": {
+          "new": {
+            "title": "Cuộc trò chuyện mới",
+            "description": "Dừng tác vụ hiện tại và bắt đầu một cuộc trò chuyện mới."
+          },
+          "stop": {
+            "title": "Dừng tác vụ hiện tại",
+            "description": "Hủy lượt agent đang chạy trong cuộc trò chuyện này."
+          },
+          "restart": {
+            "title": "Khởi động lại OriginAgent",
+            "description": "Khởi động lại tiến trình bot tại chỗ."
+          },
+          "status": {
+            "title": "Hiển thị trạng thái",
+            "description": "Hiển thị trạng thái runtime, provider và channel."
+          },
+          "history": {
+            "title": "Hiển thị lịch sử",
+            "description": "In N tin nhắn hội thoại đã lưu gần nhất."
+          },
+          "dream": {
+            "title": "Chạy Dream",
+            "description": "Kích hoạt thủ công quá trình hợp nhất bộ nhớ."
+          },
+          "dream_log": {
+            "title": "Hiển thị nhật ký Dream",
+            "description": "Hiển thị những gì lần hợp nhất Dream gần nhất đã thay đổi."
+          },
+          "dream_restore": {
+            "title": "Khôi phục bộ nhớ",
+            "description": "Đưa bộ nhớ về một snapshot Dream trước đó."
+          },
+          "goal": {
+            "title": "Mục tiêu dài hạn",
+            "description": "Yêu cầu agent xử lý đây là mục tiêu nhiều bước kéo dài."
+          },
+          "help": {
+            "title": "Hiển thị trợ giúp",
+            "description": "Liệt kê các lệnh slash có sẵn."
+          }
+        }
+      },
+      "goalStateCloseAria": "Đóng mục tiêu"
+    },
+    "scrollToBottom": "Cuộn xuống cuối"
+  },
+  "message": {
+    "streaming": "đang truyền",
+    "assistantTyping": "Trợ lý đang nhập",
+    "toolSingle": "Đang dùng một công cụ",
+    "toolMany": "Đã dùng {{count}} công cụ",
+    "toolSummary": "{{count}} công cụ",
+    "toolSummaryMany": "{{count}} công cụ",
+    "reasoningTools": "Suy luận · {{count}} công cụ",
+    "reasoningToolsSingular": "Suy luận · 1 công cụ",
+    "reasoning": "Suy luận",
+    "reasoningStreaming": "Đang suy nghĩ…",
+    "reasoningSummary": "Suy luận",
+    "agentActivitySummary": "{{reasoning}} bước · {{tools}} lần gọi công cụ",
+    "agentActivityToolsOnly": "{{tools}} lần gọi công cụ",
+    "agentActivityLiveSummary": "Đang chạy… · {{reasoning}} bước · {{tools}} lần gọi công cụ",
+    "agentActivityLiveToolsOnly": "Đang chạy… · {{tools}} lần gọi công cụ",
+    "imageAttachment": "Tệp hình ảnh đính kèm",
+    "turnLatencyTitle": "Thời gian phản hồi (end-to-end)"
+  },
+  "lightbox": {
+    "title": "Xem trước ảnh",
+    "open": "Xem ảnh",
+    "prev": "Ảnh trước",
+    "next": "Ảnh tiếp theo",
+    "close": "Đóng xem trước"
+  },
+  "code": {
+    "fallbackLanguage": "mã",
+    "copyAria": "Sao chép mã",
+    "copy": "Sao chép",
+    "copied": "Đã sao chép"
+  },
+  "common": {
+    "dismiss": "Đóng"
+  },
+  "errors": {
+    "messageTooBig": {
+      "title": "Tin nhắn quá lớn",
+      "body": "Máy chủ đã từ chối tin nhắn trước vì vượt quá giới hạn kích thước. Hãy bớt ảnh hoặc chọn tệp nhỏ hơn rồi thử lại."
+    }
+  }
+}
