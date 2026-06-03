@@ -1,0 +1,19 @@
+"""Example eval for the {{ pack_name }} domain pack."""
+
+from OriginAgent.agent.tools.base import Tool
+
+
+class ExampleEvalTool(Tool):
+    """Placeholder eval tool. Replace with actual eval logic."""
+    name = "{{ tool_id_prefix }}_eval_example"
+
+    @property
+    def description(self) -> str:
+        return "Example eval tool"
+
+    @property
+    def parameters(self) -> dict:
+        return {"type": "object", "properties": {}, "additionalProperties": False}
+
+    async def execute(self, **kwargs) -> str:
+        return "ok"

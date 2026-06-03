@@ -1,0 +1,35 @@
+id: {{ pack_id }}
+name: {{ pack_name }}
+version: 0.1.0
+enabled: true
+description: "{{ pack_description }}"
+
+capabilities:
+  - example_capability
+
+skills:
+  - example-skill
+
+tools:
+  - id: "{{ tool_id_prefix }}_example_action"
+    module: tools.example_tool
+    class: "{{ class_name }}"
+    permissions:
+      - read_files
+    audit: minimal
+{%- if include_runtime %}
+runtime:
+  module: runtime.contribution
+  factory: build_runtime_contribution
+{%- endif %}
+{%- if include_workflows %}
+workflows:
+  - example-workflow
+{%- endif %}
+{%- if include_evals %}
+evals:
+  - id: validate-manifest
+    kind: manifest
+  - id: validate-tools
+    kind: tool
+{%- endif %}

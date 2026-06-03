@@ -1,0 +1,21 @@
+"""Runtime contribution for the {{ pack_name }} domain pack."""
+
+from __future__ import annotations
+
+from OriginAgent.agent.domain_packs import DomainRuntimeContribution
+
+
+def build_runtime_contribution(context) -> DomainRuntimeContribution:
+    """Build runtime context for the {{ pack_name }} domain pack.
+
+    Receives a DomainRuntimeBuildContext with:
+    - context.pack: the DomainPack record
+    - context.workspace: the workspace Path
+    - context.config: the agent config
+    - context.overrides: optional overrides dict
+    """
+    return DomainRuntimeContribution(
+        tool_context={
+            # Add objects here that tools need at runtime
+        },
+    )
