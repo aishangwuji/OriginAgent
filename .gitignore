@@ -1,5 +1,6 @@
 # Project-specific
 .worktrees/
+base-test/
 .git.backup-*/
 .gitnexus/
 .assets
