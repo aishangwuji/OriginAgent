@@ -86,7 +86,7 @@ export function ThreadShell({
   onToggleTheme = () => {},
   hideSidebarToggleOnDesktop = false,
 }: ThreadShellProps) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const chatId = session?.chatId ?? null;
   const historyKey = session?.key ?? null;
   const {
@@ -267,7 +267,11 @@ export function ThreadShell({
     let cancelled = false;
     (async () => {
       try {
-        const commands = await withTokenRefresh(token, refreshToken, listSlashCommands);
+        const commands = await withTokenRefresh(
+          token,
+          refreshToken,
+          (freshToken) => listSlashCommands(freshToken, "", i18n.resolvedLanguage || i18n.language || ""),
+        );
         if (!cancelled) setSlashCommands(commands);
       } catch {
         if (!cancelled) setSlashCommands([]);
@@ -276,7 +280,7 @@ export function ThreadShell({
     return () => {
       cancelled = true;
     };
-  }, [refreshToken, token]);
+  }, [i18n.language, i18n.resolvedLanguage, refreshToken, token]);
 
   const handleWelcomeSend = useCallback(
     async (content: string, images?: SendImage[], options?: SendOptions) => {

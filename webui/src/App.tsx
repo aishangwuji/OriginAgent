@@ -391,7 +391,8 @@ function Shell({ onModelNameChange, onLogout }: { onModelNameChange: (modelName:
     } catch {
       // ignore storage errors
     }
-    client.sendMessage(chatId, "/restart");
+    const lang = localStorage.getItem("OriginAgent.locale") || undefined;
+    client.sendMessage(chatId, "/restart", undefined, lang ? { lang } : undefined);
   }, [activeSession?.chatId, client]);
 
   useEffect(() => {

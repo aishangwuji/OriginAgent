@@ -91,3 +91,11 @@ def test_model_preset_allows_default_fallback_reference():
     )
 
     assert cfg.resolve_preset("fast").fallback_models == ["default"]
+
+
+def test_build_help_text_localizes_when_explicit_lang_passed():
+    help_text = build_help_text("zh-CN")
+
+    assert help_text.startswith("OriginAgent 命令：")
+    assert "/help" in help_text
+    assert "列出可用的斜杠命令" in help_text

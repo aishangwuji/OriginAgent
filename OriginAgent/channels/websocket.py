@@ -1202,7 +1202,8 @@ class WebSocketChannel(BaseChannel):
     def _handle_commands(self, request: WsRequest) -> Response:
         if not self._check_api_token(request):
             return _http_error(401, "Unauthorized")
-        return _http_json_response({"commands": builtin_command_palette()})
+        lang = _query_first(_parse_query(request.path), "lang") or ""
+        return _http_json_response({"commands": builtin_command_palette(lang=lang)})
 
     def _self_model_service(self):
         from OriginAgent.agent.confirmation import PendingConfirmationStore
@@ -2501,6 +2502,9 @@ class WebSocketChannel(BaseChannel):
             metadata: dict[str, Any] = {"remote": getattr(connection, "remote_address", None)}
             if envelope.get("webui") is True:
                 metadata["webui"] = True
+            lang = envelope.get("lang")
+            if isinstance(lang, str) and lang.strip():
+                metadata["lang"] = lang.strip()
             image_generation = envelope.get("image_generation")
             if isinstance(image_generation, dict) and image_generation.get("enabled") is True:
                 aspect_ratio = image_generation.get("aspect_ratio")

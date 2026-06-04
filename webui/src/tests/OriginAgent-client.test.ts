@@ -297,6 +297,28 @@ describe("OriginAgentClient", () => {
     );
   });
 
+  it("includes lang in outbound messages when provided", () => {
+    const client = new OriginAgentClient({
+      url: "ws://test",
+      reconnect: false,
+      socketFactory: (url) => new FakeSocket(url) as unknown as WebSocket,
+    });
+    client.connect();
+    lastSocket().fakeOpen();
+
+    client.sendMessage("chat-lang", "hello", undefined, { lang: "zh-CN" });
+
+    expect(lastSocket().sent).toContain(
+      JSON.stringify({
+        type: "message",
+        chat_id: "chat-lang",
+        content: "hello",
+        lang: "zh-CN",
+        webui: true,
+      }),
+    );
+  });
+
   it("re-attaches known chats after a reconnect", async () => {
     const client = new OriginAgentClient({
       url: "ws://test",

@@ -1010,6 +1010,30 @@ async def test_commands_api_returns_slash_command_metadata(bus: MagicMock) -> No
         await server_task
 
 
+@pytest.mark.asyncio
+async def test_commands_api_localizes_when_lang_query_is_present(bus: MagicMock) -> None:
+    port = 29893
+    channel = _ch(bus, port=port)
+    channel._api_tokens["tok"] = time.monotonic() + 300
+
+    server_task = asyncio.create_task(channel.start())
+    await asyncio.sleep(0.3)
+
+    try:
+        response = await _http_get(
+            f"http://127.0.0.1:{port}/api/commands?lang=zh-CN",
+            headers={"Authorization": "Bearer tok"},
+        )
+        assert response.status_code == 200
+        body = response.json()
+        commands = {row["command"]: row for row in body["commands"]}
+        assert commands["/stop"]["title"] == "停止当前任务"
+        assert commands["/help"]["description"] == "列出可用的斜杠命令。"
+    finally:
+        await channel.stop()
+        await server_task
+
+
 def test_settings_payload_normalizes_camel_case_provider(
     bus: MagicMock,
     monkeypatch,

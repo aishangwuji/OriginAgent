@@ -1,0 +1,79 @@
+{
+  "command": {
+    "new": {
+      "title": "New chat",
+      "description": "Stop the current task and start a fresh conversation."
+    },
+    "stop": {
+      "title": "Stop current task",
+      "description": "Cancel the active agent turn for this chat."
+    },
+    "restart": {
+      "title": "Restart OriginAgent",
+      "description": "Restart the bot process in place."
+    },
+    "status": {
+      "title": "Show status",
+      "description": "Display runtime, provider, and channel status."
+    },
+    "self": {
+      "title": "Show self model",
+      "description": "Display a read-only capability and limitation summary."
+    },
+    "goal": {
+      "title": "Start long-running goal",
+      "description": "Treat the request as a sustained goal until complete_goal is called."
+    },
+    "model": {
+      "title": "Switch model",
+      "description": "Show or switch the active model preset."
+    },
+    "pairing": {
+      "title": "Manage pairing",
+      "description": "List, approve, deny, or revoke DM pairing requests."
+    },
+    "mcp": {
+      "title": "Show MCP servers",
+      "description": "List configured MCP servers and registered capabilities."
+    },
+    "skill": {
+      "title": "Show skills",
+      "description": "List available agent skills and where they come from."
+    },
+    "domain": {
+      "title": "Show domain packs",
+      "description": "List installed domain packs and their availability."
+    },
+    "history": {
+      "title": "Show conversation history",
+      "description": "Print the last N persisted conversation messages."
+    },
+    "reviews": {
+      "title": "Show learning proposals",
+      "description": "List and review background learning proposals."
+    },
+    "dream": {
+      "title": "Run Dream",
+      "description": "Manually trigger memory consolidation."
+    },
+    "dream_log": {
+      "title": "Show Dream log",
+      "description": "Show what the last Dream consolidation changed."
+    },
+    "dream_restore": {
+      "title": "Restore memory",
+      "description": "Revert memory to a previous Dream snapshot."
+    },
+    "help": {
+      "title": "Show help",
+      "description": "List available slash commands."
+    }
+  },
+  "response": {
+    "new": "New session started.",
+    "stop_zero": "No active task to stop.",
+    "stop_count": "Stopped {count} task(s).",
+    "restart": "Restarting..."
+  },
+  "help_header": "OriginAgent commands:"
+}

@@ -1109,7 +1109,8 @@ class AgentLoop:
     ) -> None:
         """Dispatch a command directly from the run() loop and publish the result."""
         session = self.sessions.get_or_create(key)
-        ctx = CommandContext(msg=msg, session=session, key=key, raw=raw, loop=self)
+        lang = (msg.metadata or {}).get("lang", "") or os.environ.get("ORIGINAGENT_LANG", "")
+        ctx = CommandContext(msg=msg, session=session, key=key, raw=raw, lang=lang, loop=self)
         result = await dispatch_fn(ctx)
         if result:
             self._persist_shortcut_command_turn(msg, key, result)
@@ -1917,8 +1918,9 @@ class AgentLoop:
 
     async def _state_command(self, ctx: TurnContext) -> str:
         raw = ctx.msg.content.strip()
+        lang = (ctx.msg.metadata or {}).get("lang", "") or os.environ.get("ORIGINAGENT_LANG", "")
         cmd_ctx = CommandContext(
-            msg=ctx.msg, session=ctx.session, key=ctx.session_key, raw=raw, loop=self
+            msg=ctx.msg, session=ctx.session, key=ctx.session_key, raw=raw, lang=lang, loop=self
         )
         result = await self.commands.dispatch(cmd_ctx)
         if result is not None:
