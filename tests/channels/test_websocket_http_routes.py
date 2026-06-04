@@ -10,6 +10,7 @@ from unittest.mock import AsyncMock, MagicMock
 import httpx
 import pytest
 
+import OriginAgent.channels.websocket as websocket_mod
 from OriginAgent.channels.websocket import WebSocketChannel
 from OriginAgent.session.manager import Session, SessionManager
 
@@ -141,7 +142,7 @@ async def test_sessions_routes_require_bearer_token(
 
 @pytest.mark.asyncio
 async def test_sessions_list_only_returns_websocket_sessions_by_default(
-    bus: MagicMock, tmp_path: Path
+    bus: MagicMock, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     # Seed a realistic multi-channel disk state: CLI, Slack, Lark and
     # websocket sessions all live in the same ``sessions/`` directory.
@@ -155,6 +156,9 @@ async def test_sessions_list_only_returns_websocket_sessions_by_default(
             "websocket:beta",
         ],
     )
+    webui_dir = tmp_path / "webui-empty"
+    webui_dir.mkdir()
+    monkeypatch.setattr(websocket_mod, "get_webui_dir", lambda: webui_dir)
     channel = _ch(bus, session_manager=sm, port=29906)
     server_task = asyncio.create_task(channel.start())
     await asyncio.sleep(0.3)
@@ -171,6 +175,48 @@ async def test_sessions_list_only_returns_websocket_sessions_by_default(
         # Only websocket-channel sessions are part of the webui surface; CLI /
         # Slack / Lark rows would be non-resumable from the browser.
         assert keys == {"websocket:alpha", "websocket:beta"}
+    finally:
+        await channel.stop()
+        await server_task
+
+
+@pytest.mark.asyncio
+async def test_sessions_list_includes_transcript_only_websocket_chat(
+    bus: MagicMock, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    sm = _seed_many(
+        tmp_path,
+        [
+            "unified:default",
+            "cli:direct",
+        ],
+    )
+    webui_dir = tmp_path / "webui"
+    webui_dir.mkdir()
+    (webui_dir / "websocket_fresh-chat.jsonl").write_text('{"event":"user","chat_id":"fresh-chat","text":"new transcript-backed chat"}\n', encoding="utf-8")
+    monkeypatch.setattr(websocket_mod, "get_webui_dir", lambda: webui_dir)
+    monkeypatch.setattr(
+        websocket_mod,
+        "read_transcript_lines",
+        lambda key: [{"event": "user", "chat_id": "fresh-chat", "text": "new transcript-backed chat"}]
+        if key == "websocket:fresh-chat"
+        else [],
+    )
+    channel = _ch(bus, session_manager=sm, port=29911)
+    server_task = asyncio.create_task(channel.start())
+    await asyncio.sleep(0.3)
+    try:
+        boot = await _http_get("http://127.0.0.1:29911/webui/bootstrap")
+        token = boot.json()["token"]
+        auth = {"Authorization": f"Bearer {token}"}
+
+        listing = await _http_get(
+            "http://127.0.0.1:29911/api/sessions", headers=auth
+        )
+        assert listing.status_code == 200
+        rows = listing.json()["sessions"]
+        assert {row["key"] for row in rows} == {"websocket:fresh-chat"}
+        assert rows[0]["preview"] == "new transcript-backed chat"
     finally:
         await channel.stop()
         await server_task
@@ -196,6 +242,37 @@ async def test_session_delete_removes_file(bus: MagicMock, tmp_path: Path) -> No
         assert resp.status_code == 200
         assert resp.json()["deleted"] is True
         assert not path.exists()
+    finally:
+        await channel.stop()
+        await server_task
+
+
+@pytest.mark.asyncio
+async def test_session_delete_reports_success_for_transcript_only_chat(
+    bus: MagicMock, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    sm = _seed_many(tmp_path, ["unified:default"])
+    channel = _ch(bus, session_manager=sm, port=29912)
+    server_task = asyncio.create_task(channel.start())
+    await asyncio.sleep(0.3)
+    try:
+        deleted_keys: list[str] = []
+        monkeypatch.setattr(
+            websocket_mod,
+            "delete_webui_thread",
+            lambda key: deleted_keys.append(key) is None or True,
+        )
+        boot = await _http_get("http://127.0.0.1:29912/webui/bootstrap")
+        token = boot.json()["token"]
+        auth = {"Authorization": f"Bearer {token}"}
+
+        resp = await _http_get(
+            "http://127.0.0.1:29912/api/sessions/websocket%3Atranscript-only/delete",
+            headers=auth,
+        )
+        assert resp.status_code == 200
+        assert resp.json()["deleted"] is True
+        assert deleted_keys == ["websocket:transcript-only"]
     finally:
         await channel.stop()
         await server_task

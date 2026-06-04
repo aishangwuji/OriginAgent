@@ -35,7 +35,7 @@ from OriginAgent.bus.events import OUTBOUND_META_AGENT_UI, OutboundMessage
 from OriginAgent.bus.queue import MessageBus
 from OriginAgent.channels.base import BaseChannel
 from OriginAgent.command.builtin import builtin_command_palette
-from OriginAgent.config.paths import get_media_dir
+from OriginAgent.config.paths import get_media_dir, get_webui_dir
 from OriginAgent.config.schema import Base
 from OriginAgent.session.goal_state import goal_state_ws_blob
 from OriginAgent.utils.helpers import safe_filename
@@ -45,7 +45,10 @@ from OriginAgent.utils.media_decode import (
 )
 from OriginAgent.utils.subagent_channel_display import scrub_subagent_messages_for_channel
 from OriginAgent.utils.webui_thread_disk import delete_webui_thread
-from OriginAgent.utils.webui_transcript import build_webui_thread_response
+from OriginAgent.utils.webui_transcript import (
+    build_webui_thread_response,
+    read_transcript_lines,
+)
 
 if TYPE_CHECKING:
     from OriginAgent.session.manager import SessionManager
@@ -1019,12 +1022,100 @@ class WebSocketChannel(BaseChannel):
         # Slack / Lark / Discord sessions can't be resumed from the browser,
         # so leaking them into the sidebar is just noise. Filter to the
         # ``websocket:`` prefix and strip absolute paths on the way out.
-        cleaned = [
-            {k: v for k, v in s.items() if k != "path"}
+        cleaned_map: dict[str, dict[str, Any]] = {
+            str(s["key"]): {k: v for k, v in s.items() if k != "path"}
             for s in sessions
             if isinstance(s.get("key"), str) and s["key"].startswith("websocket:")
-        ]
+        }
+        for transcript_session in self._list_webui_transcript_sessions():
+            key = str(transcript_session["key"])
+            existing = cleaned_map.get(key)
+            if existing is None:
+                cleaned_map[key] = transcript_session
+                continue
+            if not existing.get("preview") and transcript_session.get("preview"):
+                existing["preview"] = transcript_session["preview"]
+            existing_updated_at = existing.get("updated_at")
+            transcript_updated_at = transcript_session.get("updated_at")
+            if (
+                isinstance(transcript_updated_at, str)
+                and transcript_updated_at
+                and (
+                    not isinstance(existing_updated_at, str)
+                    or not existing_updated_at
+                    or transcript_updated_at > existing_updated_at
+                )
+            ):
+                existing["updated_at"] = transcript_updated_at
+            if not existing.get("created_at") and transcript_session.get("created_at"):
+                existing["created_at"] = transcript_session["created_at"]
+        cleaned = sorted(
+            cleaned_map.values(),
+            key=lambda item: str(item.get("updated_at") or ""),
+            reverse=True,
+        )
         return _http_json_response({"sessions": cleaned})
+
+    @staticmethod
+    def _transcript_preview_from_lines(lines: list[dict[str, Any]]) -> str:
+        def _normalize(value: Any) -> str:
+            text = value if isinstance(value, str) else ""
+            text = re.sub(r"\s+", " ", text).strip()
+            if len(text) > 120:
+                text = text[:119].rstrip() + "..."
+            return text
+
+        fallback = ""
+        for line in lines:
+            if not isinstance(line, dict):
+                continue
+            text = _normalize(line.get("text"))
+            if not text:
+                continue
+            if line.get("event") == "user":
+                return text
+            if not fallback and line.get("event") in {"message", "delta"}:
+                fallback = text
+        return fallback
+
+    def _list_webui_transcript_sessions(self) -> list[dict[str, Any]]:
+        """Return websocket chat rows reconstructed from WebUI transcript files.
+
+        When ``unified_session`` is enabled, new WebUI chats persist their
+        long-term memory under ``unified:default`` and therefore don't create a
+        dedicated ``sessions/websocket_*.jsonl`` file. The sidebar still needs a
+        websocket-scoped row for those chats, so we reconstruct one from the
+        transcript that already exists per ``chat_id``.
+        """
+        webui_dir = get_webui_dir()
+        if not webui_dir.is_dir():
+            return []
+        rows: list[dict[str, Any]] = []
+        for path in webui_dir.glob("websocket_*.jsonl"):
+            lines = read_transcript_lines(path.stem.replace("_", ":", 1))
+            if not lines:
+                continue
+            chat_id = next(
+                (
+                    str(line.get("chat_id"))
+                    for line in lines
+                    if isinstance(line, dict) and isinstance(line.get("chat_id"), str) and line.get("chat_id")
+                ),
+                "",
+            )
+            if not chat_id:
+                continue
+            timestamp = time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(path.stat().st_mtime))
+            rows.append(
+                {
+                    "key": f"websocket:{chat_id}",
+                    "created_at": timestamp,
+                    "updated_at": timestamp,
+                    "title": "",
+                    "preview": self._transcript_preview_from_lines(lines),
+                }
+            )
+        return rows
 
     def _settings_payload(self, *, requires_restart: bool = False) -> dict[str, Any]:
         from OriginAgent.config.loader import get_config_path, load_config
@@ -2110,7 +2201,7 @@ class WebSocketChannel(BaseChannel):
         if not self._is_webui_session_key(decoded_key):
             return _http_error(404, "session not found")
         deleted = self._session_manager.delete_session(decoded_key)
-        delete_webui_thread(decoded_key)
+        deleted = delete_webui_thread(decoded_key) or deleted
         return _http_json_response({"deleted": bool(deleted)})
 
     def _serve_static(self, request_path: str) -> Response | None:

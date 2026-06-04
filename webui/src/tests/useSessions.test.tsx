@@ -179,6 +179,119 @@ describe("useSessions", () => {
     expect(api.listSessions).toHaveBeenCalledTimes(2);
   });
 
+  it("ignores stale session refresh responses that finish after a newer refresh", async () => {
+    let resolveFirst: ((value: Awaited<ReturnType<typeof api.listSessions>>) => void) | null = null;
+    let resolveSecond: ((value: Awaited<ReturnType<typeof api.listSessions>>) => void) | null = null;
+    vi.mocked(api.listSessions)
+      .mockImplementationOnce(
+        () => new Promise((resolve) => {
+          resolveFirst = resolve;
+        }),
+      )
+      .mockImplementationOnce(
+        () => new Promise((resolve) => {
+          resolveSecond = resolve;
+        }),
+      );
+    const client = fakeClient();
+
+    const { result } = renderHook(() => useSessions(), {
+      wrapper: wrap(client),
+    });
+
+    await waitFor(() => expect(result.current.loading).toBe(true));
+
+    act(() => {
+      client.emitSessionUpdate("chat-a");
+    });
+
+    await waitFor(() => expect(api.listSessions).toHaveBeenCalledTimes(2));
+
+    await act(async () => {
+      resolveSecond?.([
+        {
+          key: "websocket:chat-new",
+          channel: "websocket",
+          chatId: "chat-new",
+          createdAt: "2026-06-04T10:00:00Z",
+          updatedAt: "2026-06-04T10:01:00Z",
+          title: "新的标题",
+          preview: "新的预览",
+        },
+      ]);
+    });
+
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    expect(result.current.sessions.map((session) => session.key)).toEqual(["websocket:chat-new"]);
+
+    await act(async () => {
+      resolveFirst?.([
+        {
+          key: "websocket:chat-old",
+          channel: "websocket",
+          chatId: "chat-old",
+          createdAt: "2026-06-04T09:00:00Z",
+          updatedAt: "2026-06-04T09:01:00Z",
+          title: "旧标题",
+          preview: "旧预览",
+        },
+      ]);
+    });
+
+    expect(result.current.sessions.map((session) => session.key)).toEqual(["websocket:chat-new"]);
+    expect(result.current.error).toBeNull();
+  });
+
+  it("ignores stale refresh errors once a newer refresh has already succeeded", async () => {
+    let rejectFirst: ((reason?: unknown) => void) | null = null;
+    let resolveSecond: ((value: Awaited<ReturnType<typeof api.listSessions>>) => void) | null = null;
+    vi.mocked(api.listSessions)
+      .mockImplementationOnce(
+        () => new Promise((_, reject) => {
+          rejectFirst = reject;
+        }),
+      )
+      .mockImplementationOnce(
+        () => new Promise((resolve) => {
+          resolveSecond = resolve;
+        }),
+      );
+    const client = fakeClient();
+
+    const { result } = renderHook(() => useSessions(), {
+      wrapper: wrap(client),
+    });
+
+    act(() => {
+      client.emitSessionUpdate("chat-a");
+    });
+
+    await waitFor(() => expect(api.listSessions).toHaveBeenCalledTimes(2));
+
+    await act(async () => {
+      resolveSecond?.([
+        {
+          key: "websocket:chat-stable",
+          channel: "websocket",
+          chatId: "chat-stable",
+          createdAt: "2026-06-04T10:00:00Z",
+          updatedAt: "2026-06-04T10:02:00Z",
+          title: "稳定标题",
+          preview: "稳定预览",
+        },
+      ]);
+    });
+
+    await waitFor(() => expect(result.current.loading).toBe(false));
+
+    await act(async () => {
+      rejectFirst?.(new api.ApiError(500, "HTTP 500"));
+    });
+
+    expect(result.current.sessions.map((session) => session.key)).toEqual(["websocket:chat-stable"]);
+    expect(result.current.error).toBeNull();
+  });
+
   it("passes through WebUI transcript user media as images and media", async () => {
     vi.mocked(api.fetchWebuiThread).mockResolvedValue({
       schemaVersion: 3,

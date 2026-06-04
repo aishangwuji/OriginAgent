@@ -29,10 +29,13 @@ export function useSessions(): {
   const [error, setError] = useState<string | null>(null);
   const tokenRef = useRef(token);
   const refreshTokenRef = useRef(refreshToken);
+  const latestRefreshIdRef = useRef(0);
   tokenRef.current = token;
   refreshTokenRef.current = refreshToken;
 
   const refresh = useCallback(async () => {
+    const refreshId = latestRefreshIdRef.current + 1;
+    latestRefreshIdRef.current = refreshId;
     try {
       setLoading(true);
       const rows = await withTokenRefresh(
@@ -40,13 +43,16 @@ export function useSessions(): {
         refreshTokenRef.current,
         listSessions,
       );
+      if (latestRefreshIdRef.current !== refreshId) return;
       setSessions(rows);
       setError(null);
     } catch (e) {
+      if (latestRefreshIdRef.current !== refreshId) return;
       const msg =
         e instanceof ApiError ? `HTTP ${e.status}` : (e as Error).message;
       setError(msg);
     } finally {
+      if (latestRefreshIdRef.current !== refreshId) return;
       setLoading(false);
     }
   }, []);
