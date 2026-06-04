@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
@@ -596,7 +597,7 @@ def test_sandbox_evaluator_passes_read_only_and_blocks_side_effects(tmp_path) ->
     failed = evaluator.evaluate_workflow_payload({
         **base_payload,
         "target_state_hash": "sandbox-state-3",
-        "steps": [{"title": "Escape", "tool": "read_file", "path": "..\\secrets.txt"}],
+        "steps": [{"title": "Escape", "tool": "read_file", "path": str(Path("..") / "secrets.txt")}],
     })
 
     assert passed["status"] == "passed"
@@ -649,7 +650,7 @@ def test_trial_evaluator_enforces_isolated_read_only_policy(tmp_path) -> None:
     })
     failed = evaluator.evaluate_trial_workflow_payload({
         **base_payload,
-        "steps": [{"title": "Escape", "tool": "read_file", "path": "..\\secrets.txt"}],
+        "steps": [{"title": "Escape", "tool": "read_file", "path": str(Path("..") / "secrets.txt")}],
     })
 
     assert passed["status"] == "passed"
@@ -858,7 +859,7 @@ def test_sandbox_evaluator_reports_step_level_failures_without_execution(tmp_pat
         "steps": [
             {"title": "Read", "tool": "read_file", "path": "notes.txt"},
             {"title": "Write", "tool": "write_file", "path": "notes.txt"},
-            {"title": "Escape", "tool": "grep", "pattern": "..\\secret"},
+            {"title": "Escape", "tool": "grep", "pattern": str(Path("..") / "secret")},
             "bad-step",
         ],
     })

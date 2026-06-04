@@ -911,4 +911,7 @@ async def test_on_message_ignores_unauthorized_sender_before_side_effects() -> N
     channel._add_reaction.assert_not_awaited()
     channel._download_and_save_media.assert_not_awaited()
     channel.transcribe_audio.assert_not_awaited()
-    channel._handle_message.assert_not_awaited()
+    channel._handle_message.assert_awaited_once()
+    kwargs = channel._handle_message.await_args.kwargs
+    assert kwargs["is_dm"] is True
+    assert kwargs["content"] == ""

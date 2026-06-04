@@ -12,7 +12,7 @@ from OriginAgent.bus.events import OutboundMessage
 from OriginAgent.bus.queue import MessageBus
 from OriginAgent.channels.base import BaseChannel
 from OriginAgent.channels.manager import ChannelManager
-from OriginAgent.config.schema import ChannelsConfig
+from OriginAgent.config.schema import ChannelsConfig, PairingConfig
 from OriginAgent.providers.transcription import GroqTranscriptionProvider as _GroqProvider
 from OriginAgent.providers.transcription import OpenAITranscriptionProvider as _OpenAIProvider
 from OriginAgent.utils.restart import RestartNotice
@@ -20,6 +20,10 @@ from OriginAgent.utils.restart import RestartNotice
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+
+def _fake_security_config():
+    return SimpleNamespace(pairing=PairingConfig(enabled=False))
 
 class _FakePlugin(BaseChannel):
     name = "fakeplugin"
@@ -177,6 +181,7 @@ async def test_manager_loads_plugin_from_dict_config():
             "fakeplugin": {"enabled": True, "allowFrom": ["*"]},
         }),
         providers=SimpleNamespace(groq=SimpleNamespace(api_key="", api_base="")),
+        security=_fake_security_config(),
     )
 
     with patch(
@@ -207,6 +212,7 @@ async def test_manager_propagates_groq_transcription_api_base_to_channels():
             groq=SimpleNamespace(api_key="groq-key", api_base="http://proxy.local/v1/audio/transcriptions"),
             openai=SimpleNamespace(api_key="openai-key", api_base="https://api.openai.com/v1/audio/transcriptions"),
         ),
+        security=_fake_security_config(),
     )
 
     with patch(
@@ -243,6 +249,7 @@ async def test_manager_propagates_openai_transcription_api_base_to_channels():
             ),
             groq=SimpleNamespace(api_key="groq-key", api_base=""),
         ),
+        security=_fake_security_config(),
     )
 
     with patch(
@@ -966,6 +973,7 @@ async def test_validate_allow_from_raises_on_empty_list():
     fake_config = SimpleNamespace(
         channels=ChannelsConfig(),
         providers=SimpleNamespace(groq=SimpleNamespace(api_key="")),
+        security=_fake_security_config(),
     )
 
     mgr = ChannelManager.__new__(ChannelManager)
@@ -985,6 +993,7 @@ async def test_validate_allow_from_passes_with_asterisk():
     fake_config = SimpleNamespace(
         channels=ChannelsConfig(),
         providers=SimpleNamespace(groq=SimpleNamespace(api_key="")),
+        security=_fake_security_config(),
     )
 
     mgr = ChannelManager.__new__(ChannelManager)
@@ -1002,6 +1011,7 @@ async def test_validate_allow_from_raises_on_empty_dict_allow_from():
     fake_config = SimpleNamespace(
         channels=ChannelsConfig(),
         providers=SimpleNamespace(groq=SimpleNamespace(api_key="")),
+        security=_fake_security_config(),
     )
 
     mgr = ChannelManager.__new__(ChannelManager)

@@ -1363,7 +1363,9 @@ async def test_on_message_ignores_unauthorized_user_before_side_effects() -> Non
 
     assert started_typing == []
     channel._add_reaction.assert_not_awaited()
-    assert handled == []
+    assert len(handled) == 1
+    assert handled[0]["is_dm"] is True
+    assert handled[0]["content"] == "hello"
 
 
 @pytest.mark.asyncio

@@ -210,8 +210,10 @@ async def test_manager_spawn_rejects_when_at_concurrency_limit(tmp_path):
 @pytest.mark.asyncio
 async def test_subagent_persists_tool_records(tmp_path):
     from OriginAgent.agent.subagent import SubagentManager, SubagentStatus
+    from OriginAgent.agent.subagent_policy import SubagentPolicy
     from OriginAgent.bus.queue import MessageBus
     from OriginAgent.providers.base import LLMResponse, ToolCallRequest
+    from OriginAgent.security.capabilities import CapabilitySnapshot
 
     bus = MessageBus()
     provider = MagicMock()
@@ -240,6 +242,11 @@ async def test_subagent_persists_tool_records(tmp_path):
         "label",
         {"channel": "test", "chat_id": "c1", "session_key": "test:c1"},
         status,
+        delegated_policy=SubagentPolicy(
+            capability_snapshot=CapabilitySnapshot.user_turn(),
+            allowed_tool_names=frozenset({"list_dir"}),
+            allow_web=False,
+        ),
     )
 
     tools_path = tmp_path / "memory" / "subagents" / "tools.jsonl"

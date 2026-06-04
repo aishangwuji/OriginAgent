@@ -104,6 +104,7 @@ temp/
 /data/
 /secrets/
 /.originagent/
+/MagicMock/
 *.sqlite
 *.sqlite3
 *.db

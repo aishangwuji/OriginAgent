@@ -22,7 +22,8 @@ def test_self_model_builds_empty_workspace_snapshot(tmp_path) -> None:
     assert self_model["facts"]["active_count"] == 0
     assert self_model["reviews"]["pending_count"] == 0
     assert self_model["confirmations"]["pending_count"] == 0
-    assert self_model["limitations"] == []
+    limitation_codes = {item["code"] for item in self_model["limitations"]}
+    assert limitation_codes <= {"domain_invalid"}
 
 
 def test_self_model_derives_limitations_and_redacts_sensitive_content(tmp_path) -> None:

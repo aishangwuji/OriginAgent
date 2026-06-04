@@ -13,6 +13,7 @@ import pytest
 from OriginAgent.agent.subagent import SubagentManager, SubagentStatus
 from OriginAgent.agent.tools.shell import ExecTool
 from OriginAgent.agent.tools.spawn import SpawnTool
+from OriginAgent.agent.tools.registry import ToolRegistry
 from OriginAgent.bus.queue import MessageBus
 from OriginAgent.config.schema import ExecToolConfig
 from OriginAgent.security.capabilities import CapabilitySnapshot
@@ -296,26 +297,35 @@ async def test_exec_registration_follows_effective_snapshot_and_profile(tmp_path
         exec_config=ExecToolConfig(profile="local_dev", allow_unsafe_exec=True, sandbox=""),
     )
     local_tools = await _run_subagent_and_capture_tools(local_dev, allowed_snapshot)
-    assert "exec" not in local_tools
+    assert "exec" in local_tools
 
     denied_snapshot = replace(allowed_snapshot, can_exec=False)
     denied_tools = await _run_subagent_and_capture_tools(local_dev, denied_snapshot)
-    assert "exec" not in denied_tools
+    assert "exec" in denied_tools
+
+    registry = ToolRegistry(capability_snapshot=denied_snapshot)
+    registry.register(
+        ExecTool(
+            working_dir=str(tmp_path),
+            security_profile="local_dev",
+            allow_unsafe_exec=True,
+            sandbox="none",
+        )
+    )
+    result = await registry.execute("exec", {"command": "echo ok"})
+    assert "not allowed by the current capability snapshot" in result
 
 
 @pytest.mark.asyncio
-async def test_subagent_default_policy_uses_shared_read_only_toolset(tmp_path: Path) -> None:
+async def test_subagent_default_policy_uses_current_normal_toolset(tmp_path: Path) -> None:
     manager = _manager(tmp_path)
     snapshot = CapabilitySnapshot.user_turn().derive_subagent()
 
     tool_names = await _run_subagent_and_capture_tools(manager, snapshot)
 
-    assert set(tool_names) == {"read_file", "list_dir", "glob", "grep"}
-    assert "web_search" not in tool_names
-    assert "web_fetch" not in tool_names
-    assert "write_file" not in tool_names
-    assert "edit_file" not in tool_names
-    assert "exec" not in tool_names
+    assert {"read_file", "list_dir", "glob", "grep"} <= set(tool_names)
+    assert {"ask_user", "long_task", "complete_goal", "session_search", "notebook_edit"} <= set(tool_names)
+    assert {"write_file", "edit_file", "web_search", "web_fetch", "exec"} <= set(tool_names)
     assert "message" not in tool_names
     assert "spawn" not in tool_names
     assert "cron" not in tool_names

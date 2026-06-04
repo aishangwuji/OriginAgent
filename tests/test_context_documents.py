@@ -18,10 +18,18 @@ def _make_builder(tmp_path: Path) -> ContextBuilder:
     return ContextBuilder(workspace=tmp_path, timezone="UTC")
 
 
+def _text_blocks(result: list[dict[str, object]]) -> list[str]:
+    return [
+        str(block.get("text", ""))
+        for block in result
+        if isinstance(block, dict) and block.get("type") == "text"
+    ]
+
+
 def test_build_user_content_with_no_media_returns_string(tmp_path: Path) -> None:
     builder = _make_builder(tmp_path)
     result = builder._build_user_content("hello", None)
-    assert result == "hello"
+    assert result == [{"type": "text", "text": "hello"}]
 
 
 def test_build_user_content_with_image_returns_list(tmp_path: Path) -> None:
@@ -42,7 +50,7 @@ def test_build_user_content_ignores_non_image_files(tmp_path: Path) -> None:
     txt = tmp_path / "notes.txt"
     txt.write_text("some text", encoding="utf-8")
     result = builder._build_user_content("summarize", [str(txt)])
-    assert result == "summarize"
+    assert result == [{"type": "text", "text": "summarize"}]
 
 
 def test_build_user_content_mixed_image_and_non_image(tmp_path: Path) -> None:
@@ -89,8 +97,9 @@ def test_drain_pending_path_preserves_document_text(tmp_path: Path) -> None:
     result = builder._build_user_content(new_content, image_only if image_only else None)
 
     # The document text should be present in the final content
-    assert "Quarterly revenue" in result
-    assert "summarize" in result
+    joined = "\n".join(_text_blocks(result))
+    assert "Quarterly revenue" in joined
+    assert "summarize" in joined
 
 
 def test_drain_pending_path_without_extract_loses_document(tmp_path: Path) -> None:
@@ -109,5 +118,5 @@ def test_drain_pending_path_without_extract_loses_document(tmp_path: Path) -> No
     result = builder._build_user_content("summarize", [str(docx_path)])
 
     # The document text is LOST — _build_user_content ignores non-images
-    assert result == "summarize"  # only the original text, no doc content
-    assert "Secret data" not in result
+    assert result == [{"type": "text", "text": "summarize"}]
+    assert all("Secret data" not in text for text in _text_blocks(result))

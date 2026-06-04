@@ -324,7 +324,8 @@ async def test_grep_single_file_symlink_is_skipped(tmp_path: Path) -> None:
     tool = GrepTool(workspace=tmp_path, allowed_dir=tmp_path)
     result = await tool.execute(pattern="needle", path="link.txt")
 
-    assert "No matches found" in result
+    assert "symlink" in result
+    assert "hard policy boundary" in result
 
 
 @pytest.mark.asyncio

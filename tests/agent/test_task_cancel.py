@@ -235,8 +235,10 @@ class TestSubagentCancellation:
     @pytest.mark.asyncio
     async def test_subagent_preserves_reasoning_fields_in_tool_turn(self, monkeypatch, tmp_path):
         from OriginAgent.agent.subagent import SubagentManager
+        from OriginAgent.agent.subagent_policy import SubagentPolicy
         from OriginAgent.bus.queue import MessageBus
         from OriginAgent.providers.base import LLMResponse, ToolCallRequest
+        from OriginAgent.security.capabilities import CapabilitySnapshot
 
         bus = MessageBus()
         provider = MagicMock()
@@ -272,7 +274,19 @@ class TestSubagentCancellation:
 
         from OriginAgent.agent.subagent import SubagentStatus
         status = SubagentStatus(task_id="sub-1", label="label", task_description="do task", started_at=time.monotonic())
-        await mgr._run_subagent("sub-1", "do task", "label", {"channel": "test", "chat_id": "c1"}, status)
+        policy = SubagentPolicy(
+            capability_snapshot=CapabilitySnapshot.user_turn(),
+            allowed_tool_names=frozenset({"list_dir"}),
+            allow_web=False,
+        )
+        await mgr._run_subagent(
+            "sub-1",
+            "do task",
+            "label",
+            {"channel": "test", "chat_id": "c1"},
+            status,
+            delegated_policy=policy,
+        )
 
         assistant_messages = [
             msg for msg in captured_second_call
@@ -321,8 +335,10 @@ class TestSubagentCancellation:
     @pytest.mark.asyncio
     async def test_subagent_announces_error_when_tool_execution_fails(self, monkeypatch, tmp_path):
         from OriginAgent.agent.subagent import SubagentManager
+        from OriginAgent.agent.subagent_policy import SubagentPolicy
         from OriginAgent.bus.queue import MessageBus
         from OriginAgent.providers.base import LLMResponse, ToolCallRequest
+        from OriginAgent.security.capabilities import CapabilitySnapshot
 
         bus = MessageBus()
         provider = MagicMock()
@@ -351,7 +367,19 @@ class TestSubagentCancellation:
 
         from OriginAgent.agent.subagent import SubagentStatus
         status = SubagentStatus(task_id="sub-1", label="label", task_description="do task", started_at=time.monotonic())
-        await mgr._run_subagent("sub-1", "do task", "label", {"channel": "test", "chat_id": "c1"}, status)
+        policy = SubagentPolicy(
+            capability_snapshot=CapabilitySnapshot.user_turn(),
+            allowed_tool_names=frozenset({"list_dir"}),
+            allow_web=False,
+        )
+        await mgr._run_subagent(
+            "sub-1",
+            "do task",
+            "label",
+            {"channel": "test", "chat_id": "c1"},
+            status,
+            delegated_policy=policy,
+        )
 
         mgr._announce_result.assert_awaited_once()
         args = mgr._announce_result.await_args.args
@@ -364,8 +392,10 @@ class TestSubagentCancellation:
     @pytest.mark.asyncio
     async def test_cancel_by_session_cancels_running_subagent_tool(self, monkeypatch, tmp_path):
         from OriginAgent.agent.subagent import SubagentManager, SubagentStatus
+        from OriginAgent.agent.subagent_policy import SubagentPolicy
         from OriginAgent.bus.queue import MessageBus
         from OriginAgent.providers.base import LLMResponse, ToolCallRequest
+        from OriginAgent.security.capabilities import CapabilitySnapshot
 
         bus = MessageBus()
         provider = MagicMock()
@@ -399,6 +429,11 @@ class TestSubagentCancellation:
             mgr._run_subagent(
                 "sub-1", "do task", "label", {"channel": "test", "chat_id": "c1"},
                 SubagentStatus(task_id="sub-1", label="label", task_description="do task", started_at=time.monotonic()),
+                delegated_policy=SubagentPolicy(
+                    capability_snapshot=CapabilitySnapshot.user_turn(),
+                    allowed_tool_names=frozenset({"list_dir"}),
+                    allow_web=False,
+                ),
             )
         )
         mgr._running_tasks["sub-1"] = task
