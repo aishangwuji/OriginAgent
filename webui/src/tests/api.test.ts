@@ -398,7 +398,7 @@ describe("webui API helpers", () => {
       }),
     } as Response);
 
-    await expect(listSlashCommands("tok")).resolves.toEqual([
+    await expect(listSlashCommands("tok", "", "zh-CN")).resolves.toEqual([
       {
         command: "/stop",
         title: "Stop current task",
@@ -436,7 +436,7 @@ describe("webui API helpers", () => {
       },
     ]);
     expect(fetch).toHaveBeenCalledWith(
-      "/api/commands",
+      "/api/commands?lang=zh-CN",
       expect.objectContaining({
         headers: { Authorization: "Bearer tok" },
       }),

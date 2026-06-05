@@ -21,6 +21,7 @@ class CommandContext:
     key: str
     raw: str
     args: str = ""
+    lang: str = ""
     loop: Any = None
 
 

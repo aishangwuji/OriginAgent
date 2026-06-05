@@ -63,6 +63,12 @@ class TestIsDispatchableCommand:
             command = row["command"]
             assert router.is_priority(command) or router.is_dispatchable_command(command)
 
+    def test_palette_can_be_localized_explicitly(self) -> None:
+        commands = {row["command"]: row for row in builtin_command_palette("zh-CN")}
+
+        assert commands["/stop"]["title"] == "停止当前任务"
+        assert commands["/help"]["description"] == "列出可用的斜杠命令。"
+
 
 class TestMidTurnCommandDispatchedDirectly:
     """Verify that commands matching is_dispatchable_command() are dispatched

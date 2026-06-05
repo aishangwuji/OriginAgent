@@ -288,7 +288,7 @@ export class OriginAgentClient {
     chatId: string,
     content: string,
     media?: OutboundMedia[],
-    options?: { imageGeneration?: OutboundImageGeneration },
+    options?: { imageGeneration?: OutboundImageGeneration; lang?: string },
   ): void {
     this.knownChats.add(chatId);
     const frame: Outbound = {
@@ -297,6 +297,7 @@ export class OriginAgentClient {
       content,
       ...(media && media.length > 0 ? { media } : {}),
       ...(options?.imageGeneration ? { image_generation: options.imageGeneration } : {}),
+      ...(options?.lang ? { lang: options.lang } : {}),
       webui: true,
     };
     this.queueSend(frame);

@@ -553,8 +553,12 @@ export function useOriginAgentStream(
       // right away, before the first delta arrives from the server.
       setIsStreaming(true);
       const wireMedia = hasImages ? images!.map((i) => i.media) : undefined;
+      const lang = localStorage.getItem("OriginAgent.locale") || undefined;
+      const mergedOptions = { ...options, ...(lang ? { lang } : {}) };
       if (options) {
-        client.sendMessage(chatId, content, wireMedia, options);
+        client.sendMessage(chatId, content, wireMedia, mergedOptions);
+      } else if (lang) {
+        client.sendMessage(chatId, content, wireMedia, { lang });
       } else {
         client.sendMessage(chatId, content, wireMedia);
       }
@@ -569,7 +573,8 @@ export function useOriginAgentStream(
       prev.map((m) => (m.isStreaming ? { ...m, isStreaming: false } : m)),
     );
     suppressStreamUntilTurnEndRef.current = false;
-    client.sendMessage(chatId, "/stop");
+    const lang = localStorage.getItem("OriginAgent.locale") || undefined;
+    client.sendMessage(chatId, "/stop", undefined, lang ? { lang } : undefined);
   }, [chatId, client]);
 
   return {

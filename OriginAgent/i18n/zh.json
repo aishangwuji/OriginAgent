@@ -1,0 +1,79 @@
+{
+  "command": {
+    "new": {
+      "title": "新对话",
+      "description": "停止当前任务，开启新会话。"
+    },
+    "stop": {
+      "title": "停止当前任务",
+      "description": "取消当前会话正在执行的 Agent 任务。"
+    },
+    "restart": {
+      "title": "重启 OriginAgent",
+      "description": "原地重启机器人进程。"
+    },
+    "status": {
+      "title": "显示状态",
+      "description": "展示运行时、模型、通道的运行状态。"
+    },
+    "self": {
+      "title": "显示自我模型",
+      "description": "展示当前能力的只读摘要。"
+    },
+    "goal": {
+      "title": "启动长期目标",
+      "description": "以持续目标模式处理请求，直到调用 complete_goal。"
+    },
+    "model": {
+      "title": "切换模型",
+      "description": "查看或切换运行时模型预设。"
+    },
+    "pairing": {
+      "title": "管理配对",
+      "description": "列出、批准、拒绝或撤销私聊配对请求。"
+    },
+    "mcp": {
+      "title": "显示 MCP 服务器",
+      "description": "列出已配置的 MCP 服务器和已注册能力。"
+    },
+    "skill": {
+      "title": "显示技能",
+      "description": "列出可用的 Agent 技能及其来源。"
+    },
+    "domain": {
+      "title": "显示领域包",
+      "description": "列出已安装的领域包及其可用性。"
+    },
+    "history": {
+      "title": "显示对话历史",
+      "description": "打印最近 N 条已持久化的会话消息。"
+    },
+    "reviews": {
+      "title": "显示学习提案",
+      "description": "列出并审核后台学习提案。"
+    },
+    "dream": {
+      "title": "运行 Dream",
+      "description": "手动触发记忆整合。"
+    },
+    "dream_log": {
+      "title": "显示 Dream 日志",
+      "description": "显示上次 Dream 整合的变更内容。"
+    },
+    "dream_restore": {
+      "title": "恢复记忆",
+      "description": "回退记忆到上一个 Dream 快照。"
+    },
+    "help": {
+      "title": "显示帮助",
+      "description": "列出可用的斜杠命令。"
+    }
+  },
+  "response": {
+    "new": "已开启新会话。",
+    "stop_zero": "没有正在执行的任务。",
+    "stop_count": "已停止 {count} 个任务。",
+    "restart": "正在重启..."
+  },
+  "help_header": "OriginAgent 命令："
+}

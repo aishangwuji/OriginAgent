@@ -14,6 +14,7 @@ from OriginAgent import __version__
 from OriginAgent.agent.self_model import SelfModelRenderer, SelfModelService
 from OriginAgent.bus.events import OutboundMessage
 from OriginAgent.command.router import CommandContext, CommandRouter
+from OriginAgent.i18n import t
 from OriginAgent.utils.helpers import build_status_content
 from OriginAgent.utils.restart import set_restart_notice_to_env
 
@@ -31,6 +32,16 @@ class BuiltinCommandSpec:
             "command": self.command,
             "title": self.title,
             "description": self.description,
+            "icon": self.icon,
+            "arg_hint": self.arg_hint,
+        }
+
+    def as_dict_localized(self, lang: str = "") -> dict[str, str]:
+        command_key = _command_i18n_key(self.command)
+        return {
+            "command": self.command,
+            "title": t(f"command.{command_key}.title", lang=lang) if lang else self.title,
+            "description": t(f"command.{command_key}.description", lang=lang) if lang else self.description,
             "icon": self.icon,
             "arg_hint": self.arg_hint,
         }
@@ -147,9 +158,19 @@ BUILTIN_COMMAND_SPECS: tuple[BuiltinCommandSpec, ...] = (
 )
 
 
-def builtin_command_palette() -> list[dict[str, str]]:
+def _command_i18n_key(command: str) -> str:
+    return command.lstrip("/").replace("-", "_")
+
+
+def _localized_or(default: str, key: str, *, lang: str = "", **fmt: object) -> str:
+    if not lang:
+        return default.format(**fmt) if fmt else default
+    return t(key, lang=lang, **fmt)
+
+
+def builtin_command_palette(lang: str = "") -> list[dict[str, str]]:
     """Return structured command metadata for UI command palettes."""
-    return [spec.as_dict() for spec in BUILTIN_COMMAND_SPECS]
+    return [spec.as_dict_localized(lang) for spec in BUILTIN_COMMAND_SPECS]
 
 
 async def cmd_stop(ctx: CommandContext) -> OutboundMessage:
@@ -157,7 +178,11 @@ async def cmd_stop(ctx: CommandContext) -> OutboundMessage:
     loop = ctx.loop
     msg = ctx.msg
     total = await loop._cancel_active_tasks(ctx.key)
-    content = f"Stopped {total} task(s)." if total else "No active task to stop."
+    content = (
+        _localized_or("Stopped {count} task(s).", "response.stop_count", lang=ctx.lang, count=total)
+        if total
+        else _localized_or("No active task to stop.", "response.stop_zero", lang=ctx.lang)
+    )
     return OutboundMessage(
         channel=msg.channel, chat_id=msg.chat_id, content=content,
         metadata=dict(msg.metadata or {})
@@ -179,7 +204,9 @@ async def cmd_restart(ctx: CommandContext) -> OutboundMessage:
 
     asyncio.create_task(_do_restart())
     return OutboundMessage(
-        channel=msg.channel, chat_id=msg.chat_id, content="Restarting...",
+        channel=msg.channel,
+        chat_id=msg.chat_id,
+        content=_localized_or("Restarting...", "response.restart", lang=ctx.lang),
         metadata=dict(msg.metadata or {})
     )
 
@@ -262,7 +289,7 @@ async def cmd_new(ctx: CommandContext) -> OutboundMessage:
         loop._schedule_background(loop.consolidator.archive(snapshot))
     return OutboundMessage(
         channel=ctx.msg.channel, chat_id=ctx.msg.chat_id,
-        content="New session started.",
+        content=_localized_or("New session started.", "response.new", lang=ctx.lang),
         metadata=dict(ctx.msg.metadata or {})
     )
 
@@ -1427,19 +1454,23 @@ async def cmd_help(ctx: CommandContext) -> OutboundMessage:
     return OutboundMessage(
         channel=ctx.msg.channel,
         chat_id=ctx.msg.chat_id,
-        content=build_help_text(),
+        content=build_help_text(lang=ctx.lang),
         metadata={**dict(ctx.msg.metadata or {}), "render_as": "text"},
     )
 
 
-def build_help_text() -> str:
+def build_help_text(lang: str = "") -> str:
     """Build canonical help text shared across channels."""
-    lines = ["OriginAgent commands:"]
+    lines = [_localized_or("OriginAgent commands:", "help_header", lang=lang)]
     for spec in BUILTIN_COMMAND_SPECS:
         command = spec.command
         if spec.arg_hint:
             command = f"{command} {spec.arg_hint}"
-        lines.append(f"{command} — {spec.description}")
+        if lang:
+            desc = t(f"command.{_command_i18n_key(spec.command)}.description", lang=lang)
+        else:
+            desc = spec.description
+        lines.append(f"{command} — {desc}")
     return "\n".join(lines)
 
 

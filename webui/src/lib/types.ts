@@ -720,6 +720,9 @@ export type Outbound =
       /** Marks messages sent by the embedded WebUI, without changing the
        * generic websocket protocol for other clients. */
       webui?: true;
+      /** Current UI language code (e.g. "zh-CN", "ja") so the server
+       * can localise slash-command responses. */
+      lang?: string;
     };
 
 

@@ -46,7 +46,7 @@ export function ChatPane({ session, onNewChat }: ChatPaneProps) {
     const pending = pendingFirstRef.current;
     if (!pending) return;
     pendingFirstRef.current = null;
-    client.sendMessage(chatId, pending);
+    client.sendMessage(chatId, pending, undefined, { lang: localStorage.getItem("OriginAgent.locale") || undefined });
     setMessages((prev) => [
       ...prev,
       {

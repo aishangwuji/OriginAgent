@@ -165,6 +165,7 @@ export async function fetchSelfModel(
 export async function listSlashCommands(
   token: string,
   base: string = "",
+  lang: string = "",
 ): Promise<SlashCommand[]> {
   type Row = {
     command: string;
@@ -173,7 +174,8 @@ export async function listSlashCommands(
     icon: string;
     arg_hint?: string;
   };
-  const body = await request<{ commands: Row[] }>(`${base}/api/commands`, token);
+  const suffix = lang ? `?lang=${encodeURIComponent(lang)}` : "";
+  const body = await request<{ commands: Row[] }>(`${base}/api/commands${suffix}`, token);
   const commands: SlashCommand[] = body.commands
     .map((command) => ({
       command: command.command,
