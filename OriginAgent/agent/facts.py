@@ -550,6 +550,7 @@ class FactRelationStore:
         *,
         relation_types: Iterable[str] | None = None,
         depth: int = 1,
+        bidirectional: bool = False,
     ) -> set[str]:
         allowed = {
             _normalize_relation_type(item)
@@ -560,6 +561,8 @@ class FactRelationStore:
             if relation.status != "active" or relation.relation_type not in allowed:
                 continue
             adjacency.setdefault(relation.source_fact_id, set()).add(relation.target_fact_id)
+            if bidirectional:
+                adjacency.setdefault(relation.target_fact_id, set()).add(relation.source_fact_id)
         frontier = {fact_id}
         visited = {fact_id}
         for _ in range(max(1, depth)):
@@ -1187,6 +1190,51 @@ class FactStore:
     def read_relations(self) -> list[FactRelationRecord]:
         return self.relation_store.read_all()
 
+    def persist_relation_candidates(
+        self,
+        relation_candidates: list[dict[str, Any]] | None,
+        *,
+        default_source_fact_id: str | None = None,
+        default_target_fact_id: str | None = None,
+        origin: str = "fact_store",
+        content_for_hash: str = "",
+        default_confidence: float = 0.7,
+    ) -> list[FactRelationRecord]:
+        with self._locked():
+            return self._persist_relation_candidates_unlocked(
+                relation_candidates or [],
+                default_source_fact_id=default_source_fact_id,
+                default_target_fact_id=default_target_fact_id,
+                origin=origin,
+                content_for_hash=content_for_hash,
+                default_confidence=default_confidence,
+            )
+
+    def related_facts(
+        self,
+        fact_id: str,
+        *,
+        relation_types: Iterable[str] | None = None,
+        depth: int = 1,
+        include_pending: bool = False,
+        bidirectional: bool = False,
+    ) -> list[FactRecord]:
+        statuses = {"active", "pending_confirmation"} if include_pending else {"active"}
+        related_ids = self.relation_store.related_fact_ids(
+            fact_id,
+            relation_types=relation_types,
+            depth=depth,
+            bidirectional=bidirectional,
+        )
+        if not related_ids:
+            return []
+        records_by_id = {
+            record.fact_id: record
+            for record in self.read_all()
+            if record.status in statuses
+        }
+        return [records_by_id[related_id] for related_id in sorted(related_ids) if related_id in records_by_id]
+
     def read_events(self) -> list[FactEventRecord]:
         return self.event_store.read_all()
 
@@ -1402,6 +1450,7 @@ class FactStore:
             if record.status != "active":
                 continue
             now_dt = now or datetime.now(timezone.utc)
+            usage_decay = _usage_decay_multiplier(record, now=now_dt)
             if self.flag_enabled("confidence_v2_enabled"):
                 new_confidence = self._derive_confidence(
                     record,
@@ -1410,6 +1459,10 @@ class FactStore:
                     min_confidence=min_confidence,
                     decay_start_days=decay_start_days,
                 )
+                if new_confidence < record.confidence and usage_decay < 1.0:
+                    new_confidence = record.confidence - (
+                        (record.confidence - new_confidence) * usage_decay
+                    )
             else:
                 last_seen = _parse_datetime(record.last_seen_at) or now_dt
                 days_since_seen = _days_between(last_seen, now_dt)
@@ -1423,9 +1476,10 @@ class FactStore:
                 if days_since_seen <= grace:
                     new_confidence = record.confidence
                 else:
+                    decay_steps = max(0, days_since_seen - grace) * usage_decay
                     new_confidence = max(
                         _normalize_confidence(effective_min),
-                        record.confidence * (effective_factor ** max(0, days_since_seen - grace)),
+                        record.confidence * (effective_factor ** decay_steps),
                     )
             if new_confidence == record.confidence:
                 continue
@@ -1749,6 +1803,13 @@ class FactStore:
                 origin=origin,
                 evidence={"content_hash": hashlib.sha256(content.encode("utf-8")).hexdigest()},
             )
+        if relation_candidates:
+            self._persist_explicit_relations(
+                record=record,
+                relation_candidates=relation_candidates,
+                target_fact_id=target_fact_id,
+                origin=origin,
+            )
         if incumbent is not None:
             self._mark_contested_pair(
                 incumbent=incumbent,
@@ -2032,6 +2093,7 @@ class FactStore:
                 item.fact.fact_id,
                 relation_types=("generalizes", "narrows", "implies"),
                 depth=1,
+                bidirectional=True,
             )
             for related_id in sorted(related_ids):
                 related = records_by_id.get(related_id)
@@ -2286,6 +2348,13 @@ class FactStore:
                     origin=origin,
                     evidence={"semantic_scope_hint": semantic_scope_hint or ""},
                 )
+            if relation_candidates:
+                self._persist_explicit_relations(
+                    record=challenger,
+                    relation_candidates=relation_candidates,
+                    target_fact_id=target_fact_id or candidate.fact_id,
+                    origin=origin,
+                )
             self.semantic_resolver.record_pending_index(challenger)
             return challenger
         return None
@@ -2299,13 +2368,13 @@ class FactStore:
         confidence: float,
         origin: str,
         evidence: dict[str, Any],
-    ) -> None:
+    ) -> FactRelationRecord | None:
         if not self.flag_enabled("fact_graph_enabled"):
-            return
+            return None
         if not source_fact_id or not target_fact_id:
-            return
+            return None
         if source_fact_id == target_fact_id and relation_type != "equivalent":
-            return
+            return None
         now = datetime.now(timezone.utc).isoformat()
         relation = FactRelationRecord(
             relation_id=f"relation_{uuid.uuid4().hex[:12]}",
@@ -2319,7 +2388,91 @@ class FactStore:
             status="active",
             evidence=evidence,
         )
-        self.relation_store.upsert(relation)
+        return self.relation_store.upsert(relation)
+
+    def _persist_relation_candidates_unlocked(
+        self,
+        relation_candidates: list[dict[str, Any]],
+        *,
+        default_source_fact_id: str | None = None,
+        default_target_fact_id: str | None = None,
+        origin: str,
+        content_for_hash: str = "",
+        default_confidence: float = 0.7,
+        new_fact_id: str | None = None,
+    ) -> list[FactRelationRecord]:
+        persisted: list[FactRelationRecord] = []
+        if not self.flag_enabled("fact_graph_enabled") or not relation_candidates:
+            return persisted
+        for item in relation_candidates:
+            if not isinstance(item, dict):
+                continue
+            relation_type_raw = item.get("relation_type", item.get("relation_kind"))
+            try:
+                relation_type = _normalize_relation_type(relation_type_raw)
+            except ValueError:
+                continue
+            if relation_type not in {"contradicts", "generalizes", "narrows"}:
+                continue
+            source_fact_id = _optional_record_string(item.get("source_fact_id"))
+            candidate_target_fact_id = _optional_record_string(item.get("target_fact_id"))
+            pair = item.get("fact_pair")
+            if (
+                (not source_fact_id or not candidate_target_fact_id)
+                and isinstance(pair, list)
+                and len(pair) == 2
+                and all(isinstance(value, str) and value.strip() for value in pair)
+            ):
+                source_fact_id = source_fact_id or str(pair[0]).strip()
+                candidate_target_fact_id = candidate_target_fact_id or str(pair[1]).strip()
+            if not source_fact_id:
+                source_fact_id = default_source_fact_id
+            if source_fact_id == "__new_fact__":
+                source_fact_id = new_fact_id or default_source_fact_id
+            if not candidate_target_fact_id:
+                candidate_target_fact_id = default_target_fact_id
+            if candidate_target_fact_id == "__new_fact__":
+                candidate_target_fact_id = new_fact_id or default_target_fact_id
+            if not source_fact_id or not candidate_target_fact_id:
+                continue
+            confidence = _normalize_confidence(
+                item.get("confidence", item.get("relation_confidence", default_confidence))
+            )
+            evidence = item.get("evidence") if isinstance(item.get("evidence"), dict) else {}
+            if content_for_hash and "content_hash" not in evidence:
+                evidence = {
+                    **evidence,
+                    "content_hash": hashlib.sha256(content_for_hash.encode("utf-8")).hexdigest(),
+                }
+            relation = self._upsert_relation(
+                source_fact_id=source_fact_id,
+                target_fact_id=candidate_target_fact_id,
+                relation_type=relation_type,
+                confidence=confidence,
+                origin=str(item.get("origin") or origin or "fact_store").strip() or "fact_store",
+                evidence=evidence,
+            )
+            if relation is not None:
+                persisted.append(relation)
+        return persisted
+
+    def _persist_explicit_relations(
+        self,
+        *,
+        record: FactRecord,
+        relation_candidates: list[dict[str, Any]],
+        target_fact_id: str | None,
+        origin: str,
+    ) -> list[FactRelationRecord]:
+        return self._persist_relation_candidates_unlocked(
+            relation_candidates,
+            default_source_fact_id=record.fact_id,
+            default_target_fact_id=target_fact_id,
+            origin=origin,
+            content_for_hash=record.content,
+            default_confidence=record.confidence,
+            new_fact_id=record.fact_id,
+        )
 
     def _append_fact_event(
         self,
@@ -2646,6 +2799,30 @@ def _normalize_decay_factor(value: Any) -> float:
     except (TypeError, ValueError) as exc:
         raise ValueError("confidence decay factor must be numeric") from exc
     return max(0.0, min(1.0, factor))
+
+
+def _usage_decay_multiplier(record: FactRecord, *, now: datetime) -> float:
+    retrieval_count = max(0, int(record.retrieval_count))
+    injection_count = max(0, int(record.injection_count))
+    if retrieval_count < 3 and injection_count < 2:
+        return 1.0
+
+    retrieval_weight = min(retrieval_count, 12) / 12.0
+    injection_weight = min(injection_count, 8) / 8.0
+    usage_score = (retrieval_weight * 0.6) + (injection_weight * 0.4)
+
+    last_retrieved = _parse_datetime(record.last_retrieved_at or "")
+    if last_retrieved is None:
+        recency_multiplier = 1.0
+    else:
+        retrieval_idle_days = _days_between(last_retrieved, now)
+        if retrieval_idle_days <= 7:
+            recency_multiplier = 0.7
+        elif retrieval_idle_days <= 30:
+            recency_multiplier = 0.85
+        else:
+            recency_multiplier = 1.0
+    return max(0.5, 1.0 - (usage_score * 0.35)) * recency_multiplier
 
 
 def _parse_datetime(value: str) -> datetime | None:

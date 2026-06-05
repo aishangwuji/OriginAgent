@@ -77,6 +77,81 @@ def test_same_canonical_key_updates_existing_fact_without_duplicate(fact_store):
     assert fact_store.facts_file.read_text(encoding="utf-8").count("\n") == 1
 
 
+def test_explicit_relation_candidates_persist_supported_relation_kinds(tmp_path):
+    store = FactStore(
+        tmp_path,
+        redactor=redact_memory_text,
+        feature_flags={"fact_graph_enabled": True},
+    )
+    base = store.upsert_fact(
+        "User lives in Tokyo",
+        category="preference",
+        scope="user.location",
+        owner="user",
+    )
+    narrower = store.upsert_fact(
+        "User lives in Tokyo Minato",
+        category="preference",
+        scope="user.location",
+        owner="user",
+        target_fact_id=base.fact_id,
+        relation_candidates=[
+            {"relation_type": "narrows", "target_fact_id": base.fact_id},
+            {"relation_type": "generalizes", "source_fact_id": base.fact_id, "target_fact_id": "__new_fact__"},
+            {"relation_type": "contradicts", "source_fact_id": "__new_fact__", "target_fact_id": base.fact_id},
+        ],
+    )
+
+    relations = store.read_relations()
+    triples = {
+        (relation.source_fact_id, relation.target_fact_id, relation.relation_type)
+        for relation in relations
+    }
+    assert (narrower.fact_id, base.fact_id, "narrows") in triples
+    assert (base.fact_id, narrower.fact_id, "generalizes") in triples
+    assert (narrower.fact_id, base.fact_id, "contradicts") in triples
+
+
+def test_related_facts_can_traverse_persisted_relations(tmp_path):
+    store = FactStore(
+        tmp_path,
+        redactor=redact_memory_text,
+        feature_flags={"fact_graph_enabled": True},
+    )
+    general = store.upsert_fact(
+        "User lives in Tokyo",
+        category="preference",
+        scope="user.location",
+        owner="user",
+    )
+    specific = store.upsert_fact(
+        "User lives in Tokyo Minato",
+        category="preference",
+        scope="user.location",
+        owner="user",
+        relation_candidates=[
+            {"relation_type": "narrows", "target_fact_id": general.fact_id},
+        ],
+    )
+
+    forward = store.related_facts(
+        specific.fact_id,
+        relation_types=("narrows",),
+        depth=1,
+        include_pending=True,
+    )
+    reverse = store.related_facts(
+        general.fact_id,
+        relation_types=("narrows",),
+        depth=1,
+        include_pending=True,
+        bidirectional=True,
+    )
+
+    assert [fact.fact_id for fact in forward] == [general.fact_id]
+    assert [fact.fact_id for fact in reverse] == [specific.fact_id]
+
+
 def test_source_excerpt_is_redacted_but_fact_content_is_not(fact_store):
     fact = fact_store.upsert_fact(
         "The support contact is alice@example.com",
@@ -280,6 +355,78 @@ def test_decay_confidence_only_updates_stale_active_facts(fact_store):
     assert by_id[stale.fact_id].confidence == 0.3
     assert by_id[recent.fact_id].confidence == 0.8
     assert by_id[pending.fact_id].confidence == 0.9
+
+
+def test_confidence_v2_decay_slows_for_frequently_retrieved_facts(tmp_path):
+    store = FactStore(
+        tmp_path,
+        redactor=redact_memory_text,
+        feature_flags={"confidence_v2_enabled": True},
+    )
+    now = datetime(2026, 5, 26, 12, 0, 0)
+    often_used = store.upsert_fact(
+        "Use warm bedroom lights",
+        category="preference",
+        scope="home.bedroom.lighting",
+        confidence=0.9,
+    )
+    rarely_used = store.upsert_fact(
+        "Use quiet notifications",
+        category="preference",
+        scope="user.notifications",
+        confidence=0.9,
+    )
+    records = store.read_all()
+    for record in records:
+        record.last_seen_at = (now - timedelta(days=60)).isoformat()
+        record.last_supported_at = (now - timedelta(days=60)).isoformat()
+        if record.fact_id == often_used.fact_id:
+            record.retrieval_count = 10
+            record.injection_count = 6
+            record.last_retrieved_at = (now - timedelta(days=35)).isoformat()
+        elif record.fact_id == rarely_used.fact_id:
+            record.retrieval_count = 0
+            record.injection_count = 0
+            record.last_retrieved_at = (now - timedelta(days=60)).isoformat()
+    store._write_records_unlocked(records)
+
+    changed = store.decay_confidence(now=now)
+
+    assert changed == 2
+    by_id = {record.fact_id: record for record in store.read_all()}
+    assert by_id[often_used.fact_id].confidence > by_id[rarely_used.fact_id].confidence
+
+
+def test_confidence_v2_decay_keeps_low_usage_behavior(tmp_path):
+    store = FactStore(
+        tmp_path,
+        redactor=redact_memory_text,
+        feature_flags={"confidence_v2_enabled": True},
+    )
+    now = datetime(2026, 5, 26, 12, 0, 0)
+    fact = store.upsert_fact(
+        "Use quiet notifications",
+        category="preference",
+        scope="user.notifications",
+        confidence=0.9,
+    )
+    records = store.read_all()
+    assert len(records) == 1
+    records[0].last_seen_at = (now - timedelta(days=60)).isoformat()
+    records[0].last_supported_at = (now - timedelta(days=60)).isoformat()
+    records[0].retrieval_count = 1
+    records[0].injection_count = 1
+    records[0].last_retrieved_at = (now - timedelta(days=60)).isoformat()
+    baseline_before = records[0].confidence
+    derived_baseline = store._derive_confidence(records[0], now=now)
+    assert derived_baseline < baseline_before
+    store._write_records_unlocked(records)
+
+    changed = store.decay_confidence(now=now)
+
+    assert changed == 1
+    updated = {record.fact_id: record for record in store.read_all()}[fact.fact_id]
+    assert updated.confidence == pytest.approx(derived_baseline)
 
 
 def test_calibrate_confidence_applies_bias_after_sample_threshold(fact_store):

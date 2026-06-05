@@ -79,6 +79,17 @@ def _fact_events(tmp_path: Path) -> list[dict]:
     ]
 
 
+def _relations(tmp_path: Path) -> list[dict]:
+    path = tmp_path / "memory" / "fact_relations.jsonl"
+    if not path.exists():
+        return []
+    return [
+        json.loads(line)
+        for line in path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+
+
 def test_legacy_pending_proposals_and_events_are_merged(tmp_path: Path) -> None:
     store = ReviewProposalStore(tmp_path)
     store.append_many([_proposal("review_1")])
@@ -158,6 +169,60 @@ def test_apply_fact_without_payload_uses_conservative_note_fallback(tmp_path: Pa
     facts = _facts(tmp_path)
     assert facts[0]["category"] == "note"
     assert facts[0]["scope"] == "review.fact"
+
+
+def test_apply_fact_conflict_persists_relation_kind_without_mutating_facts(tmp_path: Path) -> None:
+    store = ReviewProposalStore(
+        tmp_path,
+        feature_flags={"fact_graph_enabled": True},
+    )
+    left = store._memory_store.upsert_fact_and_rebuild_memory(
+        "User lives in Tokyo",
+        category="preference",
+        scope="user.location",
+        owner="user",
+    )
+    right = store._memory_store.upsert_fact_and_rebuild_memory(
+        "User lives in Tokyo Minato",
+        category="preference",
+        scope="user.location",
+        owner="user",
+    )
+    before_facts = _facts(tmp_path)
+    store.append_many([
+        _proposal(
+            "review_fact_conflict",
+            proposal_type="fact_conflict",
+            title="Review narrows facts for preference/user.location",
+            content="Operator should review the semantic relation.",
+            payload={
+                "relation_kind": "narrows",
+                "relation_confidence": 0.91,
+                "fact_pair": [right.fact_id, left.fact_id],
+                "subject_type": "fact_group",
+                "subject_id": "user.location|user|preference",
+            },
+        )
+    ])
+
+    result = store.apply("review_fact_conflict", reason="approved relation only")
+
+    assert result.ok is True
+    assert result.artifact == {
+        "artifact_type": "fact_relation",
+        "relation_count": 1,
+        "relation_ids": [result.artifact["relation_ids"][0]],
+        "path": "memory/fact_relations.jsonl",
+        "validation": "Fact relations persisted.",
+    }
+    assert _facts(tmp_path) == before_facts
+    relations = _relations(tmp_path)
+    assert any(
+        relation["source_fact_id"] == right.fact_id
+        and relation["target_fact_id"] == left.fact_id
+        and relation["relation_type"] == "narrows"
+        for relation in relations
+    )
 
 
 def test_reject_fact_proposal_lowers_matching_active_fact_confidence(tmp_path: Path) -> None:

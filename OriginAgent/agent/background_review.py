@@ -35,6 +35,7 @@ from OriginAgent.agent.facts import (
     UNCERTAIN_LANGUAGE,
     VALID_CATEGORIES,
     VALID_OWNERS,
+    VALID_RELATION_TYPES,
     FactRecord,
     canonical_key_for_fact,
 )
@@ -68,6 +69,7 @@ _TERMINAL_REVIEW_STATUSES = {"applied", "rejected", "deferred", "failed"}
 _APPLY_ACTIONS_BY_TYPE = {
     "memory": "memory",
     "fact": "memory",
+    "fact_conflict": "fact_relation",
     "skill": "skill",
     "workflow": "workflow",
     "promote_skill": "promote_skill",
@@ -463,6 +465,8 @@ class ReviewProposalStore:
                 return self._apply_to_skill_unlocked(record, reason=reason)
             if action_kind == "workflow":
                 return self._apply_to_workflow_unlocked(record, reason=reason)
+            if action_kind == "fact_relation":
+                return self._apply_fact_relation_unlocked(record, reason=reason)
             if action_kind == "promote_skill":
                 return self._apply_promote_skill_unlocked(record, reason=reason)
             if action_kind == "deprecate_skill":
@@ -710,7 +714,10 @@ class ReviewProposalStore:
             else None
         )
         relation_candidates = payload.get("relation_candidates")
-        fact_fields["relation_candidates"] = relation_candidates if isinstance(relation_candidates, list) else None
+        if isinstance(relation_candidates, list):
+            fact_fields["relation_candidates"] = relation_candidates
+        else:
+            fact_fields["relation_candidates"] = _normalize_relation_candidates_from_payload(payload)
         fact_fields["semantic_scope_hint"] = (
             payload.get("semantic_scope_hint")
             if isinstance(payload.get("semantic_scope_hint"), str)
@@ -726,6 +733,82 @@ class ReviewProposalStore:
             "source_message_id": str(record.get("source_message_id") or ""),
         }
         return self._memory_store.upsert_fact_and_rebuild_memory(**fact_fields)
+
+    def _apply_fact_relation_unlocked(
+        self,
+        record: dict[str, Any],
+        *,
+        reason: str = "",
+    ) -> ReviewDecisionResult:
+        proposal_id = str(record.get("id") or "")
+        payload = _proposal_payload(record)
+        relation_candidates = _normalize_relation_candidates_from_payload(payload)
+        if not relation_candidates:
+            return ReviewDecisionResult(
+                proposal_id=proposal_id,
+                status=str(record.get("status") or "pending"),
+                action="apply",
+                ok=False,
+                message="Fact relation proposal is missing relation candidates.",
+                proposal=record,
+                error="missing_relation_candidates",
+            )
+        try:
+            relations = self._memory_store.fact_store.persist_relation_candidates(
+                relation_candidates,
+                origin=_proposal_origin(record),
+            )
+        except Exception as exc:
+            logger.exception("Failed to apply fact relation review proposal {}", proposal_id)
+            event = self._append_event_unlocked(
+                proposal_id,
+                status="failed",
+                reason=reason,
+                error=str(exc),
+            )
+            return ReviewDecisionResult(
+                proposal_id=proposal_id,
+                status="failed",
+                action="apply",
+                ok=False,
+                message="Failed to persist fact relations.",
+                proposal=self._find_unlocked(proposal_id),
+                event=event,
+                error=str(exc),
+            )
+        if not relations:
+            return ReviewDecisionResult(
+                proposal_id=proposal_id,
+                status=str(record.get("status") or "pending"),
+                action="apply",
+                ok=False,
+                message="Fact relation proposal did not resolve to any storable relation.",
+                proposal=record,
+                error="no_relations_persisted",
+            )
+        artifact = {
+            "artifact_type": "fact_relation",
+            "relation_count": len(relations),
+            "relation_ids": [relation.relation_id for relation in relations],
+            "path": "memory/fact_relations.jsonl",
+            "validation": "Fact relations persisted.",
+        }
+        event = self._append_event_unlocked(
+            proposal_id,
+            status="applied",
+            reason=reason,
+            artifact=artifact,
+        )
+        return ReviewDecisionResult(
+            proposal_id=proposal_id,
+            status="applied",
+            action="apply",
+            ok=True,
+            message="Fact relation proposal applied.",
+            proposal=self._find_unlocked(proposal_id),
+            event=event,
+            artifact=artifact,
+        )
 
     def _apply_rejected_fact_feedback_unlocked(
         self,
@@ -1679,7 +1762,7 @@ def _review_subject_label(record: dict[str, Any]) -> str:
 
 def _unsupported_apply_message(record: dict[str, Any]) -> str:
     proposal_type = _proposal_type(record)
-    if proposal_type in {"merge_skill", "archive_workflow", "fact_conflict"}:
+    if proposal_type in {"merge_skill", "archive_workflow"}:
         return f"{proposal_type} proposals are review-only in P10."
     if proposal_type == "move_to_domain":
         return "move_to_domain proposals are only apply-capable when the target is a workspace domain pack."
@@ -1790,6 +1873,36 @@ def _fact_fields_from_proposal(record: dict[str, Any]) -> dict[str, Any]:
             else None
         ),
     }
+
+
+def _normalize_relation_candidates_from_payload(payload: dict[str, Any]) -> list[dict[str, Any]]:
+    raw_candidates = payload.get("relation_candidates")
+    normalized: list[dict[str, Any]] = []
+    if isinstance(raw_candidates, list):
+        for item in raw_candidates:
+            if isinstance(item, dict):
+                normalized.append(dict(item))
+
+    relation_kind = str(payload.get("relation_kind") or "").strip().lower()
+    fact_pair = payload.get("fact_pair")
+    if (
+        relation_kind in VALID_RELATION_TYPES
+        and isinstance(fact_pair, list)
+        and len(fact_pair) == 2
+        and all(isinstance(item, str) and item.strip() for item in fact_pair)
+    ):
+        normalized.append({
+            "relation_type": relation_kind,
+            "source_fact_id": str(fact_pair[0]).strip(),
+            "target_fact_id": str(fact_pair[1]).strip(),
+            "fact_pair": [str(fact_pair[0]).strip(), str(fact_pair[1]).strip()],
+            "confidence": payload.get("relation_confidence"),
+            "origin": str(record_origin := payload.get("origin") or "").strip() or DEFAULT_REVIEW_ORIGIN,
+            "evidence": {
+                "proposal_fact_pair": [str(fact_pair[0]).strip(), str(fact_pair[1]).strip()],
+            },
+        })
+    return normalized
 
 
 def _canonical_key_from_review_fact(record: dict[str, Any]) -> str:
