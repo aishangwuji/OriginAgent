@@ -42,9 +42,10 @@ from OriginAgent.agent.domain_packs import DomainPackManager
 from OriginAgent.agent.hook import AgentHook, CompositeHook
 from OriginAgent.agent.identity import ActorResolver, RuntimeContext
 from OriginAgent.agent.introspection.service import RuntimeIntrospectionService
-from OriginAgent.agent.memory import Consolidator, Dream
+from OriginAgent.agent.memory import Consolidator, Dream, dream_feature_flags
 from OriginAgent.agent.progress_hook import AgentProgressHook
 from OriginAgent.agent.runner import _MAX_INJECTIONS_PER_TURN, AgentRunner, AgentRunSpec
+from OriginAgent.agent.self_model import SelfModelService
 from OriginAgent.agent.subagent import SubagentManager
 from OriginAgent.agent.tools.ask import (
     ask_user_options_from_messages,
@@ -53,7 +54,8 @@ from OriginAgent.agent.tools.ask import (
     pending_ask_user_id,
 )
 from OriginAgent.agent.tools.audit import JsonlToolAuditSink, ToolAuditConfig
-from OriginAgent.agent.confirmation import PendingConfirmationStore
+from OriginAgent.agent.audit import AuditLogger
+from OriginAgent.agent.confirmation import ConfirmationManager, PendingConfirmationStore, classify_confirmation_reply
 from OriginAgent.agent.tools.file_state import FileStateStore, bind_file_states, reset_file_states
 from OriginAgent.agent.tools.message import MessageTool
 from OriginAgent.agent.tools.registry import ToolRegistry
@@ -65,7 +67,7 @@ from OriginAgent.config.schema import AgentDefaults
 from OriginAgent.providers.base import LLMProvider
 from OriginAgent.providers.factory import ProviderSnapshot
 from OriginAgent.security.capabilities import CapabilitySnapshot
-from OriginAgent.security.grants import CapabilityGrantStore
+from OriginAgent.security.grants import CapabilityGrantStore, issue_tool_approval_grant
 from OriginAgent.session.cold_archive import SessionColdArchiveStore
 from OriginAgent.session.goal_state import goal_state_ws_blob, runner_wall_llm_timeout_s
 from OriginAgent.session.manager import Session, SessionManager
@@ -168,6 +170,7 @@ class TurnContext:
 
     pending_queue: asyncio.Queue | None = None
     pending_summary: str | None = None
+    internal_event: tuple[str, str] | None = None
     runtime_context: RuntimeContext | None = None
     capability_snapshot: CapabilitySnapshot | None = None
 
@@ -257,6 +260,7 @@ class AgentLoop:
         curator_config_loader: Callable[[], "CuratorConfig"] | None = None,
         evolution_config: "EvolutionConfig | None" = None,
         evolution_config_loader: Callable[[], "EvolutionConfig"] | None = None,
+        dream_config: Any | None = None,
         cold_archive_enabled: bool = True,
         tool_concurrency_limit: int | None = None,
         allow_agent_initiated_messages: bool | None = None,
@@ -314,6 +318,8 @@ class AgentLoop:
         self.exec_config = exec_config or ExecToolConfig()
         self.tools_config = _tc
         self.evolution_config = evolution_config or defaults.learning.evolution
+        self._dream_config = dream_config or defaults.dream
+        self._memory_feature_flags = dream_feature_flags(self._dream_config)
         self.session_search_index = SessionSearchIndexService(
             workspace,
             backend=_tc.session_search.backend,
@@ -346,6 +352,8 @@ class AgentLoop:
             config=learning_config or defaults.learning.background_review,
             config_loader=learning_config_loader,
             domain_pack_manager=self.domain_packs,
+            memory_feature_flags=self._memory_feature_flags,
+            task_runtime_config=defaults.task_runtime,
         )
         self.curator = CuratorService(
             workspace=workspace,
@@ -361,9 +369,20 @@ class AgentLoop:
         )
         self._persist = TurnPersistManager(self.max_tool_result_chars, self.sessions)
         self._tool_audit_config = ToolAuditConfig.from_config(tool_audit_config or _tc.audit)
+        self._grant_store = CapabilityGrantStore(workspace)
+        self._audit_logger = AuditLogger(workspace)
+        self._confirmation_store = PendingConfirmationStore(workspace)
+        self._confirmation_manager = ConfirmationManager(
+            workspace,
+            store=self._confirmation_store,
+            audit_logger=self._audit_logger,
+            config=defaults.confirmation,
+        )
         self.tools = ToolRegistry(
             audit_sink=JsonlToolAuditSink(workspace),
             audit_config=self._tool_audit_config,
+            confirmation_manager=self._confirmation_manager,
+            grant_store=self._grant_store,
         )
         self._domain_runtime_overrides = dict(domain_runtime_overrides or {})
         if device_action_executor is not None:
@@ -388,7 +407,7 @@ class AgentLoop:
             disabled_skills=disabled_skills,
             max_iterations=self.max_iterations,
             subagent_policy_mode=defaults.subagent_policy.mode,
-            grant_store=CapabilityGrantStore(workspace),
+            grant_store=self._grant_store,
             preset_snapshot_loader=self._preset_snapshot_loader,
         )
         self._unified_session = unified_session
@@ -417,6 +436,8 @@ class AgentLoop:
             workspace,
             timezone=timezone,
             disabled_skills=disabled_skills,
+            memory_feature_flags=self._memory_feature_flags,
+            context_config=defaults.context,
             domain_pack_manager=self.domain_packs,
             audit_mode=self._tool_audit_config.mode,
             runtime_profile=self._runtime_profile,
@@ -424,10 +445,10 @@ class AgentLoop:
             sessions=self.sessions,
             pending_queues=self._pending_queues,
             cron_service=self.cron_service,
+            confirmation_store=self._confirmation_store,
             background_review_service=self.background_review,
             curator_service=self.curator,
         )
-        self._confirmation_store = PendingConfirmationStore(workspace)
         self._reminder_store = ReminderStore(workspace)
         self._active_intent_config = ActiveIntentConfig(
             enabled=(
@@ -516,6 +537,7 @@ class AgentLoop:
             model=self.model,
             auxiliary_router=self.auxiliary_router,
             evolution_config=self.evolution_config,
+            feature_flags=self._memory_feature_flags,
         )
         self._register_default_tools()
         if _tc.my.enable:
@@ -637,6 +659,7 @@ class AgentLoop:
             curator_config_loader=_curator_config_loader,
             evolution_config=defaults.learning.evolution,
             evolution_config_loader=_evolution_config_loader,
+            dream_config=defaults.dream,
             **extra,
         )
 
@@ -744,6 +767,8 @@ class AgentLoop:
             runtime_profile=self._runtime_profile,
             introspection_service=self.introspection,
             confirmation_store=self._confirmation_store,
+            confirmation_manager=self._confirmation_manager,
+            grant_store=self._grant_store,
             domain_runtime_overrides=self._domain_runtime_overrides,
             evolution_config=self.evolution_config,
         )
@@ -1015,12 +1040,15 @@ class AgentLoop:
         history: list[dict[str, Any]],
         pending_ask_id: str | None,
         pending_summary: str | None,
+        internal_event: tuple[str, str] | None = None,
     ) -> list[dict[str, Any]]:
         """Build the initial message list for the LLM turn."""
+        self_model_payload = self._build_prompt_self_model()
         if pending_ask_id:
             system_prompt = self.context.build_system_prompt(
                 channel=msg.channel,
                 session_summary=pending_summary,
+                self_model_payload=self_model_payload,
             )
             messages = ask_user_tool_result_messages(
                 system_prompt,
@@ -1031,9 +1059,9 @@ class AgentLoop:
             messages.append({
                 "role": "user",
                 "content": [
-                    self.context.build_runtime_context_block(
-                        msg.channel,
-                        self._runtime_chat_id(msg),
+                self.context.build_runtime_context_block(
+                    msg.channel,
+                    self._runtime_chat_id(msg),
                         self.context.timezone,
                         sender_id=msg.sender_id,
                         session_metadata=session.metadata,
@@ -1053,7 +1081,66 @@ class AgentLoop:
             sender_id=msg.sender_id,
             session_summary=pending_summary,
             session_metadata=session.metadata,
+            internal_event=internal_event,
+            self_model_payload=self_model_payload,
         )
+
+    def _build_prompt_self_model(self) -> dict[str, Any]:
+        snapshot = self.introspection.runtime_context_snapshot()
+        return SelfModelService(
+            self.workspace,
+            audit_mode=self._tool_audit_config.mode,
+            runtime_profile=self._runtime_profile,
+            domain_pack_manager=self.domain_packs,
+            skills_loader=self.context.skills,
+            memory_store=self.context.memory,
+            runtime_snapshot=snapshot,
+        ).build()
+
+    def _consume_tool_approval_reply(
+        self,
+        *,
+        session_key: str,
+        actor_id: str | None,
+        reply: str,
+    ) -> tuple[tuple[str, str] | None, bool]:
+        confirmation = self._confirmation_manager.latest_pending_tool_approval(session_key)
+        if confirmation is None:
+            return None, False
+        classification = classify_confirmation_reply(reply)
+        if classification not in {"confirmed", "rejected"}:
+            return None, False
+        result = self._confirmation_manager.resolve_user_reply(
+            confirmation.confirmation_id,
+            reply,
+        )
+        tool_name = confirmation.metadata.get("tool_name") or confirmation.action or "tool"
+        if result.decision == "confirmed":
+            grant = issue_tool_approval_grant(
+                confirmation,
+                self._grant_store,
+                approved_by=actor_id,
+            )
+            return (
+                (
+                    "tool_approval",
+                    (
+                        f"Tool approval confirmed for {tool_name}. "
+                        f"Short-lived grant {grant.grant_id} is active for this session. "
+                        "Continue the pending task using the newly approved capability."
+                    ),
+                ),
+                True,
+            )
+        if result.decision == "rejected":
+            return (
+                (
+                    "tool_approval",
+                    f"Tool approval was rejected for {tool_name}. Do not use that capability unless the user asks again.",
+                ),
+                True,
+            )
+        return None, False
 
     def _is_webui_message(self, msg: InboundMessage) -> bool:
         return msg.channel == "websocket" and msg.metadata.get("webui") is True
@@ -1963,8 +2050,22 @@ class AgentLoop:
         ctx.history = ctx.session.get_history(**_hist_kwargs)
 
         pending_ask_id = pending_ask_user_id(ctx.history)
+        tool_approval_event = None
+        if pending_ask_id is None:
+            tool_approval_event, consumed = self._consume_tool_approval_reply(
+                session_key=ctx.session_key,
+                actor_id=runtime_context.actor_id,
+                reply=ctx.msg.content,
+            )
+            if consumed:
+                ctx.internal_event = tool_approval_event
         ctx.initial_messages = self._build_initial_messages(
-            ctx.msg, ctx.session, ctx.history, pending_ask_id, ctx.pending_summary
+            ctx.msg,
+            ctx.session,
+            ctx.history,
+            pending_ask_id,
+            ctx.pending_summary,
+            ctx.internal_event,
         )
         ctx.user_persisted_early = self._persist_user_message_early(
             ctx.msg, ctx.session, pending_ask_id

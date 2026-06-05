@@ -2,6 +2,7 @@ import pytest
 
 from OriginAgent.agent.tools.message import MessageTool
 from OriginAgent.bus.events import OutboundMessage
+from OriginAgent.security.capabilities import CapabilitySnapshot
 
 _PNG = (
     b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR"
@@ -139,6 +140,35 @@ async def test_message_tool_rejects_cross_target_without_runtime_grant() -> None
 
     assert "Cross-target" in str(exc.value)
     assert sent == []
+
+
+@pytest.mark.asyncio
+async def test_message_tool_allows_cross_target_with_capability_snapshot() -> None:
+    sent: list[OutboundMessage] = []
+
+    async def _send(msg: OutboundMessage) -> None:
+        sent.append(msg)
+
+    tool = MessageTool(send_callback=_send)
+    tool.set_context("slack", "C123")
+    snapshot = CapabilitySnapshot.user_turn()
+    tool.set_capability_snapshot(snapshot.__class__(
+        version=snapshot.version,
+        source=snapshot.source,
+        trigger=snapshot.trigger,
+        can_exec=snapshot.can_exec,
+        can_read_files=snapshot.can_read_files,
+        can_write_files=snapshot.can_write_files,
+        can_send_cross_target=True,
+        can_create_cron=snapshot.can_create_cron,
+        can_spawn=snapshot.can_spawn,
+        allowed_device_domains=snapshot.allowed_device_domains,
+        allowed_mcp_scopes=snapshot.allowed_mcp_scopes,
+    ))
+
+    await tool.execute(content="channel reply", channel="slack", chat_id="C999")
+
+    assert sent[0].chat_id == "C999"
 
 
 @pytest.mark.asyncio

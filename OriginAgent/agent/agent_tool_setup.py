@@ -7,7 +7,8 @@ from typing import Any, Callable
 
 from loguru import logger
 
-from OriginAgent.agent.confirmation import PendingConfirmationStore
+from OriginAgent.agent.audit import AuditLogger
+from OriginAgent.agent.confirmation import ConfirmationManager, PendingConfirmationStore
 from OriginAgent.agent.skills import BUILTIN_SKILLS_DIR
 from OriginAgent.agent.tools.ask import AskUserTool
 from OriginAgent.agent.tools.content_read import ContentReadTool
@@ -33,6 +34,7 @@ from OriginAgent.agent.tools.session_search import SessionSearchTool
 from OriginAgent.agent.tools.shell import ExecTool
 from OriginAgent.agent.tools.spawn import SpawnTool
 from OriginAgent.agent.tools.web import WebFetchTool, WebSearchTool
+from OriginAgent.security.grants import CapabilityGrantStore
 
 
 def should_register_exec(config: Any) -> bool:
@@ -141,6 +143,8 @@ def register_default_tools(
     runtime_profile: str,
     introspection_service: Any | None = None,
     confirmation_store: PendingConfirmationStore | None = None,
+    confirmation_manager: ConfirmationManager | None = None,
+    grant_store: CapabilityGrantStore | None = None,
     domain_runtime_overrides: dict[str, Any] | None = None,
     evolution_config: Any | None = None,
     allowed_tool_names: set[str] | frozenset[str] | None = None,
@@ -149,6 +153,12 @@ def register_default_tools(
     allowed_dir = workspace if (restrict_to_workspace or exec_config.sandbox) else None
     extra_read = [BUILTIN_SKILLS_DIR] if allowed_dir else None
     confirmation_store = confirmation_store or PendingConfirmationStore(workspace)
+    confirmation_manager = confirmation_manager or ConfirmationManager(
+        workspace,
+        store=confirmation_store,
+        audit_logger=AuditLogger(workspace),
+    )
+    grant_store = grant_store or CapabilityGrantStore(workspace)
 
     def _allowed(name: str) -> bool:
         return allowed_tool_names is None or name in allowed_tool_names

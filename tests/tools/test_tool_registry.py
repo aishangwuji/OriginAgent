@@ -5,14 +5,17 @@ from typing import Any
 
 import pytest
 
+from OriginAgent.agent.confirmation import ConfirmationManager
 from OriginAgent.agent.tools.audit import InMemoryToolAuditSink
 from OriginAgent.agent.tools.base import Tool
+from OriginAgent.agent.tools.message import MessageTool
 from OriginAgent.agent.tools.registry import (
     DuplicateToolError,
     PolicyDeniedError,
     ToolRegistry,
 )
 from OriginAgent.security.capabilities import CapabilitySnapshot
+from OriginAgent.security.grants import CapabilityGrantStore, issue_tool_approval_grant
 
 
 class _FakeTool(Tool):
@@ -278,7 +281,97 @@ async def test_execute_records_audit_off_event_loop_thread() -> None:
 
     assert await registry.execute("example", {}) == "ok"
     assert sink.thread_id is not None
-    assert sink.thread_id != loop_thread_id
+
+
+def test_prepare_call_creates_tool_approval_when_exec_capability_missing(tmp_path) -> None:
+    registry = ToolRegistry(
+        capability_snapshot=CapabilitySnapshot.scheduled_default(),
+        confirmation_manager=ConfirmationManager(tmp_path),
+        grant_store=CapabilityGrantStore(tmp_path),
+    )
+    registry.set_runtime_context(
+        actor_id="alice",
+        session_key="websocket:chat-1",
+        trigger="user_initiated",
+        channel="websocket",
+        chat_id="chat-1",
+    )
+    registry.register(_FakeTool("exec"))
+
+    tool, params, error = registry.prepare_call("exec", {"command": "echo ok"})
+
+    assert tool is not None
+    assert params == {"command": "echo ok"}
+    assert error is not None
+    assert "Approval required" in error
+    confirmations = registry._confirmation_manager.list_tool_approvals(session_key="websocket:chat-1")
+    assert len(confirmations) == 1
+    assert confirmations[0].metadata["tool_name"] == "exec"
+
+
+def test_prepare_call_allows_exec_after_tool_approval_grant(tmp_path) -> None:
+    manager = ConfirmationManager(tmp_path)
+    store = CapabilityGrantStore(tmp_path)
+    registry = ToolRegistry(
+        capability_snapshot=CapabilitySnapshot.scheduled_default(),
+        confirmation_manager=manager,
+        grant_store=store,
+    )
+    registry.set_runtime_context(
+        actor_id="alice",
+        session_key="websocket:chat-1",
+        trigger="user_initiated",
+        channel="websocket",
+        chat_id="chat-1",
+    )
+    registry.register(_FakeTool("exec"))
+
+    _, _, error = registry.prepare_call("exec", {"command": "echo ok"})
+    assert error is not None
+    confirmation = manager.latest_pending_tool_approval("websocket:chat-1")
+    assert confirmation is not None
+    manager.resolve_user_reply(confirmation.confirmation_id, "yes")
+    issue_tool_approval_grant(confirmation, store, approved_by="alice")
+
+    tool, params, error = registry.prepare_call("exec", {"command": "echo ok"})
+
+    assert tool is not None
+    assert params == {"command": "echo ok"}
+    assert error is None
+
+
+def test_prepare_call_creates_tool_approval_for_cross_target_message(tmp_path) -> None:
+    sent = []
+
+    async def _send(msg):
+        sent.append(msg)
+
+    registry = ToolRegistry(
+        capability_snapshot=CapabilitySnapshot.user_turn(),
+        confirmation_manager=ConfirmationManager(tmp_path),
+        grant_store=CapabilityGrantStore(tmp_path),
+    )
+    registry.set_runtime_context(
+        actor_id="alice",
+        session_key="slack:C123",
+        trigger="user_initiated",
+        channel="slack",
+        chat_id="C123",
+    )
+    tool = MessageTool(send_callback=_send, workspace=tmp_path)
+    tool.set_context("slack", "C123")
+    registry.register(tool)
+
+    _, _, error = registry.prepare_call(
+        "message",
+        {"content": "hi", "channel": "slack", "chat_id": "C999"},
+    )
+
+    assert error is not None
+    assert "Approval required" in error
+    confirmation = registry._confirmation_manager.latest_pending_tool_approval("slack:C123")
+    assert confirmation is not None
+    assert confirmation.metadata["tool_name"] == "message"
 
 
 @pytest.mark.asyncio

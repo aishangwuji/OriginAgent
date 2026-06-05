@@ -9,8 +9,10 @@ file. Fact `content` is the remembered human-readable fact and is not redacted;
 from __future__ import annotations
 
 from collections import Counter
+from collections.abc import Iterable
 import hashlib
 import json
+import math
 import os
 import re
 import uuid
@@ -109,6 +111,33 @@ VALID_STATUSES = {
     "contradicted",
     "pending_confirmation",
 }
+VALID_CONSISTENCY_STATES = {
+    "consistent",
+    "contested",
+    "contradicted",
+}
+VALID_CONFIDENCE_VERSIONS = {"v1", "v2"}
+VALID_RELATION_TYPES = {
+    "equivalent",
+    "supersedes",
+    "contradicts",
+    "generalizes",
+    "narrows",
+    "implies",
+    "related_to",
+}
+VALID_RELATION_STATUSES = {"active", "inactive"}
+DEFAULT_CONFIDENCE_VERSION = "v2"
+DEFAULT_CONSISTENCY_STATE = "consistent"
+DEFAULT_CONTEXT_TOP_K = 12
+FEATURE_FLAG_NAMES = (
+    "semantic_retrieval_enabled",
+    "semantic_merge_enabled",
+    "fact_graph_enabled",
+    "confidence_v2_enabled",
+    "contradiction_auto_flip_enabled",
+    "fact_audit_enabled",
+)
 HIGH_RISK_CATEGORIES = set(DEFAULT_FACT_STORE_CONFIG.high_risk_categories)
 CONFLICT_CATEGORIES = set(DEFAULT_FACT_STORE_CONFIG.conflict_categories)
 MAX_DEPRECATIONS_PER_BATCH = 3
@@ -140,6 +169,10 @@ class FactProposal:
     requires_confirmation: bool | None = None
     status: str | None = None
     reason: str = ""
+    change_kind: str | None = None
+    target_fact_id: str | None = None
+    relation_candidates: list[dict[str, Any]] = field(default_factory=list)
+    semantic_scope_hint: str | None = None
 
 
 @dataclass
@@ -200,6 +233,17 @@ class FactRecord:
     expires_at: str | None
     supersedes_fact_id: str | None
     requires_confirmation: bool
+    base_confidence: float = 1.0
+    confidence_version: str = DEFAULT_CONFIDENCE_VERSION
+    consistency_state: str = DEFAULT_CONSISTENCY_STATE
+    support_count: int = 1
+    contradiction_count: int = 0
+    retrieval_count: int = 0
+    injection_count: int = 0
+    last_supported_at: str | None = None
+    last_contested_at: str | None = None
+    last_retrieved_at: str | None = None
+    semantic_text_hash: str = ""
 
     @classmethod
     def from_dict(cls, raw: dict[str, Any]) -> "FactRecord":
@@ -223,12 +267,32 @@ class FactRecord:
         expires_at = raw.get("expires_at")
         supersedes_fact_id = raw.get("supersedes_fact_id")
         requires_confirmation = raw.get("requires_confirmation", False)
+        last_supported_at = _optional_record_string(raw.get("last_supported_at"))
+        last_contested_at = _optional_record_string(raw.get("last_contested_at"))
+        last_retrieved_at = _optional_record_string(raw.get("last_retrieved_at"))
         if expires_at is not None and not isinstance(expires_at, str):
             raise ValueError("expires_at must be a string or null")
         if supersedes_fact_id is not None and not isinstance(supersedes_fact_id, str):
             raise ValueError("supersedes_fact_id must be a string or null")
         if not isinstance(requires_confirmation, bool):
             raise ValueError("requires_confirmation must be bool")
+        base_confidence = _normalize_confidence(raw.get("base_confidence", confidence))
+        confidence_version = _normalize_confidence_version(
+            raw.get("confidence_version", DEFAULT_CONFIDENCE_VERSION)
+        )
+        consistency_state = _normalize_consistency_state(
+            raw.get("consistency_state", DEFAULT_CONSISTENCY_STATE)
+        )
+        support_count = max(1, _normalize_nonnegative_int(raw.get("support_count", 1)))
+        contradiction_count = _normalize_nonnegative_int(raw.get("contradiction_count", 0))
+        retrieval_count = _normalize_nonnegative_int(raw.get("retrieval_count", 0))
+        injection_count = _normalize_nonnegative_int(raw.get("injection_count", 0))
+        semantic_text_hash = _normalize_semantic_text_hash(
+            raw.get("semantic_text_hash")
+            or semantic_text_hash_for_fact(raw["content"], raw.get("owner"), raw.get("scope"))
+        )
+        if not last_supported_at:
+            last_supported_at = raw["last_seen_at"]
         return cls(
             fact_id=raw["fact_id"],
             content=raw["content"],
@@ -246,15 +310,427 @@ class FactRecord:
             expires_at=expires_at,
             supersedes_fact_id=supersedes_fact_id,
             requires_confirmation=requires_confirmation,
+            base_confidence=base_confidence,
+            confidence_version=confidence_version,
+            consistency_state=consistency_state,
+            support_count=support_count,
+            contradiction_count=contradiction_count,
+            retrieval_count=retrieval_count,
+            injection_count=injection_count,
+            last_supported_at=last_supported_at,
+            last_contested_at=last_contested_at,
+            last_retrieved_at=last_retrieved_at,
+            semantic_text_hash=semantic_text_hash,
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        data = asdict(self)
+        if not isinstance(data.get("last_seen_at"), str) or not str(data.get("last_seen_at")).strip():
+            data["last_seen_at"] = self.effective_last_seen_at()
+        return data
+
+    def effective_last_seen_at(self) -> str:
+        candidates = [
+            ts
+            for ts in (
+                self.last_seen_at,
+                self.last_supported_at,
+                self.last_retrieved_at,
+            )
+            if isinstance(ts, str) and ts.strip()
+        ]
+        if not candidates:
+            return self.last_seen_at
+        return max(
+            candidates,
+            key=lambda item: _parse_datetime(item) or datetime.min.replace(tzinfo=timezone.utc),
+        )
+
+
+@dataclass(frozen=True)
+class FactRelationRecord:
+    relation_id: str
+    source_fact_id: str
+    target_fact_id: str
+    relation_type: str
+    confidence: float
+    origin: str
+    created_at: str
+    updated_at: str
+    status: str
+    evidence: dict[str, Any] = field(default_factory=dict)
+
+    @classmethod
+    def from_dict(cls, raw: dict[str, Any]) -> "FactRelationRecord":
+        required_strings = (
+            "relation_id",
+            "source_fact_id",
+            "target_fact_id",
+            "relation_type",
+            "origin",
+            "created_at",
+            "updated_at",
+            "status",
+        )
+        if any(not isinstance(raw.get(key), str) or not str(raw.get(key)).strip() for key in required_strings):
+            raise ValueError("relation record missing required string fields")
+        evidence = raw.get("evidence", {})
+        if not isinstance(evidence, dict):
+            raise ValueError("relation evidence must be an object")
+        return cls(
+            relation_id=str(raw["relation_id"]).strip(),
+            source_fact_id=str(raw["source_fact_id"]).strip(),
+            target_fact_id=str(raw["target_fact_id"]).strip(),
+            relation_type=_normalize_relation_type(raw["relation_type"]),
+            confidence=_normalize_confidence(raw.get("confidence", 0.7)),
+            origin=str(raw["origin"]).strip(),
+            created_at=str(raw["created_at"]).strip(),
+            updated_at=str(raw["updated_at"]).strip(),
+            status=_normalize_relation_status(raw["status"]),
+            evidence=evidence,
         )
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
 
 
+@dataclass(frozen=True)
+class FactEventRecord:
+    event_id: str
+    fact_id: str
+    event_type: str
+    actor: str
+    origin: str
+    batch_id: str
+    proposal_id: str | None
+    review_event_id: str | None
+    created_at: str
+    before: dict[str, Any]
+    after: dict[str, Any]
+    reason: str
+    evidence: dict[str, Any]
+    model_info: dict[str, Any]
+
+    @classmethod
+    def from_dict(cls, raw: dict[str, Any]) -> "FactEventRecord":
+        required_strings = (
+            "event_id",
+            "fact_id",
+            "event_type",
+            "actor",
+            "origin",
+            "batch_id",
+            "created_at",
+        )
+        if any(not isinstance(raw.get(key), str) for key in required_strings):
+            raise ValueError("event record missing required string fields")
+        before = raw.get("before", {})
+        after = raw.get("after", {})
+        evidence = raw.get("evidence", {})
+        model_info = raw.get("model_info", {})
+        if not isinstance(before, dict) or not isinstance(after, dict):
+            raise ValueError("event before/after must be objects")
+        if not isinstance(evidence, dict) or not isinstance(model_info, dict):
+            raise ValueError("event evidence/model_info must be objects")
+        return cls(
+            event_id=str(raw["event_id"]).strip(),
+            fact_id=str(raw["fact_id"]).strip(),
+            event_type=str(raw["event_type"]).strip(),
+            actor=str(raw["actor"]).strip(),
+            origin=str(raw["origin"]).strip(),
+            batch_id=str(raw["batch_id"]).strip(),
+            proposal_id=_optional_record_string(raw.get("proposal_id")),
+            review_event_id=_optional_record_string(raw.get("review_event_id")),
+            created_at=str(raw["created_at"]).strip(),
+            before=before,
+            after=after,
+            reason=str(raw.get("reason") or ""),
+            evidence=evidence,
+            model_info=model_info,
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass(frozen=True)
+class FactRetrievalResult:
+    fact: FactRecord
+    score: float
+    source: str
+    summary: str = ""
+    contested_summary: str = ""
+
+
+@dataclass(frozen=True)
+class FactRetrievalBundle:
+    facts: list[FactRecord]
+    rendered_text: str
+    fallback_used: bool = False
+    retrievals: list[FactRetrievalResult] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class FactResolution:
+    action: str
+    existing_fact_id: str | None = None
+    candidate_fact_id: str | None = None
+    relation_type: str | None = None
+    similarity: float = 0.0
+    contested: bool = False
+
+
+class FactRelationStore:
+    def __init__(self, workspace: Path, *, path: Path | None = None) -> None:
+        self.workspace = Path(workspace)
+        self.path = path or (self.workspace / "memory" / "fact_relations.jsonl")
+        self._lock_path = self.path.parent / ".fact_relations.lock"
+
+    def _locked(self) -> FileLock:
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        return FileLock(str(self._lock_path))
+
+    def read_all(self) -> list[FactRelationRecord]:
+        with self._locked():
+            return self.read_all_unlocked()
+
+    def read_all_unlocked(self) -> list[FactRelationRecord]:
+        records: list[FactRelationRecord] = []
+        with suppress(FileNotFoundError):
+            with self.path.open("r", encoding="utf-8") as handle:
+                for line in handle:
+                    raw = line.strip()
+                    if not raw:
+                        continue
+                    try:
+                        parsed = json.loads(raw)
+                        if not isinstance(parsed, dict):
+                            raise ValueError("relation line is not an object")
+                        records.append(FactRelationRecord.from_dict(parsed))
+                    except (json.JSONDecodeError, ValueError, TypeError):
+                        logger.warning("Skipping invalid fact relation line in {}", self.path)
+        return records
+
+    def upsert(self, relation: FactRelationRecord) -> FactRelationRecord:
+        with self._locked():
+            records = self.read_all_unlocked()
+            updated = self.upsert_unlocked(records, relation)
+            self._write_unlocked(records)
+            return updated
+
+    def upsert_unlocked(
+        self,
+        records: list[FactRelationRecord],
+        relation: FactRelationRecord,
+    ) -> FactRelationRecord:
+        for index, existing in enumerate(records):
+            same_edge = (
+                existing.source_fact_id == relation.source_fact_id
+                and existing.target_fact_id == relation.target_fact_id
+                and existing.relation_type == relation.relation_type
+            )
+            if not same_edge:
+                continue
+            records[index] = relation
+            return relation
+        records.append(relation)
+        return relation
+
+    def reverse_supersedes_index(self) -> dict[str, list[str]]:
+        reverse: dict[str, list[str]] = {}
+        for relation in self.read_all():
+            if relation.relation_type != "supersedes" or relation.status != "active":
+                continue
+            reverse.setdefault(relation.target_fact_id, []).append(relation.source_fact_id)
+        return reverse
+
+    def related_fact_ids(
+        self,
+        fact_id: str,
+        *,
+        relation_types: Iterable[str] | None = None,
+        depth: int = 1,
+    ) -> set[str]:
+        allowed = {
+            _normalize_relation_type(item)
+            for item in (relation_types or VALID_RELATION_TYPES)
+        }
+        adjacency: dict[str, set[str]] = {}
+        for relation in self.read_all():
+            if relation.status != "active" or relation.relation_type not in allowed:
+                continue
+            adjacency.setdefault(relation.source_fact_id, set()).add(relation.target_fact_id)
+        frontier = {fact_id}
+        visited = {fact_id}
+        for _ in range(max(1, depth)):
+            next_frontier: set[str] = set()
+            for current in frontier:
+                for target in adjacency.get(current, set()):
+                    if target in visited:
+                        continue
+                    visited.add(target)
+                    next_frontier.add(target)
+            frontier = next_frontier
+            if not frontier:
+                break
+        visited.discard(fact_id)
+        return visited
+
+    def _write_unlocked(self, records: list[FactRelationRecord]) -> None:
+        text = "".join(
+            json.dumps(record.to_dict(), ensure_ascii=False, sort_keys=True) + "\n"
+            for record in records
+        )
+        _write_text_atomic(self.path, text)
+
+
+class FactEventStore:
+    def __init__(self, workspace: Path, *, path: Path | None = None) -> None:
+        self.workspace = Path(workspace)
+        self.path = path or (self.workspace / "memory" / "audit" / "fact_events.jsonl")
+        self._lock_path = self.path.parent / ".fact_events.lock"
+
+    def _locked(self) -> FileLock:
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        return FileLock(str(self._lock_path))
+
+    def append(self, event: FactEventRecord) -> FactEventRecord:
+        with self._locked():
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            with self.path.open("a", encoding="utf-8") as handle:
+                handle.write(json.dumps(event.to_dict(), ensure_ascii=False, sort_keys=True) + "\n")
+                handle.flush()
+                os.fsync(handle.fileno())
+        return event
+
+    def read_all(self) -> list[FactEventRecord]:
+        records: list[FactEventRecord] = []
+        with suppress(FileNotFoundError):
+            with self.path.open("r", encoding="utf-8") as handle:
+                for line in handle:
+                    raw = line.strip()
+                    if not raw:
+                        continue
+                    try:
+                        parsed = json.loads(raw)
+                        if not isinstance(parsed, dict):
+                            raise ValueError("event line is not an object")
+                        records.append(FactEventRecord.from_dict(parsed))
+                    except (json.JSONDecodeError, ValueError, TypeError):
+                        logger.warning("Skipping invalid fact event line in {}", self.path)
+        return records
+
+
+class FactSemanticResolver:
+    _TOKEN_RE = re.compile(r"[\w\u3400-\u4dbf\u4e00-\u9fff]+", re.UNICODE)
+
+    def __init__(self, workspace: Path, *, path: Path | None = None) -> None:
+        self.workspace = Path(workspace)
+        self.path = path or (self.workspace / "memory" / "semantic_index.json")
+        self._lock_path = self.path.parent / ".semantic_index.lock"
+
+    def _locked(self) -> FileLock:
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        return FileLock(str(self._lock_path))
+
+    def candidate_search(
+        self,
+        proposal: FactProposal,
+        records: list[FactRecord],
+    ) -> list[tuple[FactRecord, float]]:
+        owner = _normalize_owner(proposal.owner)
+        category = _normalize_category(proposal.category)
+        scope = _normalize_scope(proposal.scope)
+        candidates: list[tuple[FactRecord, float]] = []
+        for record in records:
+            if record.owner != owner:
+                continue
+            if record.category != category:
+                continue
+            if not _scope_family_match(scope, record.scope):
+                continue
+            score = self.similarity(proposal.content, record.content)
+            if score <= 0.0:
+                continue
+            candidates.append((record, score))
+        candidates.sort(key=lambda item: item[1], reverse=True)
+        return candidates
+
+    def classify_relation(
+        self,
+        proposal: FactProposal,
+        record: FactRecord,
+        similarity: float,
+    ) -> str:
+        left = normalize_fact_content(proposal.content)
+        right = normalize_fact_content(record.content)
+        left_tokens = set(self._TOKEN_RE.findall(left))
+        right_tokens = set(self._TOKEN_RE.findall(right))
+        if similarity >= 0.92:
+            return "equivalent"
+        if left_tokens and right_tokens and left_tokens.issuperset(right_tokens):
+            return "narrows"
+        if left_tokens and right_tokens and left_tokens.issubset(right_tokens):
+            return "generalizes"
+        if similarity >= 0.80:
+            return "related_to"
+        return "related_to"
+
+    def similarity(self, left: str, right: str) -> float:
+        left_tokens = set(self._TOKEN_RE.findall(normalize_fact_content(left)))
+        right_tokens = set(self._TOKEN_RE.findall(normalize_fact_content(right)))
+        if not left_tokens or not right_tokens:
+            return 0.0
+        shared = len(left_tokens & right_tokens)
+        union = len(left_tokens | right_tokens)
+        token_score = shared / union if union else 0.0
+        prefix_bonus = 0.1 if normalize_fact_content(left) == normalize_fact_content(right) else 0.0
+        return max(0.0, min(1.0, token_score + prefix_bonus))
+
+    def record_pending_index(self, record: FactRecord) -> None:
+        with self._locked():
+            payload = self._read_unlocked()
+            payload["pending_hashes"] = sorted(set(payload.get("pending_hashes", [])) | {record.semantic_text_hash})
+            self._write_unlocked(payload)
+
+    def runtime_status(self) -> dict[str, Any]:
+        with self._locked():
+            payload = self._read_unlocked()
+        embeddings = payload.get("embeddings", {})
+        pending = payload.get("pending_hashes", [])
+        return {
+            "semantic_index_available": bool(payload),
+            "semantic_embedding_count": len(embeddings) if isinstance(embeddings, dict) else 0,
+            "semantic_pending_count": len(pending) if isinstance(pending, list) else 0,
+        }
+
+    def _read_unlocked(self) -> dict[str, Any]:
+        try:
+            parsed = json.loads(self.path.read_text(encoding="utf-8"))
+        except (FileNotFoundError, json.JSONDecodeError, OSError):
+            return {"embeddings": {}, "pending_hashes": []}
+        return parsed if isinstance(parsed, dict) else {"embeddings": {}, "pending_hashes": []}
+
+    def _write_unlocked(self, payload: dict[str, Any]) -> None:
+        _write_text_atomic(self.path, json.dumps(payload, ensure_ascii=False, sort_keys=True))
+
+
 def normalize_fact_content(content: str) -> str:
     text = content.strip().lower()
     return re.sub(r"\s+", " ", text)
+
+
+def semantic_text_hash_for_fact(
+    content: str,
+    owner: str | None = None,
+    scope: str | None = None,
+) -> str:
+    payload = "\0".join([
+        normalize_fact_content(content),
+        _normalize_owner(owner) if owner is not None else "unknown",
+        _normalize_scope(scope) if scope is not None else "general",
+    ])
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
 def canonical_key_for_fact(
@@ -445,9 +921,12 @@ def validate_fact_proposal(
                 and normalize_fact_content(record.content)
                 != normalize_fact_content(proposal.content)
             ):
+                severity = "pending"
+                if str(proposal.change_kind or "").strip().lower() in {"replace", "contradict"}:
+                    severity = "warn"
                 issues.append(_issue(
                     "possible_conflict",
-                    "pending",
+                    severity,
                     "Existing active fact in the same category/scope differs.",
                 ))
                 break
@@ -580,18 +1059,30 @@ def summarize_facts(
     domain_counts: Counter[str] = Counter()
     active_count = 0
     pending_confirmation_count = 0
+    contested_count = 0
+    contradicted_count = 0
     for record in records:
         if record.status == "active":
             active_count += 1
             category_counts[record.category] += 1
             domain_counts[_fact_domain_key(record)] += 1
+            if record.consistency_state == "contested":
+                contested_count += 1
         elif record.status == "pending_confirmation":
             pending_confirmation_count += 1
+            if record.consistency_state == "contested":
+                contested_count += 1
+        elif record.status == "contradicted":
+            contradicted_count += 1
     return {
         "active_count": active_count,
         "pending_confirmation_count": pending_confirmation_count,
+        "contested_count": contested_count,
+        "contradicted_count": contradicted_count,
         "category_counts": dict(category_counts),
         "domain_counts": dict(domain_counts),
+        "relation_count": len(store.read_relations()) if store.flag_enabled("fact_graph_enabled") else 0,
+        "event_count": len(store.read_events()) if store.flag_enabled("fact_audit_enabled") else 0,
     }
 
 
@@ -604,15 +1095,36 @@ class FactStore:
         lock_factory: Callable[[], FileLock] | None = None,
         redactor: Callable[[str], str] | None = None,
         config: FactStoreConfig | None = None,
+        feature_flags: dict[str, bool] | None = None,
     ):
         self.workspace = workspace
         self.memory_dir = ensure_dir(workspace / "memory")
         self.facts_file = facts_file or self.memory_dir / "facts.jsonl"
         self.calibration_file = self.memory_dir / "confidence_calibration.json"
+        self.relations_file = self.memory_dir / "fact_relations.jsonl"
+        self.semantic_index_file = self.memory_dir / "semantic_index.json"
+        self.fact_events_file = self.memory_dir / "audit" / "fact_events.jsonl"
         self._lock_file = self.memory_dir / ".lock"
         self._lock_factory = lock_factory
         self._redactor = redactor or _default_redactor
         self.config = config or DEFAULT_FACT_STORE_CONFIG
+        self.feature_flags = self._normalize_feature_flags(feature_flags)
+        self.relation_store = FactRelationStore(workspace, path=self.relations_file)
+        self.event_store = FactEventStore(workspace, path=self.fact_events_file)
+        self.semantic_resolver = FactSemanticResolver(workspace, path=self.semantic_index_file)
+
+    @staticmethod
+    def _normalize_feature_flags(feature_flags: dict[str, bool] | None) -> dict[str, bool]:
+        normalized = {name: False for name in FEATURE_FLAG_NAMES}
+        if not isinstance(feature_flags, dict):
+            return normalized
+        for name in FEATURE_FLAG_NAMES:
+            if name in feature_flags:
+                normalized[name] = bool(feature_flags[name])
+        return normalized
+
+    def flag_enabled(self, name: str) -> bool:
+        return bool(self.feature_flags.get(str(name or "").strip(), False))
 
     def _locked(self) -> FileLock:
         if self._lock_factory is not None:
@@ -645,6 +1157,93 @@ class FactStore:
                         continue
         return records
 
+    def runtime_status(self) -> dict[str, Any]:
+        with self._locked():
+            records = self.read_all_unlocked()
+        counts = Counter(record.status for record in records)
+        consistency = Counter(record.consistency_state for record in records)
+        events = self.event_store.read_all() if self.flag_enabled("fact_audit_enabled") else []
+        relations = self.relation_store.read_all() if self.flag_enabled("fact_graph_enabled") else []
+        semantic = (
+            self.semantic_resolver.runtime_status()
+            if self.flag_enabled("semantic_retrieval_enabled") or self.flag_enabled("semantic_merge_enabled")
+            else {
+                "semantic_index_available": False,
+                "semantic_embedding_count": 0,
+                "semantic_pending_count": 0,
+            }
+        )
+        event_types = Counter(event.event_type for event in events)
+        return {
+            "fact_total_count": len(records),
+            "fact_status_counts": dict(counts),
+            "fact_consistency_counts": dict(consistency),
+            "fact_relation_count": len(relations),
+            "fact_event_count": len(events),
+            "fact_event_type_counts": dict(event_types),
+            **semantic,
+        }
+
+    def read_relations(self) -> list[FactRelationRecord]:
+        return self.relation_store.read_all()
+
+    def read_events(self) -> list[FactEventRecord]:
+        return self.event_store.read_all()
+
+    def retrieve_context_bundle(
+        self,
+        *,
+        scope_prefix: str | None = None,
+        category: str | None = None,
+        include_pending: bool = False,
+        top_k: int = DEFAULT_CONTEXT_TOP_K,
+    ) -> FactRetrievalBundle:
+        with self._locked():
+            all_records = self.read_all_unlocked()
+            records = self._list_active_from_records(
+                all_records,
+                category=category,
+                scope_prefix=scope_prefix,
+                include_pending=include_pending,
+            )
+            if self.flag_enabled("semantic_retrieval_enabled"):
+                ranked = self._build_retrieval_rankings(records, top_k=top_k)
+                if ranked and self.flag_enabled("fact_graph_enabled"):
+                    ranked = self._expand_relation_rankings(
+                        ranked,
+                        all_records=all_records,
+                        include_pending=include_pending,
+                        top_k=top_k,
+                    )
+                now = datetime.now(timezone.utc).isoformat()
+                for item in ranked:
+                    item.fact.retrieval_count += 1
+                    item.fact.injection_count += 1
+                    item.fact.last_retrieved_at = now
+                    item.fact.last_seen_at = item.fact.effective_last_seen_at()
+                    if self.flag_enabled("confidence_v2_enabled"):
+                        item.fact.confidence = self._derive_confidence(
+                            item.fact,
+                            now=_parse_datetime(now) or datetime.now(timezone.utc),
+                        )
+                if ranked:
+                    self._write_records_unlocked(all_records)
+            else:
+                ranked = [
+                    FactRetrievalResult(
+                        fact=record,
+                        score=record.confidence,
+                        source="memory_md_fallback",
+                    )
+                    for record in records[: max(1, top_k)]
+                ]
+        return FactRetrievalBundle(
+            facts=[item.fact for item in ranked],
+            rendered_text=render_memory_md([item.fact for item in ranked]) if ranked else "",
+            fallback_used=not self.flag_enabled("semantic_retrieval_enabled"),
+            retrievals=ranked,
+        )
+
     def list_active(
         self,
         *,
@@ -666,12 +1265,27 @@ class FactStore:
         scope_prefix: str | None = None,
         include_pending: bool = False,
     ) -> list[FactRecord]:
+        return self._list_active_from_records(
+            self.read_all_unlocked(),
+            category=category,
+            scope_prefix=scope_prefix,
+            include_pending=include_pending,
+        )
+
+    def _list_active_from_records(
+        self,
+        records: list[FactRecord],
+        *,
+        category: str | None = None,
+        scope_prefix: str | None = None,
+        include_pending: bool = False,
+    ) -> list[FactRecord]:
         target_category = _normalize_category(category) if category else None
         target_scope = _normalize_scope(scope_prefix) if scope_prefix else None
         statuses = {"active", "pending_confirmation"} if include_pending else {"active"}
         facts = [
             record
-            for record in self.read_all_unlocked()
+            for record in records
             if record.status in statuses
         ]
         if target_category:
@@ -749,7 +1363,7 @@ class FactStore:
             if record.confidence == new_confidence:
                 return record
             record.confidence = new_confidence
-            record.updated_at = datetime.now().isoformat()
+            record.updated_at = datetime.now(timezone.utc).isoformat()
             return record
         return None
 
@@ -783,34 +1397,36 @@ class FactStore:
         decay_start_days: int | None = None,
         now: datetime | None = None,
     ) -> int:
-        factor = _normalize_decay_factor(
-            self.config.confidence_decay_factor if factor is None else factor
-        )
-        min_confidence = _normalize_confidence(
-            self.config.min_confidence if min_confidence is None else min_confidence
-        )
-        start_days = (
-            self.config.decay_start_days
-            if decay_start_days is None
-            else int(decay_start_days)
-        )
-        start_days = max(0, start_days)
-        now_dt = now or datetime.now()
         changed = 0
         for record in records:
             if record.status != "active":
                 continue
-            last_seen = _parse_datetime(record.last_seen_at)
-            if last_seen is None:
-                continue
-            days_since_seen = _days_between(last_seen, now_dt)
-            if days_since_seen <= start_days:
-                continue
-            new_confidence = max(
-                record.confidence * (factor ** days_since_seen),
-                min_confidence,
-            )
-            new_confidence = _normalize_confidence(new_confidence)
+            now_dt = now or datetime.now(timezone.utc)
+            if self.flag_enabled("confidence_v2_enabled"):
+                new_confidence = self._derive_confidence(
+                    record,
+                    now=now_dt,
+                    factor=factor,
+                    min_confidence=min_confidence,
+                    decay_start_days=decay_start_days,
+                )
+            else:
+                last_seen = _parse_datetime(record.last_seen_at) or now_dt
+                days_since_seen = _days_between(last_seen, now_dt)
+                effective_factor = (
+                    self.config.confidence_decay_factor
+                    if factor is None
+                    else _normalize_decay_factor(factor)
+                )
+                effective_min = self.config.min_confidence if min_confidence is None else min_confidence
+                grace = self.config.decay_start_days if decay_start_days is None else max(0, int(decay_start_days))
+                if days_since_seen <= grace:
+                    new_confidence = record.confidence
+                else:
+                    new_confidence = max(
+                        _normalize_confidence(effective_min),
+                        record.confidence * (effective_factor ** max(0, days_since_seen - grace)),
+                    )
             if new_confidence == record.confidence:
                 continue
             record.confidence = new_confidence
@@ -823,20 +1439,32 @@ class FactStore:
         proposal_type: str,
         domain_id: str,
         raw_confidence: float,
+        *,
+        source: str = "dream",
+        category: str = "note",
     ) -> float:
         confidence = _normalize_confidence(raw_confidence)
-        key = _calibration_key(proposal_type, domain_id)
-        if not key:
-            return confidence
         calibration = self._read_confidence_calibration()
-        raw_entry = calibration.get(key)
-        if not isinstance(raw_entry, dict):
-            return confidence
-        count = _int_value(raw_entry.get("count"), default=0)
-        if count <= self.config.calibration_min_count:
-            return confidence
-        bias = _float_value(raw_entry.get("bias"), default=0.0)
-        return max(0.1, min(0.99, confidence + bias))
+        for key in _calibration_keys(source, category, proposal_type, domain_id):
+            raw_entry = calibration.get(key)
+            if not isinstance(raw_entry, dict):
+                continue
+            sample_count = max(
+                _int_value(raw_entry.get("count_30d"), default=0),
+                _int_value(raw_entry.get("count_90d"), default=0),
+                _int_value(raw_entry.get("count"), default=0),
+            )
+            if sample_count <= self.config.calibration_min_count:
+                continue
+            bias = _float_value(
+                raw_entry.get("bias_30d", raw_entry.get("bias_90d", raw_entry.get("bias"))),
+                default=0.0,
+            )
+            adjusted = confidence + bias
+            if _normalize_category(category) in HIGH_RISK_CATEGORIES and bias > 0:
+                adjusted = confidence
+            return max(0.1, min(0.99, adjusted))
+        return confidence
 
     def _read_confidence_calibration(self) -> dict[str, Any]:
         try:
@@ -859,6 +1487,16 @@ class FactStore:
         requires_confirmation: bool | None = None,
         status: str | None = None,
         supersedes_fact_id: str | None = None,
+        change_kind: str | None = None,
+        target_fact_id: str | None = None,
+        relation_candidates: list[dict[str, Any]] | None = None,
+        semantic_scope_hint: str | None = None,
+        proposal_id: str | None = None,
+        review_event_id: str | None = None,
+        batch_id: str = "runtime",
+        actor: str = "system",
+        origin: str = "fact_store",
+        model_info: dict[str, Any] | None = None,
     ) -> FactRecord:
         with self._locked():
             return self.upsert_fact_unlocked(
@@ -873,6 +1511,16 @@ class FactStore:
                 requires_confirmation=requires_confirmation,
                 status=status,
                 supersedes_fact_id=supersedes_fact_id,
+                change_kind=change_kind,
+                target_fact_id=target_fact_id,
+                relation_candidates=relation_candidates,
+                semantic_scope_hint=semantic_scope_hint,
+                proposal_id=proposal_id,
+                review_event_id=review_event_id,
+                batch_id=batch_id,
+                actor=actor,
+                origin=origin,
+                model_info=model_info,
             )
 
     def upsert_fact_unlocked(
@@ -889,6 +1537,16 @@ class FactStore:
         requires_confirmation: bool | None = None,
         status: str | None = None,
         supersedes_fact_id: str | None = None,
+        change_kind: str | None = None,
+        target_fact_id: str | None = None,
+        relation_candidates: list[dict[str, Any]] | None = None,
+        semantic_scope_hint: str | None = None,
+        proposal_id: str | None = None,
+        review_event_id: str | None = None,
+        batch_id: str = "runtime",
+        actor: str = "system",
+        origin: str = "fact_store",
+        model_info: dict[str, Any] | None = None,
     ) -> FactRecord:
         records = self.read_all_unlocked()
         fact = self.upsert_fact_in_records_unlocked(
@@ -904,6 +1562,16 @@ class FactStore:
             requires_confirmation=requires_confirmation,
             status=status,
             supersedes_fact_id=supersedes_fact_id,
+            change_kind=change_kind,
+            target_fact_id=target_fact_id,
+            relation_candidates=relation_candidates,
+            semantic_scope_hint=semantic_scope_hint,
+            proposal_id=proposal_id,
+            review_event_id=review_event_id,
+            batch_id=batch_id,
+            actor=actor,
+            origin=origin,
+            model_info=model_info,
         )
         self._write_records_unlocked(records)
         return fact
@@ -923,6 +1591,16 @@ class FactStore:
         requires_confirmation: bool | None = None,
         status: str | None = None,
         supersedes_fact_id: str | None = None,
+        change_kind: str | None = None,
+        target_fact_id: str | None = None,
+        relation_candidates: list[dict[str, Any]] | None = None,
+        semantic_scope_hint: str | None = None,
+        proposal_id: str | None = None,
+        review_event_id: str | None = None,
+        batch_id: str = "runtime",
+        actor: str = "system",
+        origin: str = "fact_store",
+        model_info: dict[str, Any] | None = None,
     ) -> FactRecord:
         content = content.strip()
         if not content:
@@ -941,8 +1619,9 @@ class FactStore:
             config=self.config,
         )
         redacted_excerpt = self._redactor(source_excerpt.strip()) if source_excerpt else ""
-        now = datetime.now().isoformat()
+        now = datetime.now(timezone.utc).isoformat()
         canonical_key = canonical_key_for_fact(content, owner, category, scope)
+        semantic_text_hash = semantic_text_hash_for_fact(content, owner, scope)
 
         existing = next(
             (
@@ -954,32 +1633,77 @@ class FactStore:
             None,
         )
         if existing is not None:
-            existing.updated_at = now
-            existing.last_seen_at = now
-            existing.source_cursors = _merge_source_cursors(
-                existing.source_cursors,
-                source_cursors,
+            before = existing.to_dict()
+            self._reinforce_record(
+                existing,
+                source_cursors=source_cursors,
+                source_excerpt=redacted_excerpt,
+                base_confidence=confidence,
+                updated_at=now,
+                expires_at=expires_at,
+                supersedes_fact_id=supersedes_fact_id,
+                explicit_status=status if explicit_status is not None else None,
+                explicit_requires_confirmation=(
+                    requires_confirmation if explicit_requires_confirmation is not None else None
+                ),
             )
-            if redacted_excerpt:
-                existing.source_excerpt = redacted_excerpt
-            existing.confidence = max(existing.confidence, confidence)
-            if expires_at is not None:
-                existing.expires_at = expires_at
-            if supersedes_fact_id is not None:
-                existing.supersedes_fact_id = supersedes_fact_id
-            if (
-                explicit_status is not None
-                or explicit_requires_confirmation is not None
-            ):
-                existing.status = status
-                existing.requires_confirmation = requires_confirmation
+            self._append_fact_event(
+                existing,
+                event_type="reinforce",
+                before=before,
+                after=existing.to_dict(),
+                reason="exact canonical match",
+                evidence={"source_cursors": source_cursors},
+                proposal_id=proposal_id,
+                review_event_id=review_event_id,
+                batch_id=batch_id,
+                actor=actor,
+                origin=origin,
+                model_info=model_info,
+            )
+            self.semantic_resolver.record_pending_index(existing)
             return existing
 
+        resolution = self._semantic_resolution_for_new_fact(
+            records,
+            content=content,
+            category=category,
+            scope=scope,
+            owner=owner,
+            source_cursors=source_cursors,
+            source_excerpt=redacted_excerpt,
+            confidence=confidence,
+            status=status,
+            requires_confirmation=requires_confirmation,
+            supersedes_fact_id=supersedes_fact_id,
+            now=now,
+            change_kind=change_kind,
+            target_fact_id=target_fact_id,
+            relation_candidates=relation_candidates or [],
+            semantic_scope_hint=semantic_scope_hint,
+            proposal_id=proposal_id,
+            review_event_id=review_event_id,
+            batch_id=batch_id,
+            actor=actor,
+            origin=origin,
+            model_info=model_info,
+        )
+        if resolution is not None:
+            return resolution
+
+        incumbent = self._find_conflicting_incumbent(
+            records,
+            category=category,
+            scope=scope,
+            owner=owner,
+            content=content,
+        )
         if supersedes_fact_id:
-            self._deprecate_fact_in_records(
+            changed = self._deprecate_fact_in_records(
                 records,
                 supersedes_fact_id,
                 updated_at=now,
+                status="deprecated",
             )
         record = FactRecord(
             fact_id=self._new_fact_id(records),
@@ -998,8 +1722,59 @@ class FactStore:
             expires_at=expires_at,
             supersedes_fact_id=supersedes_fact_id,
             requires_confirmation=requires_confirmation,
+            base_confidence=confidence,
+            confidence_version=DEFAULT_CONFIDENCE_VERSION,
+            consistency_state=DEFAULT_CONSISTENCY_STATE,
+            support_count=1,
+            contradiction_count=0,
+            retrieval_count=0,
+            injection_count=0,
+            last_supported_at=now,
+            last_contested_at=None,
+            last_retrieved_at=None,
+            semantic_text_hash=semantic_text_hash,
         )
+        if self.flag_enabled("confidence_v2_enabled"):
+            record.confidence = self._derive_confidence(
+                record,
+                now=_parse_datetime(now) or datetime.now(timezone.utc),
+            )
         records.append(record)
+        if supersedes_fact_id:
+            self._upsert_relation(
+                source_fact_id=record.fact_id,
+                target_fact_id=supersedes_fact_id,
+                relation_type="supersedes",
+                confidence=confidence,
+                origin=origin,
+                evidence={"content_hash": hashlib.sha256(content.encode("utf-8")).hexdigest()},
+            )
+        if incumbent is not None:
+            self._mark_contested_pair(
+                incumbent=incumbent,
+                challenger=record,
+                now=now,
+                reason=f"change_kind={change_kind or 'new'}",
+                auto_flip=bool(
+                    self.flag_enabled("contradiction_auto_flip_enabled")
+                    and str(change_kind or "").strip().lower() in {"replace", "contradict"}
+                ),
+            )
+        self.semantic_resolver.record_pending_index(record)
+        self._append_fact_event(
+            record,
+            event_type="create",
+            before={},
+            after=record.to_dict(),
+            reason="new fact",
+            evidence={"source_cursors": source_cursors},
+            proposal_id=proposal_id,
+            review_event_id=review_event_id,
+            batch_id=batch_id,
+            actor=actor,
+            origin=origin,
+            model_info=model_info,
+        )
         return record
 
     def deprecate_fact(
@@ -1060,14 +1835,547 @@ class FactStore:
         fact_id: str,
         *,
         updated_at: str,
+        status: str = "deprecated",
     ) -> bool:
+        normalized_status = _normalize_status(status)
         for record in records:
             if record.fact_id != fact_id:
                 continue
-            record.status = "deprecated"
+            record.status = normalized_status
+            if normalized_status == "contradicted":
+                record.consistency_state = "contradicted"
             record.updated_at = updated_at
             return True
         return False
+
+    def _find_conflicting_incumbent(
+        self,
+        records: list[FactRecord],
+        *,
+        category: str,
+        scope: str,
+        owner: str,
+        content: str,
+    ) -> FactRecord | None:
+        normalized = normalize_fact_content(content)
+        candidates = [
+            record
+            for record in records
+            if record.owner == owner
+            and record.category == category
+            and record.scope == scope
+            and record.status == "active"
+            and normalize_fact_content(record.content) != normalized
+        ]
+        if not candidates:
+            return None
+        candidates.sort(
+            key=lambda item: (
+                item.confidence,
+                item.support_count,
+                item.updated_at,
+            ),
+            reverse=True,
+        )
+        return candidates[0]
+
+    def _new_pending_challenger(
+        self,
+        records: list[FactRecord],
+        *,
+        content: str,
+        category: str,
+        scope: str,
+        owner: str,
+        source_cursors: list[int],
+        source_excerpt: str,
+        confidence: float,
+        expires_at: str | None,
+        requires_confirmation: bool,
+        status: str,
+        supersedes_fact_id: str | None,
+        now: str,
+    ) -> FactRecord:
+        semantic_text_hash = semantic_text_hash_for_fact(content, owner, scope)
+        record = FactRecord(
+            fact_id=self._new_fact_id(records),
+            content=content,
+            canonical_key=canonical_key_for_fact(content, owner, category, scope),
+            category=category,
+            scope=scope,
+            owner=owner,
+            source_cursors=source_cursors,
+            source_excerpt=source_excerpt,
+            confidence=confidence,
+            status=status,
+            created_at=now,
+            updated_at=now,
+            last_seen_at=now,
+            expires_at=expires_at,
+            supersedes_fact_id=supersedes_fact_id,
+            requires_confirmation=requires_confirmation,
+            base_confidence=confidence,
+            confidence_version=DEFAULT_CONFIDENCE_VERSION,
+            consistency_state="contested",
+            support_count=1,
+            contradiction_count=0,
+            retrieval_count=0,
+            injection_count=0,
+            last_supported_at=now,
+            last_contested_at=now,
+            last_retrieved_at=None,
+            semantic_text_hash=semantic_text_hash,
+        )
+        if self.flag_enabled("confidence_v2_enabled"):
+            record.confidence = self._derive_confidence(
+                record,
+                now=_parse_datetime(now) or datetime.now(timezone.utc),
+            )
+        records.append(record)
+        return record
+
+    def _mark_contested_pair(
+        self,
+        *,
+        incumbent: FactRecord,
+        challenger: FactRecord,
+        now: str,
+        reason: str,
+        auto_flip: bool,
+    ) -> None:
+        incumbent_before = incumbent.to_dict()
+        challenger_before = challenger.to_dict()
+        incumbent.consistency_state = "contested"
+        challenger.consistency_state = "contested"
+        incumbent.contradiction_count += 1
+        challenger.contradiction_count += 1
+        incumbent.last_contested_at = now
+        challenger.last_contested_at = now
+        if self.flag_enabled("confidence_v2_enabled"):
+            now_dt = _parse_datetime(now) or datetime.now(timezone.utc)
+            incumbent.confidence = self._derive_confidence(incumbent, now=now_dt)
+            challenger.confidence = self._derive_confidence(challenger, now=now_dt)
+        self._append_fact_event(
+            incumbent,
+            event_type="contest",
+            before=incumbent_before,
+            after=incumbent.to_dict(),
+            reason=reason,
+            evidence={"challenger_fact_id": challenger.fact_id},
+        )
+        if challenger_before != challenger.to_dict():
+            self._append_fact_event(
+                challenger,
+                event_type="contest",
+                before=challenger_before,
+                after=challenger.to_dict(),
+                reason=reason,
+                evidence={"incumbent_fact_id": incumbent.fact_id},
+            )
+        if auto_flip and incumbent.category not in HIGH_RISK_CATEGORIES:
+            confidence_gap = challenger.confidence - incumbent.confidence
+            challenger_batches = max(1, len(challenger.source_cursors))
+            if challenger_batches >= 2 or confidence_gap >= 0.15:
+                incumbent_before = incumbent.to_dict()
+                incumbent.status = "contradicted"
+                incumbent.consistency_state = "contradicted"
+                incumbent.updated_at = now
+                self._append_fact_event(
+                    incumbent,
+                    event_type="contradict",
+                    before=incumbent_before,
+                    after=incumbent.to_dict(),
+                    reason="automatic replace flip",
+                    evidence={"challenger_fact_id": challenger.fact_id, "confidence_gap": confidence_gap},
+                )
+
+    def _build_retrieval_rankings(
+        self,
+        records: list[FactRecord],
+        *,
+        top_k: int,
+    ) -> list[FactRetrievalResult]:
+        ranked: list[FactRetrievalResult] = []
+        for record in records:
+            score = record.confidence
+            if record.consistency_state == "contested":
+                score -= 0.1
+            ranked.append(FactRetrievalResult(
+                fact=record,
+                score=max(0.0, min(1.0, score)),
+                source="exact_scope",
+                contested_summary=self._contested_summary(record, records),
+            ))
+        ranked.sort(key=lambda item: (item.score, item.fact.support_count), reverse=True)
+        return ranked[:max(1, top_k)]
+
+    def _expand_relation_rankings(
+        self,
+        ranked: list[FactRetrievalResult],
+        *,
+        all_records: list[FactRecord],
+        include_pending: bool,
+        top_k: int,
+    ) -> list[FactRetrievalResult]:
+        if not ranked:
+            return ranked
+        statuses = {"active", "pending_confirmation"} if include_pending else {"active"}
+        records_by_id = {
+            record.fact_id: record
+            for record in all_records
+            if record.status in statuses
+        }
+        seen = {item.fact.fact_id for item in ranked}
+        expanded = list(ranked)
+        for item in ranked:
+            related_ids = self.relation_store.related_fact_ids(
+                item.fact.fact_id,
+                relation_types=("generalizes", "narrows", "implies"),
+                depth=1,
+            )
+            for related_id in sorted(related_ids):
+                related = records_by_id.get(related_id)
+                if related is None or related.fact_id in seen:
+                    continue
+                seen.add(related.fact_id)
+                expanded.append(FactRetrievalResult(
+                    fact=related,
+                    score=max(0.0, min(1.0, related.confidence - 0.05)),
+                    source="relation_expansion",
+                    summary="related support fact",
+                    contested_summary=self._contested_summary(related, all_records),
+                ))
+                if len(expanded) >= max(1, top_k):
+                    break
+            if len(expanded) >= max(1, top_k):
+                break
+        source_rank = {"exact_scope": 2, "relation_expansion": 1}
+        expanded.sort(
+            key=lambda result: (
+                source_rank.get(result.source, 0),
+                result.score,
+                result.fact.support_count,
+            ),
+            reverse=True,
+        )
+        return expanded[:max(1, top_k)]
+
+    def _derive_confidence(
+        self,
+        record: FactRecord,
+        *,
+        now: datetime,
+        factor: float | None = None,
+        min_confidence: float | None = None,
+        decay_start_days: int | None = None,
+    ) -> float:
+        base_confidence = _normalize_confidence(record.base_confidence)
+        last_seen = _parse_datetime(record.effective_last_seen_at()) or now
+        grace = self.config.decay_start_days if decay_start_days is None else max(0, int(decay_start_days))
+        idle_days = _days_between(last_seen, now)
+        stale_penalty = 0.0
+        if idle_days > grace:
+            stale_penalty = (idle_days - grace) / 45.0
+        alpha = (
+            1
+            + 4 * base_confidence
+            + 1.0 * max(1, record.support_count)
+            + min(record.injection_count, 8) * 0.25
+        )
+        beta = (
+            1
+            + 4 * (1 - base_confidence)
+            + 1.25 * record.contradiction_count
+            + stale_penalty
+        )
+        confidence = alpha / (alpha + beta)
+        min_value = self.config.min_confidence if min_confidence is None else min_confidence
+        return max(_normalize_confidence(min_value), min(0.995, confidence))
+
+    def _reinforce_record(
+        self,
+        record: FactRecord,
+        *,
+        source_cursors: list[int],
+        source_excerpt: str,
+        base_confidence: float,
+        updated_at: str,
+        expires_at: str | None,
+        supersedes_fact_id: str | None,
+        explicit_status: str | None,
+        explicit_requires_confirmation: bool | None,
+    ) -> None:
+        record.updated_at = updated_at
+        record.last_seen_at = updated_at
+        record.last_supported_at = updated_at
+        record.source_cursors = _merge_source_cursors(record.source_cursors, source_cursors)
+        if source_excerpt:
+            record.source_excerpt = source_excerpt
+        record.base_confidence = max(record.base_confidence, base_confidence)
+        record.support_count += 1
+        if expires_at is not None:
+            record.expires_at = expires_at
+        if supersedes_fact_id is not None:
+            record.supersedes_fact_id = supersedes_fact_id
+        if explicit_status is not None:
+            record.status = explicit_status
+        if explicit_requires_confirmation is not None:
+            record.requires_confirmation = explicit_requires_confirmation
+        if self.flag_enabled("confidence_v2_enabled"):
+            record.confidence = self._derive_confidence(
+                record,
+                now=_parse_datetime(updated_at) or datetime.now(timezone.utc),
+            )
+        else:
+            record.confidence = max(record.confidence, _normalize_confidence(base_confidence))
+
+    def _semantic_resolution_for_new_fact(
+        self,
+        records: list[FactRecord],
+        *,
+        content: str,
+        category: str,
+        scope: str,
+        owner: str,
+        source_cursors: list[int],
+        source_excerpt: str,
+        confidence: float,
+        status: str,
+        requires_confirmation: bool,
+        supersedes_fact_id: str | None,
+        now: str,
+        change_kind: str | None = None,
+        target_fact_id: str | None = None,
+        relation_candidates: list[dict[str, Any]] | None = None,
+        semantic_scope_hint: str | None = None,
+        proposal_id: str | None = None,
+        review_event_id: str | None = None,
+        batch_id: str = "runtime",
+        actor: str = "system",
+        origin: str = "fact_store",
+        model_info: dict[str, Any] | None = None,
+    ) -> FactRecord | None:
+        proposal = FactProposal(
+            content=content,
+            category=category,
+            scope=scope,
+            owner=owner,
+            source_cursors=source_cursors,
+            source_excerpt=source_excerpt,
+            confidence=confidence,
+            supersedes_fact_id=supersedes_fact_id,
+            requires_confirmation=requires_confirmation,
+            status=status,
+            reason="",
+            change_kind=change_kind,
+            target_fact_id=target_fact_id,
+            relation_candidates=relation_candidates or [],
+            semantic_scope_hint=semantic_scope_hint,
+        )
+        if not self.flag_enabled("semantic_merge_enabled") and not self.flag_enabled("fact_graph_enabled"):
+            return None
+        candidates = self.semantic_resolver.candidate_search(proposal, records)
+        if not candidates:
+            return None
+        candidate, similarity = candidates[0]
+        relation_type = self.semantic_resolver.classify_relation(proposal, candidate, similarity)
+        if (
+            similarity >= 0.92
+            and relation_type == "equivalent"
+            and category not in HIGH_RISK_CATEGORIES
+        ):
+            before = candidate.to_dict()
+            self._reinforce_record(
+                candidate,
+                source_cursors=source_cursors,
+                source_excerpt=source_excerpt,
+                base_confidence=confidence,
+                updated_at=now,
+                expires_at=None,
+                supersedes_fact_id=supersedes_fact_id,
+                explicit_status=None,
+                explicit_requires_confirmation=None,
+            )
+            self._upsert_relation(
+                source_fact_id=candidate.fact_id,
+                target_fact_id=candidate.fact_id,
+                relation_type="equivalent",
+                confidence=similarity,
+                origin="semantic_resolver",
+                evidence={"semantic_text_hash": candidate.semantic_text_hash},
+            )
+            self._append_fact_event(
+                candidate,
+                event_type="merge",
+                before=before,
+                after=candidate.to_dict(),
+                reason="semantic equivalent merge",
+                evidence={"similarity": similarity},
+                proposal_id=proposal_id,
+                review_event_id=review_event_id,
+                batch_id=batch_id,
+                actor=actor,
+                origin=origin,
+                model_info=model_info,
+            )
+            self.semantic_resolver.record_pending_index(candidate)
+            return candidate
+        if similarity >= 0.80 and self.flag_enabled("fact_graph_enabled"):
+            self._upsert_relation(
+                source_fact_id=target_fact_id or candidate.fact_id,
+                target_fact_id=candidate.fact_id,
+                relation_type=relation_type,
+                confidence=similarity,
+                origin=origin,
+                evidence={
+                    "content_hash": hashlib.sha256(content.encode("utf-8")).hexdigest(),
+                    "semantic_scope_hint": semantic_scope_hint or "",
+                },
+            )
+        if (
+            category in CONFLICT_CATEGORIES
+            and candidate.status == "active"
+            and relation_type in {"related_to", "generalizes", "narrows"}
+            and normalize_fact_content(candidate.content) != normalize_fact_content(content)
+        ):
+            challenger = self._new_pending_challenger(
+                records,
+                content=content,
+                category=category,
+                scope=scope,
+                owner=owner,
+                source_cursors=source_cursors,
+                source_excerpt=source_excerpt,
+                confidence=confidence,
+                expires_at=None,
+                requires_confirmation=True,
+                status="pending_confirmation",
+                supersedes_fact_id=supersedes_fact_id,
+                now=now,
+            )
+            self._mark_contested_pair(
+                incumbent=candidate,
+                challenger=challenger,
+                now=now,
+                reason=f"semantic contradiction candidate ({relation_type})",
+                auto_flip=bool(
+                    self.flag_enabled("contradiction_auto_flip_enabled")
+                    and str(change_kind or "").strip().lower() in {"replace", "contradict"}
+                ),
+            )
+            self._append_fact_event(
+                challenger,
+                event_type="create",
+                before={},
+                after=challenger.to_dict(),
+                reason="challenger fact created",
+                evidence={"similarity": similarity, "relation_type": relation_type},
+                proposal_id=proposal_id,
+                review_event_id=review_event_id,
+                batch_id=batch_id,
+                actor=actor,
+                origin=origin,
+                model_info=model_info,
+            )
+            if self.flag_enabled("fact_graph_enabled"):
+                self._upsert_relation(
+                    source_fact_id=challenger.fact_id,
+                    target_fact_id=candidate.fact_id,
+                    relation_type="contradicts",
+                    confidence=similarity,
+                    origin=origin,
+                    evidence={"semantic_scope_hint": semantic_scope_hint or ""},
+                )
+            self.semantic_resolver.record_pending_index(challenger)
+            return challenger
+        return None
+
+    def _upsert_relation(
+        self,
+        *,
+        source_fact_id: str,
+        target_fact_id: str,
+        relation_type: str,
+        confidence: float,
+        origin: str,
+        evidence: dict[str, Any],
+    ) -> None:
+        if not self.flag_enabled("fact_graph_enabled"):
+            return
+        if not source_fact_id or not target_fact_id:
+            return
+        if source_fact_id == target_fact_id and relation_type != "equivalent":
+            return
+        now = datetime.now(timezone.utc).isoformat()
+        relation = FactRelationRecord(
+            relation_id=f"relation_{uuid.uuid4().hex[:12]}",
+            source_fact_id=source_fact_id,
+            target_fact_id=target_fact_id,
+            relation_type=relation_type,
+            confidence=_normalize_confidence(confidence),
+            origin=origin,
+            created_at=now,
+            updated_at=now,
+            status="active",
+            evidence=evidence,
+        )
+        self.relation_store.upsert(relation)
+
+    def _append_fact_event(
+        self,
+        record: FactRecord,
+        *,
+        event_type: str,
+        before: dict[str, Any],
+        after: dict[str, Any],
+        reason: str,
+        evidence: dict[str, Any],
+        proposal_id: str | None = None,
+        review_event_id: str | None = None,
+        batch_id: str = "runtime",
+        actor: str = "system",
+        origin: str = "fact_store",
+        model_info: dict[str, Any] | None = None,
+    ) -> None:
+        if not self.flag_enabled("fact_audit_enabled"):
+            return
+        before_summary = _redacted_fact_snapshot(before)
+        after_summary = _redacted_fact_snapshot(after)
+        self.event_store.append(FactEventRecord(
+            event_id=f"fact_event_{uuid.uuid4().hex}",
+            fact_id=record.fact_id,
+            event_type=event_type,
+            actor=actor,
+            origin=origin,
+            batch_id=batch_id,
+            proposal_id=proposal_id,
+            review_event_id=review_event_id,
+            created_at=datetime.now(timezone.utc).isoformat(),
+            before=before_summary,
+            after=after_summary,
+            reason=reason,
+            evidence=evidence,
+            model_info=model_info or {},
+        ))
+
+    def _contested_summary(
+        self,
+        record: FactRecord,
+        records: list[FactRecord],
+    ) -> str:
+        if record.consistency_state != "contested":
+            return ""
+        conflicts = [
+            other.content
+            for other in records
+            if other.fact_id != record.fact_id
+            and other.category == record.category
+            and other.scope == record.scope
+            and normalize_fact_content(other.content) != normalize_fact_content(record.content)
+        ]
+        if not conflicts:
+            return ""
+        return f"contested by {len(conflicts)} alternative fact(s)"
 
 
 def _default_redactor(text: str) -> str:
@@ -1101,6 +2409,17 @@ def _parse_fact_proposal(raw: Any) -> FactProposal:
     if requires_confirmation is not None and not isinstance(requires_confirmation, bool):
         raise ValueError("requires_confirmation must be bool or null")
     reason = _optional_str(raw, "reason", "")
+    change_kind = _optional_nullable_str(raw, "change_kind")
+    target_fact_id = _optional_nullable_str(raw, "target_fact_id")
+    semantic_scope_hint = _optional_nullable_str(raw, "semantic_scope_hint")
+    relation_candidates = raw.get("relation_candidates", [])
+    if not isinstance(relation_candidates, list):
+        raise ValueError("relation_candidates must be a list")
+    normalized_relation_candidates: list[dict[str, Any]] = []
+    for item in relation_candidates:
+        if not isinstance(item, dict):
+            raise ValueError("relation_candidates entries must be objects")
+        normalized_relation_candidates.append(dict(item))
     return FactProposal(
         content=content,
         category=category,
@@ -1114,6 +2433,10 @@ def _parse_fact_proposal(raw: Any) -> FactProposal:
         requires_confirmation=requires_confirmation,
         status=status,
         reason=reason,
+        change_kind=change_kind,
+        target_fact_id=target_fact_id,
+        relation_candidates=normalized_relation_candidates,
+        semantic_scope_hint=semantic_scope_hint,
     )
 
 
@@ -1264,12 +2587,57 @@ def _normalize_status(status: str | None) -> str:
     return normalized
 
 
+def _normalize_consistency_state(value: Any) -> str:
+    normalized = str(value or DEFAULT_CONSISTENCY_STATE).strip().lower()
+    if normalized not in VALID_CONSISTENCY_STATES:
+        raise ValueError(f"invalid consistency_state: {value!r}")
+    return normalized
+
+
+def _normalize_confidence_version(value: Any) -> str:
+    normalized = str(value or DEFAULT_CONFIDENCE_VERSION).strip().lower()
+    if normalized not in VALID_CONFIDENCE_VERSIONS:
+        raise ValueError(f"invalid confidence_version: {value!r}")
+    return normalized
+
+
+def _normalize_relation_type(value: Any) -> str:
+    normalized = str(value or "").strip().lower()
+    if normalized not in VALID_RELATION_TYPES:
+        raise ValueError(f"invalid relation_type: {value!r}")
+    return normalized
+
+
+def _normalize_relation_status(value: Any) -> str:
+    normalized = str(value or "active").strip().lower()
+    if normalized not in VALID_RELATION_STATUSES:
+        raise ValueError(f"invalid relation status: {value!r}")
+    return normalized
+
+
+def _normalize_semantic_text_hash(value: Any) -> str:
+    text = str(value or "").strip().lower()
+    if not text:
+        raise ValueError("semantic_text_hash cannot be empty")
+    return text
+
+
 def _normalize_confidence(value: Any) -> float:
     try:
         confidence = float(value)
     except (TypeError, ValueError) as exc:
         raise ValueError("confidence must be numeric") from exc
     return max(0.0, min(1.0, confidence))
+
+
+def _normalize_nonnegative_int(value: Any) -> int:
+    if isinstance(value, bool):
+        raise ValueError("expected nonnegative integer")
+    try:
+        number = int(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("expected nonnegative integer") from exc
+    return max(0, number)
 
 
 def _normalize_decay_factor(value: Any) -> float:
@@ -1287,9 +2655,31 @@ def _parse_datetime(value: str) -> datetime | None:
     if text.endswith("Z"):
         text = f"{text[:-1]}+00:00"
     try:
-        return datetime.fromisoformat(text)
+        parsed = datetime.fromisoformat(text)
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return parsed
     except ValueError:
         return None
+
+
+def _optional_record_string(value: Any) -> str | None:
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise ValueError("expected string or null")
+    text = value.strip()
+    return text or None
+
+
+def _scope_family_match(left: str | None, right: str | None) -> bool:
+    left_scope = _normalize_scope(left)
+    right_scope = _normalize_scope(right)
+    return (
+        left_scope == right_scope
+        or left_scope.startswith(f"{right_scope}.")
+        or right_scope.startswith(f"{left_scope}.")
+    )
 
 
 def _days_between(start: datetime, end: datetime) -> int:
@@ -1309,6 +2699,30 @@ def _calibration_key(proposal_type: str, domain_id: str) -> str:
     return f"{proposal}:{domain}"
 
 
+def _calibration_keys(
+    source: str,
+    category: str,
+    proposal_type: str,
+    domain_id: str,
+) -> list[str]:
+    normalized_source = str(source or "dream").strip().lower() or "dream"
+    normalized_category = _normalize_category(category)
+    normalized_proposal = str(proposal_type or "fact").strip().lower() or "fact"
+    normalized_domain = str(domain_id or "general").strip().lower() or "general"
+    keys = [
+        f"{normalized_source}:{normalized_category}:{normalized_domain}",
+        f"{normalized_source}:{normalized_category}:{normalized_proposal}:{normalized_domain}",
+        f"{normalized_source}:{normalized_domain}",
+        f"{normalized_source}",
+        _calibration_key(normalized_proposal, normalized_domain),
+    ]
+    deduped: list[str] = []
+    for key in keys:
+        if key and key not in deduped:
+            deduped.append(key)
+    return deduped
+
+
 def _int_value(value: Any, *, default: int) -> int:
     if isinstance(value, bool):
         return default
@@ -1325,6 +2739,60 @@ def _float_value(value: Any, *, default: float) -> float:
         return float(value)
     except (TypeError, ValueError):
         return default
+
+
+def _redacted_fact_snapshot(raw: dict[str, Any]) -> dict[str, Any]:
+    if not isinstance(raw, dict):
+        return {}
+    snapshot: dict[str, Any] = {}
+    for key in (
+        "fact_id",
+        "canonical_key",
+        "category",
+        "scope",
+        "owner",
+        "status",
+        "consistency_state",
+        "confidence",
+        "base_confidence",
+        "confidence_version",
+        "support_count",
+        "contradiction_count",
+        "retrieval_count",
+        "injection_count",
+        "created_at",
+        "updated_at",
+        "last_seen_at",
+        "last_supported_at",
+        "last_contested_at",
+        "last_retrieved_at",
+        "expires_at",
+        "supersedes_fact_id",
+        "requires_confirmation",
+        "semantic_text_hash",
+    ):
+        if key in raw:
+            snapshot[key] = raw[key]
+    if isinstance(raw.get("content"), str):
+        redacted_content = _default_redactor(raw["content"])
+        snapshot["content_hash"] = hashlib.sha256(
+            normalize_fact_content(redacted_content).encode("utf-8")
+        ).hexdigest()
+        snapshot["content_preview"] = redact_memory_preview(redacted_content)
+    if isinstance(raw.get("source_excerpt"), str) and raw["source_excerpt"].strip():
+        redacted_excerpt = _default_redactor(raw["source_excerpt"])
+        snapshot["source_excerpt_hash"] = hashlib.sha256(
+            redacted_excerpt.encode("utf-8")
+        ).hexdigest()
+        snapshot["source_excerpt_preview"] = redact_memory_preview(redacted_excerpt)
+    return snapshot
+
+
+def redact_memory_preview(text: str, *, limit: int = 120) -> str:
+    normalized = re.sub(r"\s+", " ", str(text or "").strip())
+    if len(normalized) <= limit:
+        return normalized
+    return normalized[: max(0, limit - 3)].rstrip() + "..."
 
 
 def _normalize_source_cursors(value: list[int] | Any | None) -> list[int]:
@@ -1392,6 +2860,8 @@ def _render_fact_lines(
     lines.append(f"  - confidence: {_format_confidence(fact.confidence)}")
     if fact.expires_at:
         lines.append(f"  - expires_at: {fact.expires_at}")
+    if fact.consistency_state == "contested":
+        lines.append("  - contested: this fact has active competing evidence")
     source = _format_source(fact.source_cursors)
     if source:
         lines.append(f"  - source: {source}")

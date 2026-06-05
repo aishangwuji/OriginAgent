@@ -267,12 +267,14 @@ class CronTool(Tool):
                 policy_rule="capability_cron_denied",
             )
         if self._message_requires_high_capability(message):
-            raise PolicyDeniedError(
-                "This cron job requests high-capability tools and needs an explicit grant",
-                code="cron_high_capability_denied",
-                boundary="cron",
-                policy_rule="cron_high_capability_requires_grant",
-            )
+            approved = bool(snapshot.can_exec or snapshot.can_write_files or snapshot.can_spawn)
+            if not approved:
+                raise PolicyDeniedError(
+                    "This cron job requests high-capability tools and needs an explicit grant",
+                    code="cron_high_capability_denied",
+                    boundary="cron",
+                    policy_rule="cron_high_capability_requires_grant",
+                )
         if tz and not cron_expr:
             return "Error: tz can only be used with cron_expr"
         if tz:

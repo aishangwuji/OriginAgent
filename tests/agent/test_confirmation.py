@@ -125,6 +125,53 @@ def test_notify_only_logs_notified_event(tmp_path):
     assert events[0].metadata["confirmation_status"] == "notified"
 
 
+def test_tool_approval_creates_pending_confirmation_with_session_metadata(tmp_path):
+    manager = ConfirmationManager(tmp_path)
+
+    confirmation = manager.create_tool_approval(
+        tool_name="exec",
+        prompt="Approve exec?",
+        decision_reason="exec requires approval",
+        requested_by="alice",
+        trigger="user_initiated",
+        session_key="websocket:chat-1",
+        metadata={"policy_rule": "capability_exec_denied"},
+        action_payload={"grant_flags": "{\"can_exec\":true}"},
+        idempotency_key="tool_approval:exec:test",
+        now=NOW,
+    )
+
+    assert confirmation.kind == "tool_approval"
+    assert confirmation.status == "pending"
+    assert confirmation.action == "tool:exec"
+    assert confirmation.metadata["session_key"] == "websocket:chat-1"
+    assert confirmation.metadata["tool_name"] == "exec"
+
+
+def test_tool_approval_reuses_pending_confirmation_by_idempotency_key(tmp_path):
+    manager = ConfirmationManager(tmp_path)
+
+    first = manager.create_tool_approval(
+        tool_name="exec",
+        prompt="Approve exec?",
+        decision_reason="exec requires approval",
+        session_key="websocket:chat-1",
+        idempotency_key="tool_approval:exec:test",
+        now=NOW,
+    )
+    second = manager.create_tool_approval(
+        tool_name="exec",
+        prompt="Approve exec?",
+        decision_reason="exec requires approval",
+        session_key="websocket:chat-1",
+        idempotency_key="tool_approval:exec:test",
+        now=NOW,
+    )
+
+    assert second.confirmation_id == first.confirmation_id
+    assert len(manager.list_tool_approvals(session_key="websocket:chat-1", now=NOW)) == 1
+
+
 def test_from_dict_sanitizes_action_payload_before_construction():
     confirmation = ConfirmationRequest.from_dict(
         {

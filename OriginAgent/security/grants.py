@@ -5,17 +5,20 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import uuid
 from dataclasses import asdict, dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Literal
 
+from OriginAgent.agent.confirmation import ConfirmationRequest
 from OriginAgent.cron.types import CronPayload
 from OriginAgent.security.capabilities import CapabilitySnapshot, CapabilitySource, CapabilityTrigger
 from OriginAgent.security.policy import PolicyDeniedError
 
 GrantSource = Literal["admin_config", "user_confirmation", "test"]
 _GRANT_ERROR_MESSAGE = "Capability grant is missing, expired, or revoked."
+_TOOL_APPROVAL_GRANT_TTL = timedelta(minutes=10)
 
 
 @dataclass(frozen=True)
@@ -34,6 +37,11 @@ class CapabilityGrant:
     can_spawn: bool = False
     allowed_device_domains: tuple[str, ...] = ()
     allowed_mcp_scopes: tuple[str, ...] = ()
+    approval_confirmation_id: str | None = None
+    session_key: str | None = None
+    tool_name: str | None = None
+    purpose: str | None = None
+    metadata: dict[str, Any] | None = None
 
     def is_expired(self, now: datetime | None = None) -> bool:
         if not self.expires_at:
@@ -96,12 +104,17 @@ class CapabilityGrant:
             "enabled_flags_count": sum(1 for flag in flags if flag),
             "allowed_device_domains": list(self.allowed_device_domains),
             "allowed_mcp_scopes": list(self.allowed_mcp_scopes),
+            "tool_name": self.tool_name,
+            "purpose": self.purpose,
+            "session_key_present": bool(self.session_key),
+            "approval_confirmation_present": bool(self.approval_confirmation_id),
         }
 
     def to_dict(self) -> dict[str, Any]:
         data = asdict(self)
         data["allowed_device_domains"] = list(self.allowed_device_domains)
         data["allowed_mcp_scopes"] = list(self.allowed_mcp_scopes)
+        data["metadata"] = None if self.metadata is None else dict(self.metadata)
         return data
 
     @classmethod
@@ -131,6 +144,14 @@ class CapabilityGrant:
                 or data.get("allowedMcpScopes")
                 or ()
             ),
+            approval_confirmation_id=(
+                data.get("approval_confirmation_id")
+                or data.get("approvalConfirmationId")
+            ),
+            session_key=data.get("session_key") or data.get("sessionKey"),
+            tool_name=data.get("tool_name") or data.get("toolName"),
+            purpose=data.get("purpose"),
+            metadata=data.get("metadata") if isinstance(data.get("metadata"), dict) else None,
         )
 
 
@@ -202,6 +223,53 @@ class CapabilityGrantStore:
     def list_active(self) -> list[CapabilityGrant]:
         return [grant for grant in self.list_all() if grant.is_active()]
 
+    def list_active_for_session(
+        self,
+        session_key: str,
+        *,
+        tool_name: str | None = None,
+        now: datetime | None = None,
+    ) -> list[CapabilityGrant]:
+        items = [
+            grant
+            for grant in self.list_all()
+            if grant.is_active(now)
+            and grant.session_key == session_key
+        ]
+        if tool_name is not None:
+            items = [grant for grant in items if grant.tool_name == tool_name]
+        return items
+
+    def latest_active_for_session(
+        self,
+        session_key: str,
+        *,
+        tool_name: str | None = None,
+        now: datetime | None = None,
+    ) -> CapabilityGrant | None:
+        items = self.list_active_for_session(session_key, tool_name=tool_name, now=now)
+        if not items:
+            return None
+        items.sort(key=lambda grant: (grant.created_at, grant.grant_id))
+        return items[-1]
+
+    def latest_active_for_confirmation(
+        self,
+        confirmation_id: str,
+        *,
+        now: datetime | None = None,
+    ) -> CapabilityGrant | None:
+        items = [
+            grant
+            for grant in self.list_all()
+            if grant.is_active(now)
+            and grant.approval_confirmation_id == confirmation_id
+        ]
+        if not items:
+            return None
+        items.sort(key=lambda grant: (grant.created_at, grant.grant_id))
+        return items[-1]
+
     def _save(self, grants: list[CapabilityGrant]) -> None:
         payload = {
             "version": 1,
@@ -237,6 +305,47 @@ def snapshot_for_cron_payload(
     return grant.to_snapshot(trigger="scheduled")
 
 
+def issue_tool_approval_grant(
+    confirmation: ConfirmationRequest,
+    grant_store: CapabilityGrantStore,
+    *,
+    approved_by: str | None = None,
+    now: datetime | None = None,
+) -> CapabilityGrant:
+    existing = grant_store.latest_active_for_confirmation(
+        confirmation.confirmation_id,
+        now=now,
+    )
+    if existing is not None:
+        return existing
+    current_time = _normalize_datetime(now or datetime.now(timezone.utc))
+    flags = _parse_grant_flags(confirmation)
+    metadata = dict(confirmation.metadata or {})
+    metadata["confirmation_kind"] = confirmation.kind
+    grant = CapabilityGrant(
+        grant_id=f"grant_{uuid.uuid4().hex[:12]}",
+        created_by=str(approved_by or confirmation.requested_by or "user_confirmation"),
+        created_at=_format_datetime(current_time),
+        expires_at=_format_datetime(current_time + _TOOL_APPROVAL_GRANT_TTL),
+        source="user_confirmation",
+        can_exec=bool(flags.get("can_exec", False)),
+        can_read_files=bool(flags.get("can_read_files", False)),
+        can_write_files=bool(flags.get("can_write_files", False)),
+        can_send_cross_target=bool(flags.get("can_send_cross_target", False)),
+        can_create_cron=bool(flags.get("can_create_cron", False)),
+        can_spawn=bool(flags.get("can_spawn", False)),
+        allowed_device_domains=tuple(flags.get("allowed_device_domains") or ()),
+        allowed_mcp_scopes=tuple(flags.get("allowed_mcp_scopes") or ()),
+        approval_confirmation_id=confirmation.confirmation_id,
+        session_key=metadata.get("session_key"),
+        tool_name=metadata.get("tool_name"),
+        purpose=f"tool_approval:{metadata.get('tool_name') or confirmation.action or 'unknown'}",
+        metadata=metadata | flags,
+    )
+    grant_store.put(grant)
+    return grant
+
+
 def _raise_grant_denied(policy_rule: str) -> None:
     raise PolicyDeniedError(
         _GRANT_ERROR_MESSAGE,
@@ -266,3 +375,16 @@ def _normalize_datetime(value: datetime) -> datetime:
 
 def _format_datetime(value: datetime) -> str:
     return _normalize_datetime(value).isoformat()
+
+
+def _parse_grant_flags(confirmation: ConfirmationRequest) -> dict[str, Any]:
+    raw = confirmation.action_payload.get("grant_flags")
+    if not isinstance(raw, str) or not raw.strip():
+        return {}
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError:
+        return {}
+    if not isinstance(parsed, dict):
+        return {}
+    return parsed

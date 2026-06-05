@@ -13,6 +13,7 @@ from OriginAgent.agent.confirmation import ConfirmationRequest, PendingConfirmat
 from OriginAgent.agent.domain_pack_governance import DomainPackGovernanceService
 from OriginAgent.agent.facts import FactStore, summarize_facts
 from OriginAgent.agent.memory import MemoryStore, redact_memory_text
+from OriginAgent.agent.runtime_models import RuntimeContextSnapshot
 from OriginAgent.agent.skills import SkillsLoader
 from OriginAgent.agent.workflow_artifacts import (
     list_workflow_artifact_records,
@@ -48,6 +49,7 @@ class SelfModelService:
         domain_governance_service: DomainPackGovernanceService | None = None,
         background_review_enabled: bool | None = None,
         curator_enabled: bool | None = None,
+        runtime_snapshot: RuntimeContextSnapshot | dict[str, Any] | None = None,
     ) -> None:
         self.workspace = Path(workspace)
         self._registry = registry
@@ -67,6 +69,7 @@ class SelfModelService:
         self._domain_governance_service = domain_governance_service
         self._background_review_enabled = background_review_enabled
         self._curator_enabled = curator_enabled
+        self._runtime_snapshot = self._normalize_runtime_snapshot(runtime_snapshot)
 
     def build(self) -> dict[str, Any]:
         reviews, pending_reviews = self._build_reviews()
@@ -83,7 +86,24 @@ class SelfModelService:
             pending_reviews=pending_reviews,
             pending_confirmations=pending_confirmations,
         )
-        return {
+        runtime = {
+            "registered_tools_count": _safe_len(getattr(self._registry, "tool_names", [])),
+            "active_sessions_count": _session_count(self._sessions),
+            "pending_queue_count": len(self._pending_queues),
+            "cron_available": self._cron_service is not None,
+            "confirmation_available": self._confirmation_store is not None or self.workspace.exists(),
+            "background_review_enabled": self._review_enabled(
+                self._background_review_service,
+                self._background_review_enabled,
+            ),
+            "curator_enabled": self._review_enabled(
+                self._curator_service,
+                self._curator_enabled,
+            ),
+        }
+        if self._runtime_snapshot.runtime:
+            runtime.update(self._runtime_snapshot.runtime)
+        payload = {
             "schema_version": 1,
             "generated_at": datetime.now(timezone.utc).isoformat(),
             "identity": {
@@ -92,21 +112,7 @@ class SelfModelService:
                 "runtime_profile": self._runtime_profile,
                 "audit_mode": self._audit_mode,
             },
-            "runtime": {
-                "registered_tools_count": _safe_len(getattr(self._registry, "tool_names", [])),
-                "active_sessions_count": _session_count(self._sessions),
-                "pending_queue_count": len(self._pending_queues),
-                "cron_available": self._cron_service is not None,
-                "confirmation_available": self._confirmation_store is not None or self.workspace.exists(),
-                "background_review_enabled": self._review_enabled(
-                    self._background_review_service,
-                    self._background_review_enabled,
-                ),
-                "curator_enabled": self._review_enabled(
-                    self._curator_service,
-                    self._curator_enabled,
-                ),
-            },
+            "runtime": runtime,
             "domains": domains,
             "skills": skills,
             "workflows": workflows,
@@ -116,6 +122,28 @@ class SelfModelService:
             "confirmations": confirmations,
             "limitations": limitations,
         }
+        if self._runtime_snapshot.background_tasks:
+            payload["background_tasks"] = dict(self._runtime_snapshot.background_tasks)
+        return payload
+
+    @staticmethod
+    def _normalize_runtime_snapshot(
+        snapshot: RuntimeContextSnapshot | dict[str, Any] | None,
+    ) -> RuntimeContextSnapshot:
+        if isinstance(snapshot, RuntimeContextSnapshot):
+            return snapshot
+        if isinstance(snapshot, dict):
+            return RuntimeContextSnapshot(
+                runtime=dict(snapshot.get("runtime") or {}),
+                confirmations=dict(snapshot.get("confirmations") or {}),
+                reviews=dict(snapshot.get("reviews") or {}),
+                background_tasks=dict(snapshot.get("background_tasks") or {}),
+                domains_summary=dict(snapshot.get("domains_summary") or {}),
+                skills_summary=dict(snapshot.get("skills_summary") or {}),
+                facts_summary=dict(snapshot.get("facts_summary") or {}),
+                memory_summary=dict(snapshot.get("memory_summary") or {}),
+            )
+        return RuntimeContextSnapshot()
 
     def _build_domains(self) -> dict[str, Any]:
         try:
@@ -199,6 +227,8 @@ class SelfModelService:
             }
 
     def _build_facts(self) -> dict[str, Any]:
+        if self._runtime_snapshot.facts_summary:
+            return dict(self._runtime_snapshot.facts_summary)
         try:
             return summarize_facts(self.workspace, fact_store=self._facts())
         except Exception:
@@ -210,6 +240,8 @@ class SelfModelService:
             }
 
     def _build_memory(self) -> dict[str, Any]:
+        if self._runtime_snapshot.memory_summary:
+            return dict(self._runtime_snapshot.memory_summary)
         try:
             store = self._memory()
             content = store.read_memory()
@@ -226,6 +258,8 @@ class SelfModelService:
             }
 
     def _build_reviews(self) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+        if self._runtime_snapshot.reviews:
+            return dict(self._runtime_snapshot.reviews), []
         try:
             records = self._reviews().iter_all()
         except Exception:
@@ -263,6 +297,8 @@ class SelfModelService:
         )
 
     def _build_confirmations(self) -> tuple[dict[str, Any], list[ConfirmationRequest]]:
+        if self._runtime_snapshot.confirmations:
+            return dict(self._runtime_snapshot.confirmations), []
         try:
             confirmations = self._confirmations().read_all()
         except Exception:
@@ -497,6 +533,7 @@ class SelfModelRenderer:
         memory = self_model.get("memory", {})
         reviews = self_model.get("reviews", {})
         confirmations = self_model.get("confirmations", {})
+        background_tasks = self_model.get("background_tasks", {})
         limitations = self_model.get("limitations", [])
 
         active_domains = [
@@ -536,6 +573,10 @@ class SelfModelRenderer:
             f"- Confirmation available: {_yes_no(bool(runtime.get('confirmation_available')))}",
             f"- Background review enabled: {_yes_no(bool(runtime.get('background_review_enabled')))}",
             f"- Curator enabled: {_yes_no(bool(runtime.get('curator_enabled')))}",
+            "",
+            "## Background Tasks",
+            "",
+            f"- Task groups visible: {int(background_tasks.get('task_count', 0) or 0)}",
             "",
             "## Available Capabilities",
             "",

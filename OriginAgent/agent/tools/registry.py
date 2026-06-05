@@ -8,9 +8,11 @@ from dataclasses import dataclass
 from typing import Any, Literal, Protocol
 from urllib.parse import urlparse
 
+from OriginAgent.agent.confirmation import ConfirmationManager
 from OriginAgent.agent.tools.audit import ToolAuditConfig, ToolAuditSink, ToolCallAuditEvent
 from OriginAgent.agent.tools.base import Tool
 from OriginAgent.security.capabilities import CapabilitySnapshot, intersect_capability_snapshots
+from OriginAgent.security.grants import CapabilityGrant, CapabilityGrantStore
 from OriginAgent.security.policy import PolicyDeniedError
 
 
@@ -43,6 +45,15 @@ class ToolAuditContext:
     parent_session_key_hash: str | None = None
     origin_channel: str | None = None
     origin_chat_id_hash: str | None = None
+
+
+@dataclass(frozen=True)
+class ToolRuntimeContext:
+    actor_id: str | None = None
+    session_key: str | None = None
+    trigger: str | None = None
+    channel: str | None = None
+    chat_id: str | None = None
 
 
 class ToolExecutionObserver(Protocol):
@@ -127,6 +138,8 @@ class ToolRegistry:
         audit_config: ToolAuditConfig | None = None,
         capability_snapshot: CapabilitySnapshot | None = None,
         execution_observer: ToolExecutionObserver | None = None,
+        confirmation_manager: ConfirmationManager | None = None,
+        grant_store: CapabilityGrantStore | None = None,
     ):
         self._tools: dict[str, Tool] = {}
         self._cached_definitions: list[dict[str, Any]] | None = None
@@ -135,12 +148,32 @@ class ToolRegistry:
         self._capability_snapshot = capability_snapshot
         self._audit_context = ToolAuditContext()
         self._execution_observer = execution_observer
+        self._confirmation_manager = confirmation_manager
+        self._grant_store = grant_store
+        self._runtime_context = ToolRuntimeContext()
 
     def set_capability_snapshot(self, snapshot: CapabilitySnapshot | None) -> None:
         self._capability_snapshot = snapshot
         for tool in self._tools.values():
             if hasattr(tool, "set_capability_snapshot"):
                 tool.set_capability_snapshot(snapshot)
+
+    def set_runtime_context(
+        self,
+        *,
+        actor_id: str | None = None,
+        session_key: str | None = None,
+        trigger: str | None = None,
+        channel: str | None = None,
+        chat_id: str | None = None,
+    ) -> None:
+        self._runtime_context = ToolRuntimeContext(
+            actor_id=actor_id,
+            session_key=session_key,
+            trigger=trigger,
+            channel=channel,
+            chat_id=chat_id,
+        )
 
     def set_audit_context(
         self,
@@ -242,7 +275,7 @@ class ToolRegistry:
                 f"Error: Invalid parameters for tool '{name}': " + "; ".join(errors)
             )
         try:
-            self._assert_capability(tool)
+            self._assert_capability(tool, cast_params)
         except PolicyDeniedError as exc:
             return tool, cast_params, f"Error: {exc}"
         return tool, cast_params, None
@@ -315,7 +348,7 @@ class ToolRegistry:
             )
             return error_text if policy_denied else error_text + _RETRY_HINT
 
-    def _assert_capability(self, tool: Tool) -> None:
+    def _assert_capability(self, tool: Tool, params: dict[str, Any] | None = None) -> None:
         snapshot = self._capability_snapshot
         name = tool.name
         if snapshot is None:
@@ -329,13 +362,17 @@ class ToolRegistry:
                     policy_rule="capability_snapshot_required",
                 )
             return
+        snapshot = self._effective_snapshot_for_tool(snapshot, name)
+        if hasattr(tool, "set_capability_snapshot"):
+            tool.set_capability_snapshot(snapshot)
         _assert_domain_tool_capability(tool, snapshot)
         if name == "exec" and not snapshot.can_exec:
-            raise PolicyDeniedError(
-                "Tool 'exec' is not allowed by the current capability snapshot",
-                code="capability_denied",
-                boundary="capability",
+            self._raise_or_request_tool_approval(
+                tool=tool,
+                params=params or {},
+                message="Tool 'exec' is not allowed by the current capability snapshot",
                 policy_rule="capability_exec_denied",
+                grant_flags={"can_exec": True},
             )
         if name in {"read_file", "session_search", "list_dir", "glob", "grep", "notebook_read"} and not snapshot.can_read_files:
             raise PolicyDeniedError(
@@ -352,22 +389,30 @@ class ToolRegistry:
                 policy_rule="capability_file_write_denied",
             )
         if name == "message" and not snapshot.can_send_cross_target:
-            # Same-target messages are checked inside MessageTool because the
-            # registry does not know runtime channel/chat context.
+            if self._is_cross_target_message(params or {}):
+                self._raise_or_request_tool_approval(
+                    tool=tool,
+                    params=params or {},
+                    message="Cross-target message sends require a runtime grant",
+                    policy_rule="message_cross_target_grant_required",
+                    grant_flags={"can_send_cross_target": True},
+                )
             return
         if name == "cron" and not snapshot.can_create_cron:
-            raise PolicyDeniedError(
-                "Creating cron jobs is not allowed by the current capability snapshot",
-                code="capability_denied",
-                boundary="capability",
+            self._raise_or_request_tool_approval(
+                tool=tool,
+                params=params or {},
+                message="Creating cron jobs is not allowed by the current capability snapshot",
                 policy_rule="capability_cron_denied",
+                grant_flags={"can_create_cron": True},
             )
         if name == "spawn" and not snapshot.can_spawn:
-            raise PolicyDeniedError(
-                "Spawning subagents is not allowed by the current capability snapshot",
-                code="capability_denied",
-                boundary="capability",
+            self._raise_or_request_tool_approval(
+                tool=tool,
+                params=params or {},
+                message="Spawning subagents is not allowed by the current capability snapshot",
                 policy_rule="capability_spawn_denied",
+                grant_flags={"can_spawn": True},
             )
         if name.startswith("originagent_device_"):
             allowed = snapshot.allowed_device_domains
@@ -389,6 +434,137 @@ class ToolRegistry:
                     policy_rule="capability_mcp_denied",
                 )
             return
+
+    def _raise_or_request_tool_approval(
+        self,
+        *,
+        tool: Tool,
+        params: dict[str, Any],
+        message: str,
+        policy_rule: str,
+        grant_flags: dict[str, Any],
+    ) -> None:
+        grant = self._existing_matching_grant(tool.name, policy_rule)
+        if grant is not None:
+            return
+        confirmation = self._create_tool_approval(tool=tool, params=params, grant_flags=grant_flags)
+        if confirmation is not None:
+            raise PolicyDeniedError(
+                (
+                    f"{message}. Approval required: {confirmation.prompt} "
+                    f"(confirmation_id={confirmation.confirmation_id})"
+                ),
+                code="tool_approval_required",
+                boundary="capability",
+                policy_rule=policy_rule,
+            )
+        raise PolicyDeniedError(
+            message,
+            code="capability_denied",
+            boundary="capability",
+            policy_rule=policy_rule,
+        )
+
+    def _existing_matching_grant(
+        self,
+        tool_name: str,
+        policy_rule: str,
+    ) -> CapabilityGrant | None:
+        store = self._grant_store
+        session_key = self._runtime_context.session_key
+        if store is None or not session_key:
+            return None
+        grant = store.latest_active_for_session(session_key, tool_name=tool_name)
+        if grant is None:
+            return None
+        metadata = dict(grant.metadata or {})
+        if metadata.get("policy_rule") and metadata.get("policy_rule") != policy_rule:
+            return None
+        return grant
+
+    def _create_tool_approval(
+        self,
+        *,
+        tool: Tool,
+        params: dict[str, Any],
+        grant_flags: dict[str, Any],
+    ):
+        manager = self._confirmation_manager
+        session_key = self._runtime_context.session_key
+        if manager is None or not session_key:
+            return None
+        prompt = _tool_approval_prompt(tool.name, params)
+        decision_reason = f"tool '{tool.name}' requires explicit approval before use"
+        idempotency_key = _tool_approval_idempotency_key(
+            session_key=session_key,
+            tool_name=tool.name,
+            params=params,
+            grant_flags=grant_flags,
+        )
+        metadata = {
+            "session_key": session_key,
+            "tool_name": tool.name,
+        }
+        return manager.create_tool_approval(
+            tool_name=tool.name,
+            prompt=prompt,
+            decision_reason=decision_reason,
+            requested_by=self._runtime_context.actor_id,
+            trigger=self._runtime_context.trigger,
+            session_key=session_key,
+            metadata=metadata | {"policy_rule": _policy_rule_for_tool_approval(tool.name, grant_flags)},
+            action_payload={
+                "tool_name": tool.name,
+                "params_summary": _tool_param_summary(params),
+                "grant_flags": json.dumps(grant_flags, ensure_ascii=False, sort_keys=True),
+            },
+            idempotency_key=idempotency_key,
+        )
+
+    def _effective_snapshot_for_tool(
+        self,
+        snapshot: CapabilitySnapshot,
+        tool_name: str,
+    ) -> CapabilitySnapshot:
+        grant = self._grant_for_tool(tool_name)
+        if grant is None:
+            return snapshot
+        grant_snapshot = grant.to_snapshot(trigger=snapshot.trigger)
+        return CapabilitySnapshot(
+            version=snapshot.version,
+            source=snapshot.source,
+            trigger=snapshot.trigger,
+            can_exec=snapshot.can_exec or grant_snapshot.can_exec,
+            can_read_files=snapshot.can_read_files or grant_snapshot.can_read_files,
+            can_write_files=snapshot.can_write_files or grant_snapshot.can_write_files,
+            can_send_cross_target=(
+                snapshot.can_send_cross_target or grant_snapshot.can_send_cross_target
+            ),
+            can_create_cron=snapshot.can_create_cron or grant_snapshot.can_create_cron,
+            can_spawn=snapshot.can_spawn or grant_snapshot.can_spawn,
+            allowed_device_domains=tuple(
+                sorted(set(snapshot.allowed_device_domains) | set(grant_snapshot.allowed_device_domains))
+            ),
+            allowed_mcp_scopes=tuple(
+                sorted(set(snapshot.allowed_mcp_scopes) | set(grant_snapshot.allowed_mcp_scopes))
+            ),
+        )
+
+    def _grant_for_tool(self, tool_name: str) -> CapabilityGrant | None:
+        store = self._grant_store
+        session_key = self._runtime_context.session_key
+        if store is None or not session_key:
+            return None
+        return store.latest_active_for_session(session_key, tool_name=tool_name)
+
+    def _is_cross_target_message(self, params: dict[str, Any]) -> bool:
+        current_channel = self._runtime_context.channel
+        current_chat_id = self._runtime_context.chat_id
+        if not current_channel or not current_chat_id:
+            return False
+        target_channel = str(params.get("channel") or current_channel)
+        target_chat_id = str(params.get("chat_id") or current_chat_id)
+        return target_channel != current_channel or target_chat_id != current_chat_id
 
     def _audit_tool_call(
         self,
@@ -744,3 +920,59 @@ def _command_shape(command: str) -> str:
         return ""
     operators = "".join(ch for ch in command if ch in "|&;<>")
     return f"{words[0]}:{len(words)}:{operators[:16]}"
+
+
+def _tool_param_summary(params: dict[str, Any]) -> str:
+    if not isinstance(params, dict) or not params:
+        return "{}"
+    summary: dict[str, str] = {}
+    for key, value in sorted(params.items()):
+        if value is None:
+            continue
+        text = str(value)
+        if len(text) > 80:
+            text = text[:77] + "..."
+        summary[str(key)] = text
+    return json.dumps(summary, ensure_ascii=False, sort_keys=True)
+
+
+def _tool_approval_prompt(tool_name: str, params: dict[str, Any]) -> str:
+    summary = _tool_param_summary(params)
+    return (
+        f"The agent wants to use high-risk tool '{tool_name}'. "
+        f"Approve this operation for the current session? Parameters: {summary}"
+    )
+
+
+def _tool_approval_idempotency_key(
+    *,
+    session_key: str,
+    tool_name: str,
+    params: dict[str, Any],
+    grant_flags: dict[str, Any],
+) -> str:
+    payload = json.dumps(
+        {
+            "session_key": session_key,
+            "tool_name": tool_name,
+            "params": params,
+            "grant_flags": grant_flags,
+        },
+        ensure_ascii=False,
+        sort_keys=True,
+        default=str,
+    )
+    digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
+    return f"tool_approval:{tool_name}:{digest}"
+
+
+def _policy_rule_for_tool_approval(tool_name: str, grant_flags: dict[str, Any]) -> str:
+    if tool_name == "exec" or grant_flags.get("can_exec"):
+        return "capability_exec_denied"
+    if tool_name == "cron" or grant_flags.get("can_create_cron"):
+        return "capability_cron_denied"
+    if tool_name == "spawn" or grant_flags.get("can_spawn"):
+        return "capability_spawn_denied"
+    if tool_name == "message" or grant_flags.get("can_send_cross_target"):
+        return "message_cross_target_grant_required"
+    return "tool_approval_required"

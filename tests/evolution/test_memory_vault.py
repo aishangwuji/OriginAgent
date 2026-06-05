@@ -28,10 +28,14 @@ def _write_key(path: Path, value: bytes | None = None) -> bytes:
 
 def _source_workspace(path: Path) -> Path:
     (path / "memory").mkdir(parents=True)
+    (path / "memory" / "audit").mkdir(parents=True)
     (path / "SOUL.md").write_text("soul", encoding="utf-8")
     (path / "USER.md").write_text("user", encoding="utf-8")
     (path / "memory" / "MEMORY.md").write_text("memory", encoding="utf-8")
     (path / "memory" / "facts.jsonl").write_text('{"fact":"encrypted only"}\n', encoding="utf-8")
+    (path / "memory" / "fact_relations.jsonl").write_text('{"relation":"r1"}\n', encoding="utf-8")
+    (path / "memory" / "semantic_index.json").write_text('{"embeddings":{},"pending_hashes":[]}\n', encoding="utf-8")
+    (path / "memory" / "audit" / "fact_events.jsonl").write_text('{"event":"e1"}\n', encoding="utf-8")
     (path / "memory" / "history.jsonl").write_text("must stay out\n", encoding="utf-8")
     (path / ".originagent").mkdir()
     (path / ".originagent" / "evolution_identity.json").write_text(
@@ -69,6 +73,9 @@ def test_export_verify_and_import_apply_round_trip(tmp_path) -> None:
         "USER.md",
         "memory/MEMORY.md",
         "memory/facts.jsonl",
+        "memory/fact_relations.jsonl",
+        "memory/semantic_index.json",
+        "memory/audit/fact_events.jsonl",
         "memory/evolution_events.jsonl",
     }
 
@@ -87,6 +94,9 @@ def test_export_verify_and_import_apply_round_trip(tmp_path) -> None:
     assert applied.import_event_hash
     assert (target / "SOUL.md").read_text(encoding="utf-8") == "soul"
     assert (target / "memory" / "facts.jsonl").read_text(encoding="utf-8") == '{"fact":"encrypted only"}\n'
+    assert (target / "memory" / "fact_relations.jsonl").read_text(encoding="utf-8") == '{"relation":"r1"}\n'
+    assert (target / "memory" / "semantic_index.json").read_text(encoding="utf-8") == '{"embeddings":{},"pending_hashes":[]}\n'
+    assert (target / "memory" / "audit" / "fact_events.jsonl").read_text(encoding="utf-8") == '{"event":"e1"}\n'
     assert not (target / "memory" / "history.jsonl").exists()
     assert not (target / ".originagent" / "evolution_identity.json").exists()
     assert EvolutionLedger(target).verify_chain().ok is True

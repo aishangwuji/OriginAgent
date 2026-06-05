@@ -234,17 +234,12 @@ async def cmd_self(ctx: CommandContext) -> OutboundMessage:
     loop = ctx.loop
     service = SelfModelService(
         loop.workspace,
-        registry=loop.tools,
-        sessions=loop.sessions,
-        pending_queues=loop._pending_queues,
-        cron_service=loop.cron_service,
         audit_mode=loop._tool_audit_config.mode,
         runtime_profile=getattr(loop, "_runtime_profile", "default"),
         domain_pack_manager=loop.domain_packs,
-        background_review_service=loop.background_review,
-        curator_service=loop.curator,
         skills_loader=loop.context.skills,
         memory_store=loop.context.memory,
+        runtime_snapshot=loop.introspection.runtime_context_snapshot(),
     )
     return OutboundMessage(
         channel=ctx.msg.channel,

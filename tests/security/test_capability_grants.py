@@ -2,9 +2,10 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
+from OriginAgent.agent.confirmation import ConfirmationRequest
 from OriginAgent.security.capabilities import CapabilitySnapshot
 from OriginAgent.security.capabilities import intersect_capability_snapshots
-from OriginAgent.security.grants import CapabilityGrant, CapabilityGrantStore
+from OriginAgent.security.grants import CapabilityGrant, CapabilityGrantStore, issue_tool_approval_grant
 
 
 def _now() -> datetime:
@@ -226,3 +227,32 @@ def test_summary_omits_raw_sensitive_values_and_full_grant_id() -> None:
     assert "grant-secret-raw-id" not in text
     for forbidden in ("prompt", "message", "path", "channel", "device_id", "secret"):
         assert forbidden not in summary
+
+
+def test_issue_tool_approval_grant_persists_session_scoped_capability(tmp_path) -> None:
+    confirmation = ConfirmationRequest(
+        confirmation_id="confirmation_exec_1",
+        kind="tool_approval",
+        status="confirmed_once",
+        prompt="approve exec",
+        action="tool:exec",
+        scope=None,
+        trigger="user_initiated",
+        risk="high",
+        requested_by="alice",
+        decision_reason="exec requires approval",
+        presence_status="unknown",
+        related_fact_ids=[],
+        created_at=_now().isoformat(),
+        expires_at=(_now() + timedelta(minutes=2)).isoformat(),
+        action_payload={"grant_flags": "{\"can_exec\": true}"},
+        metadata={"session_key": "websocket:chat-1", "tool_name": "exec"},
+    )
+    store = CapabilityGrantStore(tmp_path)
+
+    grant = issue_tool_approval_grant(confirmation, store, approved_by="alice", now=_now())
+
+    assert grant.can_exec is True
+    assert grant.session_key == "websocket:chat-1"
+    assert grant.tool_name == "exec"
+    assert store.latest_active_for_confirmation("confirmation_exec_1", now=_now()) == grant

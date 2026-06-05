@@ -306,6 +306,14 @@ async def test_runtime_status_reports_background_review_counts(tmp_path) -> None
                 "background_review_pending_count": 2,
                 "background_review_last_created_at": "2026-05-19T10:00:00+00:00",
                 "background_review_last_result": {"status": "ok", "proposals_written": 1},
+                "last_status": "ok",
+                "last_fault_class": "unknown",
+                "last_retryable": False,
+                "last_degraded": False,
+                "last_reason": "ok",
+                "last_started_at": "2026-05-19T09:59:00+00:00",
+                "last_finished_at": "2026-05-19T10:00:00+00:00",
+                "consecutive_failures": 0,
             }
 
     result = await RuntimeStatusTool(
@@ -321,6 +329,7 @@ async def test_runtime_status_reports_background_review_counts(tmp_path) -> None
     assert result["background_review_proposal_count"] == 3
     assert result["background_review_pending_count"] == 2
     assert result["self_model"]["runtime"]["background_review_enabled"] is True
+    assert result["background_tasks"]["tasks"]["background_review"]["last_status"] == "ok"
 
 
 @pytest.mark.asyncio
@@ -335,6 +344,14 @@ async def test_runtime_status_reports_curator_counts(tmp_path) -> None:
                 "curator_last_created_at": "2026-05-20T10:00:00+00:00",
                 "curator_last_result": {"status": "ok", "proposals_written": 2},
                 "curator_type_counts": {"promote_skill": 1, "deprecate_skill": 3},
+                "last_status": "degraded",
+                "last_fault_class": "external",
+                "last_retryable": False,
+                "last_degraded": True,
+                "last_reason": "maintenance_failed",
+                "last_started_at": "2026-05-20T09:59:00+00:00",
+                "last_finished_at": "2026-05-20T10:00:00+00:00",
+                "consecutive_failures": 0,
             }
 
     result = await RuntimeStatusTool(
@@ -350,6 +367,7 @@ async def test_runtime_status_reports_curator_counts(tmp_path) -> None:
     assert result["curator_proposal_count"] == 4
     assert result["curator_pending_count"] == 3
     assert result["curator_type_counts"] == {"promote_skill": 1, "deprecate_skill": 3}
+    assert result["background_tasks"]["tasks"]["curator"]["last_status"] == "degraded"
 
 
 @pytest.mark.asyncio

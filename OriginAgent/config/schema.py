@@ -51,6 +51,62 @@ class DreamConfig(Base):
     # on — set to False to feed MEMORY.md raw if a specific LLM reacts poorly
     # to the `← Nd` suffix or you want deterministic, git-independent prompts.
     annotate_line_ages: bool = True
+    semantic_retrieval_enabled: bool = Field(
+        default=False,
+        validation_alias=AliasChoices(
+            "semanticRetrievalEnabled",
+            "semantic_retrieval_enabled",
+        ),
+        serialization_alias="semanticRetrievalEnabled",
+    )
+    semantic_merge_enabled: bool = Field(
+        default=False,
+        validation_alias=AliasChoices(
+            "semanticMergeEnabled",
+            "semantic_merge_enabled",
+        ),
+        serialization_alias="semanticMergeEnabled",
+    )
+    fact_graph_enabled: bool = Field(
+        default=False,
+        validation_alias=AliasChoices(
+            "factGraphEnabled",
+            "fact_graph_enabled",
+        ),
+        serialization_alias="factGraphEnabled",
+    )
+    confidence_v2_enabled: bool = Field(
+        default=False,
+        validation_alias=AliasChoices(
+            "confidenceV2Enabled",
+            "confidence_v2_enabled",
+        ),
+        serialization_alias="confidenceV2Enabled",
+    )
+    contradiction_auto_flip_enabled: bool = Field(
+        default=False,
+        validation_alias=AliasChoices(
+            "contradictionAutoFlipEnabled",
+            "contradiction_auto_flip_enabled",
+        ),
+        serialization_alias="contradictionAutoFlipEnabled",
+    )
+    fact_audit_enabled: bool = Field(
+        default=False,
+        validation_alias=AliasChoices(
+            "factAuditEnabled",
+            "fact_audit_enabled",
+        ),
+        serialization_alias="factAuditEnabled",
+    )
+    lazy_snapshot_enabled: bool = Field(
+        default=False,
+        validation_alias=AliasChoices(
+            "lazySnapshotEnabled",
+            "lazy_snapshot_enabled",
+        ),
+        serialization_alias="lazySnapshotEnabled",
+    )
 
     def build_schedule(self, timezone: str) -> CronSchedule:
         """Build the runtime schedule, preferring the legacy cron override if present."""
@@ -183,6 +239,62 @@ class BackgroundReviewConfig(Base):
         validation_alias=AliasChoices("allowedProposalTypes", "allowed_proposal_types"),
         serialization_alias="allowedProposalTypes",
     )
+    title_max_chars: int = Field(
+        default=160,
+        ge=1,
+        le=1000,
+        validation_alias=AliasChoices("titleMaxChars", "title_max_chars"),
+        serialization_alias="titleMaxChars",
+    )
+    content_max_chars: int = Field(
+        default=2400,
+        ge=100,
+        le=20_000,
+        validation_alias=AliasChoices("contentMaxChars", "content_max_chars"),
+        serialization_alias="contentMaxChars",
+    )
+    rationale_max_chars: int = Field(
+        default=1200,
+        ge=100,
+        le=10_000,
+        validation_alias=AliasChoices("rationaleMaxChars", "rationale_max_chars"),
+        serialization_alias="rationaleMaxChars",
+    )
+    evidence_max_items: int = Field(
+        default=5,
+        ge=1,
+        le=50,
+        validation_alias=AliasChoices("evidenceMaxItems", "evidence_max_items"),
+        serialization_alias="evidenceMaxItems",
+    )
+    evidence_max_chars: int = Field(
+        default=500,
+        ge=50,
+        le=5000,
+        validation_alias=AliasChoices("evidenceMaxChars", "evidence_max_chars"),
+        serialization_alias="evidenceMaxChars",
+    )
+    message_max_chars: int = Field(
+        default=1600,
+        ge=100,
+        le=20_000,
+        validation_alias=AliasChoices("messageMaxChars", "message_max_chars"),
+        serialization_alias="messageMaxChars",
+    )
+    review_reason_max_chars: int = Field(
+        default=1000,
+        ge=100,
+        le=10_000,
+        validation_alias=AliasChoices("reviewReasonMaxChars", "review_reason_max_chars"),
+        serialization_alias="reviewReasonMaxChars",
+    )
+    transient_retry_count: int = Field(
+        default=1,
+        ge=0,
+        le=5,
+        validation_alias=AliasChoices("transientRetryCount", "transient_retry_count"),
+        serialization_alias="transientRetryCount",
+    )
 
 
 class CuratorConfig(Base):
@@ -195,6 +307,142 @@ class CuratorConfig(Base):
         le=50,
         validation_alias=AliasChoices("maxProposalsPerRun", "max_proposals_per_run"),
         serialization_alias="maxProposalsPerRun",
+    )
+    title_max_chars: int = Field(
+        default=160,
+        ge=1,
+        le=1000,
+        validation_alias=AliasChoices("titleMaxChars", "title_max_chars"),
+        serialization_alias="titleMaxChars",
+    )
+    body_max_chars: int = Field(
+        default=2400,
+        ge=100,
+        le=20_000,
+        validation_alias=AliasChoices("bodyMaxChars", "body_max_chars"),
+        serialization_alias="bodyMaxChars",
+    )
+    rationale_max_chars: int = Field(
+        default=1200,
+        ge=100,
+        le=10_000,
+        validation_alias=AliasChoices("rationaleMaxChars", "rationale_max_chars"),
+        serialization_alias="rationaleMaxChars",
+    )
+    evidence_max_chars: int = Field(
+        default=500,
+        ge=50,
+        le=5000,
+        validation_alias=AliasChoices("evidenceMaxChars", "evidence_max_chars"),
+        serialization_alias="evidenceMaxChars",
+    )
+    max_evidence: int = Field(
+        default=5,
+        ge=1,
+        le=50,
+        validation_alias=AliasChoices("maxEvidence", "max_evidence"),
+        serialization_alias="maxEvidence",
+    )
+    transient_retry_count: int = Field(
+        default=1,
+        ge=0,
+        le=5,
+        validation_alias=AliasChoices("transientRetryCount", "transient_retry_count"),
+        serialization_alias="transientRetryCount",
+    )
+
+
+class ContextConfig(Base):
+    """Prompt context construction limits."""
+
+    max_recent_history: int = Field(
+        default=50,
+        ge=1,
+        le=500,
+        validation_alias=AliasChoices("maxRecentHistory", "max_recent_history"),
+        serialization_alias="maxRecentHistory",
+    )
+    max_history_chars: int = Field(
+        default=32_000,
+        ge=1000,
+        le=500_000,
+        validation_alias=AliasChoices("maxHistoryChars", "max_history_chars"),
+        serialization_alias="maxHistoryChars",
+    )
+    max_media_files: int = Field(
+        default=8,
+        ge=1,
+        le=32,
+        validation_alias=AliasChoices("maxMediaFiles", "max_media_files"),
+        serialization_alias="maxMediaFiles",
+    )
+    max_media_bytes: int = Field(
+        default=8 * 1024 * 1024,
+        ge=1024,
+        le=256 * 1024 * 1024,
+        validation_alias=AliasChoices("maxMediaBytes", "max_media_bytes"),
+        serialization_alias="maxMediaBytes",
+    )
+
+
+class ConfirmationConfig(Base):
+    """Runtime confirmation sanitization and TTL settings."""
+
+    prompt_max_chars: int = Field(
+        default=1000,
+        ge=50,
+        le=20_000,
+        validation_alias=AliasChoices("promptMaxChars", "prompt_max_chars"),
+        serialization_alias="promptMaxChars",
+    )
+    reason_max_chars: int = Field(
+        default=2000,
+        ge=50,
+        le=20_000,
+        validation_alias=AliasChoices("reasonMaxChars", "reason_max_chars"),
+        serialization_alias="reasonMaxChars",
+    )
+    notify_ttl_seconds: int = Field(
+        default=24 * 60 * 60,
+        ge=60,
+        le=7 * 24 * 60 * 60,
+        validation_alias=AliasChoices("notifyTtlSeconds", "notify_ttl_seconds"),
+        serialization_alias="notifyTtlSeconds",
+    )
+    confirm_ttl_by_risk: dict[str, int] = Field(
+        default_factory=lambda: {
+            "low": 10 * 60,
+            "medium": 5 * 60,
+            "high": 2 * 60,
+        },
+        validation_alias=AliasChoices("confirmTtlByRisk", "confirm_ttl_by_risk"),
+        serialization_alias="confirmTtlByRisk",
+    )
+
+
+class TaskRuntimeConfig(Base):
+    """Shared background task runtime policy."""
+
+    default_transient_retry_count: int = Field(
+        default=1,
+        ge=0,
+        le=5,
+        validation_alias=AliasChoices("defaultTransientRetryCount", "default_transient_retry_count"),
+        serialization_alias="defaultTransientRetryCount",
+    )
+    retry_backoff_ms: int = Field(
+        default=0,
+        ge=0,
+        le=60_000,
+        validation_alias=AliasChoices("retryBackoffMs", "retry_backoff_ms"),
+        serialization_alias="retryBackoffMs",
+    )
+    status_history_limit: int = Field(
+        default=20,
+        ge=1,
+        le=500,
+        validation_alias=AliasChoices("statusHistoryLimit", "status_history_limit"),
+        serialization_alias="statusHistoryLimit",
     )
 
 
@@ -650,6 +898,13 @@ class AgentDefaults(Base):
         validation_alias=AliasChoices("consolidationRatio"),
         serialization_alias="consolidationRatio",
     )  # Consolidation target ratio (0.5 = 50% of budget retained after compression)
+    context: ContextConfig = Field(default_factory=ContextConfig)
+    confirmation: ConfirmationConfig = Field(default_factory=ConfirmationConfig)
+    task_runtime: TaskRuntimeConfig = Field(
+        default_factory=TaskRuntimeConfig,
+        validation_alias=AliasChoices("taskRuntime", "task_runtime"),
+        serialization_alias="taskRuntime",
+    )
     dream: DreamConfig = Field(default_factory=DreamConfig)
 
 

@@ -33,6 +33,9 @@ ALLOWED_MEMORY_FILES = (
     "USER.md",
     "memory/MEMORY.md",
     "memory/facts.jsonl",
+    "memory/fact_relations.jsonl",
+    "memory/semantic_index.json",
+    "memory/audit/fact_events.jsonl",
     "memory/evolution_events.jsonl",
 )
 

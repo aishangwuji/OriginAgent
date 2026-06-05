@@ -134,6 +134,10 @@ class MessageTool(Tool):
             "message_allow_cross_target",
             default=False,
         )
+        self._capability_snapshot: ContextVar[Any | None] = ContextVar(
+            "message_capability_snapshot",
+            default=None,
+        )
 
     def set_context(
         self,
@@ -174,6 +178,9 @@ class MessageTool(Tool):
 
     def reset_cross_target_grant(self, token) -> None:
         self._allow_cross_target_var.reset(token)
+
+    def set_capability_snapshot(self, snapshot) -> None:
+        self._capability_snapshot.set(snapshot)
 
     @property
     def _sent_in_turn(self) -> bool:
@@ -298,7 +305,11 @@ class MessageTool(Tool):
             message_id = message_id or self._default_message_id.get()
         else:
             message_id = None
-            if has_runtime_target and not self._allow_cross_target_var.get():
+            snapshot = self._capability_snapshot.get()
+            cross_target_allowed = self._allow_cross_target_var.get() or bool(
+                getattr(snapshot, "can_send_cross_target", False)
+            )
+            if has_runtime_target and not cross_target_allowed:
                 raise PolicyDeniedError(
                     "Cross-target message sends require a runtime grant",
                     code="cross_target_denied",

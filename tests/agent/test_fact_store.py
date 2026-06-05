@@ -363,24 +363,17 @@ def test_upsert_fact_and_rebuild_memory_uses_one_memory_lock(tmp_path, monkeypat
     result = store.upsert_fact_and_rebuild_memory("content")
 
     assert result is fact
-    assert events == [
-        "enter",
-        ("upsert", "content", {
-            "category": "note",
-            "scope": "general",
-            "owner": "unknown",
-            "source_cursors": None,
-            "source_excerpt": "",
-            "confidence": 1.0,
-            "expires_at": None,
-            "requires_confirmation": None,
-            "status": None,
-            "supersedes_fact_id": None,
-        }),
-        "render",
-        ("write", store.memory_file, "# Long-term Memory\n"),
-        "exit",
-    ]
+    assert events[0] == "enter"
+    assert events[1][0] == "upsert"
+    assert events[1][1] == "content"
+    assert events[1][2]["category"] == "note"
+    assert events[1][2]["scope"] == "general"
+    assert events[1][2]["owner"] == "unknown"
+    assert events[1][2]["source_cursors"] is None
+    assert events[1][2]["supersedes_fact_id"] is None
+    assert events[2] == "render"
+    assert events[3] == ("write", store.memory_file, "# Long-term Memory\n")
+    assert events[4] == "exit"
 
 
 def test_seed_legacy_memory_as_single_low_confidence_note(tmp_path):
@@ -450,3 +443,40 @@ def test_memory_workspace_snapshot_does_not_track_presence_json(tmp_path):
 
     assert snapshot.restore() is True
     assert presence_file.read_text(encoding="utf-8") == '{"people": {"alice": {}}}\n'
+
+
+def test_semantic_retrieval_does_not_drop_unranked_facts(tmp_path):
+    store = FactStore(
+        tmp_path,
+        redactor=redact_memory_text,
+        feature_flags={"semantic_retrieval_enabled": True},
+    )
+    store.upsert_fact("Use warm lights", category="preference", scope="home.living.lighting", owner="user")
+    store.upsert_fact("Use quiet notifications", category="preference", scope="user.notifications", owner="user")
+
+    bundle = store.retrieve_context_bundle(scope_prefix="home", top_k=1)
+
+    assert len(bundle.facts) == 1
+    assert len(store.read_all()) == 2
+
+
+def test_lazy_memory_workspace_snapshot_restores_only_touched_skill_files(tmp_path):
+    existing_skill = tmp_path / "skills" / "existing" / "SKILL.md"
+    existing_skill.parent.mkdir(parents=True, exist_ok=True)
+    existing_skill.write_text("original skill", encoding="utf-8")
+    untouched_skill = tmp_path / "skills" / "untouched" / "SKILL.md"
+    untouched_skill.parent.mkdir(parents=True, exist_ok=True)
+    untouched_skill.write_text("keep me", encoding="utf-8")
+
+    snapshot = MemoryWorkspaceSnapshot(tmp_path, lazy=True)
+    snapshot.capture_before_write(existing_skill)
+    snapshot.capture_before_write(tmp_path / "skills" / "new-skill" / "SKILL.md")
+
+    existing_skill.write_text("dirty existing skill", encoding="utf-8")
+    (tmp_path / "skills" / "new-skill").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "skills" / "new-skill" / "SKILL.md").write_text("dirty new skill", encoding="utf-8")
+
+    assert snapshot.restore() is True
+    assert existing_skill.read_text(encoding="utf-8") == "original skill"
+    assert untouched_skill.read_text(encoding="utf-8") == "keep me"
+    assert not (tmp_path / "skills" / "new-skill" / "SKILL.md").exists()

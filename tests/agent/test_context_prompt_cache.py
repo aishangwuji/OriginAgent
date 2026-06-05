@@ -121,6 +121,43 @@ def test_system_prompt_reflects_current_dream_memory_contract(tmp_path) -> None:
     assert "write important facts here" not in prompt
 
 
+def test_system_prompt_prefers_injected_self_model_payload(tmp_path) -> None:
+    workspace = _make_workspace(tmp_path)
+    builder = ContextBuilder(workspace)
+
+    prompt = builder.build_system_prompt(
+        self_model_payload={
+            "identity": {
+                "agent_name": "OriginAgent",
+                "workspace_name": workspace.name,
+                "runtime_profile": "test",
+                "audit_mode": "minimal",
+            },
+            "runtime": {
+                "registered_tools_count": 99,
+                "active_sessions_count": 7,
+                "pending_queue_count": 3,
+                "cron_available": True,
+                "confirmation_available": True,
+                "background_review_enabled": True,
+                "curator_enabled": True,
+            },
+            "domains": {"items": [], "stats": {}},
+            "skills": {"items": [], "stats": {}},
+            "workflows": {"items": [], "stats": {}},
+            "facts": {"active_count": 0, "pending_confirmation_count": 0},
+            "memory": {"has_memory_context": False, "recent_history_pending_count": 0},
+            "reviews": {"pending_count": 0},
+            "confirmations": {"pending_count": 0},
+            "limitations": [],
+            "background_tasks": {"task_count": 2},
+        }
+    )
+
+    assert "Registered tools: 99" in prompt
+    assert "Task groups visible: 2" in prompt
+
+
 def test_runtime_context_is_separate_untrusted_user_message(tmp_path) -> None:
     """Runtime metadata should be merged with the user message."""
     workspace = _make_workspace(tmp_path)
@@ -577,3 +614,28 @@ def test_customized_memory_md_is_injected_as_reference_context(tmp_path) -> None
 
     assert "# Memory\n\n## Long-term Memory" not in prompt
     assert "User prefers dark mode" in text
+
+
+def test_semantic_memory_bundle_is_injected_as_retrieval_context(tmp_path) -> None:
+    workspace = _make_workspace(tmp_path)
+    builder = ContextBuilder(
+        workspace,
+        memory_feature_flags={"semantic_retrieval_enabled": True},
+    )
+    builder.memory.upsert_fact_and_rebuild_memory(
+        "User prefers dark mode",
+        category="preference",
+        scope="user.interface.theme",
+        owner="user",
+        source_cursors=[1],
+        source_excerpt="please use dark mode",
+    )
+
+    blocks = builder.build_reference_context_blocks()
+    memory_blocks = [
+        block for block in blocks
+        if isinstance(block, dict) and block.get("_meta", {}).get("source") == "memory_retrieval"
+    ]
+
+    assert len(memory_blocks) == 1
+    assert "User prefers dark mode" in memory_blocks[0]["text"]

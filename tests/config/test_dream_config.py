@@ -46,3 +46,44 @@ def test_dream_config_uses_model_override_name_and_accepts_legacy_model() -> Non
     assert cfg.model_override == "openrouter/sonnet"
     assert dumped["modelOverride"] == "openrouter/sonnet"
     assert "model" not in dumped
+
+
+def test_dream_config_memory_rollout_flags_default_disabled() -> None:
+    cfg = DreamConfig()
+
+    assert cfg.semantic_retrieval_enabled is False
+    assert cfg.semantic_merge_enabled is False
+    assert cfg.fact_graph_enabled is False
+    assert cfg.confidence_v2_enabled is False
+    assert cfg.contradiction_auto_flip_enabled is False
+    assert cfg.fact_audit_enabled is False
+    assert cfg.lazy_snapshot_enabled is False
+
+
+def test_dream_config_memory_rollout_flags_accept_camel_case() -> None:
+    cfg = DreamConfig.model_validate({
+        "semanticRetrievalEnabled": True,
+        "semanticMergeEnabled": True,
+        "factGraphEnabled": True,
+        "confidenceV2Enabled": True,
+        "contradictionAutoFlipEnabled": True,
+        "factAuditEnabled": True,
+        "lazySnapshotEnabled": True,
+    })
+
+    dumped = cfg.model_dump(by_alias=True)
+
+    assert cfg.semantic_retrieval_enabled is True
+    assert cfg.semantic_merge_enabled is True
+    assert cfg.fact_graph_enabled is True
+    assert cfg.confidence_v2_enabled is True
+    assert cfg.contradiction_auto_flip_enabled is True
+    assert cfg.fact_audit_enabled is True
+    assert cfg.lazy_snapshot_enabled is True
+    assert dumped["semanticRetrievalEnabled"] is True
+    assert dumped["semanticMergeEnabled"] is True
+    assert dumped["factGraphEnabled"] is True
+    assert dumped["confidenceV2Enabled"] is True
+    assert dumped["contradictionAutoFlipEnabled"] is True
+    assert dumped["factAuditEnabled"] is True
+    assert dumped["lazySnapshotEnabled"] is True

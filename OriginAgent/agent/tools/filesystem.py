@@ -8,7 +8,7 @@ import os
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from OriginAgent.agent.tools.base import Tool, tool_parameters
 from OriginAgent.agent.tools.limits import ToolLimits
@@ -161,6 +161,7 @@ class _FsTool(Tool):
         file_states: FileStates | None = None,
         limits: ToolLimits | None = None,
         protected_policy: ProtectedPathPolicy | None = None,
+        write_observer: Callable[[Path], None] | None = None,
     ):
         self._workspace = workspace
         self._allowed_dir = allowed_dir
@@ -175,6 +176,7 @@ class _FsTool(Tool):
         self._explicit_file_states = file_states
         self._fallback_file_states = FileStates()
         self._limits = limits or ToolLimits()
+        self._write_observer = write_observer
 
     @property
     def _file_states(self) -> FileStates:
@@ -250,6 +252,13 @@ class _FsTool(Tool):
     def _is_allowed_read_resolved(self, path: Path) -> bool:
         roots = self._allowed_read_roots()
         return not roots or any(_is_under(path, root) for root in roots)
+
+    def set_write_observer(self, observer: Callable[[Path], None] | None) -> None:
+        self._write_observer = observer
+
+    def _notify_write_observer(self, path: Path) -> None:
+        if self._write_observer is not None:
+            self._write_observer(path)
 
     def _resolve_for_read_entry(self, entry: Path) -> Path | None:
         """Resolve a discovered read-only entry without following symlinks first."""
@@ -606,6 +615,7 @@ class WriteFileTool(_FsTool):
                 raise ValueError("Unknown content")
             fp = self._resolve_for_write(path)
             fp.parent.mkdir(parents=True, exist_ok=True)
+            self._notify_write_observer(fp)
             _atomic_write_text(fp, content)
             self._file_states.record_write(fp)
             return f"Successfully wrote {len(content)} characters to {fp}"
@@ -947,6 +957,7 @@ class EditFileTool(_FsTool):
             if not fp.exists():
                 if old_text == "":
                     fp.parent.mkdir(parents=True, exist_ok=True)
+                    self._notify_write_observer(fp)
                     _atomic_write_text(fp, new_text)
                     self._file_states.record_write(fp)
                     return f"Successfully created {fp}"
@@ -966,6 +977,7 @@ class EditFileTool(_FsTool):
                 content = raw.decode("utf-8")
                 if content.strip():
                     return f"Error: Cannot create file — {path} already exists and is not empty."
+                self._notify_write_observer(fp)
                 _atomic_write_text(fp, new_text)
                 self._file_states.record_write(fp)
                 return f"Successfully edited {fp}"
@@ -1021,6 +1033,7 @@ class EditFileTool(_FsTool):
             if uses_crlf:
                 new_content = new_content.replace("\n", "\r\n")
 
+            self._notify_write_observer(fp)
             _atomic_write_bytes(fp, new_content.encode("utf-8"))
             self._file_states.record_write(fp)
             msg = f"Successfully edited {fp}"

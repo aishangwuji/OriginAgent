@@ -8,6 +8,9 @@ from typing import Any
 from OriginAgent.agent.confirmation import PendingConfirmationStore
 from OriginAgent.agent.reminders import ReminderStore
 from OriginAgent.agent.domain_pack_governance import summarize_domain_pack_governance
+from OriginAgent.agent.facts import FactStore, summarize_facts
+from OriginAgent.agent.memory import MemoryStore
+from OriginAgent.agent.runtime_models import RuntimeContextSnapshot
 from OriginAgent.agent.self_model import SelfModelService
 from OriginAgent.agent.skills import SkillsLoader
 from OriginAgent.agent.workflow_artifacts import summarize_workflow_artifacts
@@ -110,6 +113,15 @@ class RuntimeIntrospectionService:
         evolution_status = self._evolution_status(self._workspace, self._evolution_config)
         subagent_status = self._subagent_status(self._loop)
         reminder_status = self._reminder_status(self._reminder_store)
+        background_tasks = self.background_task_summary(
+            background_review_status=background_review_status,
+            curator_status=curator_status,
+        )
+        snapshot = self.runtime_context_snapshot(
+            domain_status=domain_status,
+            background_review_status=background_review_status,
+            curator_status=curator_status,
+        )
         self_model = SelfModelService(
             self._workspace,
             registry=self._registry,
@@ -122,6 +134,7 @@ class RuntimeIntrospectionService:
             domain_pack_manager=self._domain_pack_manager,
             background_review_service=self._background_review_service,
             curator_service=self._curator_service,
+            runtime_snapshot=snapshot,
         ).build()
         return {
             "workspace_present": self._workspace.exists(),
@@ -141,8 +154,192 @@ class RuntimeIntrospectionService:
             **session_search_status,
             **subagent_status,
             **reminder_status,
+            "background_tasks": background_tasks,
             "evolution": evolution_status,
             "self_model": self_model,
+        }
+
+    def runtime_context_snapshot(
+        self,
+        *,
+        domain_status: dict[str, Any] | None = None,
+        background_review_status: dict[str, Any] | None = None,
+        curator_status: dict[str, Any] | None = None,
+    ) -> RuntimeContextSnapshot:
+        domain_status = domain_status or self._domain_pack_status(self._domain_pack_manager)
+        background_review_status = background_review_status or self._service_status(
+            self._background_review_service,
+            defaults={},
+        )
+        curator_status = curator_status or self._service_status(
+            self._curator_service,
+            defaults={},
+        )
+        reviews = self._review_snapshot()
+        confirmations = self._confirmation_snapshot()
+        background_tasks = self.background_task_summary(
+            background_review_status=background_review_status,
+            curator_status=curator_status,
+        )
+        facts_summary = self._facts_summary()
+        memory_summary = self._memory_summary()
+        return RuntimeContextSnapshot(
+            runtime={
+                "registered_tools_count": _safe_len(getattr(self._registry, "tool_names", [])),
+                "active_sessions_count": _session_count(self._sessions),
+                "pending_queue_count": len(self._pending_queues),
+                "cron_available": self._cron_service is not None,
+                "confirmation_available": self._confirmation_store is not None,
+                "background_review_enabled": bool(background_review_status.get("background_review_enabled")),
+                "curator_enabled": bool(curator_status.get("curator_enabled")),
+            },
+            confirmations=confirmations,
+            reviews=reviews,
+            background_tasks=background_tasks,
+            domains_summary=domain_status,
+            skills_summary=self._skill_lifecycle_status(self._workspace, self._domain_pack_manager),
+            facts_summary=facts_summary,
+            memory_summary=memory_summary,
+        )
+
+    def background_task_summary(
+        self,
+        *,
+        background_review_status: dict[str, Any] | None = None,
+        curator_status: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        background_review_status = background_review_status or self._service_status(
+            self._background_review_service,
+            defaults={},
+        )
+        curator_status = curator_status or self._service_status(
+            self._curator_service,
+            defaults={},
+        )
+        dream_status = self._service_status(
+            getattr(self._loop, "dream", None),
+            defaults={},
+        )
+        auto_compact_status = self._service_status(
+            getattr(self._loop, "auto_compact", None),
+            defaults={},
+        )
+        tasks = {
+            "dream": dream_status,
+            "background_review": background_review_status,
+            "curator": curator_status,
+            "auto_compact": auto_compact_status,
+        }
+        return {
+            "task_count": len([value for value in tasks.values() if value]),
+            "tasks": tasks,
+        }
+
+    def _confirmation_snapshot(self) -> dict[str, Any]:
+        store = self._confirmation_store
+        if store is None:
+            return {
+                "pending_count": 0,
+                "expired_count": 0,
+                "kind_counts": {},
+                "risk_counts": {},
+            }
+        try:
+            confirmations = store.read_all()
+        except Exception:
+            return {
+                "pending_count": 0,
+                "expired_count": 0,
+                "kind_counts": {},
+                "risk_counts": {},
+            }
+        kind_counts: dict[str, int] = {}
+        risk_counts: dict[str, int] = {}
+        pending_count = 0
+        expired_count = 0
+        for confirmation in confirmations:
+            kind = str(getattr(confirmation, "kind", "") or "unknown")
+            risk = str(getattr(confirmation, "risk", "") or "unknown")
+            kind_counts[kind] = kind_counts.get(kind, 0) + 1
+            risk_counts[risk] = risk_counts.get(risk, 0) + 1
+            if getattr(confirmation, "status", "") in {"pending", "notified"}:
+                pending_count += 1
+            elif getattr(confirmation, "status", "") == "expired":
+                expired_count += 1
+        return {
+            "pending_count": pending_count,
+            "expired_count": expired_count,
+            "kind_counts": kind_counts,
+            "risk_counts": risk_counts,
+        }
+
+    def _facts_summary(self) -> dict[str, Any]:
+        try:
+            store = FactStore(
+                self._workspace,
+                feature_flags=getattr(getattr(self._loop, "context", None), "memory", None).feature_flags
+                if getattr(getattr(self._loop, "context", None), "memory", None) is not None
+                else None,
+            )
+            return summarize_facts(self._workspace, fact_store=store)
+        except Exception:
+            return {}
+
+    def _memory_summary(self) -> dict[str, Any]:
+        try:
+            store = MemoryStore(
+                self._workspace,
+                feature_flags=getattr(getattr(self._loop, "context", None), "memory", None).feature_flags
+                if getattr(getattr(self._loop, "context", None), "memory", None) is not None
+                else None,
+            )
+            content = store.read_memory()
+            pending_history = store.read_unprocessed_history(
+                since_cursor=store.get_last_dream_cursor(),
+            )
+            return {
+                "has_memory_context": bool(content.strip()),
+                "recent_history_pending_count": len(pending_history),
+            }
+        except Exception:
+            return {}
+
+    def _review_snapshot(self) -> dict[str, Any]:
+        store = getattr(self._background_review_service, "store", None)
+        if store is None or not hasattr(store, "iter_all"):
+            return {
+                "pending_count": 0,
+                "status_counts": {},
+                "type_counts": {},
+                "origin_counts": {},
+            }
+        try:
+            records = list(store.iter_all())
+        except Exception:
+            return {
+                "pending_count": 0,
+                "status_counts": {},
+                "type_counts": {},
+                "origin_counts": {},
+            }
+        status_counts: dict[str, int] = {}
+        type_counts: dict[str, int] = {}
+        origin_counts: dict[str, int] = {}
+        pending_count = 0
+        for record in records:
+            status = str(record.get("status") or "pending")
+            proposal_type = str(record.get("proposal_type") or record.get("type") or "unknown")
+            origin = str(record.get("origin") or "background_review")
+            status_counts[status] = status_counts.get(status, 0) + 1
+            type_counts[proposal_type] = type_counts.get(proposal_type, 0) + 1
+            origin_counts[origin] = origin_counts.get(origin, 0) + 1
+            if status == "pending":
+                pending_count += 1
+        return {
+            "pending_count": pending_count,
+            "status_counts": status_counts,
+            "type_counts": type_counts,
+            "origin_counts": origin_counts,
         }
 
     @staticmethod

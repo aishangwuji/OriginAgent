@@ -8,6 +8,7 @@ import json
 import os
 import re
 import shutil
+import uuid
 import weakref
 from contextlib import suppress
 from dataclasses import dataclass
@@ -23,6 +24,7 @@ from OriginAgent.agent.facts import (
     DreamFactApplyResult,
     DreamFactProposalBatch,
     FactRecord,
+    FactRetrievalBundle,
     FactStore,
     MAX_DEPRECATIONS_PER_BATCH,
     ValidationIssue,
@@ -40,6 +42,8 @@ from OriginAgent.agent.evolution import (
     detect_workflow_opportunity_candidates,
 )
 from OriginAgent.agent.runner import AgentRunner, AgentRunSpec
+from OriginAgent.agent.runtime_models import TaskRunReport, now_iso
+from OriginAgent.agent.task_runtime import build_task_report, remember_report, report_to_status_payload
 from OriginAgent.agent.tools.registry import ToolRegistry
 from OriginAgent.session.manager import Session
 from OriginAgent.utils.gitstore import GitStore
@@ -76,6 +80,15 @@ _CHINA_ID_RE = re.compile(
     r"(?:0[1-9]|[12]\d|3[01])\d{3}[\dXx](?!\d)"
 )
 _LONG_NUMBER_RE = re.compile(r"(?<!\d)\d{16,}(?!\d)")
+_DREAM_FEATURE_FLAG_NAMES = (
+    "semantic_retrieval_enabled",
+    "semantic_merge_enabled",
+    "fact_graph_enabled",
+    "confidence_v2_enabled",
+    "contradiction_auto_flip_enabled",
+    "fact_audit_enabled",
+    "lazy_snapshot_enabled",
+)
 
 
 def redact_memory_text(text: str) -> str:
@@ -99,6 +112,15 @@ def redact_memory_text(text: str) -> str:
     return text
 
 
+def dream_feature_flags(config: Any | None) -> dict[str, bool]:
+    if config is None:
+        return {name: False for name in _DREAM_FEATURE_FLAG_NAMES}
+    return {
+        name: bool(getattr(config, name, False))
+        for name in _DREAM_FEATURE_FLAG_NAMES
+    }
+
+
 # ---------------------------------------------------------------------------
 # MemoryStore — pure file I/O layer
 # ---------------------------------------------------------------------------
@@ -113,9 +135,16 @@ class MemoryStore:
         r"^\[\d{4}-\d{2}-\d{2}[^\]]*\]\s+[A-Z][A-Z0-9_]*(?:\s+\[tools:\s*[^\]]+\])?:"
     )
 
-    def __init__(self, workspace: Path, max_history_entries: int = _DEFAULT_MAX_HISTORY):
+    def __init__(
+        self,
+        workspace: Path,
+        max_history_entries: int = _DEFAULT_MAX_HISTORY,
+        *,
+        feature_flags: dict[str, bool] | None = None,
+    ):
         self.workspace = workspace
         self.max_history_entries = max_history_entries
+        self._feature_flags = dict(feature_flags or {})
         self.memory_dir = ensure_dir(workspace / "memory")
         self._lock_file = self.memory_dir / ".lock"
         self.memory_file = self.memory_dir / "MEMORY.md"
@@ -133,12 +162,21 @@ class MemoryStore:
             facts_file=self.facts_file,
             lock_factory=self._locked,
             redactor=redact_memory_text,
+            feature_flags=self._feature_flags,
         )
         self._git = GitStore(workspace, tracked_files=[
             "SOUL.md", "USER.md", "memory/MEMORY.md",
             "memory/facts.jsonl", "memory/.dream_cursor",
         ])
         self._maybe_migrate_legacy_history()
+
+    @property
+    def feature_flags(self) -> dict[str, bool]:
+        return dict(self._feature_flags)
+
+    def set_feature_flags(self, feature_flags: dict[str, bool] | None) -> None:
+        self._feature_flags = dict(feature_flags or {})
+        self.fact_store.feature_flags = self.fact_store._normalize_feature_flags(self._feature_flags)
 
     @property
     def git(self) -> GitStore:
@@ -336,6 +374,16 @@ class MemoryStore:
         requires_confirmation: bool | None = None,
         status: str | None = None,
         supersedes_fact_id: str | None = None,
+        change_kind: str | None = None,
+        target_fact_id: str | None = None,
+        relation_candidates: list[dict[str, Any]] | None = None,
+        semantic_scope_hint: str | None = None,
+        proposal_id: str | None = None,
+        review_event_id: str | None = None,
+        batch_id: str = "runtime",
+        actor: str = "system",
+        origin: str = "fact_store",
+        model_info: dict[str, Any] | None = None,
     ) -> FactRecord:
         with self._locked():
             fact = self.fact_store.upsert_fact_unlocked(
@@ -350,6 +398,16 @@ class MemoryStore:
                 requires_confirmation=requires_confirmation,
                 status=status,
                 supersedes_fact_id=supersedes_fact_id,
+                change_kind=change_kind,
+                target_fact_id=target_fact_id,
+                relation_candidates=relation_candidates,
+                semantic_scope_hint=semantic_scope_hint,
+                proposal_id=proposal_id,
+                review_event_id=review_event_id,
+                batch_id=batch_id,
+                actor=actor,
+                origin=origin,
+                model_info=model_info,
             )
             memory_md = self.fact_store.render_memory_md_unlocked()
             self._write_text_atomic(self.memory_file, memory_md)
@@ -443,6 +501,7 @@ class MemoryStore:
 
         batch_cursor_min = min(cursors)
         batch_cursor_max = max(cursors)
+        batch_id = f"dream_{batch_cursor_min}_{batch_cursor_max}_{uuid.uuid4().hex[:8]}"
         with self._locked():
             records = self.fact_store.read_all_unlocked()
             result = DreamFactApplyResult(parse_rejected=list(batch.parse_rejected))
@@ -455,6 +514,8 @@ class MemoryStore:
                         "fact",
                         domain_id_for_fact(proposal.scope, proposal.content),
                         proposal.confidence,
+                        source="dream",
+                        category=proposal.category,
                     ),
                     proposal,
                 )
@@ -462,8 +523,9 @@ class MemoryStore:
             ]
             calibrated_upserts.sort(key=lambda item: item[0], reverse=True)
 
-            for calibrated_confidence, proposal in calibrated_upserts:
+            for index, (calibrated_confidence, proposal) in enumerate(calibrated_upserts, start=1):
                 proposal.confidence = calibrated_confidence
+                proposal_id = f"{batch_id}_proposal_{index}"
                 validation = validate_fact_proposal(
                     proposal,
                     existing_facts=records,
@@ -532,6 +594,15 @@ class MemoryStore:
                     requires_confirmation=requires_confirmation,
                     status=status,
                     supersedes_fact_id=proposal.supersedes_fact_id,
+                    change_kind=proposal.change_kind,
+                    target_fact_id=proposal.target_fact_id,
+                    relation_candidates=proposal.relation_candidates,
+                    semantic_scope_hint=proposal.semantic_scope_hint,
+                    proposal_id=proposal_id,
+                    batch_id=batch_id,
+                    actor="dream",
+                    origin="dream",
+                    model_info={"phase": "dream_phase1"},
                 )
                 if decision == "active":
                     if existing_active_fact is None:
@@ -566,6 +637,21 @@ class MemoryStore:
                     updated_at=datetime.now().isoformat(),
                 )
                 if changed:
+                    target = next((record for record in records if record.fact_id == proposal.fact_id), None)
+                    if target is not None:
+                        self.fact_store._append_fact_event(
+                            target,
+                            event_type="deprecate",
+                            before={**target.to_dict(), "status": "active"},
+                            after=target.to_dict(),
+                            reason=proposal.reason or "dream deprecation",
+                            evidence={"source_cursors": proposal.source_cursors},
+                            proposal_id=f"{batch_id}_deprecation_{deprecation_count + 1}",
+                            batch_id=batch_id,
+                            actor="dream",
+                            origin="dream",
+                            model_info={"phase": "dream_phase1"},
+                        )
                     deprecation_count += 1
                     result.deprecated.append(proposal.fact_id)
                 else:
@@ -623,8 +709,34 @@ class MemoryStore:
 
     # -- context injection (used by context.py) ------------------------------
 
-    def get_memory_context(self) -> str:
+    def get_memory_context_bundle(
+        self,
+        *,
+        scope_prefix: str | None = None,
+        category: str | None = None,
+        include_pending: bool = False,
+        top_k: int = 12,
+    ) -> FactRetrievalBundle:
+        if self.fact_store.flag_enabled("semantic_retrieval_enabled"):
+            bundle = self.fact_store.retrieve_context_bundle(
+                scope_prefix=scope_prefix,
+                category=category,
+                include_pending=include_pending,
+                top_k=top_k,
+            )
+            if bundle.rendered_text.strip():
+                return bundle
         long_term = self.read_memory()
+        return FactRetrievalBundle(
+            facts=[],
+            rendered_text=long_term,
+            fallback_used=True,
+            retrievals=[],
+        )
+
+    def get_memory_context(self) -> str:
+        bundle = self.get_memory_context_bundle()
+        long_term = bundle.rendered_text
         return f"## Long-term Memory\n{long_term}" if long_term else ""
 
     # -- history.jsonl — append-only, JSONL format ---------------------------
@@ -1330,9 +1442,14 @@ class MemoryWorkspaceSnapshot:
     )
     _TRACKED_DIRS = (Path("skills"),)
 
-    def __init__(self, workspace: Path):
+    def __init__(self, workspace: Path, *, lazy: bool = False):
         self.workspace = workspace
-        self.files, self.dirs = self._capture_state()
+        self.lazy = bool(lazy)
+        self.files, self.dirs = (
+            self._capture_lazy_state() if self.lazy else self._capture_state()
+        )
+        self._lazy_file_backups: dict[Path, bytes | None] = {}
+        self._lazy_touched_dirs: set[Path] = set()
 
     @staticmethod
     def _sha256(data: bytes) -> str:
@@ -1362,6 +1479,26 @@ class MemoryWorkspaceSnapshot:
 
         return files, dirs
 
+    def _capture_lazy_state(self) -> tuple[dict[Path, bytes], set[Path]]:
+        files: dict[Path, bytes] = {}
+        dirs: set[Path] = set()
+
+        for rel in self._TRACKED_FILES:
+            path = self.workspace / rel
+            if path.is_file():
+                files[rel] = path.read_bytes()
+
+        for root_rel in self._TRACKED_DIRS:
+            root = self.workspace / root_rel
+            if not root.exists() or not root.is_dir():
+                continue
+            dirs.add(root_rel)
+            for child in root.rglob("*"):
+                if child.is_dir():
+                    dirs.add(child.relative_to(self.workspace))
+
+        return files, dirs
+
     def _file_hashes(self, files: dict[Path, bytes]) -> dict[Path, str]:
         return {rel: self._sha256(data) for rel, data in files.items()}
 
@@ -1371,8 +1508,56 @@ class MemoryWorkspaceSnapshot:
         else:
             path.unlink(missing_ok=True)
 
+    def attach_to_tools(self, tools: ToolRegistry) -> None:
+        if not self.lazy:
+            return
+        for name in ("write_file", "edit_file"):
+            tool = tools.get(name)
+            if tool is not None and hasattr(tool, "set_write_observer"):
+                tool.set_write_observer(self.capture_before_write)
+
+    def detach_from_tools(self, tools: ToolRegistry) -> None:
+        if not self.lazy:
+            return
+        for name in ("write_file", "edit_file"):
+            tool = tools.get(name)
+            if tool is not None and hasattr(tool, "set_write_observer"):
+                tool.set_write_observer(None)
+
+    def capture_before_write(self, path: Path) -> None:
+        if not self.lazy:
+            return
+        try:
+            rel = path.resolve(strict=False).relative_to(self.workspace.resolve(strict=False))
+        except ValueError:
+            return
+        if rel in self._TRACKED_FILES:
+            return
+        if not any(
+            rel == root_rel or root_rel in rel.parents
+            for root_rel in self._TRACKED_DIRS
+        ):
+            return
+        if rel in self._lazy_file_backups:
+            return
+        self._lazy_touched_dirs.update({
+            parent
+            for parent in [rel.parent, *rel.parents]
+            if parent != Path(".")
+        })
+        if path.exists() and path.is_file():
+            self._lazy_file_backups[rel] = path.read_bytes()
+        else:
+            self._lazy_file_backups[rel] = None
+
     def restore(self) -> bool:
         """Restore the snapshot and verify that the tracked tree matches exactly."""
+        if self.lazy:
+            return self._restore_lazy()
+        return self._restore_eager()
+
+    def _restore_eager(self) -> bool:
+        """Restore the eager snapshot and verify that the tracked tree matches exactly."""
         try:
             # Remove files and directories created under tracked directories.
             for root_rel in self._TRACKED_DIRS:
@@ -1417,6 +1602,61 @@ class MemoryWorkspaceSnapshot:
             logger.exception("Dream snapshot restore failed")
             return False
 
+    def _restore_lazy(self) -> bool:
+        try:
+            # Restore eagerly tracked top-level files.
+            for rel in self._TRACKED_FILES:
+                path = self.workspace / rel
+                if rel not in self.files:
+                    if path.exists():
+                        self._remove_path(path)
+                    continue
+                if path.exists() and path.is_dir():
+                    shutil.rmtree(path)
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(self.files[rel])
+
+            # Restore only files that Dream actually touched under tracked dirs.
+            for rel, data in self._lazy_file_backups.items():
+                path = self.workspace / rel
+                if data is None:
+                    self._remove_path(path)
+                    continue
+                if path.exists() and path.is_dir():
+                    shutil.rmtree(path)
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(data)
+
+            # Clean up newly created directories that were only needed for touched files.
+            for rel in sorted(self._lazy_touched_dirs, key=lambda p: len(p.parts), reverse=True):
+                path = self.workspace / rel
+                if not path.exists() or not path.is_dir() or rel in self.dirs:
+                    continue
+                with suppress(OSError):
+                    path.rmdir()
+
+            current_files, current_dirs = self._capture_lazy_state()
+            if self._file_hashes(current_files) != self._file_hashes(self.files):
+                logger.error("Dream lazy snapshot restore verification failed for core files")
+                return False
+            if not self.dirs.issubset(current_dirs):
+                logger.error("Dream lazy snapshot restore verification failed for tracked dirs")
+                return False
+            for rel, data in self._lazy_file_backups.items():
+                path = self.workspace / rel
+                if data is None:
+                    if path.exists():
+                        logger.error("Dream lazy snapshot restore left created file {}", rel)
+                        return False
+                    continue
+                if not path.exists() or not path.is_file() or path.read_bytes() != data:
+                    logger.error("Dream lazy snapshot restore verification failed for {}", rel)
+                    return False
+            return True
+        except Exception:
+            logger.exception("Dream lazy snapshot restore failed")
+            return False
+
 
 class Dream:
     """Two-phase memory processor for structured long-term memory.
@@ -1446,6 +1686,7 @@ class Dream:
         annotate_line_ages: bool = True,
         auxiliary_router: AuxiliaryLLMRouter | None = None,
         evolution_config: Any | None = None,
+        feature_flags: dict[str, bool] | None = None,
     ):
         self.store = store
         self.provider = provider
@@ -1459,6 +1700,8 @@ class Dream:
         # (e.g. if a specific LLM reacts poorly to the `← Nd` suffix).
         self.annotate_line_ages = annotate_line_ages
         self.evolution_config = evolution_config
+        self._feature_flags = dict(feature_flags or store.feature_flags)
+        self.store.set_feature_flags(self._feature_flags)
         self.opportunity_signals = OpportunitySignalStore(store.workspace)
         runner_provider = (
             auxiliary_router.task_provider("dream_phase2")
@@ -1467,6 +1710,21 @@ class Dream:
         )
         self._runner = AgentRunner(runner_provider)
         self._tools = self._build_tools()
+        self._last_report: TaskRunReport | None = None
+        self._consecutive_failures = 0
+
+    @property
+    def feature_flags(self) -> dict[str, bool]:
+        return dict(self._feature_flags)
+
+    def runtime_status(self) -> dict[str, Any]:
+        return {
+            "dream_enabled": True,
+            **report_to_status_payload(
+                self._last_report,
+                consecutive_failures=self._consecutive_failures,
+            ),
+        }
 
     def set_provider(self, provider: LLMProvider, model: str) -> None:
         self.provider = provider
@@ -1476,6 +1734,10 @@ class Dream:
             self._runner.provider = self.auxiliary_router.task_provider("dream_phase2")
         else:
             self._runner.provider = provider
+
+    def set_feature_flags(self, feature_flags: dict[str, bool] | None) -> None:
+        self._feature_flags = dict(feature_flags or {})
+        self.store.set_feature_flags(self._feature_flags)
 
     # -- tool registry -------------------------------------------------------
 
@@ -1649,9 +1911,19 @@ class Dream:
         """Process unprocessed history entries. Returns True if work was done."""
         from OriginAgent.agent.skills import BUILTIN_SKILLS_DIR
 
+        started_at = now_iso()
         last_cursor = self.store.get_last_dream_cursor()
         entries = self.store.read_unprocessed_history(since_cursor=last_cursor)
         if not entries:
+            self._remember_report(build_task_report(
+                task_name="dream",
+                status="skipped",
+                phase="preflight",
+                fault_class="invariant",
+                reason="no_unprocessed_history",
+                started_at=started_at,
+                finished_at=now_iso(),
+            ))
             return False
 
         batch = entries[: self.max_batch_size]
@@ -1659,224 +1931,335 @@ class Dream:
             "Dream: processing {} entries (cursor {}→{}), batch={}",
             len(entries), last_cursor, batch[-1]["cursor"], len(batch),
         )
-        snapshot = MemoryWorkspaceSnapshot(self.store.workspace)
-
-        # Build history text for LLM — cap each entry so a legacy oversized
-        # record (e.g. pre-#3412 raw_archive dump) can't blow up the prompt.
-        history_text = "\n".join(
-            f"[cursor {e['cursor']}] [{e['timestamp']}] "
-            f"{truncate_text(e['content'], self._HISTORY_ENTRY_PREVIEW_MAX_CHARS)}"
-            for e in batch
+        snapshot = MemoryWorkspaceSnapshot(
+            self.store.workspace,
+            lazy=bool(self.store.feature_flags.get("lazy_snapshot_enabled")),
         )
+        snapshot.attach_to_tools(self._tools)
         try:
-            signal_count = self._record_opportunity_signals(batch)
-            if signal_count:
-                logger.info("Dream recorded {} evolution opportunity signal(s)", signal_count)
-        except Exception:
-            logger.exception("Dream opportunity signal collection failed")
-
-        # Current file contents + per-line age annotations (MEMORY.md only).
-        # Each file is capped in the *prompt preview* only; Phase 2 still sees
-        # the full file via the read_file tool.
-        current_date = datetime.now().strftime("%Y-%m-%d")
-        raw_memory = self.store.read_memory() or "(empty)"
-        annotated_memory = (
-            self._annotate_with_ages(raw_memory)
-            if self.annotate_line_ages
-            else raw_memory
-        )
-        current_memory = truncate_text(annotated_memory, self._MEMORY_FILE_MAX_CHARS)
-        current_soul = truncate_text(
-            self.store.read_soul() or "(empty)", self._SOUL_FILE_MAX_CHARS,
-        )
-        current_user = truncate_text(
-            self.store.read_user() or "(empty)", self._USER_FILE_MAX_CHARS,
-        )
-
-        file_context = (
-            f"## Current Date\n{current_date}\n\n"
-            f"## Current MEMORY.md ({len(current_memory)} chars)\n{current_memory}\n\n"
-            f"## Current SOUL.md ({len(current_soul)} chars)\n{current_soul}\n\n"
-            f"## Current USER.md ({len(current_user)} chars)\n{current_user}"
-        )
-        facts_context = self._format_current_facts()
-
-        # Phase 1: propose structured facts.
-        phase1_prompt = (
-            f"## Conversation History\n{history_text}\n\n"
-            f"## Current Facts\n{facts_context}\n\n"
-            f"{file_context}"
-        )
-
-        try:
-            phase1_response = await call_llm(
-                task="dream_phase1",
-                router=self.auxiliary_router,
-                provider=self.provider,
-                model=self.model,
-                messages=[
-                    {
-                        "role": "system",
-                        "content": render_template(
-                            "agent/dream_phase1.md",
-                            strip=True,
-                            stale_threshold_days=_STALE_THRESHOLD_DAYS,
-                        ),
-                    },
-                    {"role": "user", "content": phase1_prompt},
-                ],
-                tools=None,
-                tool_choice=None,
+            # Build history text for LLM — cap each entry so a legacy oversized
+            # record (e.g. pre-#3412 raw_archive dump) can't blow up the prompt.
+            history_text = "\n".join(
+                f"[cursor {e['cursor']}] [{e['timestamp']}] "
+                f"{truncate_text(e['content'], self._HISTORY_ENTRY_PREVIEW_MAX_CHARS)}"
+                for e in batch
             )
-            proposal_json = phase1_response.content or ""
-            logger.debug(
-                "Dream Phase 1 fact proposal JSON ({} chars): {}",
-                len(proposal_json),
-                proposal_json[:500],
+            try:
+                signal_count = self._record_opportunity_signals(batch)
+                if signal_count:
+                    logger.info("Dream recorded {} evolution opportunity signal(s)", signal_count)
+            except Exception:
+                logger.exception("Dream opportunity signal collection failed")
+
+            # Current file contents + per-line age annotations (MEMORY.md only).
+            # Each file is capped in the *prompt preview* only; Phase 2 still sees
+            # the full file via the read_file tool.
+            current_date = datetime.now().strftime("%Y-%m-%d")
+            raw_memory = self.store.read_memory() or "(empty)"
+            annotated_memory = (
+                self._annotate_with_ages(raw_memory)
+                if self.annotate_line_ages
+                else raw_memory
             )
-        except Exception:
-            logger.exception("Dream Phase 1 failed")
-            return False
-
-        try:
-            proposal_batch = parse_fact_proposal_response(proposal_json)
-        except Exception:
-            logger.exception("Dream Phase 1 returned invalid fact proposal JSON")
-            if not snapshot.restore():
-                logger.error("Dream parse failure: snapshot restore failed")
-            return False
-
-        decayed_fact_count = self.store.decay_fact_confidence_and_rebuild_memory()
-        if decayed_fact_count:
-            logger.info("Dream decayed confidence for {} active fact(s)", decayed_fact_count)
-
-        try:
-            apply_result = self.store.apply_fact_proposals_and_rebuild_memory(
-                proposal_batch,
-                history_entries=batch,
+            current_memory = truncate_text(annotated_memory, self._MEMORY_FILE_MAX_CHARS)
+            current_soul = truncate_text(
+                self.store.read_soul() or "(empty)", self._SOUL_FILE_MAX_CHARS,
             )
-        except Exception:
-            logger.exception("Dream fact proposal apply failed")
-            if not snapshot.restore():
-                logger.error("Dream fact apply failure: snapshot restore failed")
-            return False
-        logger.info(
-            "Dream fact proposals: active={} pending={} rejected={} deprecated={}",
-            len(apply_result.accepted),
-            len(apply_result.pending),
-            len(apply_result.rejected) + len(apply_result.parse_rejected),
-            len(apply_result.deprecated),
-        )
-        post_apply_hashes = self._memory_fact_hashes()
-
-        # Phase 2: Delegate to AgentRunner for non-MEMORY maintenance only.
-        existing_skills = self._list_existing_skills()
-        skills_section = ""
-        if existing_skills:
-            skills_section = (
-                "\n\n## Existing Skills\n"
-                + "\n".join(f"- {s}" for s in existing_skills)
+            current_user = truncate_text(
+                self.store.read_user() or "(empty)", self._USER_FILE_MAX_CHARS,
             )
-        phase2_prompt = (
-            f"## Fact Proposal Apply Result\n"
-            f"{self._format_apply_result(apply_result)}\n\n"
-            f"## Fact Proposal JSON\n{proposal_json}\n\n"
-            f"{file_context}{skills_section}"
-        )
 
-        tools = self._tools
-        skill_creator_path = BUILTIN_SKILLS_DIR / "skill-creator" / "SKILL.md"
-        messages: list[dict[str, Any]] = [
-            {
-                "role": "system",
-                "content": render_template(
-                    "agent/dream_phase2.md",
-                    strip=True,
-                    skill_creator_path=str(skill_creator_path),
-                ),
-            },
-            {"role": "user", "content": phase2_prompt},
-        ]
-
-        try:
-            result = await self._runner.run(AgentRunSpec(
-                initial_messages=messages,
-                tools=tools,
-                model=self.model,
-                max_iterations=self.max_iterations,
-                max_tool_result_chars=self.max_tool_result_chars,
-                fail_on_tool_error=False,
-            ))
-            logger.debug(
-                "Dream Phase 2 complete: stop_reason={}, tool_events={}",
-                result.stop_reason, len(result.tool_events),
+            file_context = (
+                f"## Current Date\n{current_date}\n\n"
+                f"## Current MEMORY.md ({len(current_memory)} chars)\n{current_memory}\n\n"
+                f"## Current SOUL.md ({len(current_soul)} chars)\n{current_soul}\n\n"
+                f"## Current USER.md ({len(current_user)} chars)\n{current_user}"
             )
-            for ev in (result.tool_events or []):
-                logger.info("Dream tool_event: name={}, status={}, detail={}", ev.get("name"), ev.get("status"), ev.get("detail", "")[:200])
-        except Exception:
-            logger.exception("Dream Phase 2 failed")
-            result = None
+            facts_context = self._format_current_facts()
 
-        # Build changelog from tool events
-        changelog: list[str] = []
-        if result and result.tool_events:
-            for event in result.tool_events:
-                if event["status"] == "ok":
-                    changelog.append(f"{event['name']}: {event['detail']}")
-        fact_changes = (
-            len(apply_result.accepted)
-            + len(apply_result.pending)
-            + len(apply_result.deprecated)
-            + decayed_fact_count
-        )
-        if fact_changes:
-            fact_summary = self._format_apply_result(apply_result)
+            # Phase 1: propose structured facts.
+            phase1_prompt = (
+                f"## Conversation History\n{history_text}\n\n"
+                f"## Current Facts\n{facts_context}\n\n"
+                f"{file_context}"
+            )
+
+            try:
+                phase1_response = await call_llm(
+                    task="dream_phase1",
+                    router=self.auxiliary_router,
+                    provider=self.provider,
+                    model=self.model,
+                    messages=[
+                        {
+                            "role": "system",
+                            "content": render_template(
+                                "agent/dream_phase1.md",
+                                strip=True,
+                                stale_threshold_days=_STALE_THRESHOLD_DAYS,
+                            ),
+                        },
+                        {"role": "user", "content": phase1_prompt},
+                    ],
+                    tools=None,
+                    tool_choice=None,
+                )
+                proposal_json = phase1_response.content or ""
+                logger.debug(
+                    "Dream Phase 1 fact proposal JSON ({} chars): {}",
+                    len(proposal_json),
+                    proposal_json[:500],
+                )
+            except Exception:
+                logger.exception("Dream Phase 1 failed")
+                self._remember_report(build_task_report(
+                    task_name="dream",
+                    status="error",
+                    phase="phase1",
+                    fault_class="external",
+                    retryable=True,
+                    reason="phase1_failed",
+                    started_at=started_at,
+                    finished_at=now_iso(),
+                ))
+                return False
+
+            try:
+                proposal_batch = parse_fact_proposal_response(proposal_json)
+            except Exception:
+                logger.exception("Dream Phase 1 returned invalid fact proposal JSON")
+                if not snapshot.restore():
+                    logger.error("Dream parse failure: snapshot restore failed")
+                    self._remember_report(build_task_report(
+                        task_name="dream",
+                        status="blocked",
+                        phase="phase1_parse",
+                        fault_class="restore",
+                        reason="phase1_parse_restore_failed",
+                        started_at=started_at,
+                        finished_at=now_iso(),
+                    ))
+                else:
+                    self._remember_report(build_task_report(
+                        task_name="dream",
+                        status="error",
+                        phase="phase1_parse",
+                        fault_class="invariant",
+                        reason="phase1_invalid_json",
+                        started_at=started_at,
+                        finished_at=now_iso(),
+                    ))
+                return False
+
+            decayed_fact_count = self.store.decay_fact_confidence_and_rebuild_memory()
             if decayed_fact_count:
-                fact_summary = f"{fact_summary} decayed={decayed_fact_count}"
-            changelog.insert(0, f"facts: {fact_summary}")
+                logger.info("Dream decayed confidence for {} active fact(s)", decayed_fact_count)
 
-        # Only advance cursor on successful completion to prevent silent loss
-        if result and result.stop_reason == "completed":
-            if self._memory_fact_hashes() != post_apply_hashes:
+            try:
+                apply_result = self.store.apply_fact_proposals_and_rebuild_memory(
+                    proposal_batch,
+                    history_entries=batch,
+                )
+            except Exception:
+                logger.exception("Dream fact proposal apply failed")
+                if not snapshot.restore():
+                    logger.error("Dream fact apply failure: snapshot restore failed")
+                    self._remember_report(build_task_report(
+                        task_name="dream",
+                        status="blocked",
+                        phase="apply",
+                        fault_class="restore",
+                        reason="fact_apply_restore_failed",
+                        started_at=started_at,
+                        finished_at=now_iso(),
+                    ))
+                else:
+                    self._remember_report(build_task_report(
+                        task_name="dream",
+                        status="error",
+                        phase="apply",
+                        fault_class="io",
+                        reason="fact_apply_failed",
+                        started_at=started_at,
+                        finished_at=now_iso(),
+                    ))
+                return False
+            logger.info(
+                "Dream fact proposals: active={} pending={} rejected={} deprecated={}",
+                len(apply_result.accepted),
+                len(apply_result.pending),
+                len(apply_result.rejected) + len(apply_result.parse_rejected),
+                len(apply_result.deprecated),
+            )
+            post_apply_hashes = self._memory_fact_hashes()
+
+            # Phase 2: Delegate to AgentRunner for non-MEMORY maintenance only.
+            existing_skills = self._list_existing_skills()
+            skills_section = ""
+            if existing_skills:
+                skills_section = (
+                    "\n\n## Existing Skills\n"
+                    + "\n".join(f"- {s}" for s in existing_skills)
+                )
+            phase2_prompt = (
+                f"## Fact Proposal Apply Result\n"
+                f"{self._format_apply_result(apply_result)}\n\n"
+                f"## Fact Proposal JSON\n{proposal_json}\n\n"
+                f"{file_context}{skills_section}"
+            )
+
+            tools = self._tools
+            skill_creator_path = BUILTIN_SKILLS_DIR / "skill-creator" / "SKILL.md"
+            messages: list[dict[str, Any]] = [
+                {
+                    "role": "system",
+                    "content": render_template(
+                        "agent/dream_phase2.md",
+                        strip=True,
+                        skill_creator_path=str(skill_creator_path),
+                    ),
+                },
+                {"role": "user", "content": phase2_prompt},
+            ]
+
+            try:
+                result = await self._runner.run(AgentRunSpec(
+                    initial_messages=messages,
+                    tools=tools,
+                    model=self.model,
+                    max_iterations=self.max_iterations,
+                    max_tool_result_chars=self.max_tool_result_chars,
+                    fail_on_tool_error=False,
+                ))
+                logger.debug(
+                    "Dream Phase 2 complete: stop_reason={}, tool_events={}",
+                    result.stop_reason, len(result.tool_events),
+                )
+                for ev in (result.tool_events or []):
+                    logger.info("Dream tool_event: name={}, status={}, detail={}", ev.get("name"), ev.get("status"), ev.get("detail", "")[:200])
+            except Exception:
+                logger.exception("Dream Phase 2 failed")
+                result = None
+
+            # Build changelog from tool events
+            changelog: list[str] = []
+            if result and result.tool_events:
+                for event in result.tool_events:
+                    if event["status"] == "ok":
+                        changelog.append(f"{event['name']}: {event['detail']}")
+            fact_changes = (
+                len(apply_result.accepted)
+                + len(apply_result.pending)
+                + len(apply_result.deprecated)
+                + decayed_fact_count
+            )
+            if fact_changes:
+                fact_summary = self._format_apply_result(apply_result)
+                if decayed_fact_count:
+                    fact_summary = f"{fact_summary} decayed={decayed_fact_count}"
+                changelog.insert(0, f"facts: {fact_summary}")
+
+            # Only advance cursor on successful completion to prevent silent loss
+            if result and result.stop_reason == "completed":
+                if self._memory_fact_hashes() != post_apply_hashes:
+                    if not snapshot.restore():
+                        logger.error(
+                            "Dream Phase 2 modified generated memory state and "
+                            "snapshot restore failed; cursor NOT advanced",
+                        )
+                        self._remember_report(build_task_report(
+                            task_name="dream",
+                            status="blocked",
+                            phase="phase2_guard",
+                            fault_class="restore",
+                            reason="phase2_dirty_restore_failed",
+                            started_at=started_at,
+                            finished_at=now_iso(),
+                        ))
+                        return False
+                    logger.warning(
+                        "Dream Phase 2 modified memory/MEMORY.md or "
+                        "memory/facts.jsonl; restored snapshot and cursor NOT advanced",
+                    )
+                    self._remember_report(build_task_report(
+                        task_name="dream",
+                        status="blocked",
+                        phase="phase2_guard",
+                        fault_class="invariant",
+                        reason="phase2_dirty_memory_state",
+                        started_at=started_at,
+                        finished_at=now_iso(),
+                    ))
+                    return False
+                new_cursor = batch[-1]["cursor"]
+                self.store.mark_dream_processed(new_cursor)
+                logger.info(
+                    "Dream done: {} change(s), cursor advanced to {}",
+                    len(changelog), new_cursor,
+                )
+                self._remember_report(build_task_report(
+                    task_name="dream",
+                    status="ok",
+                    phase="complete",
+                    fault_class="unknown",
+                    reason="ok",
+                    started_at=started_at,
+                    finished_at=now_iso(),
+                    details={
+                        "new_cursor": new_cursor,
+                        "changes": len(changelog),
+                    },
+                ))
+            else:
+                reason = result.stop_reason if result else "exception"
                 if not snapshot.restore():
                     logger.error(
-                        "Dream Phase 2 modified generated memory state and "
-                        "snapshot restore failed; cursor NOT advanced",
+                        "Dream incomplete ({}): snapshot restore failed; "
+                        "cursor NOT advanced",
+                        reason,
                     )
+                    self._remember_report(build_task_report(
+                        task_name="dream",
+                        status="blocked",
+                        phase="phase2",
+                        fault_class="restore",
+                        reason=f"incomplete_restore_failed:{reason}",
+                        started_at=started_at,
+                        finished_at=now_iso(),
+                    ))
                     return False
                 logger.warning(
-                    "Dream Phase 2 modified memory/MEMORY.md or "
-                    "memory/facts.jsonl; restored snapshot and cursor NOT advanced",
-                )
-                return False
-            new_cursor = batch[-1]["cursor"]
-            self.store.mark_dream_processed(new_cursor)
-            logger.info(
-                "Dream done: {} change(s), cursor advanced to {}",
-                len(changelog), new_cursor,
-            )
-        else:
-            reason = result.stop_reason if result else "exception"
-            if not snapshot.restore():
-                logger.error(
-                    "Dream incomplete ({}): snapshot restore failed; "
-                    "cursor NOT advanced",
+                    "Dream incomplete ({}): cursor NOT advanced, will retry next cron cycle",
                     reason,
                 )
+                self._remember_report(build_task_report(
+                    task_name="dream",
+                    status="error",
+                    phase="phase2",
+                    fault_class="external" if reason == "exception" else "invariant",
+                    retryable=(reason == "exception"),
+                    reason=f"incomplete:{reason}",
+                    started_at=started_at,
+                    finished_at=now_iso(),
+                ))
                 return False
-            logger.warning(
-                "Dream incomplete ({}): cursor NOT advanced, will retry next cron cycle",
-                reason,
-            )
-            return False
 
-        # Git auto-commit (only when there are actual changes)
-        if changelog and self.store.git.is_initialized():
-            ts = batch[-1]["timestamp"]
-            summary = f"dream: {ts}, {len(changelog)} change(s)"
-            commit_msg = f"{summary}\n\n{proposal_json.strip()}"
-            sha = self.store.git.auto_commit(commit_msg)
-            if sha:
-                logger.info("Dream commit: {}", sha)
+            # Git auto-commit (only when there are actual changes)
+            if changelog and self.store.git.is_initialized():
+                ts = batch[-1]["timestamp"]
+                summary = f"dream: {ts}, {len(changelog)} change(s)"
+                commit_msg = f"{summary}\n\n{proposal_json.strip()}"
+                sha = self.store.git.auto_commit(commit_msg)
+                if sha:
+                    logger.info("Dream commit: {}", sha)
 
-        return True
+            return True
+        finally:
+            snapshot.detach_from_tools(self._tools)
+
+    def _remember_report(self, report: TaskRunReport) -> None:
+        self._last_report = report
+        self._consecutive_failures = remember_report(
+            report=report,
+            current_failures=self._consecutive_failures,
+        )

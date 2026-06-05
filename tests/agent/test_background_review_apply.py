@@ -68,6 +68,17 @@ def _events(tmp_path: Path) -> list[dict]:
     ]
 
 
+def _fact_events(tmp_path: Path) -> list[dict]:
+    path = tmp_path / "memory" / "audit" / "fact_events.jsonl"
+    if not path.exists():
+        return []
+    return [
+        json.loads(line)
+        for line in path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+
+
 def test_legacy_pending_proposals_and_events_are_merged(tmp_path: Path) -> None:
     store = ReviewProposalStore(tmp_path)
     store.append_many([_proposal("review_1")])
@@ -112,6 +123,23 @@ def test_apply_memory_proposal_writes_fact_and_rebuilds_memory(tmp_path: Path) -
     assert facts[0]["owner"] == "user"
     assert facts[0]["status"] == "active"
     assert "concise answers" in (tmp_path / "memory" / "MEMORY.md").read_text(encoding="utf-8")
+
+
+def test_apply_memory_proposal_links_review_event_to_fact_event_when_audit_enabled(tmp_path: Path) -> None:
+    store = ReviewProposalStore(
+        tmp_path,
+        feature_flags={"fact_audit_enabled": True},
+    )
+    store.append_many([_proposal("review_memory_audit")])
+
+    result = store.apply("review_memory_audit", reason="approved")
+
+    assert result.ok is True
+    review_events = _events(tmp_path)
+    fact_events = _fact_events(tmp_path)
+    assert len(review_events) == 1
+    assert len(fact_events) == 1
+    assert fact_events[0]["review_event_id"] == review_events[0]["event_id"]
 
 
 def test_apply_fact_without_payload_uses_conservative_note_fallback(tmp_path: Path) -> None:

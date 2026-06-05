@@ -7,7 +7,7 @@ import hashlib
 import json
 import re
 import uuid
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -39,9 +39,16 @@ from OriginAgent.agent.evolution_operator import build_operator_insights
 from OriginAgent.agent.evolution_sandbox import SandboxEvaluator
 from OriginAgent.agent.facts import CONFLICT_CATEGORIES, FactStore, normalize_fact_content
 from OriginAgent.agent.memory import redact_memory_text
+from OriginAgent.agent.runtime_models import TaskRunReport, now_iso
+from OriginAgent.agent.task_runtime import (
+    build_task_report,
+    remember_report,
+    report_to_status_payload,
+)
 from OriginAgent.agent.skill_lifecycle import _read_skill_markdown
 from OriginAgent.agent.skills import SkillsLoader
 from OriginAgent.agent.workflow_artifacts import validate_workflow_artifact_dir, write_workflow_artifact
+from OriginAgent.config.schema import CuratorConfig, EvolutionConfig
 from OriginAgent.evolution.events import EventType, EvolutionEvent
 from OriginAgent.evolution.ledger import EvolutionLedger
 
@@ -66,6 +73,14 @@ class CuratorResult:
     evolution_proposals_prepared: int = 0
     evolution_dry_run: bool = True
     evolution_mode: str = "conservative"
+    phase: str = ""
+    fault_class: str = "unknown"
+    retryable: bool = False
+    degraded: bool = False
+    started_at: str = ""
+    finished_at: str = ""
+    attempt_count: int = 1
+    details: dict[str, Any] = field(default_factory=dict)
 
 
 class CuratorService:
@@ -98,6 +113,8 @@ class CuratorService:
         self._running = 0
         self._last_result: CuratorResult | None = None
         self._last_evolution_scan: dict[str, Any] = {}
+        self._last_report: TaskRunReport | None = None
+        self._consecutive_failures = 0
 
     def refresh_config(self) -> None:
         if self._config_loader is not None:
@@ -117,10 +134,34 @@ class CuratorService:
     @property
     def config(self) -> Any:
         if self._config is None:
-            from OriginAgent.config.schema import CuratorConfig
-
             self._config = CuratorConfig()
         return self._config
+
+    @staticmethod
+    def _resolved_curator_config(config: Any | None) -> CuratorConfig:
+        if isinstance(config, CuratorConfig):
+            return config
+        if config is None:
+            return CuratorConfig()
+        try:
+            return CuratorConfig.model_validate(config)
+        except Exception:
+            return CuratorConfig()
+
+    def _title_max_chars(self) -> int:
+        return int(getattr(self.config, "title_max_chars", _TITLE_MAX_CHARS) or _TITLE_MAX_CHARS)
+
+    def _body_max_chars(self) -> int:
+        return int(getattr(self.config, "body_max_chars", _BODY_MAX_CHARS) or _BODY_MAX_CHARS)
+
+    def _rationale_max_chars(self) -> int:
+        return int(getattr(self.config, "rationale_max_chars", _RATIONALE_MAX_CHARS) or _RATIONALE_MAX_CHARS)
+
+    def _evidence_max_chars(self) -> int:
+        return int(getattr(self.config, "evidence_max_chars", _EVIDENCE_MAX_CHARS) or _EVIDENCE_MAX_CHARS)
+
+    def _max_evidence(self) -> int:
+        return int(getattr(self.config, "max_evidence", _MAX_EVIDENCE) or _MAX_EVIDENCE)
 
     @property
     def enabled(self) -> bool:
@@ -129,8 +170,6 @@ class CuratorService:
     @property
     def evolution_config(self) -> Any:
         if self._evolution_config is None:
-            from OriginAgent.config.schema import EvolutionConfig
-
             self._evolution_config = EvolutionConfig()
         return apply_config_overlay(self.workspace, self._evolution_config)
 
@@ -144,6 +183,10 @@ class CuratorService:
             "curator_last_created_at": stats["last_created_at"],
             "curator_last_result": asdict(self._last_result) if self._last_result is not None else None,
             "curator_type_counts": self.store.type_counts(origin=CURATOR_ORIGIN),
+            **report_to_status_payload(
+                self._last_report,
+                consecutive_failures=self._consecutive_failures,
+            ),
         }
 
     async def review_workspace(
@@ -153,52 +196,155 @@ class CuratorService:
         turn_id: str,
     ) -> CuratorResult:
         self.refresh_config()
+        started_at = now_iso()
         if not self.enabled:
-            return self._remember(CuratorResult(status="skipped", reason="disabled"))
+            return self._remember(
+                CuratorResult(
+                    status="skipped",
+                    reason="disabled",
+                    phase="preflight",
+                    fault_class="config",
+                    started_at=started_at,
+                    finished_at=now_iso(),
+                    details={},
+                ),
+                build_task_report(
+                    task_name="curator",
+                    status="skipped",
+                    phase="preflight",
+                    fault_class="config",
+                    reason="disabled",
+                    started_at=started_at,
+                    finished_at=now_iso(),
+                ),
+            )
         if self._running > 0:
-            return self._remember(CuratorResult(status="skipped", reason="concurrency_limit"))
+            return self._remember(
+                CuratorResult(
+                    status="skipped",
+                    reason="concurrency_limit",
+                    phase="preflight",
+                    fault_class="invariant",
+                    started_at=started_at,
+                    finished_at=now_iso(),
+                    details={},
+                ),
+                build_task_report(
+                    task_name="curator",
+                    status="skipped",
+                    phase="preflight",
+                    fault_class="invariant",
+                    reason="concurrency_limit",
+                    started_at=started_at,
+                    finished_at=now_iso(),
+                ),
+            )
 
         self._running += 1
         try:
             self._last_evolution_scan = {}
-            self._run_feedback_calibration()
+            degraded_reasons: list[str] = []
+            if not self._run_feedback_calibration():
+                degraded_reasons.append("feedback_calibration_failed")
             proposals = self._build_proposals(session_key=session_key, turn_id=turn_id)
             written = await asyncio.to_thread(self.store.append_many, proposals)
             if written:
                 self._trace_written_evolution_proposals(proposals)
                 self._mark_evolution_proposals_converted(proposals)
-            self._run_evolution_maintenance()
+            if not self._run_evolution_maintenance():
+                degraded_reasons.append("maintenance_failed")
             scan = dict(self._last_evolution_scan)
-            return self._remember(CuratorResult(
-                status="ok",
+            status = "degraded" if degraded_reasons else "ok"
+            result = CuratorResult(
+                status=status,
                 proposals_written=written,
+                reason=", ".join(degraded_reasons),
                 evolution_candidates=int(scan.get("candidates", 0) or 0),
                 evolution_proposals_prepared=int(scan.get("prepared", 0) or 0),
                 evolution_dry_run=bool(scan.get("dry_run", True)),
                 evolution_mode=str(scan.get("mode") or "conservative"),
-            ))
+                phase="review_workspace",
+                fault_class="external" if degraded_reasons else "unknown",
+                degraded=bool(degraded_reasons),
+                started_at=started_at,
+                finished_at=now_iso(),
+                details={"degraded_reasons": degraded_reasons},
+            )
+            report = build_task_report(
+                task_name="curator",
+                status="degraded" if degraded_reasons else "ok",
+                phase="review_workspace",
+                fault_class="external" if degraded_reasons else "unknown",
+                degraded=bool(degraded_reasons),
+                reason=", ".join(degraded_reasons) or "ok",
+                started_at=started_at,
+                finished_at=now_iso(),
+                details={
+                    "proposals_written": written,
+                    "degraded_reasons": degraded_reasons,
+                },
+            )
+            return self._remember(result, report)
         except Exception as exc:
             logger.exception("Curator review failed")
-            return self._remember(CuratorResult(status="error", reason=str(exc)))
+            return self._remember(
+                CuratorResult(
+                    status="error",
+                    reason=str(exc),
+                    phase="review_workspace",
+                    fault_class="unknown",
+                    started_at=started_at,
+                    finished_at=now_iso(),
+                    details={},
+                ),
+                build_task_report(
+                    task_name="curator",
+                    status="error",
+                    phase="review_workspace",
+                    fault_class="unknown",
+                    reason=str(exc),
+                    started_at=started_at,
+                    finished_at=now_iso(),
+                ),
+            )
         finally:
             self._running = max(0, self._running - 1)
 
-    def _remember(self, result: CuratorResult) -> CuratorResult:
+    def _remember(
+        self,
+        result: CuratorResult,
+        report: TaskRunReport | None = None,
+    ) -> CuratorResult:
         self._last_result = result
+        if report is not None:
+            self._last_report = report
+            self._consecutive_failures = remember_report(
+                report=report,
+                current_failures=self._consecutive_failures,
+            )
         return result
 
-    def _run_feedback_calibration(self) -> None:
+    def _run_feedback_calibration(self) -> bool:
         try:
             result = self.feedback_calibrator.run()
             self._last_evolution_scan["feedback_calibration"] = result.to_json()
+            return True
         except Exception:
             logger.exception("Evolution feedback calibration failed")
+            self._last_evolution_scan["feedback_calibration_error"] = True
+            return False
 
-    def _run_evolution_maintenance(self) -> None:
-        self._last_evolution_scan["maintenance"] = run_evolution_maintenance(
-            self.workspace,
-            self.evolution_config,
-        )
+    def _run_evolution_maintenance(self) -> bool:
+        try:
+            self._last_evolution_scan["maintenance"] = run_evolution_maintenance(
+                self.workspace,
+                self.evolution_config,
+            )
+            return True
+        except Exception:
+            logger.exception("Evolution maintenance failed")
+            self._last_evolution_scan["maintenance_error"] = True
+            return False
 
     def _build_proposals(self, *, session_key: str, turn_id: str) -> list[ReviewProposal]:
         now = datetime.now(timezone.utc).isoformat()
@@ -296,10 +442,13 @@ class CuratorService:
                 self._trace_gate_evaluated(payload, proposal_type="workflow")
                 continue
             evidence = []
-            for item in signal.evidence_sources[:_MAX_EVIDENCE]:
+            for item in signal.evidence_sources[: self._max_evidence()]:
                 cursor = item.get("cursor")
                 timestamp = item.get("timestamp")
-                preview = str(item.get("preview") or "").strip()
+                preview = _clean_text(
+                    str(item.get("preview") or "").strip(),
+                    self._evidence_max_chars(),
+                )
                 evidence.append(
                     f"cursor={cursor} timestamp={timestamp}: {preview}"
                     if preview
@@ -364,7 +513,11 @@ class CuratorService:
             if gate.decision == "blocked":
                 self._trace_gate_evaluated(payload, proposal_type="skill")
                 continue
-            evidence = _evidence_lines(signal.evidence_sources)
+            evidence = _evidence_lines(
+                signal.evidence_sources,
+                max_evidence=self._max_evidence(),
+                evidence_max_chars=self._evidence_max_chars(),
+            )
             proposals.append(self._proposal(
                 session_key=session_key,
                 turn_id=turn_id,
@@ -622,7 +775,11 @@ class CuratorService:
                         "so curator cannot safely choose a single survivor in P10."
                     ),
                     evidence=[
-                        f"{item.get('name')}: {item.get('subject_path')}" for item in ordered[:_MAX_EVIDENCE]
+                        _clean_text(
+                            f"{item.get('name')}: {item.get('subject_path')}",
+                            self._evidence_max_chars(),
+                        )
+                        for item in ordered[: self._max_evidence()]
                     ],
                     payload={
                         "subject_type": "skill_group",
@@ -667,10 +824,10 @@ class CuratorService:
                         "The skill is already verified and is not blocked by a stronger duplicate candidate."
                     ),
                     evidence=[
-                        f"skill={name}",
-                        f"lifecycle={lifecycle}",
-                        f"verification={verification}",
-                        str(record.get("subject_path") or ""),
+                        _clean_text(f"skill={name}", self._evidence_max_chars()),
+                        _clean_text(f"lifecycle={lifecycle}", self._evidence_max_chars()),
+                        _clean_text(f"verification={verification}", self._evidence_max_chars()),
+                        _clean_text(str(record.get("subject_path") or ""), self._evidence_max_chars()),
                     ],
                     payload={
                         "subject_type": "skill",
@@ -708,10 +865,10 @@ class CuratorService:
                         "verification status, proposal creation ordering, and skill name."
                     ),
                     evidence=[
-                        f"duplicate={name}",
-                        f"canonical={canonical.get('name')}",
-                        str(record.get("subject_path") or ""),
-                        str(canonical.get("subject_path") or ""),
+                        _clean_text(f"duplicate={name}", self._evidence_max_chars()),
+                        _clean_text(f"canonical={canonical.get('name')}", self._evidence_max_chars()),
+                        _clean_text(str(record.get("subject_path") or ""), self._evidence_max_chars()),
+                        _clean_text(str(canonical.get("subject_path") or ""), self._evidence_max_chars()),
                     ],
                     payload={
                         "subject_type": "skill",
@@ -756,10 +913,10 @@ class CuratorService:
                         "but P10 keeps the move as a reviewed proposal only."
                     ),
                     evidence=[
-                        str(record.get("subject_path") or ""),
-                        f"domain={domain_id}",
-                        f"lifecycle={lifecycle}",
-                        f"verification={verification}",
+                        _clean_text(str(record.get("subject_path") or ""), self._evidence_max_chars()),
+                        _clean_text(f"domain={domain_id}", self._evidence_max_chars()),
+                        _clean_text(f"lifecycle={lifecycle}", self._evidence_max_chars()),
+                        _clean_text(f"verification={verification}", self._evidence_max_chars()),
                     ],
                     payload={
                         "subject_type": "skill",
@@ -867,8 +1024,8 @@ class CuratorService:
                     "P10 keeps this as a manual archive review."
                 ),
                 evidence=[
-                    str(record.get("subject_path") or ""),
-                    str(record.get("validation") or ""),
+                    _clean_text(str(record.get("subject_path") or ""), self._evidence_max_chars()),
+                    _clean_text(str(record.get("validation") or ""), self._evidence_max_chars()),
                 ],
                 payload={
                     "subject_type": "workflow",
@@ -915,8 +1072,8 @@ class CuratorService:
                         "manual guide content."
                     ),
                     evidence=[
-                        str(record.get("subject_path") or ""),
-                        str(canonical.get("subject_path") or ""),
+                        _clean_text(str(record.get("subject_path") or ""), self._evidence_max_chars()),
+                        _clean_text(str(canonical.get("subject_path") or ""), self._evidence_max_chars()),
                     ],
                     payload={
                         "subject_type": "workflow",
@@ -954,8 +1111,8 @@ class CuratorService:
                         "but P10 only records the suggestion."
                     ),
                     evidence=[
-                        str(record.get("subject_path") or ""),
-                        f"domain={domain_id}",
+                        _clean_text(str(record.get("subject_path") or ""), self._evidence_max_chars()),
+                        _clean_text(f"domain={domain_id}", self._evidence_max_chars()),
                     ],
                     payload={
                         "subject_type": "workflow",
@@ -1001,6 +1158,41 @@ class CuratorService:
             ids = {record.fact_id for record in records}
             if any(record.supersedes_fact_id in ids for record in records if record.supersedes_fact_id):
                 continue
+            pair_summaries: list[tuple[str, float, Any, Any]] = []
+            for index, left in enumerate(records):
+                for right in records[index + 1:]:
+                    similarity = store.semantic_resolver.similarity(left.content, right.content)
+                    relation_type = store.semantic_resolver.classify_relation(
+                        type("ProposalLike", (), {
+                            "content": left.content,
+                            "category": left.category,
+                            "scope": left.scope,
+                            "owner": left.owner,
+                        })(),
+                        right,
+                        similarity,
+                    )
+                    if relation_type == "equivalent" and similarity >= 0.92:
+                        continue
+                    if relation_type == "related_to" and similarity < 0.80:
+                        relation_type = "contradicts"
+                    pair_summaries.append((relation_type, similarity, left, right))
+            if not pair_summaries:
+                continue
+            relation_priority = {
+                "contradicts": 4,
+                "narrows": 3,
+                "generalizes": 2,
+                "related_to": 1,
+            }
+            pair_summaries.sort(
+                key=lambda item: (
+                    relation_priority.get(item[0], 0),
+                    item[1],
+                ),
+                reverse=True,
+            )
+            relation_type, relation_score, left, right = pair_summaries[0]
             summary = ", ".join(record.fact_id for record in records[:3])
             proposals.append(self._proposal(
                 session_key=session_key,
@@ -1008,17 +1200,21 @@ class CuratorService:
                 created_at=created_at,
                 proposal_type="fact_conflict",
                 domain_id="core",
-                title=f"Review conflicting facts for {category}/{scope}",
+                title=f"Review {relation_type} facts for {category}/{scope}",
                 content=(
-                    f"OriginAgent found multiple active facts for `{category}` in scope `{scope}` "
-                    "with conflicting normalized content."
+                    f"OriginAgent found a semantic `{relation_type}` cluster for `{category}` "
+                    f"in scope `{scope}` that needs operator review."
                 ),
                 rationale=(
-                    "Curator detected a conflict-prone fact group without an explicit supersedes relationship."
+                    "Curator detected multiple active facts in the same scope whose semantic "
+                    "relationship could not be deterministically resolved."
                 ),
                 evidence=[
-                    f"{record.fact_id}: {redact_memory_text(record.content)}"[:_EVIDENCE_MAX_CHARS]
-                    for record in records[:_MAX_EVIDENCE]
+                    _clean_text(
+                        f"{record.fact_id}: {redact_memory_text(record.content)}",
+                        self._evidence_max_chars(),
+                    )
+                    for record in records[: self._max_evidence()]
                 ],
                 payload={
                     "subject_type": "fact_group",
@@ -1033,8 +1229,11 @@ class CuratorService:
                         *sorted(normalized),
                     ]),
                     "suggested_action": "fact_conflict",
-                    "impact_summary": f"Manual fact conflict review for {summary}.",
+                    "impact_summary": f"Manual semantic fact review for {summary}.",
                     "fact_ids": sorted(ids),
+                    "relation_kind": relation_type,
+                    "relation_confidence": round(relation_score, 4),
+                    "fact_pair": [left.fact_id, right.fact_id],
                 },
                 confidence=0.82,
             ))
@@ -1064,11 +1263,15 @@ class CuratorService:
             turn_id=turn_id,
             proposal_type=proposal_type,
             domain_id=domain_id or "core",
-            title=_clean_text(title, _TITLE_MAX_CHARS),
-            content=_clean_text(content, _BODY_MAX_CHARS),
-            rationale=_clean_text(rationale, _RATIONALE_MAX_CHARS),
+            title=_clean_text(title, self._title_max_chars()),
+            content=_clean_text(content, self._body_max_chars()),
+            rationale=_clean_text(rationale, self._rationale_max_chars()),
             confidence=confidence,
-            evidence=_clean_evidence(evidence),
+            evidence=_clean_evidence(
+                evidence,
+                max_evidence=self._max_evidence(),
+                evidence_max_chars=self._evidence_max_chars(),
+            ),
             payload=_redact_payload(payload),
         )
 
@@ -1124,23 +1327,33 @@ def _clean_text(text: str, max_chars: int) -> str:
     return redact_memory_text(str(text or "").strip())[:max_chars].strip()
 
 
-def _clean_evidence(items: list[str]) -> list[str]:
+def _clean_evidence(
+    items: list[str],
+    *,
+    max_evidence: int = _MAX_EVIDENCE,
+    evidence_max_chars: int = _EVIDENCE_MAX_CHARS,
+) -> list[str]:
     cleaned: list[str] = []
     for item in items:
-        text = _clean_text(item, _EVIDENCE_MAX_CHARS)
+        text = _clean_text(item, evidence_max_chars)
         if text:
             cleaned.append(text)
-        if len(cleaned) >= _MAX_EVIDENCE:
+        if len(cleaned) >= max_evidence:
             break
     return cleaned
 
 
-def _evidence_lines(items: list[dict[str, Any]]) -> list[str]:
+def _evidence_lines(
+    items: list[dict[str, Any]],
+    *,
+    max_evidence: int = _MAX_EVIDENCE,
+    evidence_max_chars: int = _EVIDENCE_MAX_CHARS,
+) -> list[str]:
     evidence: list[str] = []
-    for item in items[:_MAX_EVIDENCE]:
+    for item in items[:max_evidence]:
         cursor = item.get("cursor")
         timestamp = item.get("timestamp")
-        preview = str(item.get("preview") or "").strip()
+        preview = _clean_text(str(item.get("preview") or "").strip(), evidence_max_chars)
         evidence.append(
             f"cursor={cursor} timestamp={timestamp}: {preview}"
             if preview

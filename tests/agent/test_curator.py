@@ -313,6 +313,24 @@ async def test_curator_writes_proposals_off_event_loop_thread(tmp_path: Path) ->
 
 
 @pytest.mark.asyncio
+async def test_curator_degraded_status_is_visible_when_maintenance_fails(tmp_path: Path) -> None:
+    service = CuratorService(
+        workspace=tmp_path,
+        config=SimpleNamespace(enabled=True),
+        store=ReviewProposalStore(tmp_path),
+    )
+    service._build_proposals = lambda **_: []  # type: ignore[assignment]
+    service._run_evolution_maintenance = lambda: False  # type: ignore[assignment]
+
+    result = await service.review_workspace(session_key="websocket:chat1", turn_id="turn-1")
+
+    status = service.runtime_status()
+    assert result.status == "degraded"
+    assert status["last_status"] == "degraded"
+    assert status["last_degraded"] is True
+
+
+@pytest.mark.asyncio
 async def test_curator_default_evolution_dry_run_does_not_write_workflow_proposals(tmp_path: Path) -> None:
     review_store = ReviewProposalStore(tmp_path)
     signal_store = _seed_workflow_signal(tmp_path)
@@ -908,3 +926,36 @@ def test_review_only_curator_apply_stays_pending_without_terminal_event(tmp_path
     assert result.status == "pending"
     assert store.get("review_merge")["status"] == "pending"
     assert _proposal_events(tmp_path) == []
+
+
+@pytest.mark.asyncio
+async def test_curator_fact_conflict_proposal_carries_semantic_relation_kind(tmp_path: Path) -> None:
+    fact_store = ReviewProposalStore(tmp_path)
+    fact_store._memory_store.upsert_fact_and_rebuild_memory(
+        "User lives in Tokyo",
+        category="preference",
+        scope="user.location",
+        owner="user",
+        source_cursors=[1],
+        source_excerpt="I live in Tokyo",
+    )
+    fact_store._memory_store.upsert_fact_and_rebuild_memory(
+        "User lives in Tokyo Minato",
+        category="preference",
+        scope="user.location",
+        owner="user",
+        source_cursors=[2],
+        source_excerpt="I live in Tokyo Minato",
+    )
+    service = CuratorService(workspace=tmp_path, config=SimpleNamespace(enabled=True), store=fact_store)
+
+    result = await service.review_workspace(
+        session_key="websocket:chat-a",
+        turn_id="turn-semantic-facts",
+    )
+
+    assert result.proposals_written >= 1
+    proposals = fact_store.recent(limit=10)
+    fact_conflicts = [proposal for proposal in proposals if proposal["proposal_type"] == "fact_conflict"]
+    assert fact_conflicts
+    assert fact_conflicts[0]["payload"]["relation_kind"] in {"narrows", "generalizes", "contradicts", "related_to"}

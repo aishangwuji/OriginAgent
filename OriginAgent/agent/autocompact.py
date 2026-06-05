@@ -9,6 +9,8 @@ from typing import TYPE_CHECKING, Any, Callable, Coroutine
 from loguru import logger
 
 from OriginAgent.agent.memory import record_recent_summary, session_summary_text
+from OriginAgent.agent.runtime_models import TaskRunReport, now_iso
+from OriginAgent.agent.task_runtime import build_task_report, remember_report, report_to_status_payload
 from OriginAgent.session.manager import Session, SessionManager
 
 if TYPE_CHECKING:
@@ -32,6 +34,8 @@ class AutoCompact:
         self._ttl = session_ttl_minutes
         self._archiving: set[str] = set()
         self._summaries: dict[str, str] = {}
+        self._last_report: TaskRunReport | None = None
+        self._consecutive_failures = 0
 
     def _is_expired(self, ts: datetime | str | None,
                     now: datetime | None = None) -> bool:
@@ -77,6 +81,7 @@ class AutoCompact:
                 schedule_background(self._archive(key))
 
     async def _archive(self, key: str) -> None:
+        started_at = now_iso()
         try:
             self.sessions.invalidate(key)
             session = self.sessions.get_or_create(key)
@@ -84,6 +89,16 @@ class AutoCompact:
             if not archive_msgs and not kept_msgs:
                 session.updated_at = datetime.now()
                 self.sessions.save(session)
+                self._remember_report(build_task_report(
+                    task_name="auto_compact",
+                    status="ok",
+                    phase="archive",
+                    fault_class="unknown",
+                    reason="nothing_to_archive",
+                    started_at=started_at,
+                    finished_at=now_iso(),
+                    details={"session_key": key},
+                ))
                 return
 
             last_active = session.updated_at
@@ -112,8 +127,33 @@ class AutoCompact:
                     len(kept_msgs),
                     bool(summary),
                 )
+            self._remember_report(build_task_report(
+                task_name="auto_compact",
+                status="ok",
+                phase="archive",
+                fault_class="unknown",
+                reason="ok",
+                started_at=started_at,
+                finished_at=now_iso(),
+                details={
+                    "session_key": key,
+                    "archived_count": len(archive_msgs),
+                    "kept_count": len(kept_msgs),
+                },
+            ))
         except Exception:
             logger.exception("Auto-compact: failed for {}", key)
+            self._remember_report(build_task_report(
+                task_name="auto_compact",
+                status="degraded",
+                phase="archive",
+                fault_class="unknown",
+                degraded=True,
+                reason=f"archive_failed:{key}",
+                started_at=started_at,
+                finished_at=now_iso(),
+                details={"session_key": key},
+            ))
         finally:
             self._archiving.discard(key)
 
@@ -127,3 +167,21 @@ class AutoCompact:
             return session, summary
         # Cold path: summary persisted in session metadata (process restarted).
         return session, session_summary_text(session)
+
+    def runtime_status(self) -> dict[str, Any]:
+        return {
+            "auto_compact_enabled": self._ttl > 0,
+            "auto_compact_ttl_minutes": self._ttl,
+            "auto_compact_running_count": len(self._archiving),
+            **report_to_status_payload(
+                self._last_report,
+                consecutive_failures=self._consecutive_failures,
+            ),
+        }
+
+    def _remember_report(self, report: TaskRunReport) -> None:
+        self._last_report = report
+        self._consecutive_failures = remember_report(
+            report=report,
+            current_failures=self._consecutive_failures,
+        )

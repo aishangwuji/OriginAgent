@@ -121,6 +121,10 @@ async def test_background_review_writes_redacted_pending_proposals(tmp_path: Pat
     assert records[0]["status"] == "pending"
     assert "[REDACTED_SECRET]" in records[0]["content"]
     assert "sk-proj" not in records[0]["content"]
+    status = service.runtime_status()
+    assert status["last_status"] == "ok"
+    assert status["last_reason"] == "ok"
+    assert status["consecutive_failures"] == 0
 
 
 @pytest.mark.asyncio
@@ -156,6 +160,32 @@ async def test_background_review_writes_proposals_off_event_loop_thread(tmp_path
     assert result.proposals_written == 1
     assert store.thread_id is not None
     assert store.thread_id != loop_thread_id
+
+
+@pytest.mark.asyncio
+async def test_background_review_failure_sets_structured_runtime_report(tmp_path: Path) -> None:
+    service = BackgroundReviewService(
+        workspace=tmp_path,
+        provider=FakeProvider(_proposal_response()),
+        model="fake-model",
+        config=BackgroundReviewConfig(enabled=True),
+    )
+    service._build_prompt = lambda **_: (_ for _ in ()).throw(RuntimeError("boom"))  # type: ignore[assignment]
+
+    result = await service.review_turn(
+        session_key="websocket:chat1",
+        turn_id="turn-1",
+        channel="websocket",
+        chat_id="chat1",
+        message_id="m1",
+        messages=[{"role": "user", "content": "remember this"}],
+    )
+
+    status = service.runtime_status()
+    assert result.status == "error"
+    assert status["last_status"] == "error"
+    assert status["last_reason"] == "boom"
+    assert status["consecutive_failures"] == 1
 
 
 @pytest.mark.asyncio

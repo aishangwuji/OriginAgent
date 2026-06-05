@@ -15,6 +15,7 @@ from OriginAgent.agent.domain_packs import DomainPackManager
 from OriginAgent.agent.memory import MemoryStore
 from OriginAgent.agent.self_model import SelfModelRenderer, SelfModelService
 from OriginAgent.agent.skills import SkillsLoader
+from OriginAgent.config.schema import ContextConfig
 from OriginAgent.session.goal_state import goal_state_runtime_lines
 from OriginAgent.utils.helpers import (
     build_assistant_message,
@@ -47,6 +48,8 @@ class ContextBuilder:
         workspace: Path,
         timezone: str | None = None,
         disabled_skills: list[str] | None = None,
+        memory_feature_flags: dict[str, bool] | None = None,
+        context_config: ContextConfig | None = None,
         domain_pack_manager: DomainPackManager | None = None,
         domain_packs_config: Any | None = None,
         audit_mode: str = "minimal",
@@ -61,7 +64,9 @@ class ContextBuilder:
     ):
         self.workspace = workspace
         self.timezone = timezone
-        self.memory = MemoryStore(workspace)
+        self._memory_feature_flags = dict(memory_feature_flags or {})
+        self._context_config = context_config or ContextConfig()
+        self.memory = MemoryStore(workspace, feature_flags=self._memory_feature_flags)
         self.domain_packs = domain_pack_manager or DomainPackManager(
             workspace,
             config=domain_packs_config,
@@ -86,6 +91,7 @@ class ContextBuilder:
         skill_names: list[str] | None = None,
         channel: str | None = None,
         session_summary: str | None = None,
+        self_model_payload: dict[str, Any] | None = None,
     ) -> str:
         """Build the trusted system prompt.
 
@@ -99,25 +105,17 @@ class ContextBuilder:
         if bootstrap:
             parts.append(bootstrap)
 
-        parts.append(
-            SelfModelRenderer().render(
-                SelfModelService(
-                    self.workspace,
-                    registry=self._registry,
-                    sessions=self._sessions,
-                    pending_queues=self._pending_queues,
-                    cron_service=self._cron_service,
-                    confirmation_store=self._confirmation_store,
-                    audit_mode=self._audit_mode,
-                    runtime_profile=self._runtime_profile,
-                    domain_pack_manager=self.domain_packs,
-                    background_review_service=self._background_review_service,
-                    curator_service=self._curator_service,
-                    skills_loader=self.skills,
-                    memory_store=self.memory,
-                ).build()
-            )
-        )
+        payload = self_model_payload
+        if payload is None:
+            payload = SelfModelService(
+                self.workspace,
+                audit_mode=self._audit_mode,
+                runtime_profile=self._runtime_profile,
+                domain_pack_manager=self.domain_packs,
+                skills_loader=self.skills,
+                memory_store=self.memory,
+            ).build()
+        parts.append(SelfModelRenderer().render(payload))
 
         always_skills = self.skills.get_always_skills()
         if always_skills:
@@ -147,17 +145,23 @@ class ContextBuilder:
         if user_file:
             blocks.append(self.build_reference_context_block("user_profile", user_file))
 
-        memory = self.memory.get_memory_context()
-        if memory and not self._is_template_content(self.memory.read_memory(), "memory/MEMORY.md"):
-            blocks.append(self.build_reference_context_block("memory", memory))
+        memory_bundle = self.memory.get_memory_context_bundle()
+        memory = memory_bundle.rendered_text
+        if memory:
+            source = "memory_retrieval" if not memory_bundle.fallback_used else "memory"
+            if not memory_bundle.fallback_used or not self._is_template_content(
+                self.memory.read_memory(),
+                "memory/MEMORY.md",
+            ):
+                blocks.append(self.build_reference_context_block(source, memory))
 
         entries = self.memory.read_unprocessed_history(since_cursor=self.memory.get_last_dream_cursor())
         if entries:
-            capped = entries[-self._MAX_RECENT_HISTORY:]
+            capped = entries[-self._context_config.max_recent_history:]
             history_text = "\n".join(
                 f"- [{e['timestamp']}] {e['content']}" for e in capped
             )
-            history_text = truncate_text(history_text, self._MAX_HISTORY_CHARS)
+            history_text = truncate_text(history_text, self._context_config.max_history_chars)
             blocks.append(self.build_reference_context_block("recent_history", history_text))
 
         if session_summary:
@@ -344,10 +348,18 @@ class ContextBuilder:
         session_summary: str | None = None,
         session_metadata: Mapping[str, Any] | None = None,
         internal_event: tuple[str, str] | None = None,
+        self_model_payload: dict[str, Any] | None = None,
     ) -> list[dict[str, Any]]:
         """Build the complete message list for an LLM call."""
         messages = [
-            {"role": "system", "content": self.build_system_prompt(skill_names, channel=channel)},
+            {
+                "role": "system",
+                "content": self.build_system_prompt(
+                    skill_names,
+                    channel=channel,
+                    self_model_payload=self_model_payload,
+                ),
+            },
             *history,
         ]
 
@@ -384,14 +396,14 @@ class ContextBuilder:
     def _build_user_content(self, text: str | None, media: list[str] | None) -> list[dict[str, Any]]:
         """Build user message content with optional base64-encoded images."""
         blocks: list[dict[str, Any]] = []
-        if media and len(media) > self._MAX_MEDIA_FILES:
+        if media and len(media) > self._context_config.max_media_files:
             logger.warning(
                 "Skipping {} media file(s): max {} images per turn",
-                len(media) - self._MAX_MEDIA_FILES,
-                self._MAX_MEDIA_FILES,
+                len(media) - self._context_config.max_media_files,
+                self._context_config.max_media_files,
             )
 
-        for path in (media or [])[:self._MAX_MEDIA_FILES]:
+        for path in (media or [])[:self._context_config.max_media_files]:
             p = Path(path)
             if not p.is_file():
                 continue
@@ -400,12 +412,12 @@ class ContextBuilder:
             except OSError:
                 logger.warning("Skipping unreadable media file: {}", p)
                 continue
-            if size > self._MAX_MEDIA_BYTES:
+            if size > self._context_config.max_media_bytes:
                 logger.warning(
                     "Skipping oversized image for model context: {} ({:.1f} MB > {} MB limit)",
                     p.name,
                     size / (1024 * 1024),
-                    self._MAX_MEDIA_BYTES // (1024 * 1024),
+                    self._context_config.max_media_bytes // (1024 * 1024),
                 )
                 continue
             try:

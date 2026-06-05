@@ -39,8 +39,16 @@ from OriginAgent.agent.facts import (
     canonical_key_for_fact,
 )
 from OriginAgent.agent.memory import MemoryStore, redact_memory_text
+from OriginAgent.agent.runtime_models import TaskRunReport, now_iso
+from OriginAgent.agent.task_runtime import (
+    build_task_report,
+    maybe_retry_once,
+    remember_report,
+    report_to_status_payload,
+)
 from OriginAgent.agent.skill_artifacts import write_skill_artifact
 from OriginAgent.agent.workflow_artifacts import write_workflow_artifact
+from OriginAgent.config.schema import BackgroundReviewConfig, TaskRuntimeConfig
 from OriginAgent.providers.base import LLMProvider
 from OriginAgent.utils.helpers import truncate_text
 from OriginAgent.utils.prompt_templates import render_template
@@ -140,6 +148,14 @@ class BackgroundReviewResult:
     status: str
     proposals_written: int = 0
     reason: str = ""
+    phase: str = ""
+    fault_class: str = "unknown"
+    retryable: bool = False
+    degraded: bool = False
+    started_at: str = ""
+    finished_at: str = ""
+    attempt_count: int = 1
+    details: dict[str, Any] = field(default_factory=dict)
 
 
 class ReviewProposalStore:
@@ -151,13 +167,28 @@ class ReviewProposalStore:
         *,
         path: Path | None = None,
         event_path: Path | None = None,
+        feature_flags: dict[str, bool] | None = None,
+        config: BackgroundReviewConfig | None = None,
     ) -> None:
         self.workspace = Path(workspace)
         self.path = path or (self.workspace / PROPOSAL_STORE_RELATIVE)
         self.event_path = event_path or (self.workspace / PROPOSAL_EVENT_STORE_RELATIVE)
         self._lock_path = self.path.parent / ".review_proposals.lock"
-        self._memory_store = MemoryStore(self.workspace)
+        self._feature_flags = dict(feature_flags or {})
+        self._config = config or BackgroundReviewConfig()
+        self._memory_store = MemoryStore(self.workspace, feature_flags=feature_flags)
         self._outcome_store = EvolutionOutcomeStore(self.workspace)
+
+    @property
+    def feature_flags(self) -> dict[str, bool]:
+        return dict(self._feature_flags)
+
+    def set_feature_flags(self, feature_flags: dict[str, bool] | None) -> None:
+        self._feature_flags = dict(feature_flags or {})
+        self._memory_store.set_feature_flags(self._feature_flags)
+
+    def set_config(self, config: BackgroundReviewConfig | None) -> None:
+        self._config = config or BackgroundReviewConfig()
 
     def _locked(self) -> FileLock:
         self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -439,8 +470,9 @@ class ReviewProposalStore:
             if action_kind == "move_to_domain":
                 return self._apply_move_to_domain_unlocked(record, reason=reason)
 
+            review_event_id = f"review_event_{uuid.uuid4().hex}"
             try:
-                fact = self._apply_to_memory(record)
+                fact = self._apply_to_memory(record, review_event_id=review_event_id)
             except Exception as exc:
                 logger.exception("Failed to apply background review proposal {}", proposal_id)
                 event = self._append_event_unlocked(
@@ -448,6 +480,7 @@ class ReviewProposalStore:
                     status="failed",
                     reason=reason,
                     error=str(exc),
+                    event_id=review_event_id,
                 )
                 return ReviewDecisionResult(
                     proposal_id=proposal_id,
@@ -465,6 +498,7 @@ class ReviewProposalStore:
                 status="applied",
                 reason=reason,
                 fact_id=fact.fact_id,
+                event_id=review_event_id,
             )
             return ReviewDecisionResult(
                 proposal_id=proposal_id,
@@ -577,12 +611,13 @@ class ReviewProposalStore:
         fact_id: str | None = None,
         artifact: dict[str, Any] | None = None,
         error: str = "",
+        event_id: str | None = None,
     ) -> dict[str, Any]:
-        reason = _clean_text(reason, _REVIEW_REASON_MAX_CHARS)
-        error = _clean_text(error, _REVIEW_REASON_MAX_CHARS)
+        reason = _clean_text(reason, self._config.review_reason_max_chars)
+        error = _clean_text(error, self._config.review_reason_max_chars)
         artifact = _redact_json_payload(artifact) if isinstance(artifact, dict) else None
         event = ReviewProposalEvent(
-            event_id=f"review_event_{uuid.uuid4().hex}",
+            event_id=event_id or f"review_event_{uuid.uuid4().hex}",
             proposal_id=proposal_id,
             status=status,
             created_at=datetime.now(timezone.utc).isoformat(),
@@ -649,13 +684,47 @@ class ReviewProposalStore:
             },
         )
 
-    def _apply_to_memory(self, record: dict[str, Any]) -> FactRecord:
+    def _apply_to_memory(
+        self,
+        record: dict[str, Any],
+        *,
+        review_event_id: str | None = None,
+    ) -> FactRecord:
         fact_fields = _fact_fields_from_proposal(record)
         fact_fields["confidence"] = self._memory_store.fact_store.calibrate_confidence(
             _proposal_type(record),
             str(record.get("domain_id") or "core"),
             fact_fields["confidence"],
+            source=_review_source_for_calibration(record),
+            category=fact_fields["category"],
         )
+        payload = _proposal_payload(record)
+        fact_fields["change_kind"] = (
+            payload.get("change_kind")
+            if isinstance(payload.get("change_kind"), str)
+            else None
+        )
+        fact_fields["target_fact_id"] = (
+            payload.get("target_fact_id")
+            if isinstance(payload.get("target_fact_id"), str)
+            else None
+        )
+        relation_candidates = payload.get("relation_candidates")
+        fact_fields["relation_candidates"] = relation_candidates if isinstance(relation_candidates, list) else None
+        fact_fields["semantic_scope_hint"] = (
+            payload.get("semantic_scope_hint")
+            if isinstance(payload.get("semantic_scope_hint"), str)
+            else None
+        )
+        fact_fields["proposal_id"] = str(record.get("id") or "")
+        fact_fields["review_event_id"] = review_event_id
+        fact_fields["batch_id"] = f"review_apply:{record.get('id') or 'unknown'}"
+        fact_fields["actor"] = _proposal_origin(record)
+        fact_fields["origin"] = _proposal_origin(record)
+        fact_fields["model_info"] = {
+            "proposal_type": _proposal_type(record),
+            "source_message_id": str(record.get("source_message_id") or ""),
+        }
         return self._memory_store.upsert_fact_and_rebuild_memory(**fact_fields)
 
     def _apply_rejected_fact_feedback_unlocked(
@@ -1083,6 +1152,8 @@ class BackgroundReviewService:
         config_loader: Callable[[], Any] | None = None,
         domain_pack_manager: DomainPackManager | None = None,
         store: ReviewProposalStore | None = None,
+        memory_feature_flags: dict[str, bool] | None = None,
+        task_runtime_config: TaskRuntimeConfig | None = None,
     ) -> None:
         self.workspace = Path(workspace)
         self.provider = provider
@@ -1091,29 +1162,57 @@ class BackgroundReviewService:
         self._config = config
         self._config_loader = config_loader
         self.domain_pack_manager = domain_pack_manager
-        self.store = store or ReviewProposalStore(self.workspace)
+        self._memory_feature_flags = dict(memory_feature_flags or {})
+        self.store = store or ReviewProposalStore(
+            self.workspace,
+            feature_flags=self._memory_feature_flags,
+            config=config if isinstance(config, BackgroundReviewConfig) else None,
+        )
+        if hasattr(self.store, "set_feature_flags"):
+            self.store.set_feature_flags(self._memory_feature_flags)
+        if hasattr(self.store, "set_config"):
+            self.store.set_config(self._resolved_background_review_config(config))
         self._running = 0
         self._last_result: BackgroundReviewResult | None = None
+        self._last_report: TaskRunReport | None = None
+        self._consecutive_failures = 0
+        self._task_runtime_config = task_runtime_config or TaskRuntimeConfig()
 
     def set_provider(self, provider: LLMProvider, model: str) -> None:
         self.provider = provider
         self.model = model
+
+    def set_memory_feature_flags(self, feature_flags: dict[str, bool] | None) -> None:
+        self._memory_feature_flags = dict(feature_flags or {})
+        if hasattr(self.store, "set_feature_flags"):
+            self.store.set_feature_flags(self._memory_feature_flags)
 
     def refresh_config(self) -> None:
         if self._config_loader is None:
             return
         try:
             self._config = self._config_loader()
+            if hasattr(self.store, "set_config"):
+                self.store.set_config(self._resolved_background_review_config(self._config))
         except Exception:
             logger.exception("Failed to refresh background review config")
 
     @property
     def config(self) -> Any:
         if self._config is None:
-            from OriginAgent.config.schema import BackgroundReviewConfig
-
             self._config = BackgroundReviewConfig()
         return self._config
+
+    @staticmethod
+    def _resolved_background_review_config(config: Any | None) -> BackgroundReviewConfig:
+        if isinstance(config, BackgroundReviewConfig):
+            return config
+        if config is None:
+            return BackgroundReviewConfig()
+        try:
+            return BackgroundReviewConfig.model_validate(config)
+        except Exception:
+            return BackgroundReviewConfig()
 
     @property
     def enabled(self) -> bool:
@@ -1130,6 +1229,10 @@ class BackgroundReviewService:
             "background_review_last_result": (
                 asdict(self._last_result) if self._last_result is not None else None
             ),
+            **report_to_status_payload(
+                self._last_report,
+                consecutive_failures=self._consecutive_failures,
+            ),
         }
 
     async def review_turn(
@@ -1144,15 +1247,48 @@ class BackgroundReviewService:
     ) -> BackgroundReviewResult:
         self.refresh_config()
         cfg = self.config
+        started_at = now_iso()
         if not bool(getattr(cfg, "enabled", False)):
             return self._remember_result(
-                BackgroundReviewResult(status="skipped", reason="disabled")
+                BackgroundReviewResult(
+                    status="skipped",
+                    reason="disabled",
+                    phase="preflight",
+                    fault_class="config",
+                    started_at=started_at,
+                    finished_at=now_iso(),
+                ),
+                build_task_report(
+                    task_name="background_review",
+                    status="skipped",
+                    phase="preflight",
+                    fault_class="config",
+                    reason="disabled",
+                    started_at=started_at,
+                    finished_at=now_iso(),
+                ),
             )
 
         max_concurrent = max(1, int(getattr(cfg, "max_concurrent_reviews", 1) or 1))
         if self._running >= max_concurrent:
             return self._remember_result(
-                BackgroundReviewResult(status="skipped", reason="concurrency_limit")
+                BackgroundReviewResult(
+                    status="skipped",
+                    reason="concurrency_limit",
+                    phase="preflight",
+                    fault_class="invariant",
+                    started_at=started_at,
+                    finished_at=now_iso(),
+                ),
+                build_task_report(
+                    task_name="background_review",
+                    status="skipped",
+                    phase="preflight",
+                    fault_class="invariant",
+                    reason="concurrency_limit",
+                    started_at=started_at,
+                    finished_at=now_iso(),
+                ),
             )
 
         self._running += 1
@@ -1165,31 +1301,61 @@ class BackgroundReviewService:
                 message_id=message_id,
                 messages=messages,
             )
-            response = await call_llm(
-                task="background_review",
-                router=self.router,
-                provider=self.provider,
-                model=self.model,
-                messages=[
-                    {
-                        "role": "system",
-                        "content": render_template(
-                            "agent/background_review.md",
-                            strip=True,
-                            allowed_types=", ".join(self._allowed_types()),
-                            max_proposals=int(getattr(cfg, "max_proposals_per_turn", 8) or 8),
-                        ),
-                    },
-                    {"role": "user", "content": prompt},
-                ],
-                tools=None,
-                tool_choice=None,
-                max_tokens=2048,
-                temperature=0.1,
+            async def _call(attempt_count: int):
+                return await call_llm(
+                    task="background_review",
+                    router=self.router,
+                    provider=self.provider,
+                    model=self.model,
+                    messages=[
+                        {
+                            "role": "system",
+                            "content": render_template(
+                                "agent/background_review.md",
+                                strip=True,
+                                allowed_types=", ".join(self._allowed_types()),
+                                max_proposals=int(getattr(cfg, "max_proposals_per_turn", 8) or 8),
+                            ),
+                        },
+                        {"role": "user", "content": prompt},
+                    ],
+                    tools=None,
+                    tool_choice=None,
+                    max_tokens=2048,
+                    temperature=0.1,
+                )
+
+            response, attempt_count = await maybe_retry_once(
+                _call,
+                retry_count=int(
+                    getattr(cfg, "transient_retry_count", self._task_runtime_config.default_transient_retry_count)
+                    or 0
+                ),
+                backoff_ms=int(getattr(self._task_runtime_config, "retry_backoff_ms", 0) or 0),
             )
             if response.finish_reason == "error":
                 return self._remember_result(
-                    BackgroundReviewResult(status="llm_error", reason=response.content or "error")
+                    BackgroundReviewResult(
+                        status="llm_error",
+                        reason=response.content or "error",
+                        phase="llm",
+                        fault_class="external",
+                        retryable=True,
+                        started_at=started_at,
+                        finished_at=now_iso(),
+                        attempt_count=attempt_count,
+                    ),
+                    build_task_report(
+                        task_name="background_review",
+                        status="error",
+                        phase="llm",
+                        fault_class="external",
+                        retryable=True,
+                        reason=response.content or "error",
+                        started_at=started_at,
+                        finished_at=now_iso(),
+                        attempt_count=attempt_count,
+                    ),
                 )
             proposals = self._parse_response(
                 response.content or "",
@@ -1199,18 +1365,63 @@ class BackgroundReviewService:
             )
             written = await asyncio.to_thread(self.store.append_many, proposals)
             return self._remember_result(
-                BackgroundReviewResult(status="ok", proposals_written=written)
+                BackgroundReviewResult(
+                    status="ok",
+                    proposals_written=written,
+                    phase="persist",
+                    fault_class="unknown",
+                    started_at=started_at,
+                    finished_at=now_iso(),
+                    attempt_count=attempt_count,
+                ),
+                build_task_report(
+                    task_name="background_review",
+                    status="ok",
+                    phase="persist",
+                    fault_class="unknown",
+                    reason="ok",
+                    started_at=started_at,
+                    finished_at=now_iso(),
+                    attempt_count=attempt_count,
+                    details={"proposals_written": written},
+                ),
             )
         except Exception as exc:
             logger.exception("Background review failed")
             return self._remember_result(
-                BackgroundReviewResult(status="error", reason=str(exc))
+                BackgroundReviewResult(
+                    status="error",
+                    reason=str(exc),
+                    phase="review_turn",
+                    fault_class="unknown",
+                    started_at=started_at,
+                    finished_at=now_iso(),
+                ),
+                build_task_report(
+                    task_name="background_review",
+                    status="error",
+                    phase="review_turn",
+                    fault_class="unknown",
+                    reason=str(exc),
+                    started_at=started_at,
+                    finished_at=now_iso(),
+                ),
             )
         finally:
             self._running = max(0, self._running - 1)
 
-    def _remember_result(self, result: BackgroundReviewResult) -> BackgroundReviewResult:
+    def _remember_result(
+        self,
+        result: BackgroundReviewResult,
+        report: TaskRunReport | None = None,
+    ) -> BackgroundReviewResult:
         self._last_result = result
+        if report is not None:
+            self._last_report = report
+            self._consecutive_failures = remember_report(
+                report=report,
+                current_failures=self._consecutive_failures,
+            )
         return result
 
     def _allowed_types(self) -> tuple[str, ...]:
@@ -1265,7 +1476,7 @@ class BackgroundReviewService:
             role = str(message.get("role") or "unknown")
             timestamp = str(message.get("timestamp") or "")
             text = _message_text(message)
-            text = truncate_text(redact_memory_text(text), _MESSAGE_MAX_CHARS)
+            text = truncate_text(redact_memory_text(text), int(getattr(cfg, "message_max_chars", _MESSAGE_MAX_CHARS) or _MESSAGE_MAX_CHARS))
             lines.append(f"[{index}] role={role} timestamp={timestamp}")
             lines.append(text or "(empty)")
             lines.append("")
@@ -1289,6 +1500,9 @@ class BackgroundReviewService:
         allowed_types = set(self._allowed_types())
         allowed_domains = self._allowed_domain_ids()
         max_items = int(getattr(self.config, "max_proposals_per_turn", 8) or 8)
+        title_max_chars = int(getattr(self.config, "title_max_chars", _TITLE_MAX_CHARS) or _TITLE_MAX_CHARS)
+        content_max_chars = int(getattr(self.config, "content_max_chars", _CONTENT_MAX_CHARS) or _CONTENT_MAX_CHARS)
+        rationale_max_chars = int(getattr(self.config, "rationale_max_chars", _RATIONALE_MAX_CHARS) or _RATIONALE_MAX_CHARS)
         proposals: list[ReviewProposal] = []
         now = datetime.now(timezone.utc).isoformat()
         for raw in raw_proposals:
@@ -1298,15 +1512,15 @@ class BackgroundReviewService:
                 continue
             proposal_type = str(raw.get("type") or raw.get("proposal_type") or "").strip().lower()
             domain_id = str(raw.get("domain_id") or raw.get("domain") or "core").strip()
-            title = _clean_text(raw.get("title"), _TITLE_MAX_CHARS)
-            content = _clean_text(raw.get("content"), _CONTENT_MAX_CHARS)
+            title = _clean_text(raw.get("title"), title_max_chars)
+            content = _clean_text(raw.get("content"), content_max_chars)
             if proposal_type not in allowed_types or domain_id not in allowed_domains:
                 continue
             if not title or not content:
                 continue
             confidence = _confidence(raw.get("confidence"))
-            rationale = _clean_text(raw.get("rationale") or raw.get("reason"), _RATIONALE_MAX_CHARS)
-            evidence = _evidence(raw.get("evidence"))
+            rationale = _clean_text(raw.get("rationale") or raw.get("reason"), rationale_max_chars)
+            evidence = _evidence(raw.get("evidence"), config=self._resolved_background_review_config(self.config))
             payload = raw.get("payload")
             if not isinstance(payload, dict):
                 payload = raw.get("fact") if isinstance(raw.get("fact"), dict) else {}
@@ -1337,6 +1551,15 @@ def _proposal_type(record: dict[str, Any]) -> str:
 
 def _proposal_origin(record: dict[str, Any]) -> str:
     return str(record.get("origin") or DEFAULT_REVIEW_ORIGIN).strip().lower() or DEFAULT_REVIEW_ORIGIN
+
+
+def _review_source_for_calibration(record: dict[str, Any]) -> str:
+    origin = _proposal_origin(record)
+    if origin in {"dream", "background_review", "curator", "manual"}:
+        return origin
+    if origin == AUTO_EVOLUTION_ORIGIN:
+        return "curator"
+    return "manual"
 
 
 def _is_auto_evolution_record(record: dict[str, Any]) -> bool:
@@ -1524,7 +1747,9 @@ def _review_confidence(record: dict[str, Any], payload: dict[str, Any]) -> float
 def _fact_fields_from_proposal(record: dict[str, Any]) -> dict[str, Any]:
     proposal_type = _proposal_type(record)
     payload = _proposal_payload(record)
-    content = _clean_text(payload.get("content") or record.get("content"), _CONTENT_MAX_CHARS)
+    content_max_chars = BackgroundReviewConfig().content_max_chars
+    evidence_max_chars = BackgroundReviewConfig().evidence_max_chars
+    content = _clean_text(payload.get("content") or record.get("content"), content_max_chars)
     if not content:
         raise ValueError("proposal content cannot be empty")
 
@@ -1541,7 +1766,7 @@ def _fact_fields_from_proposal(record: dict[str, Any]) -> dict[str, Any]:
     evidence = next((str(item).strip() for item in evidence_items if str(item).strip()), "")
     if not evidence:
         evidence = str(record.get("rationale") or record.get("title") or "").strip()
-    evidence = _clean_text(evidence, _EVIDENCE_MAX_CHARS)
+    evidence = _clean_text(evidence, evidence_max_chars)
     requires_confirmation = _pending_confirmation_required(
         category=category,
         scope=scope,
@@ -1638,7 +1863,8 @@ def _confidence(value: Any) -> float | None:
     return max(0.0, min(number, 1.0))
 
 
-def _evidence(value: Any) -> list[str]:
+def _evidence(value: Any, *, config: BackgroundReviewConfig | None = None) -> list[str]:
+    cfg = config or BackgroundReviewConfig()
     if isinstance(value, str):
         candidates = [value]
     elif isinstance(value, list):
@@ -1646,8 +1872,8 @@ def _evidence(value: Any) -> list[str]:
     else:
         candidates = []
     cleaned: list[str] = []
-    for item in candidates[:_EVIDENCE_MAX_ITEMS]:
-        text = _clean_text(item, _EVIDENCE_MAX_CHARS)
+    for item in candidates[: int(cfg.evidence_max_items or _EVIDENCE_MAX_ITEMS)]:
+        text = _clean_text(item, int(cfg.evidence_max_chars or _EVIDENCE_MAX_CHARS))
         if text:
             cleaned.append(text)
     return cleaned

@@ -18,9 +18,10 @@ from loguru import logger
 from OriginAgent.agent.action_safety import ActionDecision, ActionRequest
 from OriginAgent.agent.audit import AuditLogger
 from OriginAgent.agent.action_privacy import sanitize_metadata
+from OriginAgent.config.schema import ConfirmationConfig
 from OriginAgent.utils.helpers import ensure_dir, truncate_text
 
-VALID_KINDS = {"action_confirmation", "fact_confirmation", "notify_only"}
+VALID_KINDS = {"action_confirmation", "fact_confirmation", "notify_only", "tool_approval"}
 VALID_STATUSES = {
     "pending",
     "notified",
@@ -55,13 +56,13 @@ ACTION_SNAPSHOT_FORBIDDEN_KEYS = {
     "secret",
     "token",
 }
-PROMPT_MAX_CHARS = 1000
-REASON_MAX_CHARS = 2000
-NOTIFY_TTL = timedelta(hours=24)
+_DEFAULT_CONFIRMATION_CONFIG = ConfirmationConfig()
+PROMPT_MAX_CHARS = _DEFAULT_CONFIRMATION_CONFIG.prompt_max_chars
+REASON_MAX_CHARS = _DEFAULT_CONFIRMATION_CONFIG.reason_max_chars
+NOTIFY_TTL = timedelta(seconds=_DEFAULT_CONFIRMATION_CONFIG.notify_ttl_seconds)
 CONFIRM_TTL_BY_RISK = {
-    "low": timedelta(minutes=10),
-    "medium": timedelta(minutes=5),
-    "high": timedelta(minutes=2),
+    key: timedelta(seconds=max(0, int(value)))
+    for key, value in _DEFAULT_CONFIRMATION_CONFIG.confirm_ttl_by_risk.items()
 }
 
 CONFIRM_ONCE_EXACT_PHRASES = {
@@ -375,11 +376,13 @@ class ConfirmationManager:
         store: PendingConfirmationStore | None = None,
         audit_logger: AuditLogger | None = None,
         prompt_builder: ConfirmationPromptBuilder | None = None,
+        config: ConfirmationConfig | None = None,
     ):
         self.workspace = workspace
         self.store = store or PendingConfirmationStore(workspace)
         self.audit_logger = audit_logger
         self.prompt_builder = prompt_builder or DefaultConfirmationPromptBuilder()
+        self.config = config or ConfirmationConfig()
 
     def create_from_action_decision(
         self,
@@ -403,7 +406,7 @@ class ConfirmationManager:
             return None
 
         created_at = _normalize_datetime(now)
-        expires_at = created_at + _ttl_for(kind, request.risk)
+        expires_at = created_at + _ttl_for(kind, request.risk, self.config)
         confirmation = ConfirmationRequest(
             confirmation_id=f"confirmation_{uuid.uuid4().hex[:12]}",
             kind=kind,
@@ -435,6 +438,71 @@ class ConfirmationManager:
             decision=("notified" if stored.kind == "notify_only" else "created"),
             reason=stored.decision_reason,
             now=created_at,
+            metadata={
+                "confirmation_status": stored.status,
+                "confirmation_kind": stored.kind,
+                "expires_at": stored.expires_at,
+                "consumed": stored.consumed_at is not None,
+            },
+        )
+        return stored
+
+    def create_tool_approval(
+        self,
+        *,
+        tool_name: str,
+        prompt: str,
+        decision_reason: str,
+        requested_by: str | None = None,
+        trigger: str | None = None,
+        risk: str | None = "high",
+        scope: str | None = None,
+        session_key: str | None = None,
+        metadata: dict[str, Any] | None = None,
+        action_payload: dict[str, Any] | None = None,
+        idempotency_key: str | None = None,
+        now: datetime | None = None,
+    ) -> ConfirmationRequest:
+        current_time = _normalize_datetime(now)
+        if idempotency_key:
+            for existing in self.store.read_all():
+                if (
+                    existing.kind == "tool_approval"
+                    and existing.status == "pending"
+                    and not _is_expired(existing, now=current_time)
+                    and existing.idempotency_key == idempotency_key
+                ):
+                    return existing
+        expires_at = current_time + _ttl_for("tool_approval", risk, self.config)
+        confirmation_metadata = dict(metadata or {})
+        if session_key:
+            confirmation_metadata.setdefault("session_key", session_key)
+        confirmation_metadata.setdefault("tool_name", tool_name)
+        confirmation = ConfirmationRequest(
+            confirmation_id=f"confirmation_{uuid.uuid4().hex[:12]}",
+            kind="tool_approval",
+            status="pending",
+            prompt=_sanitize_text(prompt, PROMPT_MAX_CHARS),
+            action=f"tool:{tool_name}",
+            scope=_optional_str(scope),
+            trigger=_optional_str(trigger),
+            risk="high" if not _optional_str(risk) else _optional_str(risk),
+            requested_by=_optional_str(requested_by),
+            decision_reason=_sanitize_text(decision_reason, REASON_MAX_CHARS),
+            presence_status="unknown",
+            related_fact_ids=[],
+            created_at=_format_datetime(current_time),
+            expires_at=_format_datetime(expires_at),
+            action_payload=_sanitize_action_payload_snapshot(action_payload or {}),
+            idempotency_key=_optional_str(idempotency_key),
+            metadata=_sanitize_confirmation_metadata(confirmation_metadata),
+        )
+        stored = self.store.upsert(confirmation)
+        self._audit_confirmation_event(
+            stored,
+            decision="created",
+            reason=stored.decision_reason,
+            now=current_time,
             metadata={
                 "confirmation_status": stored.status,
                 "confirmation_kind": stored.kind,
@@ -671,6 +739,38 @@ class ConfirmationManager:
             and not _is_expired(confirmation)
         ]
 
+    def list_tool_approvals(
+        self,
+        *,
+        session_key: str | None = None,
+        include_non_pending: bool = False,
+        now: datetime | None = None,
+    ) -> list[ConfirmationRequest]:
+        current_time = _normalize_datetime(now)
+        results: list[ConfirmationRequest] = []
+        for confirmation in self.store.read_all():
+            if confirmation.kind != "tool_approval":
+                continue
+            if session_key and confirmation.metadata.get("session_key") != session_key:
+                continue
+            if not include_non_pending:
+                if confirmation.status != "pending" or _is_expired(confirmation, now=current_time):
+                    continue
+            results.append(confirmation)
+        results.sort(key=lambda item: (item.created_at, item.confirmation_id))
+        return results
+
+    def latest_pending_tool_approval(
+        self,
+        session_key: str,
+        *,
+        now: datetime | None = None,
+    ) -> ConfirmationRequest | None:
+        approvals = self.list_tool_approvals(session_key=session_key, now=now)
+        if not approvals:
+            return None
+        return approvals[-1]
+
     def _audit_confirmation_event(
         self,
         confirmation: ConfirmationRequest,
@@ -775,10 +875,25 @@ def _human_action(request: ActionRequest) -> str:
     return f"'{request.action}'"
 
 
-def _ttl_for(kind: str, risk: str | None) -> timedelta:
+def _ttl_for(
+    kind: str,
+    risk: str | None,
+    config: ConfirmationConfig | None = None,
+) -> timedelta:
+    cfg = config or _DEFAULT_CONFIRMATION_CONFIG
     if kind == "notify_only":
-        return NOTIFY_TTL
-    return CONFIRM_TTL_BY_RISK.get(risk or "low", CONFIRM_TTL_BY_RISK["low"])
+        return timedelta(seconds=max(0, int(cfg.notify_ttl_seconds)))
+    ttl_map = {
+        str(key or "").strip().lower(): timedelta(seconds=max(0, int(value)))
+        for key, value in dict(cfg.confirm_ttl_by_risk).items()
+    }
+    if "low" not in ttl_map:
+        ttl_map["low"] = timedelta(seconds=10 * 60)
+    return ttl_map.get((risk or "low").strip().lower(), ttl_map["low"])
+
+
+def classify_confirmation_reply(reply: str) -> str:
+    return _classify_reply(reply)
 
 
 def _classify_reply(reply: str) -> str:

@@ -87,6 +87,14 @@ def set_tool_context(
     )
     if hasattr(tools, "set_capability_snapshot"):
         tools.set_capability_snapshot(capability_snapshot)
+    if hasattr(tools, "set_runtime_context"):
+        tools.set_runtime_context(
+            actor_id=actor_id,
+            session_key=effective_key,
+            trigger=trigger,
+            channel=channel,
+            chat_id=chat_id,
+        )
     if hasattr(tools, "set_audit_context"):
         tools.set_audit_context(actor_id=actor_id, session_key=effective_key)
     for name in context_tool_names:
