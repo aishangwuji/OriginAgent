@@ -38,6 +38,7 @@ class RuntimeContextSnapshot:
     skills_summary: dict[str, Any] = field(default_factory=dict)
     facts_summary: dict[str, Any] = field(default_factory=dict)
     memory_summary: dict[str, Any] = field(default_factory=dict)
+    nearline_memory_summary: dict[str, Any] = field(default_factory=dict)
 
     def to_json(self) -> dict[str, Any]:
         return asdict(self)
@@ -45,4 +46,3 @@ class RuntimeContextSnapshot:
 
 def now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
-

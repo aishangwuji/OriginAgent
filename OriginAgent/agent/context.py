@@ -16,6 +16,7 @@ from OriginAgent.agent.memory import MemoryStore
 from OriginAgent.agent.self_model import SelfModelRenderer, SelfModelService
 from OriginAgent.agent.skills import SkillsLoader
 from OriginAgent.config.schema import ContextConfig
+from OriginAgent.memory.retrieval import NearlineMemoryRetriever
 from OriginAgent.session.goal_state import goal_state_runtime_lines
 from OriginAgent.utils.helpers import (
     build_assistant_message,
@@ -67,6 +68,10 @@ class ContextBuilder:
         self._memory_feature_flags = dict(memory_feature_flags or {})
         self._context_config = context_config or ContextConfig()
         self.memory = MemoryStore(workspace, feature_flags=self._memory_feature_flags)
+        self.nearline_memory = NearlineMemoryRetriever(
+            workspace,
+            fact_store=self.memory.fact_store,
+        )
         self.domain_packs = domain_pack_manager or DomainPackManager(
             workspace,
             config=domain_packs_config,
@@ -145,17 +150,21 @@ class ContextBuilder:
         if user_file:
             blocks.append(self.build_reference_context_block("user_profile", user_file))
 
-        memory_bundle = self.memory.get_memory_context_bundle()
-        memory = memory_bundle.rendered_text
-        if memory:
-            source = "memory_retrieval" if not memory_bundle.fallback_used else "memory"
-            if not memory_bundle.fallback_used or not self._is_template_content(
-                self.memory.read_memory(),
-                "memory/MEMORY.md",
-            ):
-                blocks.append(self.build_reference_context_block(source, memory))
-
         entries = self.memory.read_unprocessed_history(since_cursor=self.memory.get_last_dream_cursor())
+        layered = self.nearline_memory.retrieve(recent_history=entries[-6:] if entries else None)
+        if layered.has_primary_content and layered.rendered_text.strip():
+            blocks.append(self.build_reference_context_block("layered_memory", layered.rendered_text))
+        else:
+            memory_bundle = self.memory.get_memory_context_bundle()
+            memory = memory_bundle.rendered_text
+            if memory:
+                source = "memory_retrieval" if not memory_bundle.fallback_used else "memory"
+                if not memory_bundle.fallback_used or not self._is_template_content(
+                    self.memory.read_memory(),
+                    "memory/MEMORY.md",
+                ):
+                    blocks.append(self.build_reference_context_block(source, memory))
+
         if entries:
             capped = entries[-self._context_config.max_recent_history:]
             history_text = "\n".join(

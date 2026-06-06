@@ -47,6 +47,7 @@ from OriginAgent.agent.progress_hook import AgentProgressHook
 from OriginAgent.agent.runner import _MAX_INJECTIONS_PER_TURN, AgentRunner, AgentRunSpec
 from OriginAgent.agent.self_model import SelfModelService
 from OriginAgent.agent.subagent import SubagentManager
+from OriginAgent.memory.pipeline import NearlineMemoryPipeline
 from OriginAgent.agent.tools.ask import (
     ask_user_options_from_messages,
     ask_user_outbound,
@@ -319,6 +320,7 @@ class AgentLoop:
         self.tools_config = _tc
         self.evolution_config = evolution_config or defaults.learning.evolution
         self._dream_config = dream_config or defaults.dream
+        self._nearline_memory_config = defaults.nearline_memory
         self._memory_feature_flags = dream_feature_flags(self._dream_config)
         self.session_search_index = SessionSearchIndexService(
             workspace,
@@ -486,6 +488,10 @@ class AgentLoop:
             reminder_store=self._reminder_store,
             config=self._active_intent_config,
         )
+        self.nearline_memory = NearlineMemoryPipeline(
+            workspace=workspace,
+            config=self._nearline_memory_config,
+        )
         self.introspection = RuntimeIntrospectionService(
             loop=self,
             workspace=workspace,
@@ -500,6 +506,7 @@ class AgentLoop:
             domain_pack_manager=self.domain_packs,
             background_review_service=self.background_review,
             curator_service=self.curator,
+            nearline_memory_service=self.nearline_memory,
             session_search_index_service=self.session_search_index,
             evolution_config=self.evolution_config,
         )
@@ -2149,6 +2156,7 @@ class AgentLoop:
                 replay_max_messages=self._max_messages,
             )
         )
+        self._schedule_nearline_memory(ctx)
         self._schedule_background_review(ctx)
         self._schedule_curator_review(ctx)
         return "ok"
@@ -2226,6 +2234,30 @@ class AgentLoop:
         self._schedule_background(
             self.curator.review_workspace(
                 session_key=ctx.session_key,
+                turn_id=ctx.turn_id,
+            )
+        )
+
+    def _schedule_nearline_memory(self, ctx: TurnContext) -> None:
+        """Schedule nearline sidecar extraction without blocking the foreground reply."""
+        if ctx.session is None:
+            return
+        service = getattr(self, "nearline_memory", None)
+        if service is None or not getattr(service, "enabled", False):
+            return
+        if ctx.stop_reason in {"error", "tool_error"}:
+            return
+        actor_id = (
+            ctx.runtime_context.actor_id
+            if ctx.runtime_context is not None and getattr(ctx.runtime_context, "actor_id", None)
+            else "user"
+        )
+        self._schedule_background(
+            service.process_turn(
+                session=ctx.session,
+                channel=ctx.msg.channel,
+                chat_id=ctx.msg.chat_id,
+                actor_id=actor_id,
                 turn_id=ctx.turn_id,
             )
         )

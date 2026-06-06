@@ -20,6 +20,8 @@ def test_self_model_builds_empty_workspace_snapshot(tmp_path) -> None:
     assert self_model["skills"]["stats"]["workspace_skills_count"] == 0
     assert self_model["workflows"]["items"] == []
     assert self_model["facts"]["active_count"] == 0
+    assert self_model["memory"]["nearline"]["status"] == "disabled"
+    assert self_model["memory"]["nearline"]["memcell_count"] == 0
     assert self_model["reviews"]["pending_count"] == 0
     assert self_model["confirmations"]["pending_count"] == 0
     limitation_codes = {item["code"] for item in self_model["limitations"]}
@@ -105,3 +107,28 @@ def test_self_model_derives_limitations_and_redacts_sensitive_content(tmp_path) 
     }
     assert RAW_SECRET not in serialized
     assert "[REDACTED_SECRET]" in serialized
+
+
+def test_self_model_uses_nearline_runtime_snapshot_when_present(tmp_path) -> None:
+    self_model = SelfModelService(
+        tmp_path,
+        runtime_snapshot={
+            "memory_summary": {
+                "has_memory_context": False,
+                "recent_history_pending_count": 0,
+                "nearline": {
+                    "status": "enabled",
+                    "memcell_count": 3,
+                    "episode_count": 2,
+                },
+            },
+            "nearline_memory_summary": {
+                "status": "enabled",
+                "memcell_count": 3,
+                "episode_count": 2,
+            },
+        },
+    ).build()
+
+    assert self_model["memory"]["nearline"]["status"] == "enabled"
+    assert self_model["memory"]["nearline"]["memcell_count"] == 3

@@ -14,6 +14,8 @@ from OriginAgent.agent.runtime_models import RuntimeContextSnapshot
 from OriginAgent.agent.self_model import SelfModelService
 from OriginAgent.agent.skills import SkillsLoader
 from OriginAgent.agent.workflow_artifacts import summarize_workflow_artifacts
+from OriginAgent.config.schema import AgentDefaults
+from OriginAgent.memory.store import NearlineMemoryStore
 
 
 class RuntimeIntrospectionService:
@@ -40,6 +42,7 @@ class RuntimeIntrospectionService:
         domain_pack_manager: Any | None = None,
         background_review_service: Any | None = None,
         curator_service: Any | None = None,
+        nearline_memory_service: Any | None = None,
         session_search_index_service: Any | None = None,
         evolution_config: Any | None = None,
     ) -> None:
@@ -56,6 +59,7 @@ class RuntimeIntrospectionService:
         self._domain_pack_manager = domain_pack_manager
         self._background_review_service = background_review_service
         self._curator_service = curator_service
+        self._nearline_memory_service = nearline_memory_service
         self._session_search_index_service = session_search_index_service
         self._evolution_config = evolution_config
 
@@ -148,7 +152,9 @@ class RuntimeIntrospectionService:
             "confirmation_available": self._confirmation_store is not None,
             **domain_status,
             **background_review_status,
+            **self._prefixed_task_status(background_review_status, "background_review"),
             **curator_status,
+            **self._prefixed_task_status(curator_status, "curator"),
             **skill_status,
             **workflow_status,
             **session_search_status,
@@ -183,6 +189,7 @@ class RuntimeIntrospectionService:
         )
         facts_summary = self._facts_summary()
         memory_summary = self._memory_summary()
+        nearline_memory_summary = self._nearline_memory_summary()
         return RuntimeContextSnapshot(
             runtime={
                 "registered_tools_count": _safe_len(getattr(self._registry, "tool_names", [])),
@@ -200,6 +207,7 @@ class RuntimeIntrospectionService:
             skills_summary=self._skill_lifecycle_status(self._workspace, self._domain_pack_manager),
             facts_summary=facts_summary,
             memory_summary=memory_summary,
+            nearline_memory_summary=nearline_memory_summary,
         )
 
     def background_task_summary(
@@ -224,8 +232,13 @@ class RuntimeIntrospectionService:
             getattr(self._loop, "auto_compact", None),
             defaults={},
         )
+        nearline_status = self._service_status(
+            self._nearline_memory_service,
+            defaults={},
+        )
         tasks = {
             "dream": dream_status,
+            "nearline_memory": nearline_status,
             "background_review": background_review_status,
             "curator": curator_status,
             "auto_compact": auto_compact_status,
@@ -300,7 +313,19 @@ class RuntimeIntrospectionService:
             return {
                 "has_memory_context": bool(content.strip()),
                 "recent_history_pending_count": len(pending_history),
+                "nearline": self._nearline_memory_summary(),
             }
+        except Exception:
+            return {}
+
+    def _nearline_memory_summary(self) -> dict[str, Any]:
+        try:
+            config = AgentDefaults().nearline_memory
+            return NearlineMemoryStore(self._workspace).summary(
+                nearline_enabled=bool(config.enabled),
+                pipeline_enabled=bool(config.pipeline_enabled),
+                profile_shadow_write_enabled=bool(config.profile_shadow_write_enabled),
+            )
         except Exception:
             return {}
 
@@ -386,6 +411,25 @@ class RuntimeIntrospectionService:
             return dict(service.runtime_status())
         except Exception:
             return dict(defaults)
+
+    @staticmethod
+    def _prefixed_task_status(status: dict[str, Any], prefix: str) -> dict[str, Any]:
+        fields = (
+            "last_status",
+            "last_fault_class",
+            "last_retryable",
+            "last_degraded",
+            "last_reason",
+            "last_started_at",
+            "last_finished_at",
+            "consecutive_failures",
+            "last_report",
+        )
+        return {
+            f"{prefix}_{field}": status.get(field)
+            for field in fields
+            if field in status
+        }
 
     @staticmethod
     def _reminder_status(store: ReminderStore | None) -> dict[str, Any]:

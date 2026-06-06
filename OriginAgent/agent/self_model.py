@@ -19,6 +19,7 @@ from OriginAgent.agent.workflow_artifacts import (
     list_workflow_artifact_records,
     summarize_workflow_artifacts,
 )
+from OriginAgent.memory.store import NearlineMemoryStore
 from OriginAgent.utils.helpers import truncate_text
 
 _LIMITATION_MAX_CHARS = 220
@@ -142,6 +143,7 @@ class SelfModelService:
                 skills_summary=dict(snapshot.get("skills_summary") or {}),
                 facts_summary=dict(snapshot.get("facts_summary") or {}),
                 memory_summary=dict(snapshot.get("memory_summary") or {}),
+                nearline_memory_summary=dict(snapshot.get("nearline_memory_summary") or {}),
             )
         return RuntimeContextSnapshot()
 
@@ -250,12 +252,29 @@ class SelfModelService:
             return {
                 "has_memory_context": has_memory_context,
                 "recent_history_pending_count": len(pending_history),
+                "nearline": self._build_nearline_memory_summary(),
             }
         except Exception:
             return {
                 "has_memory_context": False,
                 "recent_history_pending_count": 0,
+                "nearline": self._build_nearline_memory_summary(),
             }
+
+    def _build_nearline_memory_summary(self) -> dict[str, Any]:
+        if self._runtime_snapshot.nearline_memory_summary:
+            return dict(self._runtime_snapshot.nearline_memory_summary)
+        try:
+            from OriginAgent.config.schema import AgentDefaults
+
+            config = AgentDefaults().nearline_memory
+            return NearlineMemoryStore(self.workspace).summary(
+                nearline_enabled=bool(config.enabled),
+                pipeline_enabled=bool(config.pipeline_enabled),
+                profile_shadow_write_enabled=bool(config.profile_shadow_write_enabled),
+            )
+        except Exception:
+            return {}
 
     def _build_reviews(self) -> tuple[dict[str, Any], list[dict[str, Any]]]:
         if self._runtime_snapshot.reviews:

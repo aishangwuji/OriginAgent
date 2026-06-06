@@ -289,6 +289,83 @@ def test_cache_reuse_and_invalidation_on_file_fingerprint(tmp_path: Path) -> Non
     assert third["total_matches"] == 1
 
 
+def test_searches_nearline_sources_when_explicitly_requested(tmp_path: Path) -> None:
+    _write_jsonl(
+        tmp_path / "memory" / "nearline" / "episodes.jsonl",
+        [
+            {
+                "episode_id": "ep_1",
+                "memcell_id": "mem_1",
+                "session_key": "cli:direct",
+                "owner_id": "user",
+                "summary": "Release checklist for Friday deployment",
+                "content": "Need a deployment checklist before Friday release.",
+                "timestamp": "2026-05-19T10:00:00",
+            }
+        ],
+    )
+    _write_jsonl(
+        tmp_path / "memory" / "nearline" / "foresights.jsonl",
+        [
+            {
+                "foresight_id": "fo_1",
+                "memcell_id": "mem_1",
+                "session_key": "cli:direct",
+                "owner_id": "user",
+                "content": "Deploy on 2026-05-21 morning",
+                "evidence": "We will deploy on 2026-05-21.",
+                "start_at": "2026-05-21T09:00:00",
+                "end_at": "2026-05-21T12:00:00",
+                "timestamp": "2026-05-19T10:01:00",
+            }
+        ],
+    )
+    _write_jsonl(
+        tmp_path / "memory" / "nearline" / "agent_cases.jsonl",
+        [
+            {
+                "case_id": "case_1",
+                "memcell_id": "mem_2",
+                "session_key": "cli:direct",
+                "agent_id": "origin",
+                "task_intent": "Implement deployment validation",
+                "approach": "Added smoke test and dry run",
+                "outcome_summary": "Validation succeeded",
+                "quality_score": 0.9,
+                "timestamp": "2026-05-19T10:02:00",
+            }
+        ],
+    )
+    _write_jsonl(
+        tmp_path / "memory" / "nearline" / "profiles.jsonl",
+        [
+            {
+                "profile_id": "profile_1",
+                "owner_id": "user",
+                "summary": "Prefers concise deployment updates",
+                "explicit_traits": ["Prefers concise updates"],
+                "implicit_traits": ["Usually asks for deployment checklists"],
+                "updated_at": "2026-05-19T10:03:00",
+            }
+        ],
+    )
+
+    service = SessionSearchService(tmp_path)
+    episode_result = service.search(query="deployment checklist", sources=["episodes"])
+    foresight_result = service.search(query="2026-05-21", sources=["foresights"])
+    case_result = service.search(query="smoke test", sources=["agent_cases"])
+    profile_result = service.search(query="concise updates", sources=["profiles"])
+
+    assert episode_result["total_matches"] == 1
+    assert episode_result["results"][0]["source"] == "episodes"
+    assert foresight_result["total_matches"] == 1
+    assert foresight_result["results"][0]["source"] == "foresights"
+    assert case_result["total_matches"] == 1
+    assert case_result["results"][0]["source"] == "agent_cases"
+    assert profile_result["total_matches"] == 1
+    assert profile_result["results"][0]["source"] == "profiles"
+
+
 def test_large_range_returns_performance_note(tmp_path: Path) -> None:
     old = (datetime.now(timezone.utc) - timedelta(days=45)).date().isoformat()
     _write_jsonl(

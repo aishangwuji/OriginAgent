@@ -122,6 +122,81 @@ class DreamConfig(Base):
         return f"every {hours}h"
 
 
+class NearlineMemoryConfig(Base):
+    """Layered nearline memory scaffolding configuration."""
+
+    enabled: bool = Field(
+        default=False,
+        validation_alias=AliasChoices("enabled"),
+    )
+    pipeline_enabled: bool = Field(
+        default=False,
+        validation_alias=AliasChoices(
+            "pipelineEnabled",
+            "pipeline_enabled",
+        ),
+        serialization_alias="pipelineEnabled",
+    )
+    profile_shadow_write_enabled: bool = Field(
+        default=False,
+        validation_alias=AliasChoices(
+            "profileShadowWriteEnabled",
+            "profile_shadow_write_enabled",
+        ),
+        serialization_alias="profileShadowWriteEnabled",
+    )
+    retrieval_top_k: int = Field(
+        default=8,
+        ge=1,
+        le=50,
+        validation_alias=AliasChoices(
+            "retrievalTopK",
+            "retrieval_top_k",
+        ),
+        serialization_alias="retrievalTopK",
+    )
+    max_messages_per_memcell: int = Field(
+        default=12,
+        ge=1,
+        le=100,
+        validation_alias=AliasChoices(
+            "maxMessagesPerMemcell",
+            "max_messages_per_memcell",
+        ),
+        serialization_alias="maxMessagesPerMemcell",
+    )
+    idle_gap_seconds: int = Field(
+        default=900,
+        ge=30,
+        le=86_400,
+        validation_alias=AliasChoices(
+            "idleGapSeconds",
+            "idle_gap_seconds",
+        ),
+        serialization_alias="idleGapSeconds",
+    )
+    profile_refresh_min_memcells: int = Field(
+        default=1,
+        ge=1,
+        le=100,
+        validation_alias=AliasChoices(
+            "profileRefreshMinMemcells",
+            "profile_refresh_min_memcells",
+        ),
+        serialization_alias="profileRefreshMinMemcells",
+    )
+    event_batch_size: int = Field(
+        default=10,
+        ge=1,
+        le=200,
+        validation_alias=AliasChoices(
+            "eventBatchSize",
+            "event_batch_size",
+        ),
+        serialization_alias="eventBatchSize",
+    )
+
+
 class InlineFallbackConfig(Base):
     """Inline fallback model candidate."""
 
@@ -906,6 +981,11 @@ class AgentDefaults(Base):
         serialization_alias="taskRuntime",
     )
     dream: DreamConfig = Field(default_factory=DreamConfig)
+    nearline_memory: NearlineMemoryConfig = Field(
+        default_factory=NearlineMemoryConfig,
+        validation_alias=AliasChoices("nearlineMemory", "nearline_memory"),
+        serialization_alias="nearlineMemory",
+    )
 
 
 class AgentsConfig(Base):

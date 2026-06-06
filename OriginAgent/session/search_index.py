@@ -42,7 +42,17 @@ INDEX_SCHEMA_VERSION = "1"
 INDEX_SNIPPET_MAX_CHARS = 240
 MAX_INDEX_TOKEN_LENGTH = 80
 MAX_QUERY_TOKENS = 24
-SUPPORTED_INDEX_SOURCES = ("sessions", "history", "webui", "facts", "cold")
+SUPPORTED_INDEX_SOURCES = (
+    "sessions",
+    "history",
+    "webui",
+    "facts",
+    "cold",
+    "episodes",
+    "foresights",
+    "agent_cases",
+    "profiles",
+)
 DEFAULT_INDEX_SOURCES = ("sessions", "history", "webui")
 _TOKEN_RE = re.compile(r"[A-Za-z0-9]+(?:[._:/\\-][A-Za-z0-9]+)*")
 _CAMEL_BOUNDARY_RE = re.compile(r"(?<=[a-z0-9])(?=[A-Z])")
@@ -515,6 +525,18 @@ class SessionSearchIndexService:
         if source == "cold":
             root = self.workspace / SESSION_COLD_ARCHIVE_DIR
             return sorted(root.glob("*.jsonl")) if root.is_dir() else []
+        if source == "episodes":
+            path = self.workspace / "memory" / "nearline" / "episodes.jsonl"
+            return [path] if path.is_file() else []
+        if source == "foresights":
+            path = self.workspace / "memory" / "nearline" / "foresights.jsonl"
+            return [path] if path.is_file() else []
+        if source == "agent_cases":
+            path = self.workspace / "memory" / "nearline" / "agent_cases.jsonl"
+            return [path] if path.is_file() else []
+        if source == "profiles":
+            path = self.workspace / "memory" / "nearline" / "profiles.jsonl"
+            return [path] if path.is_file() else []
         return []
 
     def _records_for_source(self, source: str, path: Path) -> list[dict[str, Any]]:

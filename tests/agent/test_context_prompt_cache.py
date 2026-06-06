@@ -639,3 +639,106 @@ def test_semantic_memory_bundle_is_injected_as_retrieval_context(tmp_path) -> No
 
     assert len(memory_blocks) == 1
     assert "User prefers dark mode" in memory_blocks[0]["text"]
+
+
+def test_layered_memory_falls_back_to_legacy_bundle_when_nearline_empty(tmp_path) -> None:
+    workspace = _make_workspace(tmp_path)
+    builder = ContextBuilder(
+        workspace,
+        memory_feature_flags={"semantic_retrieval_enabled": True},
+    )
+    builder.memory.upsert_fact_and_rebuild_memory(
+        "User prefers dark mode",
+        category="preference",
+        scope="user.interface.theme",
+        owner="user",
+        source_cursors=[1],
+        source_excerpt="please use dark mode",
+    )
+
+    blocks = builder.build_reference_context_blocks()
+
+    assert any(block.get("_meta", {}).get("source") == "memory_retrieval" for block in blocks)
+    assert not any(block.get("_meta", {}).get("source") == "layered_memory" for block in blocks)
+
+
+def test_layered_memory_injects_episode_support_facts_foresight_and_profile(tmp_path) -> None:
+    workspace = _make_workspace(tmp_path)
+    builder = ContextBuilder(workspace)
+    nearline = workspace / "memory" / "nearline"
+    nearline.mkdir(parents=True, exist_ok=True)
+    (nearline / "episodes.jsonl").write_text(
+        json.dumps(
+            {
+                "episode_id": "ep_1",
+                "memcell_id": "mem_1",
+                "session_key": "cli:direct",
+                "owner_id": "user",
+                "summary": "User wants a release checklist for Friday deployment.",
+                "content": "Please help me prepare a release checklist for the Friday deployment.",
+                "timestamp": "2026-06-05T10:00:00+08:00",
+                "source_message_ids": ["msg_1"],
+                "metadata": {},
+            },
+            ensure_ascii=False,
+        ) + "\n",
+        encoding="utf-8",
+    )
+    (nearline / "foresights.jsonl").write_text(
+        json.dumps(
+            {
+                "foresight_id": "fo_1",
+                "memcell_id": "mem_1",
+                "session_key": "cli:direct",
+                "owner_id": "user",
+                "content": "Deploy on 2026-06-07 morning.",
+                "evidence": "We will deploy on 2026-06-07.",
+                "start_at": "2026-06-07T09:00:00+08:00",
+                "end_at": "2026-06-07T12:00:00+08:00",
+                "timestamp": "2026-06-05T10:00:00+08:00",
+                "source_message_ids": ["msg_1"],
+                "metadata": {},
+            },
+            ensure_ascii=False,
+        ) + "\n",
+        encoding="utf-8",
+    )
+    (nearline / "profiles.jsonl").write_text(
+        json.dumps(
+            {
+                "profile_id": "profile_1",
+                "owner_id": "user",
+                "summary": "User prefers concise release updates.",
+                "explicit_traits": ["Prefers concise release updates"],
+                "implicit_traits": ["Often asks for deployment checklists"],
+                "source_memcell_ids": ["mem_1"],
+                "updated_at": "2026-06-05T12:00:00+08:00",
+                "metadata": {},
+            },
+            ensure_ascii=False,
+        ) + "\n",
+        encoding="utf-8",
+    )
+    builder.memory.upsert_fact_and_rebuild_memory(
+        "User usually wants deployment checklists before release.",
+        category="note",
+        scope="project.release",
+        owner="user",
+        source_cursors=[1],
+        source_excerpt="prepare release checklist",
+    )
+    builder.memory.append_history("Please help me prepare a release checklist for Friday deployment.")
+
+    blocks = builder.build_reference_context_blocks()
+    layered_blocks = [
+        block for block in blocks
+        if isinstance(block, dict) and block.get("_meta", {}).get("source") == "layered_memory"
+    ]
+
+    assert len(layered_blocks) == 1
+    text = layered_blocks[0]["text"]
+    assert "## Relevant Episodes" in text
+    assert "## Supporting Facts" in text
+    assert "## Active Foresight" in text
+    assert "## Profile Summary" in text
+    assert "release checklist" in text

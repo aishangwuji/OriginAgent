@@ -1,4 +1,4 @@
-from OriginAgent.config.schema import DreamConfig
+from OriginAgent.config.schema import AgentDefaults, DreamConfig, NearlineMemoryConfig
 
 
 def test_dream_config_defaults_to_interval_hours() -> None:
@@ -87,3 +87,37 @@ def test_dream_config_memory_rollout_flags_accept_camel_case() -> None:
     assert dumped["contradictionAutoFlipEnabled"] is True
     assert dumped["factAuditEnabled"] is True
     assert dumped["lazySnapshotEnabled"] is True
+
+
+def test_nearline_memory_config_defaults_disabled() -> None:
+    cfg = NearlineMemoryConfig()
+
+    assert cfg.enabled is False
+    assert cfg.pipeline_enabled is False
+    assert cfg.profile_shadow_write_enabled is False
+    assert cfg.retrieval_top_k == 8
+
+
+def test_agent_defaults_accept_nearline_memory_camel_case() -> None:
+    defaults = AgentDefaults.model_validate({
+        "nearlineMemory": {
+            "enabled": True,
+            "pipelineEnabled": True,
+            "profileShadowWriteEnabled": True,
+            "retrievalTopK": 12,
+            "maxMessagesPerMemcell": 16,
+            "idleGapSeconds": 600,
+            "profileRefreshMinMemcells": 2,
+            "eventBatchSize": 20,
+        }
+    })
+
+    dumped = defaults.model_dump(by_alias=True)
+    nearline = dumped["nearlineMemory"]
+
+    assert defaults.nearline_memory.enabled is True
+    assert defaults.nearline_memory.pipeline_enabled is True
+    assert defaults.nearline_memory.profile_shadow_write_enabled is True
+    assert nearline["pipelineEnabled"] is True
+    assert nearline["profileShadowWriteEnabled"] is True
+    assert nearline["retrievalTopK"] == 12

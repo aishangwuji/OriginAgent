@@ -19,8 +19,28 @@ from OriginAgent.session.cold_archive import SESSION_COLD_ARCHIVE_DIR
 from OriginAgent.utils.helpers import truncate_text
 
 DEFAULT_SOURCES: tuple[str, ...] = ("sessions", "history", "webui")
-SUPPORTED_SOURCES: tuple[str, ...] = ("sessions", "history", "webui", "facts", "cold")
-SOURCE_PRIORITY: dict[str, int] = {"sessions": 0, "history": 1, "webui": 2, "facts": 3, "cold": 4}
+SUPPORTED_SOURCES: tuple[str, ...] = (
+    "sessions",
+    "history",
+    "webui",
+    "facts",
+    "cold",
+    "episodes",
+    "foresights",
+    "agent_cases",
+    "profiles",
+)
+SOURCE_PRIORITY: dict[str, int] = {
+    "sessions": 0,
+    "history": 1,
+    "webui": 2,
+    "facts": 3,
+    "cold": 4,
+    "episodes": 5,
+    "foresights": 6,
+    "agent_cases": 7,
+    "profiles": 8,
+}
 SUPPORTED_MODES: tuple[str, ...] = ("literal", "hybrid", "semantic")
 DEFAULT_LIMIT = 10
 MAX_LIMIT = 50
@@ -377,6 +397,18 @@ class SessionSearchService:
             if not self.cold_archive_dir.is_dir():
                 return []
             return sorted(path for path in self.cold_archive_dir.glob("*.jsonl") if path.is_file())
+        if source == "episodes":
+            path = self.workspace / "memory" / "nearline" / "episodes.jsonl"
+            return [path] if path.is_file() else []
+        if source == "foresights":
+            path = self.workspace / "memory" / "nearline" / "foresights.jsonl"
+            return [path] if path.is_file() else []
+        if source == "agent_cases":
+            path = self.workspace / "memory" / "nearline" / "agent_cases.jsonl"
+            return [path] if path.is_file() else []
+        if source == "profiles":
+            path = self.workspace / "memory" / "nearline" / "profiles.jsonl"
+            return [path] if path.is_file() else []
         return []
 
     def _scan_source(self, source: str, paths: list[Path]) -> _SourceLoad:
@@ -443,6 +475,14 @@ class SessionSearchService:
             return _webui_record_from_json(path, line_no, fallback_session_key, data)
         if source == "facts":
             return _fact_record_from_json(self.workspace, path, line_no, data)
+        if source == "episodes":
+            return _episode_record_from_json(self.workspace, path, line_no, data)
+        if source == "foresights":
+            return _foresight_record_from_json(self.workspace, path, line_no, data)
+        if source == "agent_cases":
+            return _agent_case_record_from_json(self.workspace, path, line_no, data)
+        if source == "profiles":
+            return _profile_record_from_json(self.workspace, path, line_no, data)
         return None
 
 
@@ -704,6 +744,133 @@ def _fact_record_from_json(
         text=text,
         locator=locator,
         record_status=status,
+    )
+
+
+def _episode_record_from_json(
+    workspace: Path,
+    path: Path,
+    line_no: int,
+    data: dict[str, Any],
+) -> SearchRecord | None:
+    summary = _text_from_content(data.get("summary"))
+    content = _text_from_content(data.get("content"))
+    text = "\n".join(part for part in (summary, content) if part.strip())
+    if not text.strip():
+        return None
+    return SearchRecord(
+        source="episodes",
+        session_key=str(data.get("session_key") or "memory:episodes"),
+        role="archive",
+        timestamp=_parse_record_timestamp(data.get("timestamp")),
+        text=text,
+        locator={
+            "path": _relative_path(workspace, path),
+            "line": line_no,
+            "episode_id": str(data.get("episode_id") or ""),
+            "memcell_id": str(data.get("memcell_id") or ""),
+            "owner_id": str(data.get("owner_id") or ""),
+            "has_full_content": True,
+        },
+    )
+
+
+def _foresight_record_from_json(
+    workspace: Path,
+    path: Path,
+    line_no: int,
+    data: dict[str, Any],
+) -> SearchRecord | None:
+    content = _text_from_content(data.get("content"))
+    evidence = _text_from_content(data.get("evidence"))
+    window = " ".join(
+        part for part in (data.get("start_at"), data.get("end_at")) if isinstance(part, str) and part.strip()
+    )
+    text = "\n".join(part for part in (content, evidence, window) if part.strip())
+    if not text.strip():
+        return None
+    return SearchRecord(
+        source="foresights",
+        session_key=str(data.get("session_key") or "memory:foresights"),
+        role="archive",
+        timestamp=_parse_record_timestamp(data.get("timestamp") or data.get("start_at")),
+        text=text,
+        locator={
+            "path": _relative_path(workspace, path),
+            "line": line_no,
+            "foresight_id": str(data.get("foresight_id") or ""),
+            "memcell_id": str(data.get("memcell_id") or ""),
+            "owner_id": str(data.get("owner_id") or ""),
+            "start_at": str(data.get("start_at") or ""),
+            "end_at": str(data.get("end_at") or ""),
+            "has_full_content": False,
+        },
+    )
+
+
+def _agent_case_record_from_json(
+    workspace: Path,
+    path: Path,
+    line_no: int,
+    data: dict[str, Any],
+) -> SearchRecord | None:
+    text = "\n".join(
+        part
+        for part in (
+            _text_from_content(data.get("task_intent")),
+            _text_from_content(data.get("approach")),
+            _text_from_content(data.get("outcome_summary")),
+        )
+        if part.strip()
+    )
+    if not text.strip():
+        return None
+    return SearchRecord(
+        source="agent_cases",
+        session_key=str(data.get("session_key") or "memory:agent_cases"),
+        role="archive",
+        timestamp=_parse_record_timestamp(data.get("timestamp")),
+        text=text,
+        locator={
+            "path": _relative_path(workspace, path),
+            "line": line_no,
+            "case_id": str(data.get("case_id") or ""),
+            "memcell_id": str(data.get("memcell_id") or ""),
+            "agent_id": str(data.get("agent_id") or ""),
+            "has_full_content": False,
+        },
+    )
+
+
+def _profile_record_from_json(
+    workspace: Path,
+    path: Path,
+    line_no: int,
+    data: dict[str, Any],
+) -> SearchRecord | None:
+    traits = []
+    for key in ("explicit_traits", "implicit_traits"):
+        value = data.get(key)
+        if isinstance(value, list):
+            traits.extend(str(item) for item in value if isinstance(item, str))
+    text = "\n".join(
+        part for part in (_text_from_content(data.get("summary")), *traits) if part.strip()
+    )
+    if not text.strip():
+        return None
+    return SearchRecord(
+        source="profiles",
+        session_key=f"memory:profiles:{str(data.get('owner_id') or 'unknown')}",
+        role="archive",
+        timestamp=_parse_record_timestamp(data.get("updated_at") or data.get("timestamp")),
+        text=text,
+        locator={
+            "path": _relative_path(workspace, path),
+            "line": line_no,
+            "profile_id": str(data.get("profile_id") or ""),
+            "owner_id": str(data.get("owner_id") or ""),
+            "has_full_content": False,
+        },
     )
 
 
