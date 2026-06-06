@@ -22,6 +22,7 @@ from loguru import logger
 from OriginAgent.agent.facts import FactStore
 from OriginAgent.agent.memory import redact_memory_text
 from OriginAgent.config.loader import get_config_path
+from OriginAgent.memory.policy import nearline_runtime_enabled
 from OriginAgent.session.cold_archive import SESSION_COLD_ARCHIVE_DIR
 from OriginAgent.utils.helpers import ensure_dir, truncate_text
 
@@ -148,6 +149,7 @@ class SessionSearchIndexService:
         backend: str = "auto",
         semantic_enabled: bool = True,
         rebuild_on_start: bool = False,
+        nearline_memory_config: Any | None = None,
     ) -> None:
         self.workspace = Path(workspace)
         self.db_path = self.workspace / INDEX_DB_RELATIVE_PATH
@@ -155,6 +157,7 @@ class SessionSearchIndexService:
         self.backend = backend
         self.semantic_enabled = semantic_enabled
         self.rebuild_on_start = rebuild_on_start
+        self._nearline_memory_config = nearline_memory_config
         self.normalizer = SearchTextNormalizer()
         self._lock = threading.RLock()
         self._refresh_running = False
@@ -526,15 +529,23 @@ class SessionSearchIndexService:
             root = self.workspace / SESSION_COLD_ARCHIVE_DIR
             return sorted(root.glob("*.jsonl")) if root.is_dir() else []
         if source == "episodes":
+            if not nearline_runtime_enabled(self._nearline_memory_config):
+                return []
             path = self.workspace / "memory" / "nearline" / "episodes.jsonl"
             return [path] if path.is_file() else []
         if source == "foresights":
+            if not nearline_runtime_enabled(self._nearline_memory_config):
+                return []
             path = self.workspace / "memory" / "nearline" / "foresights.jsonl"
             return [path] if path.is_file() else []
         if source == "agent_cases":
+            if not nearline_runtime_enabled(self._nearline_memory_config):
+                return []
             path = self.workspace / "memory" / "nearline" / "agent_cases.jsonl"
             return [path] if path.is_file() else []
         if source == "profiles":
+            if not nearline_runtime_enabled(self._nearline_memory_config):
+                return []
             path = self.workspace / "memory" / "nearline" / "profiles.jsonl"
             return [path] if path.is_file() else []
         return []
@@ -544,7 +555,11 @@ class SessionSearchIndexService:
             return self._fact_records(path)
         from OriginAgent.session.search import SessionSearchService, _format_timestamp
 
-        service = SessionSearchService(self.workspace, webui_dir=self._webui_dir)
+        service = SessionSearchService(
+            self.workspace,
+            webui_dir=self._webui_dir,
+            nearline_memory_config=self._nearline_memory_config,
+        )
         loaded = service._scan_file(source, path)
         return [
             {

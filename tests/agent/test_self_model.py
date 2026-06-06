@@ -7,6 +7,7 @@ from OriginAgent.agent.background_review import ReviewProposal, ReviewProposalSt
 from OriginAgent.agent.confirmation import ConfirmationRequest, PendingConfirmationStore
 from OriginAgent.agent.facts import FactStore
 from OriginAgent.agent.self_model import SelfModelService
+from OriginAgent.config.schema import NearlineMemoryConfig
 
 RAW_SECRET = "sk-proj-secretsecretsecretsecret"
 
@@ -134,6 +135,59 @@ def test_self_model_uses_nearline_runtime_snapshot_when_present(tmp_path) -> Non
     assert self_model["memory"]["nearline"]["memcell_count"] == 3
 
 
+def test_self_model_uses_runtime_nearline_config_without_snapshot(tmp_path) -> None:
+    self_model = SelfModelService(
+        tmp_path,
+        nearline_memory_config=NearlineMemoryConfig(
+            enabled=True,
+            pipeline_enabled=False,
+            profile_shadow_write_enabled=True,
+        ),
+    ).build()
+
+    assert self_model["memory"]["nearline"]["status"] == "idle"
+    assert self_model["memory"]["nearline"]["nearline_enabled"] is True
+    assert self_model["memory"]["nearline"]["pipeline_enabled"] is False
+    assert self_model["memory"]["nearline"]["profile_shadow_write_enabled"] is True
+    assert self_model["memory"]["nearline"]["memcell_count"] == 0
+    assert self_model["memory"]["nearline"]["user_shadow_last_synced_at"] is None
+
+
+def test_self_model_does_not_read_stale_nearline_files_when_pipeline_is_disabled(tmp_path) -> None:
+    nearline = tmp_path / "memory" / "nearline"
+    nearline.mkdir(parents=True, exist_ok=True)
+    (nearline / "episodes.jsonl").write_text(
+        json.dumps(
+            {
+                "episode_id": "ep_1",
+                "memcell_id": "mem_1",
+                "session_key": "cli:test",
+                "owner_id": "user",
+                "summary": "Stale episode",
+                "content": "Need a release checklist.",
+                "timestamp": "2026-06-05T10:00:00+00:00",
+            },
+            ensure_ascii=False,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    self_model = SelfModelService(
+        tmp_path,
+        nearline_memory_config=NearlineMemoryConfig(
+            enabled=True,
+            pipeline_enabled=False,
+            profile_shadow_write_enabled=True,
+        ),
+    ).build()
+
+    nearline_summary = self_model["memory"]["nearline"]
+    assert nearline_summary["status"] == "idle"
+    assert nearline_summary["episode_count"] == 0
+    assert nearline_summary["last_synced_at"] is None
+
+
 def test_self_model_reports_nearline_counts_and_last_sync(tmp_path) -> None:
     nearline = tmp_path / "memory" / "nearline"
     nearline.mkdir(parents=True, exist_ok=True)
@@ -205,7 +259,14 @@ def test_self_model_reports_nearline_counts_and_last_sync(tmp_path) -> None:
         encoding="utf-8",
     )
 
-    self_model = SelfModelService(tmp_path).build()
+    self_model = SelfModelService(
+        tmp_path,
+        nearline_memory_config=NearlineMemoryConfig(
+            enabled=True,
+            pipeline_enabled=True,
+            profile_shadow_write_enabled=True,
+        ),
+    ).build()
     nearline_summary = self_model["memory"]["nearline"]
 
     assert nearline_summary["episode_count"] == 1

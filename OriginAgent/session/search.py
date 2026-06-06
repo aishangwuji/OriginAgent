@@ -15,6 +15,7 @@ from loguru import logger
 
 from OriginAgent.agent.memory import redact_memory_text
 from OriginAgent.config.loader import get_config_path
+from OriginAgent.memory.policy import nearline_runtime_enabled
 from OriginAgent.session.cold_archive import SESSION_COLD_ARCHIVE_DIR
 from OriginAgent.utils.helpers import truncate_text
 
@@ -123,6 +124,7 @@ class SessionSearchService:
         index_backend: str = "auto",
         semantic_enabled: bool = True,
         max_tool_refresh_ms: int = 500,
+        nearline_memory_config: Any | None = None,
     ) -> None:
         self.workspace = Path(workspace)
         self.sessions_dir = self.workspace / "sessions"
@@ -137,6 +139,7 @@ class SessionSearchService:
         self._index_backend = index_backend
         self._semantic_enabled = semantic_enabled
         self._max_tool_refresh_ms = max_tool_refresh_ms
+        self._nearline_memory_config = nearline_memory_config
 
     def search(
         self,
@@ -348,6 +351,7 @@ class SessionSearchService:
             webui_dir=self._webui_dir,
             backend=self._index_backend,
             semantic_enabled=self._semantic_enabled,
+            nearline_memory_config=self._nearline_memory_config,
         )
         return self._index_service
 
@@ -398,15 +402,23 @@ class SessionSearchService:
                 return []
             return sorted(path for path in self.cold_archive_dir.glob("*.jsonl") if path.is_file())
         if source == "episodes":
+            if not nearline_runtime_enabled(self._nearline_memory_config):
+                return []
             path = self.workspace / "memory" / "nearline" / "episodes.jsonl"
             return [path] if path.is_file() else []
         if source == "foresights":
+            if not nearline_runtime_enabled(self._nearline_memory_config):
+                return []
             path = self.workspace / "memory" / "nearline" / "foresights.jsonl"
             return [path] if path.is_file() else []
         if source == "agent_cases":
+            if not nearline_runtime_enabled(self._nearline_memory_config):
+                return []
             path = self.workspace / "memory" / "nearline" / "agent_cases.jsonl"
             return [path] if path.is_file() else []
         if source == "profiles":
+            if not nearline_runtime_enabled(self._nearline_memory_config):
+                return []
             path = self.workspace / "memory" / "nearline" / "profiles.jsonl"
             return [path] if path.is_file() else []
         return []

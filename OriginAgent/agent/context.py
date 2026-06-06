@@ -16,6 +16,7 @@ from OriginAgent.agent.memory import MemoryStore
 from OriginAgent.agent.self_model import SelfModelRenderer, SelfModelService
 from OriginAgent.agent.skills import SkillsLoader
 from OriginAgent.config.schema import ContextConfig
+from OriginAgent.memory.policy import nearline_runtime_enabled
 from OriginAgent.memory.retrieval import NearlineMemoryRetriever
 from OriginAgent.session.goal_state import goal_state_runtime_lines
 from OriginAgent.utils.helpers import (
@@ -58,6 +59,7 @@ class ContextBuilder:
         registry: Any | None = None,
         sessions: Any | None = None,
         pending_queues: dict[str, Any] | None = None,
+        nearline_memory_config: Any | None = None,
         cron_service: Any | None = None,
         confirmation_store: Any | None = None,
         background_review_service: Any | None = None,
@@ -86,6 +88,7 @@ class ContextBuilder:
         self._registry = registry
         self._sessions = sessions
         self._pending_queues = pending_queues
+        self._nearline_memory_config = nearline_memory_config
         self._cron_service = cron_service
         self._confirmation_store = confirmation_store
         self._background_review_service = background_review_service
@@ -119,6 +122,7 @@ class ContextBuilder:
                 domain_pack_manager=self.domain_packs,
                 skills_loader=self.skills,
                 memory_store=self.memory,
+                nearline_memory_config=self._nearline_memory_config,
             ).build()
         parts.append(SelfModelRenderer().render(payload))
 
@@ -151,8 +155,12 @@ class ContextBuilder:
             blocks.append(self.build_reference_context_block("user_profile", user_file))
 
         entries = self.memory.read_unprocessed_history(since_cursor=self.memory.get_last_dream_cursor())
-        layered = self.nearline_memory.retrieve(recent_history=entries[-6:] if entries else None)
-        if layered.has_primary_content and layered.rendered_text.strip():
+        layered = (
+            self.nearline_memory.retrieve(recent_history=entries[-6:] if entries else None)
+            if self._nearline_memory_enabled()
+            else None
+        )
+        if layered is not None and layered.has_primary_content and layered.rendered_text.strip():
             blocks.append(self.build_reference_context_block("layered_memory", layered.rendered_text))
         else:
             memory_bundle = self.memory.get_memory_context_bundle()
@@ -182,6 +190,9 @@ class ContextBuilder:
             )
 
         return blocks
+
+    def _nearline_memory_enabled(self) -> bool:
+        return nearline_runtime_enabled(self._nearline_memory_config)
 
     def _get_identity(self, channel: str | None = None) -> str:
         """Get the core identity section."""

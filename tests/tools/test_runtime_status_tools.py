@@ -16,7 +16,7 @@ from OriginAgent.agent.tools.runtime_status import (
     RuntimeStatusTool,
     ToolAuditSummaryTool,
 )
-from OriginAgent.config.schema import DomainPacksConfig
+from OriginAgent.config.schema import DomainPacksConfig, NearlineMemoryConfig
 from OriginAgent.cron.service import CronService
 from OriginAgent.cron.types import CronSchedule
 from OriginAgent.session.search_index import SessionSearchIndexService
@@ -262,6 +262,29 @@ async def test_runtime_status_uses_workspace_basename_not_absolute_path(tmp_path
     assert result["self_model"]["identity"]["workspace_name"] == tmp_path.name
     assert result["self_model"]["runtime"]["registered_tools_count"] == 2
     assert str(tmp_path) not in _serialized(result)
+
+
+@pytest.mark.asyncio
+async def test_runtime_status_uses_provided_nearline_runtime_config(tmp_path) -> None:
+    class Registry:
+        tool_names = ["a"]
+
+    result = await RuntimeStatusTool(
+        workspace=tmp_path,
+        registry=Registry(),
+        sessions=object(),
+        pending_queues={},
+        nearline_memory_config=NearlineMemoryConfig(
+            enabled=True,
+            pipeline_enabled=False,
+            profile_shadow_write_enabled=True,
+        ),
+    ).execute()
+
+    assert result["self_model"]["memory"]["nearline"]["status"] == "idle"
+    assert result["self_model"]["memory"]["nearline"]["nearline_enabled"] is True
+    assert result["self_model"]["memory"]["nearline"]["pipeline_enabled"] is False
+    assert result["self_model"]["memory"]["nearline"]["profile_shadow_write_enabled"] is True
 
 
 @pytest.mark.asyncio

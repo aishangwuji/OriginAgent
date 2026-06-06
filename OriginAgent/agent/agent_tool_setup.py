@@ -187,6 +187,9 @@ def register_default_tools(
             curator_service=curator_service,
             session_search_index_service=session_search_index_service,
             evolution_config=evolution_config,
+            nearline_memory_config=getattr(introspection_service, "_nearline_memory_config", None)
+            if introspection_service is not None
+            else None,
             introspection_service=introspection_service,
         )
     )
@@ -236,6 +239,11 @@ def register_default_tools(
                 workspace=workspace,
                 config=config.session_search,
                 index_service=session_search_index_service,
+                nearline_memory_config=(
+                    getattr(introspection_service, "_nearline_memory_config", None)
+                    if introspection_service is not None
+                    else None
+                ),
             ),
         )
     _register_named(

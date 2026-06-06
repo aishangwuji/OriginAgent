@@ -15,6 +15,7 @@ from OriginAgent.agent.self_model import SelfModelService
 from OriginAgent.agent.skills import SkillsLoader
 from OriginAgent.agent.workflow_artifacts import summarize_workflow_artifacts
 from OriginAgent.config.schema import AgentDefaults
+from OriginAgent.memory.policy import nearline_runtime_enabled
 from OriginAgent.memory.store import NearlineMemoryStore
 
 
@@ -34,6 +35,7 @@ class RuntimeIntrospectionService:
         registry: Any,
         sessions: Any,
         pending_queues: dict[str, Any],
+        nearline_memory_config: Any | None = None,
         cron_service: Any | None = None,
         confirmation_store: PendingConfirmationStore | None = None,
         reminder_store: ReminderStore | None = None,
@@ -51,6 +53,7 @@ class RuntimeIntrospectionService:
         self._registry = registry
         self._sessions = sessions
         self._pending_queues = pending_queues
+        self._nearline_memory_config = nearline_memory_config
         self._cron_service = cron_service
         self._confirmation_store = confirmation_store
         self._reminder_store = reminder_store
@@ -138,6 +141,7 @@ class RuntimeIntrospectionService:
             domain_pack_manager=self._domain_pack_manager,
             background_review_service=self._background_review_service,
             curator_service=self._curator_service,
+            nearline_memory_config=self._resolve_nearline_memory_config(),
             runtime_snapshot=snapshot,
         ).build()
         return {
@@ -320,14 +324,44 @@ class RuntimeIntrospectionService:
 
     def _nearline_memory_summary(self) -> dict[str, Any]:
         try:
-            config = AgentDefaults().nearline_memory
-            return NearlineMemoryStore(self._workspace).summary(
-                nearline_enabled=bool(config.enabled),
-                pipeline_enabled=bool(config.pipeline_enabled),
-                profile_shadow_write_enabled=bool(config.profile_shadow_write_enabled),
-            )
+            config = self._resolve_nearline_memory_config()
+            if nearline_runtime_enabled(config):
+                return NearlineMemoryStore(self._workspace).summary(
+                    nearline_enabled=bool(config.enabled),
+                    pipeline_enabled=bool(config.pipeline_enabled),
+                    profile_shadow_write_enabled=bool(config.profile_shadow_write_enabled),
+                )
+            status = "disabled" if not bool(config.enabled) else "idle"
+            return {
+                "nearline_enabled": bool(config.enabled),
+                "pipeline_enabled": bool(config.pipeline_enabled),
+                "profile_shadow_write_enabled": bool(config.profile_shadow_write_enabled),
+                "memcell_count": 0,
+                "episode_count": 0,
+                "foresight_count": 0,
+                "agent_case_count": 0,
+                "profile_count": 0,
+                "last_memcell_at": None,
+                "last_episode_at": None,
+                "last_foresight_at": None,
+                "last_agent_case_at": None,
+                "last_profile_at": None,
+                "latest_cursor": 0,
+                "status": status,
+            }
         except Exception:
             return {}
+
+    def _resolve_nearline_memory_config(self) -> Any:
+        config = getattr(self._nearline_memory_service, "config", None)
+        if config is not None:
+            return config
+        if self._nearline_memory_config is not None:
+            return self._nearline_memory_config
+        loop_config = getattr(self._loop, "_nearline_memory_config", None)
+        if loop_config is not None:
+            return loop_config
+        return AgentDefaults().nearline_memory
 
     def _review_snapshot(self) -> dict[str, Any]:
         store = getattr(self._background_review_service, "store", None)

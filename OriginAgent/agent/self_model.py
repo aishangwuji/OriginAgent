@@ -19,6 +19,7 @@ from OriginAgent.agent.workflow_artifacts import (
     list_workflow_artifact_records,
     summarize_workflow_artifacts,
 )
+from OriginAgent.memory.policy import nearline_runtime_enabled
 from OriginAgent.memory.profile import NearlineProfileService
 from OriginAgent.memory.store import NearlineMemoryStore
 from OriginAgent.utils.helpers import truncate_text
@@ -51,6 +52,7 @@ class SelfModelService:
         domain_governance_service: DomainPackGovernanceService | None = None,
         background_review_enabled: bool | None = None,
         curator_enabled: bool | None = None,
+        nearline_memory_config: Any | None = None,
         runtime_snapshot: RuntimeContextSnapshot | dict[str, Any] | None = None,
     ) -> None:
         self.workspace = Path(workspace)
@@ -71,6 +73,7 @@ class SelfModelService:
         self._domain_governance_service = domain_governance_service
         self._background_review_enabled = background_review_enabled
         self._curator_enabled = curator_enabled
+        self._nearline_memory_config = nearline_memory_config
         self._runtime_snapshot = self._normalize_runtime_snapshot(runtime_snapshot)
 
     def build(self) -> dict[str, Any]:
@@ -268,12 +271,31 @@ class SelfModelService:
         try:
             from OriginAgent.config.schema import AgentDefaults
 
-            config = AgentDefaults().nearline_memory
-            summary = NearlineMemoryStore(self.workspace).summary(
-                nearline_enabled=bool(config.enabled),
-                pipeline_enabled=bool(config.pipeline_enabled),
-                profile_shadow_write_enabled=bool(config.profile_shadow_write_enabled),
-            )
+            config = self._nearline_memory_config or AgentDefaults().nearline_memory
+            if nearline_runtime_enabled(config):
+                summary = NearlineMemoryStore(self.workspace).summary(
+                    nearline_enabled=bool(config.enabled),
+                    pipeline_enabled=bool(config.pipeline_enabled),
+                    profile_shadow_write_enabled=bool(config.profile_shadow_write_enabled),
+                )
+            else:
+                summary = {
+                    "nearline_enabled": bool(config.enabled),
+                    "pipeline_enabled": bool(config.pipeline_enabled),
+                    "profile_shadow_write_enabled": bool(config.profile_shadow_write_enabled),
+                    "memcell_count": 0,
+                    "episode_count": 0,
+                    "foresight_count": 0,
+                    "agent_case_count": 0,
+                    "profile_count": 0,
+                    "last_memcell_at": None,
+                    "last_episode_at": None,
+                    "last_foresight_at": None,
+                    "last_agent_case_at": None,
+                    "last_profile_at": None,
+                    "latest_cursor": 0,
+                    "status": "disabled" if not bool(config.enabled) else "idle",
+                }
             return self._normalize_nearline_summary(summary)
         except Exception:
             return {}
@@ -291,7 +313,10 @@ class SelfModelService:
             or normalized.get("last_agent_case_at")
         )
         normalized.setdefault("last_synced_at", latest_sync)
-        normalized.setdefault("user_shadow_last_synced_at", NearlineProfileService.last_sync_time(self.workspace))
+        if bool(normalized.get("nearline_enabled")) and bool(normalized.get("pipeline_enabled")):
+            normalized.setdefault("user_shadow_last_synced_at", NearlineProfileService.last_sync_time(self.workspace))
+        else:
+            normalized.setdefault("user_shadow_last_synced_at", None)
         return normalized
 
     def _build_reviews(self) -> tuple[dict[str, Any], list[dict[str, Any]]]:

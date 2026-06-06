@@ -17,7 +17,13 @@ from OriginAgent.agent.evolution import (
 from OriginAgent.agent.evolution_control_plane import CONTROL_EVENT_DENIED, CONTROL_EVENT_EXECUTED
 from OriginAgent.agent.evolution_outcomes import EvolutionOutcomeStore
 from OriginAgent.bus.queue import MessageBus
-from OriginAgent.config.schema import Config, DomainPacksConfig, EvolutionConfig, ToolAuditConfig
+from OriginAgent.config.schema import (
+    Config,
+    DomainPacksConfig,
+    EvolutionConfig,
+    NearlineMemoryConfig,
+    ToolAuditConfig,
+)
 
 RUNTIME_TOOL_NAMES = {
     "originagent_runtime_status",
@@ -230,6 +236,26 @@ async def test_runtime_status_reflects_from_config_audit_mode(tmp_path: Path) ->
     assert audit_summary["audit_mode"] == "off"
     assert audit_summary["enabled"] is False
     assert runtime_status["self_model"]["identity"]["audit_mode"] == "off"
+
+
+@pytest.mark.asyncio
+async def test_runtime_status_uses_from_config_nearline_runtime_config(tmp_path: Path) -> None:
+    cfg = _config(tmp_path)
+    cfg.agents.defaults.nearline_memory = NearlineMemoryConfig(
+        enabled=True,
+        pipeline_enabled=False,
+        profile_shadow_write_enabled=True,
+    )
+    loop = AgentLoop.from_config(cfg, bus=MessageBus(), provider=_provider())
+
+    result = await loop.tools.execute("originagent_runtime_status", {})
+
+    assert loop.nearline_memory.config.enabled is True
+    assert loop.nearline_memory.config.pipeline_enabled is False
+    assert result["background_tasks"]["tasks"]["nearline_memory"]["nearline_enabled"] is True
+    assert result["background_tasks"]["tasks"]["nearline_memory"]["nearline_pipeline_enabled"] is False
+    assert result["self_model"]["memory"]["nearline"]["status"] == "idle"
+    assert result["self_model"]["memory"]["nearline"]["profile_shadow_write_enabled"] is True
 
 
 @pytest.mark.asyncio

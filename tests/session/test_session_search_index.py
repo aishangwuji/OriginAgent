@@ -6,6 +6,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 from OriginAgent.agent.facts import FactStore
+from OriginAgent.config.schema import NearlineMemoryConfig
 from OriginAgent.session.cold_archive import SessionColdArchiveStore
 from OriginAgent.session.search import SessionSearchService
 from OriginAgent.session.search_index import SearchTextNormalizer, SessionSearchIndexService
@@ -241,6 +242,44 @@ def test_nearline_sources_are_indexed_only_when_explicitly_requested(tmp_path: P
     assert default_result["total_matches"] == 0
     assert explicit_result["total_matches"] == 1
     assert explicit_result["results"][0]["source"] == "episodes"
+
+
+def test_nearline_sources_are_not_indexed_when_pipeline_is_disabled(tmp_path: Path) -> None:
+    _write_jsonl(
+        tmp_path / "memory" / "nearline" / "episodes.jsonl",
+        [
+            {
+                "episode_id": "ep_1",
+                "memcell_id": "mem_1",
+                "session_key": "cli:direct",
+                "owner_id": "user",
+                "summary": "Stale deployment checklist",
+                "content": "Need a deployment checklist before Friday release.",
+                "timestamp": "2026-05-19T10:00:00",
+            }
+        ],
+    )
+    index = SessionSearchIndexService(
+        tmp_path,
+        webui_dir=tmp_path / "webui",
+        nearline_memory_config=NearlineMemoryConfig(enabled=True, pipeline_enabled=False),
+    )
+    status = index.refresh_incremental(sources=["episodes"])
+    service = SessionSearchService(
+        tmp_path,
+        webui_dir=tmp_path / "webui",
+        index_service=index,
+        nearline_memory_config=NearlineMemoryConfig(enabled=True, pipeline_enabled=False),
+    )
+
+    result = service.search(
+        query="deployment checklist",
+        sources=["episodes"],
+        mode="semantic",
+    )
+
+    assert status["session_search_indexed_doc_count"] == 0
+    assert result["total_matches"] == 0
 
 
 def test_deleted_cold_archive_file_removes_index_rows(tmp_path: Path) -> None:

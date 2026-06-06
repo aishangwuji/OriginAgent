@@ -262,6 +262,7 @@ class AgentLoop:
         evolution_config: "EvolutionConfig | None" = None,
         evolution_config_loader: Callable[[], "EvolutionConfig"] | None = None,
         dream_config: Any | None = None,
+        nearline_memory_config: "NearlineMemoryConfig | None" = None,
         cold_archive_enabled: bool = True,
         tool_concurrency_limit: int | None = None,
         allow_agent_initiated_messages: bool | None = None,
@@ -320,13 +321,16 @@ class AgentLoop:
         self.tools_config = _tc
         self.evolution_config = evolution_config or defaults.learning.evolution
         self._dream_config = dream_config or defaults.dream
-        self._nearline_memory_config = defaults.nearline_memory
+        self._nearline_memory_config = (
+            nearline_memory_config if nearline_memory_config is not None else defaults.nearline_memory
+        )
         self._memory_feature_flags = dream_feature_flags(self._dream_config)
         self.session_search_index = SessionSearchIndexService(
             workspace,
             backend=_tc.session_search.backend,
             semantic_enabled=bool(_tc.session_search.semantic_enabled and _tc.session_search.enabled),
             rebuild_on_start=_tc.session_search.rebuild_on_start,
+            nearline_memory_config=self._nearline_memory_config,
         )
         self.pairing_config = pairing_config
         self._image_generation_provider_configs = dict(image_generation_provider_configs or {})
@@ -446,6 +450,7 @@ class AgentLoop:
             registry=self.tools,
             sessions=self.sessions,
             pending_queues=self._pending_queues,
+            nearline_memory_config=self._nearline_memory_config,
             cron_service=self.cron_service,
             confirmation_store=self._confirmation_store,
             background_review_service=self.background_review,
@@ -487,6 +492,7 @@ class AgentLoop:
             fact_store=self.context.memory.fact_store,
             reminder_store=self._reminder_store,
             config=self._active_intent_config,
+            nearline_memory_config=self._nearline_memory_config,
         )
         self.nearline_memory = NearlineMemoryPipeline(
             workspace=workspace,
@@ -507,6 +513,7 @@ class AgentLoop:
             background_review_service=self.background_review,
             curator_service=self.curator,
             nearline_memory_service=self.nearline_memory,
+            nearline_memory_config=self._nearline_memory_config,
             session_search_index_service=self.session_search_index,
             evolution_config=self.evolution_config,
         )
@@ -667,6 +674,7 @@ class AgentLoop:
             evolution_config=defaults.learning.evolution,
             evolution_config_loader=_evolution_config_loader,
             dream_config=defaults.dream,
+            nearline_memory_config=defaults.nearline_memory,
             **extra,
         )
 
@@ -1101,6 +1109,7 @@ class AgentLoop:
             domain_pack_manager=self.domain_packs,
             skills_loader=self.context.skills,
             memory_store=self.context.memory,
+            nearline_memory_config=self._nearline_memory_config,
             runtime_snapshot=snapshot,
         ).build()
 

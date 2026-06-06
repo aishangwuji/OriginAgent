@@ -34,6 +34,7 @@ class RuntimeStatusTool(Tool):
         curator_service: Any | None = None,
         session_search_index_service: Any | None = None,
         evolution_config: Any | None = None,
+        nearline_memory_config: Any | None = None,
         introspection_service: RuntimeIntrospectionService | None = None,
     ) -> None:
         self._workspace = Path(workspace)
@@ -50,6 +51,7 @@ class RuntimeStatusTool(Tool):
         self._curator_service = curator_service
         self._session_search_index_service = session_search_index_service
         self._evolution_config = evolution_config
+        self._nearline_memory_config = nearline_memory_config
         self._introspection_service = introspection_service
 
     @property
@@ -70,6 +72,7 @@ class RuntimeStatusTool(Tool):
             registry=self._registry,
             sessions=self._sessions,
             pending_queues=self._pending_queues,
+            nearline_memory_config=self._nearline_memory_config,
             cron_service=self._cron_service,
             confirmation_store=self._confirmation_store,
             reminder_store=self._reminder_store,

@@ -1225,6 +1225,7 @@ class WebSocketChannel(BaseChannel):
             domain_pack_manager=manager,
             background_review_enabled=bool(config.agents.defaults.learning.background_review.enabled),
             curator_enabled=bool(config.agents.defaults.learning.curator.enabled),
+            nearline_memory_config=config.agents.defaults.nearline_memory,
         )
 
     def _handle_self(self, request: WsRequest) -> Response:

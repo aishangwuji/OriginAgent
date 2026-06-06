@@ -13,7 +13,14 @@ from OriginAgent.session.search import SessionSearchService
 class SessionSearchTool(Tool):
     """Read-only structured search over session/history JSONL sources."""
 
-    def __init__(self, workspace: Path, *, config: Any | None = None, index_service: Any | None = None):
+    def __init__(
+        self,
+        workspace: Path,
+        *,
+        config: Any | None = None,
+        index_service: Any | None = None,
+        nearline_memory_config: Any | None = None,
+    ):
         self._workspace = Path(workspace)
         self._config = config
         refresh_ms = getattr(config, "max_tool_refresh_ms", 500)
@@ -25,6 +32,7 @@ class SessionSearchTool(Tool):
             index_backend=str(getattr(config, "backend", "auto")),
             semantic_enabled=bool(getattr(config, "semantic_enabled", True)),
             max_tool_refresh_ms=int(refresh_ms),
+            nearline_memory_config=nearline_memory_config,
         )
 
     @property

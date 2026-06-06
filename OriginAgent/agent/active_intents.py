@@ -15,6 +15,7 @@ from OriginAgent.agent.facts import FactStore
 from OriginAgent.agent.reminders import ReminderStore
 from OriginAgent.bus.events import InboundMessage
 from OriginAgent.bus.queue import MessageBus
+from OriginAgent.memory.policy import nearline_runtime_enabled
 from OriginAgent.memory.store import NearlineMemoryStore
 from OriginAgent.session.goal_state import goal_state_raw, parse_goal_state
 from OriginAgent.session.manager import Session, SessionManager
@@ -142,6 +143,7 @@ class ActiveIntentService:
         fact_store: FactStore,
         reminder_store: ReminderStore | None = None,
         config: ActiveIntentConfig,
+        nearline_memory_config: Any | None = None,
     ) -> None:
         self.workspace = Path(workspace)
         self.bus = bus
@@ -151,6 +153,7 @@ class ActiveIntentService:
         self.reminder_store = reminder_store or ReminderStore(workspace)
         self.nearline_store = NearlineMemoryStore(workspace)
         self.config = config
+        self._nearline_memory_config = nearline_memory_config
         self.ledger = JsonlActiveIntentLedger(workspace)
 
     def session_keys(self) -> list[str]:
@@ -334,6 +337,8 @@ class ActiveIntentService:
         )
 
     def _foresight_candidate(self, session: Session) -> ActiveIntentCandidate | None:
+        if not self._nearline_memory_enabled():
+            return None
         now = _utcnow()
         foresights = [
             item
@@ -365,6 +370,9 @@ class ActiveIntentService:
             source_reference=foresight.foresight_id,
             summary=summary,
         )
+
+    def _nearline_memory_enabled(self) -> bool:
+        return nearline_runtime_enabled(self._nearline_memory_config)
 
     def _passes_cooldown(self, session_key: str, intent_id: str) -> tuple[bool, str | None]:
         now = _utcnow()

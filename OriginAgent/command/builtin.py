@@ -266,6 +266,7 @@ async def cmd_self(ctx: CommandContext) -> OutboundMessage:
         domain_pack_manager=loop.domain_packs,
         skills_loader=loop.context.skills,
         memory_store=loop.context.memory,
+        nearline_memory_config=getattr(loop, "_nearline_memory_config", None),
         runtime_snapshot=loop.introspection.runtime_context_snapshot(),
     )
     return OutboundMessage(

@@ -5,6 +5,7 @@ import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+from OriginAgent.config.schema import NearlineMemoryConfig
 from OriginAgent.session.cold_archive import SessionColdArchiveStore
 from OriginAgent.session.search import SessionSearchService
 
@@ -364,6 +365,32 @@ def test_searches_nearline_sources_when_explicitly_requested(tmp_path: Path) -> 
     assert case_result["results"][0]["source"] == "agent_cases"
     assert profile_result["total_matches"] == 1
     assert profile_result["results"][0]["source"] == "profiles"
+
+
+def test_nearline_sources_stay_dark_when_pipeline_is_disabled(tmp_path: Path) -> None:
+    _write_jsonl(
+        tmp_path / "memory" / "nearline" / "episodes.jsonl",
+        [
+            {
+                "episode_id": "ep_1",
+                "memcell_id": "mem_1",
+                "session_key": "cli:direct",
+                "owner_id": "user",
+                "summary": "Stale deployment checklist",
+                "content": "Need a deployment checklist before Friday release.",
+                "timestamp": "2026-05-19T10:00:00",
+            }
+        ],
+    )
+
+    service = SessionSearchService(
+        tmp_path,
+        nearline_memory_config=NearlineMemoryConfig(enabled=True, pipeline_enabled=False),
+    )
+    result = service.search(query="deployment checklist", sources=["episodes"])
+
+    assert result["searched_sources"] == ["episodes"]
+    assert result["total_matches"] == 0
 
 
 def test_large_range_returns_performance_note(tmp_path: Path) -> None:

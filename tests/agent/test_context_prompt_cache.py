@@ -10,6 +10,7 @@ from pathlib import Path
 import datetime as datetime_module
 
 from OriginAgent.agent.context import ContextBuilder
+from OriginAgent.config.schema import NearlineMemoryConfig
 
 
 class _FakeDatetime(real_datetime):
@@ -742,3 +743,91 @@ def test_layered_memory_injects_episode_support_facts_foresight_and_profile(tmp_
     assert "## Active Foresight" in text
     assert "## Profile Summary" in text
     assert "release checklist" in text
+
+
+def test_layered_memory_is_ignored_when_nearline_is_disabled(tmp_path) -> None:
+    workspace = _make_workspace(tmp_path)
+    builder = ContextBuilder(
+        workspace,
+        memory_feature_flags={"semantic_retrieval_enabled": True},
+        nearline_memory_config=NearlineMemoryConfig(
+            enabled=False,
+            pipeline_enabled=False,
+        ),
+    )
+    nearline = workspace / "memory" / "nearline"
+    nearline.mkdir(parents=True, exist_ok=True)
+    (nearline / "episodes.jsonl").write_text(
+        json.dumps(
+            {
+                "episode_id": "ep_1",
+                "memcell_id": "mem_1",
+                "session_key": "cli:direct",
+                "owner_id": "user",
+                "summary": "This nearline episode should stay dark when disabled.",
+                "content": "This nearline episode should stay dark when disabled.",
+                "timestamp": "2026-06-05T10:00:00+08:00",
+                "source_message_ids": ["msg_1"],
+                "metadata": {},
+            },
+            ensure_ascii=False,
+        ) + "\n",
+        encoding="utf-8",
+    )
+    builder.memory.upsert_fact_and_rebuild_memory(
+        "User prefers dark mode",
+        category="preference",
+        scope="user.interface.theme",
+        owner="user",
+        source_cursors=[1],
+        source_excerpt="please use dark mode",
+    )
+
+    blocks = builder.build_reference_context_blocks()
+
+    assert any(block.get("_meta", {}).get("source") == "memory_retrieval" for block in blocks)
+    assert not any(block.get("_meta", {}).get("source") == "layered_memory" for block in blocks)
+
+
+def test_layered_memory_is_ignored_when_nearline_pipeline_is_disabled(tmp_path) -> None:
+    workspace = _make_workspace(tmp_path)
+    builder = ContextBuilder(
+        workspace,
+        memory_feature_flags={"semantic_retrieval_enabled": True},
+        nearline_memory_config=NearlineMemoryConfig(
+            enabled=True,
+            pipeline_enabled=False,
+        ),
+    )
+    nearline = workspace / "memory" / "nearline"
+    nearline.mkdir(parents=True, exist_ok=True)
+    (nearline / "episodes.jsonl").write_text(
+        json.dumps(
+            {
+                "episode_id": "ep_1",
+                "memcell_id": "mem_1",
+                "session_key": "cli:direct",
+                "owner_id": "user",
+                "summary": "This stale nearline episode should stay dark when pipeline is off.",
+                "content": "This stale nearline episode should stay dark when pipeline is off.",
+                "timestamp": "2026-06-05T10:00:00+08:00",
+                "source_message_ids": ["msg_1"],
+                "metadata": {},
+            },
+            ensure_ascii=False,
+        ) + "\n",
+        encoding="utf-8",
+    )
+    builder.memory.upsert_fact_and_rebuild_memory(
+        "User prefers release checklists from the legacy path",
+        category="preference",
+        scope="project.release",
+        owner="user",
+        source_cursors=[1],
+        source_excerpt="legacy memory path",
+    )
+
+    blocks = builder.build_reference_context_blocks()
+
+    assert any(block.get("_meta", {}).get("source") == "memory_retrieval" for block in blocks)
+    assert not any(block.get("_meta", {}).get("source") == "layered_memory" for block in blocks)
