@@ -1835,6 +1835,18 @@ class AgentLoop:
                 replay_max_messages=self._max_messages,
             )
         )
+        system_ctx = TurnContext(
+            msg=msg,
+            session_key=key,
+            state=TurnState.SAVE,
+            turn_id=f"{key}:{time.time_ns()}",
+            session=session,
+            final_content=final_content,
+            all_messages=all_msgs,
+            stop_reason=stop_reason,
+            runtime_context=runtime_context,
+        )
+        self._schedule_nearline_memory(system_ctx)
         options = ask_user_options_from_messages(all_msgs) if stop_reason == "ask_user" else []
         content, buttons = ask_user_outbound(
             final_content or "Background task completed.",
@@ -2254,7 +2266,7 @@ class AgentLoop:
         service = getattr(self, "nearline_memory", None)
         if service is None or not getattr(service, "enabled", False):
             return
-        if ctx.stop_reason in {"error", "tool_error"}:
+        if not self._nearline_turn_completed_successfully(ctx):
             return
         actor_id = (
             ctx.runtime_context.actor_id
@@ -2270,6 +2282,18 @@ class AgentLoop:
                 turn_id=ctx.turn_id,
             )
         )
+
+    @staticmethod
+    def _nearline_turn_completed_successfully(ctx: TurnContext) -> bool:
+        if ctx.stop_reason in {
+            "ask_user",
+            "error",
+            "tool_error",
+            "max_iterations",
+            "empty_final_response",
+        }:
+            return False
+        return bool((ctx.final_content or "").strip())
 
     async def _state_respond(self, ctx: TurnContext) -> str:
         ctx.outbound = self._assemble_outbound(
