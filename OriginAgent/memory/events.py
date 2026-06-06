@@ -18,6 +18,7 @@ MemoryEventName = Literal[
 
 @dataclass(frozen=True)
 class MemoryEvent:
+    event_id: str
     event_name: MemoryEventName
     session_key: str
     timestamp: str
@@ -40,6 +41,7 @@ class MemCellCreated(MemoryEvent):
         metadata: dict[str, Any] | None = None,
     ) -> None:
         object.__setattr__(self, "event_name", "memcell_created")
+        object.__setattr__(self, "event_id", f"memcell_created:{memcell.memcell_id}")
         object.__setattr__(self, "session_key", session_key)
         object.__setattr__(self, "timestamp", timestamp)
         object.__setattr__(self, "memcell", memcell)
@@ -59,6 +61,7 @@ class EpisodeExtracted(MemoryEvent):
         metadata: dict[str, Any] | None = None,
     ) -> None:
         object.__setattr__(self, "event_name", "episode_extracted")
+        object.__setattr__(self, "event_id", f"episode_extracted:{episode.episode_id}")
         object.__setattr__(self, "session_key", session_key)
         object.__setattr__(self, "timestamp", timestamp)
         object.__setattr__(self, "episode", episode)
@@ -78,6 +81,7 @@ class ForesightExtracted(MemoryEvent):
         metadata: dict[str, Any] | None = None,
     ) -> None:
         object.__setattr__(self, "event_name", "foresight_extracted")
+        object.__setattr__(self, "event_id", f"foresight_extracted:{foresight.foresight_id}")
         object.__setattr__(self, "session_key", session_key)
         object.__setattr__(self, "timestamp", timestamp)
         object.__setattr__(self, "foresight", foresight)
@@ -97,6 +101,7 @@ class AgentCaseExtracted(MemoryEvent):
         metadata: dict[str, Any] | None = None,
     ) -> None:
         object.__setattr__(self, "event_name", "agent_case_extracted")
+        object.__setattr__(self, "event_id", f"agent_case_extracted:{agent_case.case_id}")
         object.__setattr__(self, "session_key", session_key)
         object.__setattr__(self, "timestamp", timestamp)
         object.__setattr__(self, "agent_case", agent_case)
@@ -120,6 +125,14 @@ class ProfileRefreshRequested(MemoryEvent):
         metadata: dict[str, Any] | None = None,
     ) -> None:
         object.__setattr__(self, "event_name", "profile_refresh_requested")
+        object.__setattr__(
+            self,
+            "event_id",
+            "profile_refresh_requested:"
+            + session_key
+            + ":"
+            + (source_memcell_ids[-1] if source_memcell_ids else timestamp),
+        )
         object.__setattr__(self, "session_key", session_key)
         object.__setattr__(self, "timestamp", timestamp)
         object.__setattr__(self, "owner_id", owner_id)

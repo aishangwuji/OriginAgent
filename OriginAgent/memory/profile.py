@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-import uuid
+import hashlib
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -66,8 +66,16 @@ class NearlineProfileService:
         summary = " | ".join(summary_lines)[:320].strip()
         if not summary:
             summary = " | ".join([*(explicit_traits[:1]), *(implicit_traits[:1])]).strip()
+        identity_payload = "|".join(
+            [
+                owner_id or "user",
+                memcells[-1].ended_at,
+                ",".join(memcell.memcell_id for memcell in memcells),
+            ]
+        )
+        digest = hashlib.sha1(identity_payload.encode("utf-8")).hexdigest()[:12]
         return ProfileSnapshot(
-            profile_id=f"profile_{uuid.uuid4().hex[:12]}",
+            profile_id=f"profile_{digest}",
             owner_id=owner_id or "user",
             summary=summary,
             explicit_traits=explicit_traits,

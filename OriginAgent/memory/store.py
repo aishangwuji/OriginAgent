@@ -33,6 +33,7 @@ class NearlineMemoryStore:
         self.foresights_path = self.root / "foresights.jsonl"
         self.agent_cases_path = self.root / "agent_cases.jsonl"
         self.profiles_path = self.root / "profiles.jsonl"
+        self.events_path = self.root / "events.jsonl"
         self.cursor_path = self.root / ".cursor"
         self.session_cursors_path = self.root / "session_cursors.json"
 
@@ -92,19 +93,22 @@ class NearlineMemoryStore:
             return cursor
 
     def append_memcells(self, memcells: list[MemCell]) -> int:
-        return self._append_jsonl(self.memcells_path, memcells)
+        return self._append_jsonl(self.memcells_path, memcells, identity_keys=("memcell_id",))
 
     def append_episodes(self, episodes: list[EpisodeRecord]) -> int:
-        return self._append_jsonl(self.episodes_path, episodes)
+        return self._append_jsonl(self.episodes_path, episodes, identity_keys=("episode_id",))
 
     def append_foresights(self, foresights: list[ForesightRecord]) -> int:
-        return self._append_jsonl(self.foresights_path, foresights)
+        return self._append_jsonl(self.foresights_path, foresights, identity_keys=("foresight_id",))
 
     def append_agent_cases(self, agent_cases: list[AgentCaseRecord]) -> int:
-        return self._append_jsonl(self.agent_cases_path, agent_cases)
+        return self._append_jsonl(self.agent_cases_path, agent_cases, identity_keys=("case_id",))
 
     def append_profiles(self, profiles: list[ProfileSnapshot]) -> int:
-        return self._append_jsonl(self.profiles_path, profiles)
+        return self._append_jsonl(self.profiles_path, profiles, identity_keys=("profile_id",))
+
+    def append_events(self, events: list[Any]) -> int:
+        return self._append_jsonl(self.events_path, events, identity_keys=("event_id",))
 
     def read_memcells(self, *, limit: int | None = None) -> list[MemCell]:
         payloads = self._read_jsonl(self.memcells_path, limit=limit)
@@ -222,19 +226,36 @@ class NearlineMemoryStore:
             return 0, None
         return count, last_timestamp
 
-    def _append_jsonl(self, path: Path, records: list[Any]) -> int:
+    def _append_jsonl(
+        self,
+        path: Path,
+        records: list[Any],
+        *,
+        identity_keys: tuple[str, ...] = (),
+    ) -> int:
         payloads = [self._normalize_record(record) for record in records]
         if not payloads:
             return 0
         with self._locked():
+            known_identities = self._read_existing_identities(path, identity_keys)
+            new_payloads: list[dict[str, Any]] = []
+            for payload in payloads:
+                identity = self._payload_identity(payload, identity_keys)
+                if identity is not None:
+                    if identity in known_identities:
+                        continue
+                    known_identities.add(identity)
+                new_payloads.append(payload)
+            if not new_payloads:
+                return 0
             path.parent.mkdir(parents=True, exist_ok=True)
             with path.open("a", encoding="utf-8") as handle:
-                for payload in payloads:
+                for payload in new_payloads:
                     handle.write(json.dumps(payload, ensure_ascii=False) + "\n")
                 handle.flush()
                 os.fsync(handle.fileno())
             self._fsync_parent(path)
-        return len(payloads)
+        return len(new_payloads)
 
     @staticmethod
     def _normalize_record(record: Any) -> dict[str, Any]:
@@ -245,6 +266,48 @@ class NearlineMemoryStore:
         if not isinstance(payload, dict):
             raise TypeError("Nearline JSONL records must serialize to dict payloads")
         return payload
+
+    @staticmethod
+    def _payload_identity(
+        payload: dict[str, Any],
+        identity_keys: tuple[str, ...],
+    ) -> tuple[str, ...] | None:
+        if not identity_keys:
+            return None
+        values: list[str] = []
+        for key in identity_keys:
+            value = payload.get(key)
+            if not isinstance(value, str) or not value.strip():
+                return None
+            values.append(value)
+        return tuple(values)
+
+    def _read_existing_identities(
+        self,
+        path: Path,
+        identity_keys: tuple[str, ...],
+    ) -> set[tuple[str, ...]]:
+        identities: set[tuple[str, ...]] = set()
+        if not identity_keys or not path.exists():
+            return identities
+        try:
+            with path.open("r", encoding="utf-8") as handle:
+                for line in handle:
+                    raw = line.strip()
+                    if not raw:
+                        continue
+                    try:
+                        payload = json.loads(raw)
+                    except json.JSONDecodeError:
+                        continue
+                    if not isinstance(payload, dict):
+                        continue
+                    identity = self._payload_identity(payload, identity_keys)
+                    if identity is not None:
+                        identities.add(identity)
+        except OSError:
+            return set()
+        return identities
 
     @staticmethod
     def _read_jsonl(path: Path, *, limit: int | None = None) -> list[dict[str, Any]]:

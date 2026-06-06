@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
+import os
 import re
-import uuid
+from contextlib import suppress
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -274,15 +276,14 @@ class NearlineMemoryPipeline:
                     metadata={"turn_id": turn_id},
                 )
                 events.append(refresh_event)
-                if self.config.profile_shadow_write_enabled:
-                    profile = self.profile_service.synthesize_snapshot(
-                        owner_id=actor_id or "user",
-                        memcells=memcells,
-                        episodes=episodes,
-                        foresights=foresights,
-                    )
-                    if profile is not None:
-                        profiles.append(profile)
+                profile = self.profile_service.synthesize_snapshot(
+                    owner_id=actor_id or "user",
+                    memcells=memcells,
+                    episodes=episodes,
+                    foresights=foresights,
+                )
+                if profile is not None:
+                    profiles.append(profile)
 
             await asyncio.to_thread(self.store.append_memcells, memcells)
             if episodes:
@@ -293,10 +294,11 @@ class NearlineMemoryPipeline:
                 await asyncio.to_thread(self.store.append_agent_cases, agent_cases)
             if profiles:
                 await asyncio.to_thread(self.store.append_profiles, profiles)
-                latest_profile = profiles[-1]
-                await asyncio.to_thread(self.profile_service.write_profile_shadow, latest_profile)
+                if self.config.profile_shadow_write_enabled:
+                    latest_profile = profiles[-1]
+                    await asyncio.to_thread(self.profile_service.write_profile_shadow, latest_profile)
             if events:
-                await asyncio.to_thread(self._append_events, events)
+                await asyncio.to_thread(self.store.append_events, events)
 
             cursor_after = cursor_before + len(messages)
             await asyncio.to_thread(self.store.advance_session_cursor, session_key, cursor_after)
@@ -372,16 +374,20 @@ class NearlineMemoryPipeline:
     def _append_events(self, events: list[MemoryEvent]) -> int:
         if not events:
             return 0
-        with self._events_locked():
-            self.events_path.parent.mkdir(parents=True, exist_ok=True)
-            with self.events_path.open("a", encoding="utf-8") as handle:
-                for event in events:
-                    handle.write(json.dumps(event.to_json(), ensure_ascii=False) + "\n")
-        return len(events)
+        return self.store.append_events(events)
 
     def _events_locked(self) -> FileLock:
         self.events_path.parent.mkdir(parents=True, exist_ok=True)
         return FileLock(str(self._events_lock_path))
+
+    @staticmethod
+    def _fsync_parent(path: Path) -> None:
+        with suppress(PermissionError, OSError):
+            fd = os.open(str(path.parent), os.O_RDONLY)
+            try:
+                os.fsync(fd)
+            finally:
+                os.close(fd)
 
     @staticmethod
     def _extract_episode(memcell) -> EpisodeRecord | None:
@@ -392,8 +398,11 @@ class NearlineMemoryPipeline:
         if not lead:
             return None
         summary = _truncate_line(lead, 160)
+        digest = hashlib.sha1(
+            f"{memcell.memcell_id}|episode|{user_messages[0].sender_id or 'user'}".encode("utf-8")
+        ).hexdigest()[:12]
         return EpisodeRecord(
-            episode_id=f"episode_{uuid.uuid4().hex[:12]}",
+            episode_id=f"episode_{digest}",
             memcell_id=memcell.memcell_id,
             session_key=memcell.session_key,
             owner_id=user_messages[0].sender_id or "user",
@@ -447,8 +456,11 @@ class NearlineMemoryPipeline:
         )
         if not task_intent and not outcome_summary:
             return None
+        digest = hashlib.sha1(
+            f"{memcell.memcell_id}|agent_case|{actor_id or 'assistant'}".encode("utf-8")
+        ).hexdigest()[:12]
         return AgentCaseRecord(
-            case_id=f"agent_case_{uuid.uuid4().hex[:12]}",
+            case_id=f"agent_case_{digest}",
             memcell_id=memcell.memcell_id,
             session_key=memcell.session_key,
             agent_id=actor_id or "assistant",
@@ -476,8 +488,11 @@ class NearlineMemoryPipeline:
             start_at = _extract_future_timestamp(content, reference=message.timestamp)
             if start_at is None:
                 continue
+            digest = hashlib.sha1(
+                f"{memcell.memcell_id}|foresight|{message.sender_id or 'user'}|{start_at}".encode("utf-8")
+            ).hexdigest()[:12]
             return ForesightRecord(
-                foresight_id=f"foresight_{uuid.uuid4().hex[:12]}",
+                foresight_id=f"foresight_{digest}",
                 memcell_id=memcell.memcell_id,
                 session_key=memcell.session_key,
                 owner_id=message.sender_id or "user",
