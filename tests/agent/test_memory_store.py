@@ -7,6 +7,8 @@ import pytest
 
 from OriginAgent.agent.memory import _HISTORY_ENTRY_HARD_CAP, MemoryStore
 from OriginAgent.domain_packs.smart_home.runtime.presence import PresenceStore
+from OriginAgent.memory.models import ProfileSnapshot
+from OriginAgent.memory.profile import NearlineProfileService
 
 
 @pytest.fixture
@@ -35,6 +37,28 @@ class TestMemoryStoreBasicIO:
     def test_write_and_read_user(self, store):
         store.write_user("user content")
         assert store.read_user() == "user content"
+
+    def test_profile_shadow_updates_only_managed_user_region(self, store):
+        store.write_user("# User Profile\n\nManual notes:\n- Keep me\n")
+        service = NearlineProfileService(store.workspace, memory_store=store)
+        snapshot = ProfileSnapshot(
+            profile_id="profile_1",
+            owner_id="user",
+            summary="Prefers concise updates.",
+            explicit_traits=["Prefers concise updates"],
+            implicit_traits=["Will send draft tomorrow"],
+            source_memcell_ids=["mem_1"],
+            updated_at="2026-06-05T10:03:00+00:00",
+        )
+
+        service.write_profile_shadow(snapshot)
+        updated = store.read_user()
+        start, end = service.managed_markers()
+
+        assert "Manual notes:\n- Keep me" in updated
+        assert start in updated
+        assert end in updated
+        assert "Managed Profile Snapshot" in updated
 
     def test_get_memory_context_returns_empty_when_missing(self, store):
         assert store.get_memory_context() == ""

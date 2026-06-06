@@ -77,6 +77,15 @@ _APPLY_ACTIONS_BY_TYPE = {
     "move_to_domain": "move_to_domain",
 }
 _HIGH_RISK_DEVICE_DOMAINS = {"lock", "security", "camera", "gas", "presence"}
+_DERIVED_NEARLINE_PATH_MARKERS = (
+    "memory/nearline/",
+    "memcells.jsonl",
+    "episodes.jsonl",
+    "foresights.jsonl",
+    "agent_cases.jsonl",
+    "profiles.jsonl",
+    "events.jsonl",
+)
 
 
 @dataclass(frozen=True)
@@ -1542,7 +1551,8 @@ class BackgroundReviewService:
         cfg = self.config
         max_recent = max(1, int(getattr(cfg, "max_recent_messages", 12) or 12))
         max_prompt = max(1000, int(getattr(cfg, "max_prompt_chars", 16000) or 16000))
-        recent = messages[-max_recent:]
+        filtered = [message for message in messages if not _is_derived_memory_message(message)]
+        recent = filtered[-max_recent:]
         lines = [
             "## Review Scope",
             f"- session_key: {session_key}",
@@ -1643,6 +1653,41 @@ def _review_source_for_calibration(record: dict[str, Any]) -> str:
     if origin == AUTO_EVOLUTION_ORIGIN:
         return "curator"
     return "manual"
+
+
+def _is_derived_memory_message(message: dict[str, Any]) -> bool:
+    metadata = message.get("metadata") if isinstance(message.get("metadata"), dict) else {}
+    if message.get("_from_active") or metadata.get("_from_active"):
+        return True
+    injected_event = str(message.get("injected_event") or metadata.get("injected_event") or "").strip().lower()
+    if injected_event in {"active_intent", "subagent_result"}:
+        return True
+    if _contains_derived_nearline_reference(message):
+        return True
+    return False
+
+
+def _contains_derived_nearline_reference(value: Any) -> bool:
+    if isinstance(value, str):
+        lowered = value.casefold()
+        return any(marker in lowered for marker in _DERIVED_NEARLINE_PATH_MARKERS)
+    if isinstance(value, dict):
+        for key, item in value.items():
+            if str(key).strip().lower() in {
+                "source_type",
+                "artifact_type",
+                "extractor",
+                "path",
+                "source_path",
+                "source_reference",
+            } and _contains_derived_nearline_reference(item):
+                return True
+            if _contains_derived_nearline_reference(item):
+                return True
+        return False
+    if isinstance(value, list):
+        return any(_contains_derived_nearline_reference(item) for item in value)
+    return False
 
 
 def _is_auto_evolution_record(record: dict[str, Any]) -> bool:

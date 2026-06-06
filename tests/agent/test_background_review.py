@@ -127,6 +127,47 @@ async def test_background_review_writes_redacted_pending_proposals(tmp_path: Pat
     assert status["consecutive_failures"] == 0
 
 
+def test_background_review_prompt_filters_derived_nearline_messages(tmp_path: Path) -> None:
+    provider = FakeProvider(_proposal_response())
+    service = BackgroundReviewService(
+        workspace=tmp_path,
+        provider=provider,
+        model="fake-model",
+        config=BackgroundReviewConfig(enabled=True),
+    )
+
+    prompt = service._build_prompt(
+        session_key="websocket:chat1",
+        turn_id="turn-1",
+        channel="websocket",
+        chat_id="chat1",
+        message_id="m1",
+        messages=[
+            {
+                "role": "user",
+                "content": "Please remember I prefer direct answers.",
+                "timestamp": "2026-05-19T10:00:00",
+            },
+            {
+                "role": "assistant",
+                "content": "Foresight follow-up...",
+                "timestamp": "2026-05-19T10:01:00",
+                "_from_active": True,
+                "injected_event": "active_intent",
+            },
+            {
+                "role": "tool",
+                "content": "source_path=memory/nearline/episodes.jsonl",
+                "timestamp": "2026-05-19T10:02:00",
+            },
+        ],
+    )
+
+    assert "Please remember I prefer direct answers." in prompt
+    assert "Foresight follow-up" not in prompt
+    assert "memory/nearline/episodes.jsonl" not in prompt
+
+
 @pytest.mark.asyncio
 async def test_background_review_writes_proposals_off_event_loop_thread(tmp_path: Path) -> None:
     class ThreadRecordingStore:

@@ -26,6 +26,7 @@ from OriginAgent.memory.events import (
     ProfileRefreshRequested,
 )
 from OriginAgent.memory.models import AgentCaseRecord, EpisodeRecord, ForesightRecord, ProfileSnapshot
+from OriginAgent.memory.profile import NearlineProfileService
 from OriginAgent.memory.segmenter import canonicalize_session_messages, segment_memcells
 from OriginAgent.memory.store import NearlineMemoryStore
 from OriginAgent.session.manager import Session
@@ -103,6 +104,10 @@ class NearlineMemoryPipeline:
         self.workspace = Path(workspace)
         self.config = config or NearlineMemoryConfig()
         self.store = store or NearlineMemoryStore(self.workspace)
+        self.profile_service = NearlineProfileService(
+            self.workspace,
+            store=self.store,
+        )
         self.events_path = self.workspace / "memory" / "nearline" / "events.jsonl"
         self._events_lock_path = self.events_path.parent / ".events.lock"
         self._last_report: TaskRunReport | None = None
@@ -270,7 +275,7 @@ class NearlineMemoryPipeline:
                 )
                 events.append(refresh_event)
                 if self.config.profile_shadow_write_enabled:
-                    profile = self._build_profile_snapshot(
+                    profile = self.profile_service.synthesize_snapshot(
                         owner_id=actor_id or "user",
                         memcells=memcells,
                         episodes=episodes,
@@ -288,6 +293,8 @@ class NearlineMemoryPipeline:
                 await asyncio.to_thread(self.store.append_agent_cases, agent_cases)
             if profiles:
                 await asyncio.to_thread(self.store.append_profiles, profiles)
+                latest_profile = profiles[-1]
+                await asyncio.to_thread(self.profile_service.write_profile_shadow, latest_profile)
             if events:
                 await asyncio.to_thread(self._append_events, events)
 
@@ -486,41 +493,6 @@ class NearlineMemoryPipeline:
                 },
             )
         return None
-
-    @staticmethod
-    def _build_profile_snapshot(
-        *,
-        owner_id: str,
-        memcells: list[Any],
-        episodes: list[EpisodeRecord],
-        foresights: list[ForesightRecord],
-    ) -> ProfileSnapshot | None:
-        if not memcells:
-            return None
-        explicit_traits = [
-            _truncate_line(episode.summary, 160)
-            for episode in episodes[:5]
-            if episode.summary.strip()
-        ]
-        implicit_traits = [
-            _truncate_line(foresight.content, 160)
-            for foresight in foresights[:5]
-            if foresight.content.strip()
-        ]
-        if not explicit_traits and not implicit_traits:
-            return None
-        summary_parts = explicit_traits[:2] + implicit_traits[:2]
-        return ProfileSnapshot(
-            profile_id=f"profile_{uuid.uuid4().hex[:12]}",
-            owner_id=owner_id or "user",
-            summary=" | ".join(summary_parts),
-            explicit_traits=explicit_traits,
-            implicit_traits=implicit_traits,
-            source_memcell_ids=[memcell.memcell_id for memcell in memcells],
-            updated_at=memcells[-1].ended_at,
-            metadata={"source": "nearline_pipeline"},
-        )
-
 
 def _truncate_line(text: str, limit: int) -> str:
     text = " ".join(str(text or "").split()).strip()

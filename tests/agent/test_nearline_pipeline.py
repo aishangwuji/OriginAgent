@@ -176,3 +176,57 @@ async def test_nearline_pipeline_is_incremental_per_session(tmp_path) -> None:
     assert first.status == "ok"
     assert second.status == "skipped"
     assert second.reason == "no_new_messages"
+
+
+@pytest.mark.asyncio
+async def test_nearline_pipeline_updates_profile_sidecar_and_managed_user_region(tmp_path) -> None:
+    from OriginAgent.memory.profile import NearlineProfileService
+
+    pipeline = NearlineMemoryPipeline(
+        tmp_path,
+        config=NearlineMemoryConfig(
+            enabled=True,
+            pipeline_enabled=True,
+            profile_shadow_write_enabled=True,
+        ),
+    )
+    user_file = tmp_path / "USER.md"
+    user_file.write_text(
+        "# User Profile\n\nManual notes:\n- Keep this line.\n",
+        encoding="utf-8",
+    )
+    session = Session(key="cli:profile")
+    session.messages = [
+        {
+            "role": "user",
+            "content": "I prefer concise release updates and I will send the draft tomorrow morning.",
+            "timestamp": "2026-06-05T12:00:00+08:00",
+            "sender_id": "user-5",
+        },
+        {
+            "role": "assistant",
+            "content": "Noted.",
+            "timestamp": "2026-06-05T12:00:01+08:00",
+        },
+    ]
+
+    result = await pipeline.process_turn(
+        session=session,
+        channel="cli",
+        chat_id="profile",
+        actor_id="user-5",
+        turn_id="turn-profile",
+    )
+
+    assert result.status == "ok"
+    assert result.profiles_written == 1
+    profiles = _load_jsonl(tmp_path / "memory" / "nearline" / "profiles.jsonl")
+    assert len(profiles) == 1
+    assert "concise release updates" in profiles[0]["summary"]
+
+    user_text = user_file.read_text(encoding="utf-8")
+    start, end = NearlineProfileService.managed_markers()
+    assert "Manual notes:\n- Keep this line." in user_text
+    assert start in user_text
+    assert end in user_text
+    assert "Managed Profile Snapshot" in user_text

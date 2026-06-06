@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from datetime import timedelta, timezone, datetime
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
@@ -315,6 +316,53 @@ async def test_active_intents_busy_session_suppresses_due_reminder(tmp_path: Pat
     unchanged = service.reminder_store.get(reminder.reminder_id)
     assert unchanged is not None
     assert unchanged.status == "pending"
+
+
+@pytest.mark.asyncio
+async def test_active_intents_emit_due_foresight_nudge_with_cooldown(tmp_path: Path) -> None:
+    service, bus, sessions = _make_service(tmp_path, enabled=True)
+    session = sessions.get_or_create("cli:test")
+    sessions.save(session)
+    foresight_path = tmp_path / "memory" / "nearline" / "foresights.jsonl"
+    foresight_path.parent.mkdir(parents=True, exist_ok=True)
+    foresight_path.write_text(
+        json.dumps(
+            {
+                "foresight_id": "fo_1",
+                "memcell_id": "mem_1",
+                "session_key": "cli:test",
+                "owner_id": "user",
+                "content": "I will send the draft tomorrow morning.",
+                "evidence": "User said they will send the draft tomorrow morning.",
+                "start_at": (datetime.now(timezone.utc) - timedelta(minutes=5)).isoformat(),
+                "end_at": None,
+                "timestamp": "2026-06-05T12:00:00+00:00",
+            },
+            ensure_ascii=False,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    first = await service.process_session(
+        "cli:test",
+        active_task_count=0,
+        running_subagents=0,
+    )
+    msg = await asyncio.wait_for(bus.consume_inbound(), timeout=0.2)
+    second = await service.process_session(
+        "cli:test",
+        active_task_count=0,
+        running_subagents=0,
+    )
+
+    assert len(first) == 1
+    assert msg.metadata["active_intent_type"] == "foresight_nudge"
+    assert "future plan or commitment is now due" in msg.content
+    assert second == []
+    recent = service.ledger.recent()
+    assert recent[-1]["outcome"] == "suppressed"
+    assert recent[-1]["suppression_reason"] in {"session_cooldown", "intent_cooldown"}
 
 
 @pytest.mark.asyncio

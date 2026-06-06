@@ -60,6 +60,16 @@ _TITLE_MAX_CHARS = 160
 _EVIDENCE_MAX_CHARS = 500
 _MAX_EVIDENCE = 5
 _NORMALIZE_SPACE_RE = re.compile(r"\s+")
+_DERIVED_NEARLINE_MARKERS = (
+    "memory/nearline/",
+    "memcells.jsonl",
+    "episodes.jsonl",
+    "foresights.jsonl",
+    "agent_cases.jsonl",
+    "profiles.jsonl",
+    "events.jsonl",
+    "nearline",
+)
 
 
 @dataclass(frozen=True)
@@ -1350,7 +1360,8 @@ def _evidence_lines(
     evidence_max_chars: int = _EVIDENCE_MAX_CHARS,
 ) -> list[str]:
     evidence: list[str] = []
-    for item in items[:max_evidence]:
+    filtered = [item for item in items if not _is_derived_nearline_evidence(item)]
+    for item in filtered[:max_evidence]:
         cursor = item.get("cursor")
         timestamp = item.get("timestamp")
         preview = _clean_text(str(item.get("preview") or "").strip(), evidence_max_chars)
@@ -1370,6 +1381,31 @@ def _redact_payload(value: Any) -> Any:
     if isinstance(value, dict):
         return {str(key): _redact_payload(item) for key, item in value.items()}
     return value
+
+
+def _is_derived_nearline_evidence(item: Any) -> bool:
+    if isinstance(item, str):
+        lowered = item.casefold()
+        return any(marker in lowered for marker in _DERIVED_NEARLINE_MARKERS)
+    if isinstance(item, dict):
+        for key, value in item.items():
+            key_name = str(key).strip().lower()
+            if key_name in {
+                "source_type",
+                "source",
+                "extractor",
+                "path",
+                "source_path",
+                "artifact_type",
+                "source_reference",
+            } and _is_derived_nearline_evidence(value):
+                return True
+            if _is_derived_nearline_evidence(value):
+                return True
+        return False
+    if isinstance(item, list):
+        return any(_is_derived_nearline_evidence(value) for value in item)
+    return False
 
 
 def payload_gate(record: dict[str, Any]) -> dict[str, Any]:

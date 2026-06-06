@@ -15,12 +15,13 @@ from OriginAgent.agent.facts import FactStore
 from OriginAgent.agent.reminders import ReminderStore
 from OriginAgent.bus.events import InboundMessage
 from OriginAgent.bus.queue import MessageBus
+from OriginAgent.memory.store import NearlineMemoryStore
 from OriginAgent.session.goal_state import goal_state_raw, parse_goal_state
 from OriginAgent.session.manager import Session, SessionManager
 from OriginAgent.utils.helpers import ensure_dir, truncate_text
 
 ActiveIntentOutcome = Literal["emitted", "suppressed", "skipped"]
-ActiveIntentType = Literal["goal_nudge", "pending_confirmation_nudge", "scheduled_reminder"]
+ActiveIntentType = Literal["goal_nudge", "pending_confirmation_nudge", "scheduled_reminder", "foresight_nudge"]
 
 _SUMMARY_MAX_CHARS = 240
 _RECENT_SCAN_LIMIT = 200
@@ -148,6 +149,7 @@ class ActiveIntentService:
         self.confirmation_store = confirmation_store
         self.fact_store = fact_store
         self.reminder_store = reminder_store or ReminderStore(workspace)
+        self.nearline_store = NearlineMemoryStore(workspace)
         self.config = config
         self.ledger = JsonlActiveIntentLedger(workspace)
 
@@ -239,6 +241,9 @@ class ActiveIntentService:
         reminder_candidate = self._scheduled_reminder_candidate(session)
         if reminder_candidate is not None:
             candidates.append(reminder_candidate)
+        foresight_candidate = self._foresight_candidate(session)
+        if foresight_candidate is not None:
+            candidates.append(foresight_candidate)
         return candidates
 
     def _goal_candidate(self, session: Session) -> ActiveIntentCandidate | None:
@@ -325,6 +330,39 @@ class ActiveIntentService:
             ),
             source_type="reminder",
             source_reference=reminder.reminder_id,
+            summary=summary,
+        )
+
+    def _foresight_candidate(self, session: Session) -> ActiveIntentCandidate | None:
+        now = _utcnow()
+        foresights = [
+            item
+            for item in self.nearline_store.read_foresights(limit=80)
+            if item.session_key == session.key and item.start_at
+        ]
+        due: list[tuple[datetime, Any]] = []
+        for item in foresights:
+            start_at = _parse_iso(item.start_at)
+            if start_at is None:
+                continue
+            if start_at > now:
+                continue
+            due.append((start_at, item))
+        if not due:
+            return None
+        due.sort(key=lambda pair: pair[0])
+        _start_at, foresight = due[0]
+        summary = _summarize_text(foresight.content, max_chars=160)
+        return ActiveIntentCandidate(
+            intent_type="foresight_nudge",
+            intent_id=f"foresight:{foresight.foresight_id}",
+            content=(
+                "Foresight follow-up: a previously stated future plan or commitment is now due.\n"
+                f"Foresight: {summary}\n"
+                "If helpful, gently nudge the user about this due plan and keep the follow-up bounded."
+            ),
+            source_type="foresight",
+            source_reference=foresight.foresight_id,
             summary=summary,
         )
 

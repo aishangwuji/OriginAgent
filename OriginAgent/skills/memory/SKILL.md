@@ -8,10 +8,18 @@ always: true
 
 ## Structure
 
-- `SOUL.md` — Bot personality and communication style. **Managed by Dream.** Do NOT edit.
-- `USER.md` — User profile and preferences. **Managed by Dream.** Do NOT edit.
-- `memory/MEMORY.md` — Long-term facts (project context, important events). **Managed by Dream.** Do NOT edit.
+- `SOUL.md` — Bot personality and communication style. Dream-managed.
+- `USER.md` — User profile and preferences. User-authored file with an optional managed profile shadow section.
+- `memory/MEMORY.md` — Long-term fact summary rendered from facts. Dream-managed.
 - `memory/history.jsonl` — append-only JSONL, not loaded into context. Prefer the built-in `grep` tool to search it.
+- `memory/nearline/` — sidecar layered memory artifacts: memcells, episodes, foresights, agent cases, profiles, and pipeline events.
+
+## Responsibility Split
+
+- Dream owns `facts.jsonl` consolidation and `memory/MEMORY.md` rendering.
+- Nearline pipeline owns `memory/nearline/*.jsonl`, layered retrieval inputs, foresight follow-up inputs, and profile sidecar snapshots.
+- Nearline objects are recall/proactivity aids, not human-review proposal sources.
+- `USER.md` is not fully taken over by nearline. Only the managed profile shadow block may be updated automatically when enabled.
 
 ## Search Past Events
 
@@ -31,6 +39,8 @@ Examples (replace `keyword`):
 
 ## Important
 
-- **Do NOT edit SOUL.md, USER.md, or MEMORY.md.** They are automatically managed by Dream.
-- If you notice outdated information, it will be corrected when Dream runs next.
+- Do not edit `SOUL.md` or `memory/MEMORY.md` directly.
+- Treat `USER.md` as partly user-authored. Preserve manual content outside the managed profile section.
+- If facts or long-term summaries look outdated, Dream is the owner.
+- If episodes / foresights / agent cases / profiles look outdated, nearline pipeline is the owner.
 - Users can view Dream's activity with the `/dream-log` command.

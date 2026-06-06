@@ -132,3 +132,84 @@ def test_self_model_uses_nearline_runtime_snapshot_when_present(tmp_path) -> Non
 
     assert self_model["memory"]["nearline"]["status"] == "enabled"
     assert self_model["memory"]["nearline"]["memcell_count"] == 3
+
+
+def test_self_model_reports_nearline_counts_and_last_sync(tmp_path) -> None:
+    nearline = tmp_path / "memory" / "nearline"
+    nearline.mkdir(parents=True, exist_ok=True)
+    (nearline / "episodes.jsonl").write_text(
+        json.dumps(
+            {
+                "episode_id": "ep_1",
+                "memcell_id": "mem_1",
+                "session_key": "cli:test",
+                "owner_id": "user",
+                "summary": "User asked for release checklist",
+                "content": "Need a release checklist.",
+                "timestamp": "2026-06-05T10:00:00+00:00",
+            },
+            ensure_ascii=False,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    (nearline / "foresights.jsonl").write_text(
+        json.dumps(
+            {
+                "foresight_id": "fo_1",
+                "memcell_id": "mem_1",
+                "session_key": "cli:test",
+                "owner_id": "user",
+                "content": "Will send draft tomorrow",
+                "evidence": "Will send tomorrow",
+                "start_at": "2026-06-06T09:00:00+00:00",
+                "timestamp": "2026-06-05T10:01:00+00:00",
+            },
+            ensure_ascii=False,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    (nearline / "agent_cases.jsonl").write_text(
+        json.dumps(
+            {
+                "case_id": "case_1",
+                "memcell_id": "mem_2",
+                "session_key": "cli:test",
+                "agent_id": "origin",
+                "task_intent": "Implement validation",
+                "approach": "Added smoke test",
+                "outcome_summary": "Validation passed",
+                "quality_score": 1.0,
+                "timestamp": "2026-06-05T10:02:00+00:00",
+            },
+            ensure_ascii=False,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    (nearline / "profiles.jsonl").write_text(
+        json.dumps(
+            {
+                "profile_id": "profile_1",
+                "owner_id": "user",
+                "summary": "Prefers concise updates.",
+                "explicit_traits": ["Prefers concise updates"],
+                "implicit_traits": ["Will send draft tomorrow"],
+                "source_memcell_ids": ["mem_1"],
+                "updated_at": "2026-06-05T10:03:00+00:00",
+            },
+            ensure_ascii=False,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    self_model = SelfModelService(tmp_path).build()
+    nearline_summary = self_model["memory"]["nearline"]
+
+    assert nearline_summary["episode_count"] == 1
+    assert nearline_summary["foresight_count"] == 1
+    assert nearline_summary["agent_case_count"] == 1
+    assert nearline_summary["profile_count"] == 1
+    assert nearline_summary["last_synced_at"] == "2026-06-05T10:03:00+00:00"

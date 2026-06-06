@@ -19,6 +19,7 @@ from OriginAgent.agent.workflow_artifacts import (
     list_workflow_artifact_records,
     summarize_workflow_artifacts,
 )
+from OriginAgent.memory.profile import NearlineProfileService
 from OriginAgent.memory.store import NearlineMemoryStore
 from OriginAgent.utils.helpers import truncate_text
 
@@ -263,18 +264,35 @@ class SelfModelService:
 
     def _build_nearline_memory_summary(self) -> dict[str, Any]:
         if self._runtime_snapshot.nearline_memory_summary:
-            return dict(self._runtime_snapshot.nearline_memory_summary)
+            return self._normalize_nearline_summary(dict(self._runtime_snapshot.nearline_memory_summary))
         try:
             from OriginAgent.config.schema import AgentDefaults
 
             config = AgentDefaults().nearline_memory
-            return NearlineMemoryStore(self.workspace).summary(
+            summary = NearlineMemoryStore(self.workspace).summary(
                 nearline_enabled=bool(config.enabled),
                 pipeline_enabled=bool(config.pipeline_enabled),
                 profile_shadow_write_enabled=bool(config.profile_shadow_write_enabled),
             )
+            return self._normalize_nearline_summary(summary)
         except Exception:
             return {}
+
+    def _normalize_nearline_summary(self, summary: dict[str, Any]) -> dict[str, Any]:
+        normalized = dict(summary or {})
+        normalized.setdefault("episode_count", int(normalized.get("episode_count", 0) or 0))
+        normalized.setdefault("foresight_count", int(normalized.get("foresight_count", 0) or 0))
+        normalized.setdefault("agent_case_count", int(normalized.get("agent_case_count", 0) or 0))
+        normalized.setdefault("profile_count", int(normalized.get("profile_count", 0) or 0))
+        latest_sync = (
+            normalized.get("last_profile_at")
+            or normalized.get("last_episode_at")
+            or normalized.get("last_foresight_at")
+            or normalized.get("last_agent_case_at")
+        )
+        normalized.setdefault("last_synced_at", latest_sync)
+        normalized.setdefault("user_shadow_last_synced_at", NearlineProfileService.last_sync_time(self.workspace))
+        return normalized
 
     def _build_reviews(self) -> tuple[dict[str, Any], list[dict[str, Any]]]:
         if self._runtime_snapshot.reviews:
@@ -614,6 +632,14 @@ class SelfModelRenderer:
             f"- Pending confirmations: {int(confirmations.get('pending_count', 0) or 0)}",
             f"- Recent history pending: {int(memory.get('recent_history_pending_count', 0) or 0)}",
             f"- Memory context available: {_yes_no(bool(memory.get('has_memory_context')))}",
+            (
+                "- Nearline memory: "
+                f"{int(memory.get('nearline', {}).get('episode_count', 0) or 0)} episodes, "
+                f"{int(memory.get('nearline', {}).get('foresight_count', 0) or 0)} foresights, "
+                f"{int(memory.get('nearline', {}).get('agent_case_count', 0) or 0)} agent cases, "
+                f"{int(memory.get('nearline', {}).get('profile_count', 0) or 0)} profiles"
+            ),
+            f"- Nearline last synced: {memory.get('nearline', {}).get('last_synced_at') or 'unknown'}",
             "",
             "## Known Limitations",
             "",

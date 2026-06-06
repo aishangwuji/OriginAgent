@@ -10,7 +10,7 @@ import pytest
 import yaml
 
 from OriginAgent.agent.background_review import ReviewProposal, ReviewProposalStore
-from OriginAgent.agent.curator import CURATOR_ORIGIN, CuratorService
+from OriginAgent.agent.curator import CURATOR_ORIGIN, CuratorService, _evidence_lines
 from OriginAgent.agent.evolution import (
     AUTO_EVOLUTION_ORIGIN,
     SIGNAL_KIND_SKILL,
@@ -223,6 +223,29 @@ def test_legacy_review_proposal_without_origin_defaults_to_background_review(tmp
 
     assert record is not None
     assert record["origin"] == "background_review"
+
+
+def test_curator_evidence_lines_skip_derived_nearline_sources() -> None:
+    lines = _evidence_lines(
+        [
+            {
+                "cursor": 1,
+                "timestamp": "2026-05-21T10:00:00+00:00",
+                "preview": "Use deploy checklist before release.",
+                "source_type": "history",
+            },
+            {
+                "cursor": 2,
+                "timestamp": "2026-05-21T10:01:00+00:00",
+                "preview": "Derived foresight evidence.",
+                "path": "memory/nearline/foresights.jsonl",
+            },
+        ]
+    )
+
+    assert len(lines) == 1
+    assert "deploy checklist" in lines[0]
+    assert "Derived foresight evidence" not in lines[0]
 
 
 @pytest.mark.asyncio

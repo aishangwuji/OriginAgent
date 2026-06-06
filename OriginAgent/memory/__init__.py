@@ -21,6 +21,7 @@ from OriginAgent.memory.models import (
     MemoryLayerSummary,
     ProfileSnapshot,
 )
+from OriginAgent.memory.profile import NearlineProfileService
 from OriginAgent.memory.pipeline import NearlineMemoryPipeline, NearlinePipelineResult
 from OriginAgent.memory.segmenter import canonicalize_session_messages, segment_memcells
 from OriginAgent.memory.store import NearlineMemoryStore
@@ -38,6 +39,7 @@ __all__ = [
     "MemCellCreated",
     "MemoryLayerSummary",
     "NearlineMemoryPipeline",
+    "NearlineProfileService",
     "NearlinePipelineResult",
     "NearlineMemoryStore",
     "ProfileRefreshRequested",
