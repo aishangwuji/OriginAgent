@@ -5,14 +5,17 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
+import mimetypes
 import os
 import re
 from collections.abc import Awaitable, Callable, Iterator
+from pathlib import Path
 from typing import Any
 
 import json_repair
 
 from OriginAgent.providers.base import LLMProvider, LLMResponse, ToolCallRequest
+from OriginAgent.utils.attachments import AttachmentDescriptor, attachment_placeholder_text
 
 _IMAGE_DATA_URL = re.compile(r"^data:image/([a-zA-Z0-9.+-]+);base64,(.*)$", re.DOTALL)
 _TEXT_BLOCK_TYPES = {"text", "input_text", "output_text"}
@@ -35,6 +38,27 @@ def _next_or_none(iterator: Iterator[dict[str, Any]]) -> dict[str, Any] | None:
         return next(iterator)
     except StopIteration:
         return None
+
+
+def _attachment_descriptor(block: dict[str, Any]) -> AttachmentDescriptor | None:
+    attachment = block.get("attachment")
+    if not isinstance(attachment, dict):
+        return None
+    path = attachment.get("path")
+    kind = attachment.get("kind")
+    if not isinstance(path, str) or not path or not isinstance(kind, str) or not kind:
+        return None
+    name = attachment.get("name")
+    size_bytes = attachment.get("size_bytes")
+    return AttachmentDescriptor(
+        path=Path(path),
+        name=name if isinstance(name, str) and name else Path(path).name,
+        mime=attachment.get("mime") if isinstance(attachment.get("mime"), str) else None,
+        kind=kind,  # type: ignore[arg-type]
+        size_bytes=size_bytes if isinstance(size_bytes, int) else 0,
+        source=attachment.get("source") if isinstance(attachment.get("source"), str) else "media",
+        metadata=attachment.get("metadata") if isinstance(attachment.get("metadata"), dict) else {},
+    )
 
 
 class BedrockProvider(LLMProvider):
@@ -116,6 +140,39 @@ class BedrockProvider(LLMProvider):
             return {"text": "(invalid image data)"}
         return {"image": {"format": fmt, "source": {"bytes": data}}}
 
+    @staticmethod
+    def _attachment_block(block: dict[str, Any]) -> dict[str, Any] | None:
+        descriptor = _attachment_descriptor(block)
+        if descriptor is None:
+            return {"text": "[attachment omitted]"}
+        try:
+            raw = descriptor.path.read_bytes()
+        except OSError:
+            return {"text": attachment_placeholder_text(descriptor)}
+
+        suffix = descriptor.path.suffix.lower().lstrip(".")
+        mime = descriptor.mime or mimetypes.guess_type(descriptor.name)[0] or ""
+        if descriptor.kind == "document":
+            fmt = suffix or "pdf"
+            return {
+                "document": {
+                    "format": fmt,
+                    "name": descriptor.name,
+                    "source": {"bytes": raw},
+                }
+            }
+        if descriptor.kind == "video":
+            fmt = suffix
+            if fmt == "3gp":
+                fmt = "three_gp"
+            if not fmt:
+                fmt = "mp4"
+            return {"video": {"format": fmt, "source": {"bytes": raw}}}
+        if descriptor.kind == "audio":
+            fmt = suffix or mime.split("/", 1)[-1].lower() or "mpeg"
+            return {"audio": {"format": fmt, "source": {"bytes": raw}}}
+        return {"text": attachment_placeholder_text(descriptor)}
+
     @classmethod
     def _content_blocks(cls, content: Any, *, for_tool_result: bool = False) -> list[dict[str, Any]]:
         if isinstance(content, str) or content is None:
@@ -142,9 +199,14 @@ class BedrockProvider(LLMProvider):
                 if converted:
                     blocks.append(converted)
                 continue
+            if item_type == "attachment_ref":
+                converted = cls._attachment_block(item)
+                if converted:
+                    blocks.append(converted)
+                continue
 
             # Preserve already-Bedrock-shaped content where possible.
-            for key in ("text", "image", "document", "video", "json", "searchResult"):
+            for key in ("text", "image", "document", "video", "audio", "json", "searchResult"):
                 if key in item:
                     blocks.append({key: item[key]})
                     break

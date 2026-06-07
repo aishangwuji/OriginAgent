@@ -118,6 +118,14 @@ def _coerce_workspace_path(value: Any) -> Path | str | None:
     return None
 
 
+def _extract_data_url_from_part(part: dict[str, Any], *keys: str) -> str:
+    for key in keys:
+        value = part.get(key)
+        if isinstance(value, str):
+            return value
+    return ""
+
+
 def _parse_json_content(
     body: dict,
     *,
@@ -156,7 +164,7 @@ def _parse_json_content(
                         "Use base64 data URLs or upload files via multipart/form-data."
                     )
             elif part.get("type") == "input_audio":
-                url = part.get("audio_url", "")
+                url = _extract_data_url_from_part(part, "audio_url")
                 if isinstance(url, str) and url.startswith("data:"):
                     if media_dir is None:
                         media_dir = get_workspace_upload_dir(workspace, "api")
@@ -168,8 +176,53 @@ def _parse_json_content(
                         "Remote audio URLs are not supported. "
                         "Use base64 data URLs or upload files via multipart/form-data."
                     )
+            elif part.get("type") == "input_video":
+                url = _extract_data_url_from_part(part, "video_url")
+                if isinstance(url, str) and url.startswith("data:"):
+                    if media_dir is None:
+                        media_dir = get_workspace_upload_dir(workspace, "api")
+                    saved = _save_base64_data_url(url, media_dir)
+                    if saved:
+                        media_paths.append(saved)
+                elif url:
+                    raise ValueError(
+                        "Remote video URLs are not supported. "
+                        "Use base64 data URLs or upload files via multipart/form-data."
+                    )
             elif part.get("type") == "input_file":
-                url = part.get("file_url", "")
+                url = _extract_data_url_from_part(part, "file_url", "file_data")
+                if (
+                    isinstance(url, str)
+                    and url
+                    and not url.startswith("data:")
+                    and isinstance(part.get("file_data"), str)
+                ):
+                    url = f"data:application/octet-stream;base64,{url}"
+                if isinstance(url, str) and url.startswith("data:"):
+                    if media_dir is None:
+                        media_dir = get_workspace_upload_dir(workspace, "api")
+                    saved = _save_base64_data_url(url, media_dir)
+                    if saved:
+                        media_paths.append(saved)
+                elif url:
+                    raise ValueError(
+                        "Remote file URLs are not supported. "
+                        "Use base64 data URLs or upload files via multipart/form-data."
+                    )
+            elif part.get("type") == "file":
+                file_obj = part.get("file")
+                url = ""
+                if isinstance(file_obj, dict):
+                    url = _extract_data_url_from_part(file_obj, "file_url", "file_data")
+                    if (
+                        isinstance(url, str)
+                        and url
+                        and not url.startswith("data:")
+                        and isinstance(file_obj.get("file_data"), str)
+                    ):
+                        mime = file_obj.get("mime_type")
+                        mime_type = mime if isinstance(mime, str) and mime else "application/octet-stream"
+                        url = f"data:{mime_type};base64,{url}"
                 if isinstance(url, str) and url.startswith("data:"):
                     if media_dir is None:
                         media_dir = get_workspace_upload_dir(workspace, "api")
@@ -443,7 +496,7 @@ def create_app(
     app["model_name"] = model_name
     app["request_timeout"] = request_timeout
     app["session_locks"] = {}  # per-user locks, keyed by session_key
-    app["workspace"] = _coerce_workspace_path(getattr(agent_loop, "workspace", None))
+    app["workspace"] = _coerce_workspace_path(getattr(agent_loop, "workspace", None)) or Path.cwd()
 
     app.router.add_post("/v1/chat/completions", handle_chat_completions)
     app.router.add_get("/v1/models", handle_models)

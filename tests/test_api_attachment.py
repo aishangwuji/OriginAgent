@@ -144,6 +144,58 @@ def test_parse_json_content_extracts_text_and_media(api_media_dir) -> None:
     assert media_paths[0].startswith(str(api_media_dir))
 
 
+def test_parse_json_content_extracts_video_audio_and_file_media(api_media_dir) -> None:
+    payload = base64.b64encode(b"fake-bytes").decode()
+    body = {
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "analyze these"},
+                    {"type": "input_video", "video_url": f"data:video/mp4;base64,{payload}"},
+                    {"type": "input_audio", "audio_url": f"data:audio/mpeg;base64,{payload}"},
+                    {"type": "input_file", "file_data": payload},
+                ],
+            }
+        ]
+    }
+
+    text, media_paths = _parse_json_content(body, workspace=api_media_dir.parent.parent)
+
+    assert text == "analyze these"
+    assert len(media_paths) == 3
+    assert media_paths[0].endswith(".mp4")
+    assert media_paths[1].endswith((".mp3", ".mpeg"))
+    assert media_paths[2].endswith(".bin")
+
+
+def test_parse_json_content_extracts_chat_completions_file_block(api_media_dir) -> None:
+    payload = base64.b64encode(b"%PDF-1.4 fake").decode()
+    body = {
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "read this"},
+                    {
+                        "type": "file",
+                        "file": {
+                            "file_data": payload,
+                            "mime_type": "application/pdf",
+                        },
+                    },
+                ],
+            }
+        ]
+    }
+
+    text, media_paths = _parse_json_content(body, workspace=api_media_dir.parent.parent)
+
+    assert text == "read this"
+    assert len(media_paths) == 1
+    assert media_paths[0].endswith(".pdf")
+
+
 def test_parse_json_content_plain_text_only() -> None:
     """Plain text string content returns no media."""
     body = {"messages": [{"role": "user", "content": "hello"}]}

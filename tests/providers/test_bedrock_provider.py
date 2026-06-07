@@ -188,6 +188,64 @@ def test_build_kwargs_strips_meta_without_mutating_messages() -> None:
     assert "_meta" not in str(kwargs)
 
 
+def test_content_blocks_convert_attachment_refs_to_native_blocks(tmp_path) -> None:
+    pdf = tmp_path / "report.pdf"
+    pdf.write_bytes(b"%PDF-1.4 fake")
+    audio = tmp_path / "voice.mp3"
+    audio.write_bytes(b"ID3fake-audio")
+    video = tmp_path / "clip.mp4"
+    video.write_bytes(b"\x00\x00\x00\x18ftypmp42")
+
+    content = [
+        {
+            "type": "attachment_ref",
+            "attachment": {
+                "kind": "document",
+                "mime": "application/pdf",
+                "name": "report.pdf",
+                "path": str(pdf),
+                "size_bytes": pdf.stat().st_size,
+                "source": "media",
+                "metadata": {},
+            },
+        },
+        {
+            "type": "attachment_ref",
+            "attachment": {
+                "kind": "audio",
+                "mime": "audio/mpeg",
+                "name": "voice.mp3",
+                "path": str(audio),
+                "size_bytes": audio.stat().st_size,
+                "source": "media",
+                "metadata": {},
+            },
+        },
+        {
+            "type": "attachment_ref",
+            "attachment": {
+                "kind": "video",
+                "mime": "video/mp4",
+                "name": "clip.mp4",
+                "path": str(video),
+                "size_bytes": video.stat().st_size,
+                "source": "media",
+                "metadata": {},
+            },
+        },
+    ]
+
+    blocks = BedrockProvider._content_blocks(content)
+
+    assert blocks[0]["document"]["format"] == "pdf"
+    assert blocks[0]["document"]["name"] == "report.pdf"
+    assert blocks[0]["document"]["source"]["bytes"] == b"%PDF-1.4 fake"
+    assert blocks[1]["audio"]["format"] == "mp3"
+    assert blocks[1]["audio"]["source"]["bytes"] == b"ID3fake-audio"
+    assert blocks[2]["video"]["format"] == "mp4"
+    assert blocks[2]["video"]["source"]["bytes"] == b"\x00\x00\x00\x18ftypmp42"
+
+
 def test_parse_response_maps_text_tools_reasoning_usage_and_stop_reason() -> None:
     response = {
         "output": {

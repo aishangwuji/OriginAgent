@@ -59,9 +59,33 @@ bun install            # npm install also works
 bun run dev
 ```
 
-Then open `http://127.0.0.1:5173`.
+Then open `http://127.0.0.1:4173`.
 
 By default the dev server proxies `/api`, `/webui`, `/auth`, and WebSocket traffic to `http://127.0.0.1:8765`.
+The defaults are:
+
+- WebUI dev server: `4173`
+- Vite HMR socket: `4174`
+
+If you set only `ORIGINAGENT_WEBUI_PORT`, the HMR socket automatically moves to the next port.
+
+If you need different dev ports, override them with environment variables:
+
+```bash
+ORIGINAGENT_WEBUI_PORT=5173 ORIGINAGENT_WEBUI_HMR_PORT=5174 bun run dev
+```
+
+On PowerShell:
+
+```powershell
+$env:ORIGINAGENT_WEBUI_PORT = "5173"
+$env:ORIGINAGENT_WEBUI_HMR_PORT = "5174"
+bun run dev
+```
+
+Keep the HMR port different from the main dev-server port. If you omit `ORIGINAGENT_WEBUI_HMR_PORT`, Vite uses the next port automatically.
+
+The dev server uses a fixed port (`strictPort: true`). If the chosen port is already in use or blocked by local OS policy, Vite exits instead of silently picking another port, so set the environment variables above to an allowed port pair and restart `bun run dev`.
 
 If your gateway listens on a non-default port, point the dev server at it:
 

@@ -7,6 +7,8 @@ were passed to Anthropic unconverted, causing silent image drops with a
 warning.
 """
 
+from pathlib import Path
+
 from OriginAgent.providers.anthropic_provider import AnthropicProvider
 
 
@@ -85,3 +87,55 @@ def test_build_kwargs_strips_meta_without_mutating_messages():
     assert "_meta" in messages[0]["content"][0]
     assert kwargs["messages"][0]["content"] == [{"type": "text", "text": "hi"}]
     assert "_meta" not in str(kwargs)
+
+
+def test_convert_user_content_maps_pdf_attachment_ref_to_document(tmp_path: Path):
+    pdf = tmp_path / "report.pdf"
+    pdf.write_bytes(b"%PDF-1.4 fake")
+
+    content = [{
+        "type": "attachment_ref",
+        "attachment": {
+            "kind": "document",
+            "mime": "application/pdf",
+            "name": "report.pdf",
+            "path": str(pdf),
+            "size_bytes": pdf.stat().st_size,
+            "source": "media",
+            "metadata": {},
+        },
+    }]
+
+    converted = AnthropicProvider._convert_user_content(content)
+
+    assert converted == [{
+        "type": "document",
+        "source": {
+            "type": "base64",
+            "media_type": "application/pdf",
+            "data": "JVBERi0xLjQgZmFrZQ==",
+        },
+        "title": "report.pdf",
+    }]
+
+
+def test_convert_user_content_degrades_video_attachment_ref_to_text():
+    content = [{
+        "type": "attachment_ref",
+        "attachment": {
+            "kind": "video",
+            "mime": "video/mp4",
+            "name": "clip.mp4",
+            "path": str(Path("D:/tmp/clip.mp4")),
+            "size_bytes": 12,
+            "source": "media",
+            "metadata": {},
+        },
+    }]
+
+    converted = AnthropicProvider._convert_user_content(content)
+
+    assert converted == [{
+        "type": "text",
+        "text": f"[video: {Path('D:/tmp/clip.mp4')}]",
+    }]
