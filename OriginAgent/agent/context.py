@@ -19,6 +19,11 @@ from OriginAgent.config.schema import ContextConfig
 from OriginAgent.memory.policy import nearline_runtime_enabled
 from OriginAgent.memory.retrieval import NearlineMemoryRetriever
 from OriginAgent.session.goal_state import goal_state_runtime_lines
+from OriginAgent.utils.attachments import (
+    attachment_block,
+    describe_attachment,
+    image_url_block,
+)
 from OriginAgent.utils.helpers import (
     build_assistant_message,
     current_time_str,
@@ -414,7 +419,7 @@ class ContextBuilder:
         return messages
 
     def _build_user_content(self, text: str | None, media: list[str] | None) -> list[dict[str, Any]]:
-        """Build user message content with optional base64-encoded images."""
+        """Build provider-neutral user content with images and attachment refs."""
         blocks: list[dict[str, Any]] = []
         if media and len(media) > self._context_config.max_media_files:
             logger.warning(
@@ -446,14 +451,15 @@ class ContextBuilder:
                 logger.warning("Skipping unreadable media file: {}", p)
                 continue
             mime = detect_image_mime(raw) or mimetypes.guess_type(path)[0]
-            if not mime or not mime.startswith("image/"):
+            descriptor = describe_attachment(p)
+            if descriptor is None:
                 continue
-            b64 = base64.b64encode(raw).decode()
-            blocks.append({
-                "type": "image_url",
-                "image_url": {"url": f"data:{mime};base64,{b64}"},
-                "_meta": {"path": str(p)},
-            })
+            if mime and mime.startswith("image/"):
+                image_block = image_url_block(descriptor)
+                if image_block:
+                    blocks.append(image_block)
+                continue
+            blocks.append(attachment_block(descriptor))
 
         if text is not None:
             text = str(text)

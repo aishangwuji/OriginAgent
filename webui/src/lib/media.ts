@@ -38,10 +38,12 @@ export function inferMediaKind(media: { url?: string; name?: string }): UIMediaK
   const url = media.url ?? "";
   if (url.startsWith("data:image/")) return "image";
   if (url.startsWith("data:video/")) return "video";
+  if (url.startsWith("data:audio/")) return "audio";
 
   const ext = extensionOf(media.name) || extensionOf(url);
   if (IMAGE_EXTENSIONS.has(ext)) return "image";
   if (VIDEO_EXTENSIONS.has(ext)) return "video";
+  if ([".mp3", ".m4a", ".wav", ".ogg", ".flac", ".aac"].includes(ext)) return "audio";
   return "file";
 }
 

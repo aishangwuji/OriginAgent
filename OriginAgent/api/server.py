@@ -11,12 +11,13 @@ import contextlib
 import json as _json
 import time
 import uuid
+from pathlib import Path
 from typing import Any
 
 from aiohttp import web
 from loguru import logger
 
-from OriginAgent.config.paths import get_media_dir
+from OriginAgent.config.paths import get_workspace_upload_dir
 from OriginAgent.utils.helpers import safe_filename
 from OriginAgent.utils.media_decode import (
     MAX_FILE_SIZE,
@@ -109,7 +110,19 @@ _SSE_DONE = b"data: [DONE]\n\n"
 # ---------------------------------------------------------------------------
 
 
-def _parse_json_content(body: dict) -> tuple[str, list[str]]:
+def _coerce_workspace_path(value: Any) -> Path | str | None:
+    if isinstance(value, Path):
+        return value
+    if isinstance(value, str) and value.strip():
+        return value
+    return None
+
+
+def _parse_json_content(
+    body: dict,
+    *,
+    workspace: str | Path | None = None,
+) -> tuple[str, list[str]]:
     """Parse JSON request body. Returns (text, media_paths)."""
     messages = body.get("messages")
     if not isinstance(messages, list) or len(messages) != 1:
@@ -119,7 +132,7 @@ def _parse_json_content(body: dict) -> tuple[str, list[str]]:
         raise ValueError("Only a single user message is supported")
 
     user_content = message.get("content", "")
-    media_dir = get_media_dir("api")
+    media_dir: Path | None = None
     media_paths: list[str] = []
 
     if isinstance(user_content, list):
@@ -132,12 +145,40 @@ def _parse_json_content(body: dict) -> tuple[str, list[str]]:
             elif part.get("type") == "image_url":
                 url = part.get("image_url", {}).get("url", "")
                 if url.startswith("data:"):
+                    if media_dir is None:
+                        media_dir = get_workspace_upload_dir(workspace, "api")
                     saved = _save_base64_data_url(url, media_dir)
                     if saved:
                         media_paths.append(saved)
                 elif url:
                     raise ValueError(
                         "Remote image URLs are not supported. "
+                        "Use base64 data URLs or upload files via multipart/form-data."
+                    )
+            elif part.get("type") == "input_audio":
+                url = part.get("audio_url", "")
+                if isinstance(url, str) and url.startswith("data:"):
+                    if media_dir is None:
+                        media_dir = get_workspace_upload_dir(workspace, "api")
+                    saved = _save_base64_data_url(url, media_dir)
+                    if saved:
+                        media_paths.append(saved)
+                elif url:
+                    raise ValueError(
+                        "Remote audio URLs are not supported. "
+                        "Use base64 data URLs or upload files via multipart/form-data."
+                    )
+            elif part.get("type") == "input_file":
+                url = part.get("file_url", "")
+                if isinstance(url, str) and url.startswith("data:"):
+                    if media_dir is None:
+                        media_dir = get_workspace_upload_dir(workspace, "api")
+                    saved = _save_base64_data_url(url, media_dir)
+                    if saved:
+                        media_paths.append(saved)
+                elif url:
+                    raise ValueError(
+                        "Remote file URLs are not supported. "
                         "Use base64 data URLs or upload files via multipart/form-data."
                     )
         text = " ".join(text_parts)
@@ -149,9 +190,13 @@ def _parse_json_content(body: dict) -> tuple[str, list[str]]:
     return text, media_paths
 
 
-async def _parse_multipart(request: web.Request) -> tuple[str, list[str], str | None, str | None]:
+async def _parse_multipart(
+    request: web.Request,
+    *,
+    workspace: str | Path | None = None,
+) -> tuple[str, list[str], str | None, str | None]:
     """Parse multipart/form-data. Returns (text, media_paths, session_id, model)."""
-    media_dir = get_media_dir("api")
+    media_dir: Path | None = None
     reader = await request.multipart()
     text = ""
     session_id = None
@@ -174,6 +219,8 @@ async def _parse_multipart(request: web.Request) -> tuple[str, list[str], str | 
                 raise _FileSizeExceeded(
                     f"File '{part.filename}' exceeds {MAX_FILE_SIZE // (1024 * 1024)}MB limit"
                 )
+            if media_dir is None:
+                media_dir = get_workspace_upload_dir(workspace, "api")
             base = safe_filename(part.filename or "upload.bin")
             filename = f"{uuid.uuid4().hex[:12]}_{base}"
             dest = media_dir / filename
@@ -202,9 +249,13 @@ async def handle_chat_completions(request: web.Request) -> web.Response:
     model_name: str = request.app.get("model_name", "OriginAgent")
 
     stream = False
+    workspace = request.app.get("workspace")
     try:
         if content_type.startswith("multipart/"):
-            text, media_paths, session_id, requested_model = await _parse_multipart(request)
+            text, media_paths, session_id, requested_model = await _parse_multipart(
+                request,
+                workspace=workspace,
+            )
         else:
             try:
                 body = await request.json()
@@ -212,7 +263,7 @@ async def handle_chat_completions(request: web.Request) -> web.Response:
                 return _error_json(400, "Invalid JSON body")
             stream = body.get("stream", False)
             requested_model = body.get("model")
-            text, media_paths = _parse_json_content(body)
+            text, media_paths = _parse_json_content(body, workspace=workspace)
             session_id = body.get("session_id")
     except ValueError as e:
         return _error_json(400, str(e))
@@ -392,6 +443,7 @@ def create_app(
     app["model_name"] = model_name
     app["request_timeout"] = request_timeout
     app["session_locks"] = {}  # per-user locks, keyed by session_key
+    app["workspace"] = _coerce_workspace_path(getattr(agent_loop, "workspace", None))
 
     app.router.add_post("/v1/chat/completions", handle_chat_completions)
     app.router.add_get("/v1/models", handle_models)

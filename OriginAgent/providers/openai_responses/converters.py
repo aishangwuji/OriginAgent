@@ -3,10 +3,17 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from typing import Any
 
+from OriginAgent.utils.attachments import AttachmentDescriptor, attachment_placeholder_text
 
-def convert_messages(messages: list[dict[str, Any]]) -> tuple[str, list[dict[str, Any]]]:
+
+def convert_messages(
+    messages: list[dict[str, Any]],
+    *,
+    native_attachment_kinds: set[str] | None = None,
+) -> tuple[str, list[dict[str, Any]]]:
     """Convert Chat Completions messages to Responses API input items.
 
     Returns ``(system_prompt, input_items)`` where *system_prompt* is extracted
@@ -25,7 +32,12 @@ def convert_messages(messages: list[dict[str, Any]]) -> tuple[str, list[dict[str
             continue
 
         if role == "user":
-            input_items.append(convert_user_message(content))
+            input_items.append(
+                convert_user_message(
+                    content,
+                    native_attachment_kinds=native_attachment_kinds,
+                )
+            )
             continue
 
         if role == "assistant":
@@ -55,7 +67,61 @@ def convert_messages(messages: list[dict[str, Any]]) -> tuple[str, list[dict[str
     return system_prompt, input_items
 
 
-def convert_user_message(content: Any) -> dict[str, Any]:
+def _attachment_descriptor(block: dict[str, Any]) -> AttachmentDescriptor | None:
+    attachment = block.get("attachment")
+    if not isinstance(attachment, dict):
+        return None
+    path = attachment.get("path")
+    name = attachment.get("name")
+    kind = attachment.get("kind")
+    size_bytes = attachment.get("size_bytes")
+    if not isinstance(path, str) or not path:
+        return None
+    if not isinstance(name, str) or not name:
+        name = path.rsplit("/", 1)[-1].rsplit("\\", 1)[-1]
+    if not isinstance(kind, str) or not kind:
+        return None
+    if not isinstance(size_bytes, int):
+        size_bytes = 0
+    mime = attachment.get("mime")
+    source = attachment.get("source")
+    metadata = attachment.get("metadata")
+    return AttachmentDescriptor(
+        path=Path(path),
+        name=name,
+        mime=mime if isinstance(mime, str) else None,
+        kind=kind,  # type: ignore[arg-type]
+        size_bytes=size_bytes,
+        source=source if isinstance(source, str) else "media",
+        metadata=metadata if isinstance(metadata, dict) else {},
+    )
+
+
+def _native_attachment_content(
+    descriptor: AttachmentDescriptor,
+    *,
+    native_attachment_kinds: set[str] | None,
+) -> dict[str, Any] | None:
+    if native_attachment_kinds is None or descriptor.kind not in native_attachment_kinds:
+        return None
+    path_value = descriptor.path.resolve(strict=False).as_uri()
+    if descriptor.kind == "image":
+        return {"type": "input_image", "image_url": path_value, "detail": "auto"}
+    if descriptor.kind == "video":
+        block: dict[str, Any] = {"type": "input_video", "video_url": path_value}
+        return block
+    if descriptor.kind == "audio":
+        return {"type": "input_audio", "audio_url": path_value}
+    if descriptor.kind == "document":
+        return {"type": "input_file", "file_url": path_value}
+    return None
+
+
+def convert_user_message(
+    content: Any,
+    *,
+    native_attachment_kinds: set[str] | None = None,
+) -> dict[str, Any]:
     """Convert a user message's content to Responses API format.
 
     Handles plain strings, ``text`` blocks -> ``input_text``, and
@@ -74,6 +140,21 @@ def convert_user_message(content: Any) -> dict[str, Any]:
                 url = (item.get("image_url") or {}).get("url")
                 if url:
                     converted.append({"type": "input_image", "image_url": url, "detail": "auto"})
+            elif item.get("type") == "attachment_ref":
+                descriptor = _attachment_descriptor(item)
+                if descriptor is None:
+                    continue
+                native = _native_attachment_content(
+                    descriptor,
+                    native_attachment_kinds=native_attachment_kinds,
+                )
+                if native is not None:
+                    converted.append(native)
+                else:
+                    converted.append({
+                        "type": "input_text",
+                        "text": attachment_placeholder_text(descriptor),
+                    })
         if converted:
             return {"role": "user", "content": converted}
     return {"role": "user", "content": [{"type": "input_text", "text": ""}]}

@@ -1,9 +1,4 @@
-"""Tests for context builder media handling.
-
-The ContextBuilder._build_user_content method should ONLY handle images.
-Document text extraction is the responsibility of the processing layer
-(AgentLoop._process_message and _drain_pending).
-"""
+"""Tests for context builder media handling."""
 
 from __future__ import annotations
 
@@ -45,16 +40,17 @@ def test_build_user_content_with_image_returns_list(tmp_path: Path) -> None:
 
 
 def test_build_user_content_ignores_non_image_files(tmp_path: Path) -> None:
-    """Non-image files should be silently skipped — extraction is not context builder's job."""
+    """Non-image attachments should be preserved as provider-neutral refs."""
     builder = _make_builder(tmp_path)
     txt = tmp_path / "notes.txt"
     txt.write_text("some text", encoding="utf-8")
     result = builder._build_user_content("summarize", [str(txt)])
-    assert result == [{"type": "text", "text": "summarize"}]
+    assert any(block.get("type") == "attachment_ref" for block in result)
+    assert result[-1] == {"type": "text", "text": "summarize"}
 
 
 def test_build_user_content_mixed_image_and_non_image(tmp_path: Path) -> None:
-    """Only images should be included; non-image files are skipped."""
+    """Images stay native; non-image attachments are preserved as refs."""
     builder = _make_builder(tmp_path)
     png = tmp_path / "chart.png"
     png.write_bytes(b"\x89PNG\r\n\x1a\n" + b"\x00" * 100)
@@ -64,6 +60,7 @@ def test_build_user_content_mixed_image_and_non_image(tmp_path: Path) -> None:
     result = builder._build_user_content("analyze", [str(png), str(txt)])
     assert isinstance(result, list)
     assert any(b["type"] == "image_url" for b in result)
+    assert any(b["type"] == "attachment_ref" for b in result)
     text_parts = [b.get("text", "") for b in result if b.get("type") == "text"]
     assert all("report text" not in t for t in text_parts)
 
@@ -103,8 +100,7 @@ def test_drain_pending_path_preserves_document_text(tmp_path: Path) -> None:
 
 
 def test_drain_pending_path_without_extract_loses_document(tmp_path: Path) -> None:
-    """Demonstrates the BUG: if _drain_pending calls _build_user_content
-    directly without extract_documents, document content is lost."""
+    """Without extract_documents, inline-text docs are not expanded into text."""
     from docx import Document
 
     doc = Document()
@@ -117,6 +113,20 @@ def test_drain_pending_path_without_extract_loses_document(tmp_path: Path) -> No
     # Bug path: call _build_user_content directly with document media
     result = builder._build_user_content("summarize", [str(docx_path)])
 
-    # The document text is LOST — _build_user_content ignores non-images
-    assert result == [{"type": "text", "text": "summarize"}]
+    # The document remains an attachment ref; inline document text is absent.
+    assert any(block.get("type") == "attachment_ref" for block in result)
     assert all("Secret data" not in text for text in _text_blocks(result))
+
+
+def test_build_user_content_preserves_pdf_as_attachment_ref(tmp_path: Path) -> None:
+    builder = _make_builder(tmp_path)
+    pdf = tmp_path / "report.pdf"
+    pdf.write_bytes(b"%PDF-1.4\n1 0 obj\n<<>>\nendobj\n")
+
+    result = builder._build_user_content("read this", [str(pdf)])
+
+    refs = [block for block in result if block.get("type") == "attachment_ref"]
+    assert len(refs) == 1
+    attachment = refs[0]["attachment"]
+    assert attachment["kind"] == "document"
+    assert attachment["path"] == str(pdf)

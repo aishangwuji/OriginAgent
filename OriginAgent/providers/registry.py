@@ -76,6 +76,9 @@ class ProviderSpec:
     # whose API returns the actual answer in "reasoning" instead of "content".
     reasoning_as_content: bool = False
 
+    # Provider-native multimodal inputs supported through adapter translation.
+    native_attachment_kinds: frozenset[str] = frozenset()
+
     @property
     def label(self) -> str:
         return self.display_name or self.name.title()
@@ -104,6 +107,7 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
         display_name="Azure OpenAI",
         backend="azure_openai",
         is_direct=True,
+        native_attachment_kinds=frozenset({"image", "video", "audio", "document"}),
     ),
     # === AWS Bedrock (native Converse API via bedrock-runtime) =============
     ProviderSpec(
@@ -192,6 +196,7 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
         detect_by_base_keyword="volces",
         default_api_base="https://ark.cn-beijing.volces.com/api/v3",
         thinking_style="thinking_type",
+        native_attachment_kinds=frozenset({"image", "video", "audio", "document"}),
     ),
 
     # VolcEngine Coding Plan (火山引擎 Coding Plan): same key as volcengine
@@ -219,6 +224,7 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
         default_api_base="https://ark.ap-southeast.bytepluses.com/api/v3",
         strip_model_prefix=True,
         thinking_style="thinking_type",
+        native_attachment_kinds=frozenset({"image", "video", "audio", "document"}),
     ),
 
     # BytePlus Coding Plan: same key as byteplus
@@ -253,6 +259,7 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
         display_name="OpenAI",
         backend="openai_compat",
         supports_max_completion_tokens=True,
+        native_attachment_kinds=frozenset({"image", "video", "audio", "document"}),
     ),
     # OpenAI Codex: OAuth-based, dedicated provider
     ProviderSpec(
@@ -264,6 +271,7 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
         detect_by_base_keyword="codex",
         default_api_base="https://chatgpt.com/backend-api",
         is_oauth=True,
+        native_attachment_kinds=frozenset({"image", "video", "audio", "document"}),
     ),
     # GitHub Copilot: OAuth-based
     ProviderSpec(

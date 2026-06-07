@@ -13,9 +13,32 @@ from loguru import logger
 
 from OriginAgent.config.paths import get_webui_dir
 from OriginAgent.session.manager import SessionManager
+from OriginAgent.utils.attachments import describe_attachment
 
 WEBUI_TRANSCRIPT_SCHEMA_VERSION = 3
 _MAX_TRANSCRIPT_FILE_BYTES = 8 * 1024 * 1024
+
+
+def _ui_media_kind(name: str | None) -> str:
+    if not name:
+      return "file"
+    descriptor = describe_attachment(name)
+    if descriptor is not None:
+        if descriptor.kind == "image":
+            return "image"
+        if descriptor.kind == "video":
+            return "video"
+        if descriptor.kind == "audio":
+            return "audio"
+        return "file"
+    lower = name.lower()
+    if lower.endswith((".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp", ".tif", ".tiff")):
+        return "image"
+    if lower.endswith((".mp4", ".webm", ".mov", ".m4v", ".avi", ".mkv", ".3gp")):
+        return "video"
+    if lower.endswith((".mp3", ".m4a", ".wav", ".ogg", ".flac", ".aac")):
+        return "audio"
+    return "file"
 
 
 def webui_transcript_path(session_key: str) -> Path:
@@ -369,16 +392,19 @@ def replay_transcript_to_ui_messages(
             if isinstance(media_urls, list):
                 for m in media_urls:
                     if isinstance(m, dict) and m.get("url"):
+                        name = str(m.get("name") or "")
                         media.append(
                             {
-                                "kind": "image",
+                                "kind": _ui_media_kind(name),
                                 "url": str(m["url"]),
-                                "name": str(m.get("name") or ""),
+                                "name": name,
                             },
                         )
             extra: dict[str, Any] = {"content": content_s}
             if media:
                 extra["media"] = media
+                if all(item.get("kind") == "image" for item in media):
+                    extra["images"] = [{"url": item.get("url"), "name": item.get("name")} for item in media]
             lat = rec.get("latency_ms")
             if isinstance(lat, (int, float)) and lat >= 0:
                 extra["latencyMs"] = int(lat)

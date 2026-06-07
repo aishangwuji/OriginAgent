@@ -67,3 +67,25 @@ def test_merge_turn_media_dedupes_into_last_assistant(tmp_path, monkeypatch) -> 
         assert Path(messages[0]["media"][0]).is_file()
     finally:
         set_config_path(previous)
+
+
+def test_stage_media_paths_uses_explicit_runtime_workspace_not_default(tmp_path, monkeypatch) -> None:
+    previous = get_config_path()
+    set_config_path(tmp_path / "config.json")
+    runtime_workspace = tmp_path / "runtime-workspace"
+    runtime_workspace.mkdir()
+    default_workspace = tmp_path / "workspace"
+    default_workspace.mkdir()
+    monkeypatch.setattr(session_attachments, "get_workspace_path", lambda: runtime_workspace)
+    try:
+        source = runtime_workspace / "image.png"
+        source.write_bytes(b"png")
+        default_source = default_workspace / "default.png"
+        default_source.write_bytes(b"png")
+
+        staged = stage_media_paths_for_session_replay([str(source), str(default_source)])
+
+        assert len(staged) == 1
+        assert Path(staged[0]).is_file()
+    finally:
+        set_config_path(previous)

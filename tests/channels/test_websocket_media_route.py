@@ -378,3 +378,70 @@ async def test_session_messages_skips_vanished_media(
         finally:
             await channel.stop()
             await server_task
+
+
+@pytest.mark.asyncio
+async def test_session_messages_stages_workspace_upload_media_for_preview(
+    bus: MagicMock,
+    tmp_path: Path,
+) -> None:
+    media = tmp_path / "media"
+    media.mkdir()
+    workspace = tmp_path / "ws_state"
+    upload = workspace / "uploads" / "websocket" / "u.png"
+    upload.parent.mkdir(parents=True)
+    upload.write_bytes(_PNG_BYTES)
+
+    sm = SessionManager(workspace)
+    sess = Session(key="websocket:workspace-upload")
+    sess.add_message("user", "look at this", media=[str(upload)])
+    sm.save(sess)
+
+    channel = _ch(bus, session_manager=sm, port=29927)
+    with patch("OriginAgent.channels.websocket.get_media_dir", return_value=media):
+        server_task = asyncio.create_task(channel.start())
+        await asyncio.sleep(0.3)
+        try:
+            boot = await _http_get("http://127.0.0.1:29927/webui/bootstrap")
+            token = boot.json()["token"]
+            resp = await _http_get(
+                "http://127.0.0.1:29927/api/sessions/websocket:workspace-upload/messages",
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            user_msg = next(m for m in resp.json()["messages"] if m["role"] == "user")
+            urls = user_msg.get("media_urls") or []
+            assert len(urls) == 1
+            assert urls[0]["name"] == "u.png"
+            fetched = await _http_get(f"http://127.0.0.1:29927{urls[0]['url']}")
+            assert fetched.status_code == 200
+            assert fetched.content == _PNG_BYTES
+        finally:
+            await channel.stop()
+            await server_task
+
+
+@pytest.mark.asyncio
+async def test_build_webui_thread_marks_pdf_user_media_as_file(
+    bus: MagicMock,
+    tmp_path: Path,
+) -> None:
+    media = tmp_path / "media"
+    media.mkdir()
+    pdf = media / "report.pdf"
+    pdf.write_bytes(b"%PDF-1.4 fake")
+
+    sm = SessionManager(tmp_path / "ws_state")
+    sess = Session(key="websocket:pdf-kind")
+    sess.add_message("user", "read this", media=[str(pdf)])
+    sm.save(sess)
+
+    channel = _ch(bus, session_manager=sm, port=0)
+    with patch("OriginAgent.channels.websocket.get_media_dir", return_value=media):
+        body = channel._build_webui_thread_from_session("websocket:pdf-kind")
+
+    assert body is not None
+    user_msg = next(m for m in body["messages"] if m["role"] == "user")
+    assert user_msg["media"] == [
+        {"kind": "file", "url": user_msg["media"][0]["url"], "name": "report.pdf"},
+    ]
+    assert "images" not in user_msg

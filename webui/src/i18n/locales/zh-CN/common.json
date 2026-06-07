@@ -612,6 +612,7 @@
       "send": "发送消息",
       "stop": "停止响应",
       "attachImage": "添加图片",
+      "attachAttachment": "添加文件",
       "imageMode": {
         "label": "图片生成",
         "toggle": "切换图片生成模式",
@@ -697,12 +698,15 @@
       "encoding": "处理中…",
       "remove": "移除附件",
       "normalizedSizeHint": "{{orig}} → {{current}}（已自动压缩）",
-      "imageRejected": {
+      "attachmentRejected": {
         "unsupported_type": "不支持的文件类型",
-        "too_many_images": "每条消息最多 {{max}} 张图片",
+        "too_many_attachments": "每条消息最多 {{max}} 个附件",
+        "too_many_images": "每条消息最多 {{imageMax}} 张图片",
+        "too_many_videos": "每条消息最多 {{videoMax}} 个视频",
+        "too_many_audio": "每条消息最多 {{audioMax}} 个音频文件",
         "magic_mismatch": "文件看起来不像真实的图片",
-        "decode_failed": "无法解码这张图片",
-        "too_large": "图片太大，请换一张小一点的",
+        "decode_failed": "无法解码该文件",
+        "too_large": "文件太大，请换一个更小的",
         "io": "无法读取该文件"
       },
       "goalStateCloseAria": "关闭目标"
@@ -750,6 +754,21 @@
     "messageTooBig": {
       "title": "消息过大",
       "body": "服务端因超过大小限制拒收了上一条消息。可移除部分图片或使用更小的图片后重试。"
+    },
+    "attachmentRejected": {
+      "title": "附件上传失败",
+      "reasons": {
+        "default": "服务端拒绝了其中一个附件。请检查文件类型、数量和大小后重试。",
+        "unsupported_type": "该文件类型暂不支持。当前 WebUI 上传支持图片、视频、音频和 PDF。",
+        "too_many_attachments": "这条消息携带的附件过多，请减少后重试。",
+        "too_many_images": "这条消息里的图片数量超出限制。",
+        "too_many_videos": "当前每条消息最多只允许上传一个视频。",
+        "too_many_audio": "这条消息里的音频文件数量超出限制。",
+        "mime": "其中一个附件使用了当前不支持的 MIME 类型。",
+        "size": "其中一个附件超过了当前大小限制。",
+        "decode": "其中一个附件无法被安全解码。",
+        "malformed": "其中一个附件格式不正确。"
+      }
     }
   }
 }

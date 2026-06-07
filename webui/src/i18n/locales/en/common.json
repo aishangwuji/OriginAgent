@@ -625,6 +625,7 @@
       "send": "Send message",
       "stop": "Stop response",
       "attachImage": "Attach image",
+      "attachAttachment": "Attach file",
       "imageMode": {
         "label": "Image Generation",
         "toggle": "Toggle image generation mode",
@@ -710,12 +711,15 @@
       "encoding": "Encoding…",
       "remove": "Remove attachment",
       "normalizedSizeHint": "{{orig}} → {{current}} (auto)",
-      "imageRejected": {
+      "attachmentRejected": {
         "unsupported_type": "Unsupported file type",
-        "too_many_images": "Max {{max}} images per message",
+        "too_many_attachments": "Max {{max}} attachments per message",
+        "too_many_images": "Max {{imageMax}} images per message",
+        "too_many_videos": "Max {{videoMax}} video per message",
+        "too_many_audio": "Max {{audioMax}} audio files per message",
         "magic_mismatch": "File doesn't look like a real image",
-        "decode_failed": "Couldn't decode this image",
-        "too_large": "Image is too large — try a smaller one",
+        "decode_failed": "Couldn't decode this file",
+        "too_large": "This file is too large — try a smaller one",
         "io": "Couldn't read this file"
       }
     },
@@ -762,6 +766,21 @@
     "messageTooBig": {
       "title": "Message too large",
       "body": "The server rejected your last message because it exceeded the size limit. Remove some images or try smaller files, then send again."
+    },
+    "attachmentRejected": {
+      "title": "Attachment upload failed",
+      "reasons": {
+        "default": "The server rejected one of the attachments. Check the file type, count, and size, then try again.",
+        "unsupported_type": "That file type isn't allowed yet. Current WebUI uploads support images, video, audio, and PDF.",
+        "too_many_attachments": "Too many attachments were sent in one message. Remove a few files and try again.",
+        "too_many_images": "Too many images were attached to one message.",
+        "too_many_videos": "Only one video is allowed per message right now.",
+        "too_many_audio": "Too many audio files were attached to one message.",
+        "mime": "One of the attachments used an unsupported MIME type.",
+        "size": "One of the attachments exceeded the current size limit.",
+        "decode": "One of the attachments couldn't be decoded safely.",
+        "malformed": "One of the attachments was malformed."
+      }
     }
   }
 }

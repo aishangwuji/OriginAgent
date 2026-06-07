@@ -1,13 +1,19 @@
 import { useCallback, useRef, useState } from "react";
 
-/** Extract image ``File``s from a paste / drop event.
+const SUPPORTED_PREFIXES = ["image/", "video/", "audio/"];
+const SUPPORTED_EXACT = new Set(["application/pdf"]);
+
+function isSupportedFile(file: File | null): file is File {
+  if (!file) return false;
+  const type = file.type.trim().toLowerCase();
+  if (!type) return false;
+  return SUPPORTED_PREFIXES.some((prefix) => type.startsWith(prefix)) || SUPPORTED_EXACT.has(type);
+}
+
+/** Extract staged attachment ``File``s from a paste event.
  *
- * Deliberate behaviour:
- *   - Only items whose ``kind === "file"`` and ``type`` starts with
- *     ``image/`` are returned; ``<img>`` tags inside HTML fragments are
- *     ignored (defending against remote URL fetch + XSS surfaces).
- *   - Plain text pasted alongside images is *not* consumed by this helper,
- *     so the caller can still let the textarea receive it naturally.
+ * Only file payloads are surfaced; pasted HTML and remote URLs are ignored so
+ * the textarea can keep handling plain text naturally.
  */
 export function extractImageFilesFromPaste(
   event: ClipboardEvent | React.ClipboardEvent,
@@ -18,14 +24,13 @@ export function extractImageFilesFromPaste(
   const files: File[] = [];
   for (const item of Array.from(clipboard.items)) {
     if (item.kind !== "file") continue;
-    if (!item.type.startsWith("image/")) continue;
     const file = item.getAsFile();
-    if (file) files.push(file);
+    if (isSupportedFile(file)) files.push(file);
   }
   return files;
 }
 
-/** Extract dropped image files, mirroring ``extractImageFilesFromPaste``. */
+/** Extract dropped attachments, mirroring ``extractImageFilesFromPaste``. */
 export function extractImageFilesFromDrop(
   event: DragEvent | React.DragEvent,
 ): File[] {
@@ -34,31 +39,22 @@ export function extractImageFilesFromDrop(
   if (!dt) return [];
   const files: File[] = [];
   for (const item of Array.from(dt.files)) {
-    if (item.type.startsWith("image/")) files.push(item);
+    if (isSupportedFile(item)) files.push(item);
   }
   return files;
 }
 
 export interface UseClipboardAndDropApi {
-  /** Whether a drag is currently hovering the drop zone (toggle dragover UI). */
   isDragging: boolean;
-  onPaste: (
-    event: React.ClipboardEvent,
-  ) => void;
+  onPaste: (event: React.ClipboardEvent) => void;
   onDragEnter: (event: React.DragEvent) => void;
   onDragOver: (event: React.DragEvent) => void;
   onDragLeave: (event: React.DragEvent) => void;
   onDrop: (event: React.DragEvent) => void;
 }
 
-/** Wire paste + drag-and-drop to a callback.
- *
- * The hook owns ``isDragging`` state and the refcount that keeps it accurate
- * across nested ``dragenter`` / ``dragleave`` events (a known DOM gotcha: the
- * text cursor inside a textarea fires ``dragleave`` on entry, flicking the
- * highlight off otherwise). */
 export function useClipboardAndDrop(
-  onImageFiles: (files: File[]) => void,
+  onFiles: (files: File[]) => void,
 ): UseClipboardAndDropApi {
   const [isDragging, setIsDragging] = useState(false);
   const dragDepth = useRef(0);
@@ -67,12 +63,10 @@ export function useClipboardAndDrop(
     (event: React.ClipboardEvent) => {
       const files = extractImageFilesFromPaste(event);
       if (files.length === 0) return;
-      // Consume only when an image is actually present; plain-text paste still
-      // reaches the textarea unmolested.
       event.preventDefault();
-      onImageFiles(files);
+      onFiles(files);
     },
-    [onImageFiles],
+    [onFiles],
   );
 
   const onDragEnter = useCallback((event: React.DragEvent) => {
@@ -102,9 +96,9 @@ export function useClipboardAndDrop(
       const files = extractImageFilesFromDrop(event);
       if (files.length === 0) return;
       event.preventDefault();
-      onImageFiles(files);
+      onFiles(files);
     },
-    [onImageFiles],
+    [onFiles],
   );
 
   return { isDragging, onPaste, onDragEnter, onDragOver, onDragLeave, onDrop };

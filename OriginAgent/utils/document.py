@@ -5,6 +5,7 @@ from pathlib import Path
 
 from loguru import logger
 
+from OriginAgent.utils.attachments import AttachmentDescriptor, describe_attachment
 from OriginAgent.utils.helpers import detect_image_mime
 
 
@@ -232,6 +233,18 @@ def _is_text_extension(ext: str) -> bool:
 _MAX_EXTRACT_FILE_SIZE = 50 * 1024 * 1024  # 50 MB
 
 
+def _should_extract_document_text(descriptor: AttachmentDescriptor) -> bool:
+    """Return True when the attachment should be converted to inline text."""
+    if descriptor.kind != "document":
+        return False
+    suffix = descriptor.path.suffix.lower()
+    if suffix == ".pdf":
+        return False
+    if descriptor.mime == "application/pdf":
+        return False
+    return True
+
+
 def extract_documents(
     text: str,
     media_paths: list[str],
@@ -240,15 +253,14 @@ def extract_documents(
 ) -> tuple[str, list[str]]:
     """Separate images from documents in *media_paths*.
 
-    Documents (PDF, DOCX, XLSX, PPTX, plain-text, …) have their text
-    extracted and appended to *text*.  Only image paths are kept in the
-    returned list so that downstream layers only need to handle vision
-    blocks.
+    Inline-text documents (DOCX, XLSX, PPTX, plain-text, …) have their text
+    extracted and appended to *text*. Provider-native multimodal attachments
+    such as PDF, video, and audio are preserved in the returned media list.
 
     Files larger than *max_file_size* bytes are skipped with a warning
     to avoid unbounded memory / CPU usage.
     """
-    image_paths: list[str] = []
+    retained_paths: list[str] = []
     doc_texts: list[str] = []
 
     for path_str in media_paths:
@@ -270,14 +282,19 @@ def extract_documents(
         with open(p, "rb") as f:
             header = f.read(16)
         mime = detect_image_mime(header) or mimetypes.guess_type(path_str)[0]
+        descriptor = describe_attachment(p)
+        if descriptor is None:
+            continue
         if mime and mime.startswith("image/"):
-            image_paths.append(path_str)
-        else:
+            retained_paths.append(path_str)
+        elif _should_extract_document_text(descriptor):
             extracted = extract_text(p)
             if extracted and not extracted.startswith("[error:"):
                 doc_texts.append(f"[File: {p.name}]\n{extracted}")
+        else:
+            retained_paths.append(path_str)
 
     if doc_texts:
         text = text + "\n\n" + "\n\n".join(doc_texts)
 
-    return text, image_paths
+    return text, retained_paths

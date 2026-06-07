@@ -19,7 +19,7 @@ import { ThreadComposer } from "@/components/thread/ThreadComposer";
 import { ThreadHeader } from "@/components/thread/ThreadHeader";
 import { StreamErrorNotice } from "@/components/thread/StreamErrorNotice";
 import { ThreadViewport } from "@/components/thread/ThreadViewport";
-import { useOriginAgentStream, type SendImage, type SendOptions } from "@/hooks/useOriginAgentStream";
+import { useOriginAgentStream, type SendAttachment, type SendOptions } from "@/hooks/useOriginAgentStream";
 import { useSessionHistory } from "@/hooks/useSessions";
 import { listSlashCommands, withTokenRefresh } from "@/lib/api";
 import type { ChatSummary, SlashCommand, UIMessage } from "@/lib/types";
@@ -72,7 +72,7 @@ const IMAGE_QUICK_ACTION_KEYS = [
 
 interface PendingFirstMessage {
   content: string;
-  images?: SendImage[];
+  attachments?: SendAttachment[];
   options?: SendOptions;
 }
 
@@ -259,7 +259,7 @@ export function ThreadShell({
     if (!pending) return;
     pendingFirstRef.current = null;
     setScrollToBottomSignal((value) => value + 1);
-    send(pending.content, pending.images, pending.options);
+    send(pending.content, pending.attachments, pending.options);
     setBooting(false);
   }, [chatId, send]);
 
@@ -283,10 +283,10 @@ export function ThreadShell({
   }, [i18n.language, i18n.resolvedLanguage, refreshToken, token]);
 
   const handleWelcomeSend = useCallback(
-    async (content: string, images?: SendImage[], options?: SendOptions) => {
+    async (content: string, attachments?: SendAttachment[], options?: SendOptions) => {
       if (booting) return;
       setBooting(true);
-      pendingFirstRef.current = { content, images, options };
+      pendingFirstRef.current = { content, attachments, options };
       const newId = await onCreateChat?.();
       if (!newId) {
         pendingFirstRef.current = null;
@@ -297,9 +297,9 @@ export function ThreadShell({
   );
 
   const handleThreadSend = useCallback(
-    (content: string, images?: SendImage[], options?: SendOptions) => {
+    (content: string, attachments?: SendAttachment[], options?: SendOptions) => {
       setScrollToBottomSignal((value) => value + 1);
-      send(content, images, options);
+      send(content, attachments, options);
     },
     [send],
   );

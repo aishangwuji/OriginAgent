@@ -13,6 +13,8 @@ from OriginAgent.config.paths import (
     get_logs_dir,
     get_media_dir,
     get_runtime_subdir,
+    get_workspace_inbox_dir,
+    get_workspace_upload_dir,
     get_workspace_path,
     is_default_workspace,
 )
@@ -63,6 +65,32 @@ def test_workspace_path_is_explicitly_resolved(monkeypatch, tmp_path: Path) -> N
 
     assert get_workspace_path() == tmp_path / ".originagent" / "workspace"
     assert get_workspace_path(str(custom_workspace)) == custom_workspace
+
+
+def test_workspace_upload_dir_is_namespaced_under_workspace(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    custom_workspace = tmp_path / "custom-workspace"
+
+    assert get_workspace_upload_dir() == tmp_path / ".originagent" / "workspace" / "uploads"
+    assert get_workspace_upload_dir(custom_workspace, "websocket") == (
+        custom_workspace / "uploads" / "websocket"
+    )
+
+
+def test_workspace_inbox_dir_is_namespaced_under_workspace(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    custom_workspace = tmp_path / "custom-workspace"
+
+    assert get_workspace_inbox_dir() == tmp_path / ".originagent" / "workspace" / "inbox"
+    assert get_workspace_inbox_dir(custom_workspace, "camera") == (
+        custom_workspace / "inbox" / "camera"
+    )
 
 
 def test_is_default_workspace_distinguishes_default_and_custom_paths(

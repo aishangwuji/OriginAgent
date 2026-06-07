@@ -1802,6 +1802,7 @@ class AgentLoop:
         messages = self.context.build_messages(
             history=history_for_model,
             current_message=None if (is_subagent or is_active_intent) else msg.content,
+            media=msg.media if msg.media else None,
             channel=channel,
             chat_id=chat_id,
             current_role="user",
@@ -2163,7 +2164,12 @@ class AgentLoop:
             if hasattr(message_tool, "turn_delivered_media_paths")
             else []
         )
-        merge_turn_media_into_last_assistant(ctx.all_messages, ctx.generated_media, extra_media)
+        merge_turn_media_into_last_assistant(
+            ctx.all_messages,
+            ctx.generated_media,
+            extra_media,
+            workspace=self.workspace,
+        )
 
         self._save_turn(ctx.session, ctx.all_messages, ctx.save_skip)
         ctx.session.enforce_file_cap(on_archive=self._archive_session_file_cap)

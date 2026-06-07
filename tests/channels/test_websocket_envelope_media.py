@@ -117,7 +117,7 @@ async def test_message_with_single_image_forwards_saved_path(tmp_path) -> None:
     }
 
     with patch(
-        "OriginAgent.channels.websocket.get_media_dir", return_value=tmp_path
+        "OriginAgent.channels.websocket.get_workspace_upload_dir", return_value=tmp_path
     ):
         await channel._dispatch_envelope(mock_conn, "client-1", envelope)
 
@@ -146,7 +146,7 @@ async def test_message_with_multiple_images(tmp_path) -> None:
     }
 
     with patch(
-        "OriginAgent.channels.websocket.get_media_dir", return_value=tmp_path
+        "OriginAgent.channels.websocket.get_workspace_upload_dir", return_value=tmp_path
     ):
         await channel._dispatch_envelope(mock_conn, "client-1", envelope)
 
@@ -169,7 +169,7 @@ async def test_image_only_message_allows_empty_text(tmp_path) -> None:
     }
 
     with patch(
-        "OriginAgent.channels.websocket.get_media_dir", return_value=tmp_path
+        "OriginAgent.channels.websocket.get_workspace_upload_dir", return_value=tmp_path
     ):
         await channel._dispatch_envelope(mock_conn, "client-1", envelope)
 
@@ -190,7 +190,7 @@ async def test_message_rejected_when_more_than_four_images(tmp_path) -> None:
     }
 
     with patch(
-        "OriginAgent.channels.websocket.get_media_dir", return_value=tmp_path
+        "OriginAgent.channels.websocket.get_workspace_upload_dir", return_value=tmp_path
     ):
         await channel._dispatch_envelope(mock_conn, "client-1", envelope)
 
@@ -198,7 +198,7 @@ async def test_message_rejected_when_more_than_four_images(tmp_path) -> None:
     mock_conn.send.assert_awaited_once()
     err = json.loads(mock_conn.send.call_args[0][0])
     assert err["event"] == "error"
-    assert err["detail"] == "image_rejected"
+    assert err["detail"] == "attachment_rejected"
     assert err["reason"] == "too_many_images"
 
 
@@ -215,18 +215,18 @@ async def test_message_rejected_on_oversize_payload(tmp_path) -> None:
     }
 
     with patch(
-        "OriginAgent.channels.websocket.get_media_dir", return_value=tmp_path
+        "OriginAgent.channels.websocket.get_workspace_upload_dir", return_value=tmp_path
     ):
         await channel._dispatch_envelope(mock_conn, "client-1", envelope)
 
     channel._handle_message.assert_not_awaited()
     err = json.loads(mock_conn.send.call_args[0][0])
-    assert err["detail"] == "image_rejected"
+    assert err["detail"] == "attachment_rejected"
     assert err["reason"] == "size"
 
 
 @pytest.mark.asyncio
-async def test_message_rejected_on_non_image_mime(tmp_path) -> None:
+async def test_message_accepts_pdf_attachment(tmp_path) -> None:
     channel = _make_channel()
     mock_conn = AsyncMock()
     envelope = {
@@ -237,14 +237,15 @@ async def test_message_rejected_on_non_image_mime(tmp_path) -> None:
     }
 
     with patch(
-        "OriginAgent.channels.websocket.get_media_dir", return_value=tmp_path
+        "OriginAgent.channels.websocket.get_workspace_upload_dir", return_value=tmp_path
     ):
         await channel._dispatch_envelope(mock_conn, "client-1", envelope)
 
-    channel._handle_message.assert_not_awaited()
-    err = json.loads(mock_conn.send.call_args[0][0])
-    assert err["detail"] == "image_rejected"
-    assert err["reason"] == "mime"
+    channel._handle_message.assert_awaited_once()
+    paths = channel._handle_message.call_args.kwargs["media"]
+    assert isinstance(paths, list) and len(paths) == 1
+    assert Path(paths[0]).suffix == ".pdf"
+    mock_conn.send.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -260,13 +261,36 @@ async def test_message_rejected_on_svg_mime(tmp_path) -> None:
     }
 
     with patch(
-        "OriginAgent.channels.websocket.get_media_dir", return_value=tmp_path
+        "OriginAgent.channels.websocket.get_workspace_upload_dir", return_value=tmp_path
     ):
         await channel._dispatch_envelope(mock_conn, "client-1", envelope)
 
     channel._handle_message.assert_not_awaited()
     err = json.loads(mock_conn.send.call_args[0][0])
     assert err["reason"] == "mime"
+
+
+@pytest.mark.asyncio
+async def test_message_accepts_audio_attachment(tmp_path) -> None:
+    channel = _make_channel()
+    mock_conn = AsyncMock()
+    envelope = {
+        "type": "message",
+        "chat_id": "abc123",
+        "content": "listen",
+        "media": [{"data_url": _data_url("audio/mpeg", b"ID3fake-audio")}],
+    }
+
+    with patch(
+        "OriginAgent.channels.websocket.get_workspace_upload_dir", return_value=tmp_path
+    ):
+        await channel._dispatch_envelope(mock_conn, "client-1", envelope)
+
+    channel._handle_message.assert_awaited_once()
+    paths = channel._handle_message.call_args.kwargs["media"]
+    assert isinstance(paths, list) and len(paths) == 1
+    assert Path(paths[0]).suffix in {".mp3", ".mpeg"}
+    mock_conn.send.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -281,7 +305,7 @@ async def test_message_rejected_on_malformed_data_url(tmp_path) -> None:
     }
 
     with patch(
-        "OriginAgent.channels.websocket.get_media_dir", return_value=tmp_path
+        "OriginAgent.channels.websocket.get_workspace_upload_dir", return_value=tmp_path
     ):
         await channel._dispatch_envelope(mock_conn, "client-1", envelope)
 
@@ -302,7 +326,7 @@ async def test_message_rejected_on_broken_base64(tmp_path) -> None:
     }
 
     with patch(
-        "OriginAgent.channels.websocket.get_media_dir", return_value=tmp_path
+        "OriginAgent.channels.websocket.get_workspace_upload_dir", return_value=tmp_path
     ):
         await channel._dispatch_envelope(mock_conn, "client-1", envelope)
 
@@ -324,7 +348,7 @@ async def test_message_rejected_when_media_item_shape_wrong(tmp_path) -> None:
     }
 
     with patch(
-        "OriginAgent.channels.websocket.get_media_dir", return_value=tmp_path
+        "OriginAgent.channels.websocket.get_workspace_upload_dir", return_value=tmp_path
     ):
         await channel._dispatch_envelope(mock_conn, "client-1", envelope)
 
@@ -348,13 +372,13 @@ async def test_message_rejected_when_media_field_is_not_list() -> None:
 
     channel._handle_message.assert_not_awaited()
     err = json.loads(mock_conn.send.call_args[0][0])
-    assert err["detail"] == "image_rejected"
+    assert err["detail"] == "attachment_rejected"
     assert err["reason"] == "malformed"
 
 
 @pytest.mark.asyncio
 async def test_failed_media_does_not_partially_persist(tmp_path) -> None:
-    """If the second image is invalid, the first must not be forwarded.
+    """If a later attachment is invalid, earlier ones must not be forwarded.
 
     Also: images already written in this call are cleaned up on failure, so
     a mixed-valid/invalid batch never leaves orphan files in the media dir.
@@ -367,12 +391,12 @@ async def test_failed_media_does_not_partially_persist(tmp_path) -> None:
         "content": "mixed",
         "media": [
             {"data_url": _tiny_png_data_url()},
-            {"data_url": _data_url("application/pdf", b"%PDF-1.4")},
+            {"data_url": _data_url("image/svg+xml", b"<svg/>")},
         ],
     }
 
     with patch(
-        "OriginAgent.channels.websocket.get_media_dir", return_value=tmp_path
+        "OriginAgent.channels.websocket.get_workspace_upload_dir", return_value=tmp_path
     ):
         await channel._dispatch_envelope(mock_conn, "client-1", envelope)
 

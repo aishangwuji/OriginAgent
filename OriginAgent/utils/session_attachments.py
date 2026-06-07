@@ -30,8 +30,12 @@ def _is_under(path: Path, root: Path) -> bool:
         return False
 
 
-def _trusted_roots() -> tuple[Path, ...]:
-    roots = [get_workspace_path(), get_media_dir(), get_data_dir() / "tmp"]
+def _trusted_roots(workspace: str | Path | None = None) -> tuple[Path, ...]:
+    if workspace is None:
+        workspace_root = get_workspace_path()
+    else:
+        workspace_root = get_workspace_path(workspace)
+    roots = [workspace_root, get_media_dir(), get_data_dir() / "tmp"]
     out: list[Path] = []
     for root in roots:
         with contextlib.suppress(OSError):
@@ -41,10 +45,14 @@ def _trusted_roots() -> tuple[Path, ...]:
     return tuple(out)
 
 
-def stage_media_paths_for_session_replay(paths: list[str]) -> list[str]:
+def stage_media_paths_for_session_replay(
+    paths: list[str],
+    *,
+    workspace: str | Path | None = None,
+) -> list[str]:
     """Keep trusted local files only; copy non-media files into ``media/websocket``."""
     root = get_media_dir().resolve()
-    trusted_roots = _trusted_roots()
+    trusted_roots = _trusted_roots(workspace)
     out: list[str] = []
     seen: set[str] = set()
     seen_sources: set[str] = set()
@@ -94,13 +102,15 @@ def merge_turn_media_into_last_assistant(
     all_messages: list[dict[str, Any]],
     generated_image_paths: list[str],
     extra_attachment_paths: list[str],
+    *,
+    workspace: str | Path | None = None,
 ) -> None:
     """Attach staged paths to the last assistant row in *all_messages* (in-place)."""
     merged = list(
         dict.fromkeys(
             [
-                *stage_media_paths_for_session_replay(generated_image_paths),
-                *stage_media_paths_for_session_replay(extra_attachment_paths),
+                *stage_media_paths_for_session_replay(generated_image_paths, workspace=workspace),
+                *stage_media_paths_for_session_replay(extra_attachment_paths, workspace=workspace),
             ]
         )
     )

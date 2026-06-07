@@ -6,7 +6,7 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import { Check, ChevronRight, Copy, FileIcon, ImageIcon, PlaySquare, Sparkles, Wrench } from "lucide-react";
+import { AudioLines, Check, ChevronRight, Copy, FileIcon, ImageIcon, PlaySquare, Sparkles, Wrench } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
 import { ImageLightbox } from "@/components/ImageLightbox";
@@ -79,7 +79,7 @@ export function MessageBubble({
         )}
       >
         {hasImages ? <UserImages images={images} align="right" /> : null}
-        {!hasImages && hasMedia ? (
+        {hasMedia ? (
           <MessageMedia media={media} align="right" />
         ) : null}
         {hasText ? (
@@ -212,11 +212,30 @@ function MediaCell({ media }: { media: UIMediaAttachment }) {
     );
   }
 
+  if (media.kind === "audio" && hasUrl) {
+    return (
+      <figure className="max-w-[min(100%,28rem)] overflow-hidden rounded-[14px] border border-border/60 bg-muted/40 p-3">
+        <figcaption className="mb-2 truncate text-[11.5px] text-muted-foreground">
+          {media.name ?? t("message.audioAttachment", { defaultValue: "Audio attachment" })}
+        </figcaption>
+        <audio
+          src={media.url}
+          controls
+          preload="metadata"
+          className="block w-full"
+          aria-label={media.name ? `${t("message.audioAttachment", { defaultValue: "Audio attachment" })}: ${media.name}` : t("message.audioAttachment", { defaultValue: "Audio attachment" })}
+        />
+      </figure>
+    );
+  }
+
   const label =
     media.kind === "video"
       ? t("message.videoAttachment", { defaultValue: "Video attachment" })
+      : media.kind === "audio"
+        ? t("message.audioAttachment", { defaultValue: "Audio attachment" })
       : t("message.fileAttachment", { defaultValue: "File attachment" });
-  const Icon = media.kind === "video" ? PlaySquare : FileIcon;
+  const Icon = media.kind === "video" ? PlaySquare : media.kind === "audio" ? AudioLines : FileIcon;
 
   const inner = (
     <>

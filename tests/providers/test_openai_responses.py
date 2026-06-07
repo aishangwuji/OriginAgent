@@ -1,5 +1,6 @@
 """Tests for the shared openai_responses converters and parsers."""
 
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -73,6 +74,77 @@ class TestConvertUserMessage:
         assert len(result["content"]) == 2
         assert result["content"][0]["type"] == "input_text"
         assert result["content"][1]["type"] == "input_image"
+
+    def test_attachment_ref_degrades_to_text_without_native_support(self):
+        expected = str(Path("D:/tmp/clip.mp4"))
+        result = convert_user_message([{
+            "type": "attachment_ref",
+            "attachment": {
+                "kind": "video",
+                "mime": "video/mp4",
+                "name": "clip.mp4",
+                "path": "D:/tmp/clip.mp4",
+                "size_bytes": 12,
+                "source": "media",
+                "metadata": {},
+            },
+        }])
+        assert result["content"] == [{
+            "type": "input_text",
+            "text": f"[video: {expected}]",
+        }]
+
+    def test_attachment_ref_converts_to_native_video(self):
+        result = convert_user_message(
+            [{
+                "type": "attachment_ref",
+                "attachment": {
+                    "kind": "video",
+                    "mime": "video/mp4",
+                    "name": "clip.mp4",
+                    "path": str(Path("D:/tmp/clip.mp4")),
+                    "size_bytes": 12,
+                    "source": "media",
+                    "metadata": {},
+                },
+            }],
+            native_attachment_kinds={"video"},
+        )
+        assert result["content"][0]["type"] == "input_video"
+        assert result["content"][0]["video_url"].startswith("file:///")
+
+    def test_attachment_ref_converts_to_native_audio_and_file(self):
+        result = convert_user_message(
+            [
+                {
+                    "type": "attachment_ref",
+                    "attachment": {
+                        "kind": "audio",
+                        "mime": "audio/mpeg",
+                        "name": "voice.mp3",
+                        "path": str(Path("D:/tmp/voice.mp3")),
+                        "size_bytes": 12,
+                        "source": "media",
+                        "metadata": {},
+                    },
+                },
+                {
+                    "type": "attachment_ref",
+                    "attachment": {
+                        "kind": "document",
+                        "mime": "application/pdf",
+                        "name": "report.pdf",
+                        "path": str(Path("D:/tmp/report.pdf")),
+                        "size_bytes": 12,
+                        "source": "media",
+                        "metadata": {},
+                    },
+                },
+            ],
+            native_attachment_kinds={"audio", "document"},
+        )
+        assert result["content"][0]["type"] == "input_audio"
+        assert result["content"][1]["type"] == "input_file"
 
     def test_empty_list_falls_back(self):
         result = convert_user_message([])

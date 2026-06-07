@@ -22,7 +22,7 @@ export interface UIImage {
   name?: string;
 }
 
-export type UIMediaKind = "image" | "video" | "file";
+export type UIMediaKind = "image" | "video" | "audio" | "file";
 
 export interface UIMediaAttachment {
   kind: UIMediaKind;
@@ -680,15 +680,14 @@ export type InboundEvent =
       goal_state: GoalStateWsPayload;
     }
   | { event: "session_updated"; chat_id: string }
-  | { event: "error"; chat_id?: string; detail?: string };
+  | { event: "error"; chat_id?: string; detail?: string; reason?: string };
 
-/** Base64-encoded image attached to an outbound ``message`` envelope.
+/** Base64-encoded attachment attached to an outbound ``message`` envelope.
  *
- * ``data_url`` must be a ``data:image/<png|jpeg|webp|gif>;base64,...`` string
- * — the server whitelists those MIME types and rejects everything else
- * (including SVG, to avoid an XSS surface). ``name`` is advisory: it's
- * preserved for the file on disk and surfaced as the placeholder label when
- * the session is replayed.
+ * ``data_url`` must be a supported ``data:<mime>;base64,...`` string. The
+ * server applies a conservative MIME whitelist and per-kind limits; unsupported
+ * types are rejected before the turn reaches the Agent runtime. ``name`` is
+ * advisory: it's preserved for the file on disk and surfaced during replay.
  */
 export interface OutboundMedia {
   data_url: string;

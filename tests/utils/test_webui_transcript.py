@@ -72,3 +72,28 @@ def test_build_response_schema(monkeypatch, tmp_path) -> None:
     assert out["schemaVersion"] == WEBUI_TRANSCRIPT_SCHEMA_VERSION
     assert out["sessionKey"] == key
     assert len(out["messages"]) == 1
+
+
+def test_replay_message_media_preserves_audio_and_file_kinds(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr("OriginAgent.config.paths.get_data_dir", lambda: tmp_path)
+    key = "websocket:t-media"
+    for ev in (
+        {"event": "user", "chat_id": "t-media", "text": "check these"},
+        {
+            "event": "message",
+            "chat_id": "t-media",
+            "text": "done",
+            "media_urls": [
+                {"url": "/api/media/audio", "name": "voice.mp3"},
+                {"url": "/api/media/file", "name": "report.pdf"},
+            ],
+        },
+        {"event": "turn_end", "chat_id": "t-media"},
+    ):
+        append_transcript_object(key, ev)
+
+    msgs = replay_transcript_to_ui_messages(read_transcript_lines(key))
+    assert msgs[1]["media"] == [
+        {"kind": "audio", "url": "/api/media/audio", "name": "voice.mp3"},
+        {"kind": "file", "url": "/api/media/file", "name": "report.pdf"},
+    ]

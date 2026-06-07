@@ -37,6 +37,7 @@ from OriginAgent.providers.openai_responses import (
     convert_tools,
     parse_response_output,
 )
+from OriginAgent.utils.attachments import attachment_placeholder_text, describe_attachment
 
 if TYPE_CHECKING:
     from OriginAgent.providers.registry import ProviderSpec
@@ -250,6 +251,34 @@ def _deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any
     return merged
 
 
+def _strip_attachment_ref_content(messages: list[dict[str, Any]]) -> list[dict[str, Any]] | None:
+    """Replace provider-neutral attachment refs with text breadcrumbs."""
+    found = False
+    result = []
+    for msg in messages:
+        content = msg.get("content")
+        if isinstance(content, list):
+            new_content = []
+            for block in content:
+                if isinstance(block, dict) and block.get("type") == "attachment_ref":
+                    attachment = block.get("attachment")
+                    path = attachment.get("path") if isinstance(attachment, dict) else None
+                    descriptor = describe_attachment(path) if isinstance(path, str) else None
+                    if descriptor is not None:
+                        new_content.append({"type": "text", "text": attachment_placeholder_text(descriptor)})
+                    elif isinstance(path, str) and path:
+                        new_content.append({"type": "text", "text": f"[attachment: {path}]"})
+                    else:
+                        new_content.append({"type": "text", "text": "[attachment omitted]"})
+                    found = True
+                else:
+                    new_content.append(block)
+            result.append({**msg, "content": new_content})
+        else:
+            result.append(msg)
+    return result if found else None
+
+
 class OpenAICompatProvider(LLMProvider):
     """Unified provider for all OpenAI-compatible APIs.
 
@@ -313,6 +342,12 @@ class OpenAICompatProvider(LLMProvider):
         # probe again after _RESPONSES_PROBE_INTERVAL_S seconds.
         self._responses_failures: dict[str, int] = {}
         self._responses_tripped_at: dict[str, float] = {}
+
+    def _native_attachment_kinds(self) -> set[str] | None:
+        spec = self._spec
+        if spec is None or not spec.native_attachment_kinds:
+            return None
+        return set(spec.native_attachment_kinds)
 
     def _setup_env(self, api_key: str, api_base: str | None) -> None:
         """Set environment variables based on provider spec."""
@@ -479,6 +514,9 @@ class OpenAICompatProvider(LLMProvider):
     ) -> dict[str, Any]:
         model_name = model or self.default_model
         spec = self._spec
+        stripped_attachments = _strip_attachment_ref_content(messages)
+        if stripped_attachments is not None:
+            messages = stripped_attachments
 
         if spec and spec.supports_prompt_caching:
             model_name = model or self.default_model
@@ -674,7 +712,10 @@ class OpenAICompatProvider(LLMProvider):
         if self._spec and self._spec.strip_model_prefix:
             model_name = model_name.split("/")[-1]
         sanitized_messages = self._sanitize_messages(self._sanitize_empty_content(messages))
-        instructions, input_items = convert_messages(sanitized_messages)
+        instructions, input_items = convert_messages(
+            sanitized_messages,
+            native_attachment_kinds=self._native_attachment_kinds(),
+        )
 
         body: dict[str, Any] = {
             "model": model_name,

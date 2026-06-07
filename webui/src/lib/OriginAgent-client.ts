@@ -68,7 +68,8 @@ export type StreamError =
   /** Server rejected the inbound frame as too large (WS close code 1009).
    * Typically means the user attached images whose base64 size exceeded
    * ``maxMessageBytes`` on the server. */
-  | { kind: "message_too_big" };
+  | { kind: "message_too_big" }
+  | { kind: "attachment_rejected"; reason?: string };
 
 type ErrorHandler = (error: StreamError) => void;
 
@@ -370,6 +371,9 @@ export class OriginAgentClient {
     }
 
     const chatId = (parsed as { chat_id?: string }).chat_id;
+    if (parsed.event === "error" && parsed.detail === "attachment_rejected") {
+      this.emitError({ kind: "attachment_rejected", reason: parsed.reason });
+    }
     if (chatId) {
       this.recordGoalStatusForRunStrip(chatId, parsed);
       this.recordGoalStateSnapshot(chatId, parsed);

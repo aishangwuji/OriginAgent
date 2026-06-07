@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 from io import BytesIO
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -15,6 +16,7 @@ from OriginAgent.api.server import (
     _save_base64_data_url,
     create_app,
 )
+from OriginAgent.config.paths import get_workspace_upload_dir
 from OriginAgent.utils.document import extract_documents
 
 try:
@@ -47,15 +49,24 @@ def app(mock_agent):
 
 @pytest.fixture
 def api_media_dir(tmp_path, monkeypatch):
-    root = tmp_path / "media"
+    workspace = tmp_path / "workspace"
 
-    def _fake_get_media_dir(channel: str | None = None):
-        path = root / channel if channel else root
+    def _fake_get_workspace_upload_dir(
+        workspace_arg=None,
+        channel: str | None = None,
+    ):
+        base_workspace = Path(workspace_arg) if workspace_arg is not None else workspace
+        path = base_workspace / "uploads"
+        if channel:
+            path = path / channel
         path.mkdir(parents=True, exist_ok=True)
         return path
 
-    monkeypatch.setattr("OriginAgent.api.server.get_media_dir", _fake_get_media_dir)
-    return _fake_get_media_dir("api")
+    monkeypatch.setattr(
+        "OriginAgent.api.server.get_workspace_upload_dir",
+        _fake_get_workspace_upload_dir,
+    )
+    return _fake_get_workspace_upload_dir(workspace, "api")
 
 
 @pytest_asyncio.fixture
@@ -127,7 +138,7 @@ def test_parse_json_content_extracts_text_and_media(api_media_dir) -> None:
             }
         ]
     }
-    text, media_paths = _parse_json_content(body)
+    text, media_paths = _parse_json_content(body, workspace=api_media_dir.parent.parent)
     assert text == "describe this"
     assert len(media_paths) == 1
     assert media_paths[0].startswith(str(api_media_dir))
@@ -175,7 +186,7 @@ def test_parse_json_content_rejects_oversized_base64_file(api_media_dir) -> None
         ]
     }
     with pytest.raises(_FileSizeExceeded, match="10MB limit"):
-        _parse_json_content(body)
+        _parse_json_content(body, workspace=api_media_dir.parent.parent)
 
 
 # ---------------------------------------------------------------------------
@@ -340,6 +351,38 @@ async def test_json_base64_image_upload(aiohttp_client, mock_agent, api_media_di
     assert media[0].startswith(str(api_media_dir))
 
 
+@pytest.mark.skipif(not HAS_AIOHTTP, reason="aiohttp not installed")
+@pytest.mark.asyncio
+async def test_api_uploads_use_agent_workspace(aiohttp_client, tmp_path) -> None:
+    agent = _make_mock_agent()
+    agent.workspace = tmp_path / "agent-workspace"
+    app = create_app(agent, model_name="m")
+    client = await aiohttp_client(app)
+
+    tiny_png_b64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFBQIAX8jx0gAAAABJRU5ErkJggg=="
+
+    resp = await client.post(
+        "/v1/chat/completions",
+        json={
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "what is this"},
+                        {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{tiny_png_b64}"}},
+                    ],
+                }
+            ]
+        },
+    )
+
+    assert resp.status == 200
+    media = agent.process_direct.call_args.kwargs.get("media") or []
+    expected_root = get_workspace_upload_dir(agent.workspace, "api")
+    assert len(media) == 1
+    assert Path(media[0]).is_relative_to(expected_root)
+
+
 # ---------------------------------------------------------------------------
 # extract_documents tests (now in OriginAgent.utils.document)
 # ---------------------------------------------------------------------------
@@ -361,6 +404,16 @@ def test_extract_documents_separates_images_from_docs(tmp_path) -> None:
     assert image_paths[0] == str(png)
     assert "Quarterly revenue" in text
     assert "summarize" in text
+
+
+def test_extract_documents_preserves_pdf_for_native_provider_handling(tmp_path) -> None:
+    pdf = tmp_path / "report.pdf"
+    pdf.write_bytes(b"%PDF-1.4\n1 0 obj\n<<>>\nendobj\n")
+
+    text, retained = extract_documents("summarize", [str(pdf)])
+
+    assert text == "summarize"
+    assert retained == [str(pdf)]
 
 
 def test_extract_documents_skips_extraction_errors(tmp_path, monkeypatch) -> None:

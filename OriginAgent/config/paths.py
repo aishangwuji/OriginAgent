@@ -45,6 +45,24 @@ def get_workspace_path(workspace: str | None = None) -> Path:
     return ensure_dir(path)
 
 
+def get_workspace_upload_dir(
+    workspace: str | Path | None = None,
+    channel: str | None = None,
+) -> Path:
+    """Return the workspace-local upload staging directory."""
+    base = ensure_dir(get_workspace_path(workspace) / "uploads")
+    return ensure_dir(base / channel) if channel else base
+
+
+def get_workspace_inbox_dir(
+    workspace: str | Path | None = None,
+    source: str | None = None,
+) -> Path:
+    """Return the workspace-local future ingress inbox directory."""
+    base = ensure_dir(get_workspace_path(workspace) / "inbox")
+    return ensure_dir(base / source) if source else base
+
+
 def is_default_workspace(workspace: str | Path | None) -> bool:
     """Return whether a workspace resolves to OriginAgent's default workspace path."""
     default = get_config_path().parent / "workspace"

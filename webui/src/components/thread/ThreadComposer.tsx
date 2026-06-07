@@ -14,14 +14,17 @@ import {
   ArrowUp,
   BookOpen,
   Bot,
+  FileIcon,
   Check,
   ChevronDown,
   ChevronUp,
   CircleHelp,
+  Film,
   GraduationCap,
   History,
   ImageIcon,
   Loader2,
+  Music4,
   Plus,
   RotateCw,
   Server,
@@ -38,19 +41,41 @@ import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
 import {
   useAttachedImages,
-  type AttachedImage,
+  type AttachedAttachment,
   type AttachmentError,
+  MAX_ATTACHMENTS_PER_MESSAGE,
+  MAX_AUDIOS_PER_MESSAGE,
   MAX_IMAGES_PER_MESSAGE,
+  MAX_VIDEOS_PER_MESSAGE,
 } from "@/hooks/useAttachedImages";
 import { useClipboardAndDrop } from "@/hooks/useClipboardAndDrop";
-import type { SendImage, SendOptions } from "@/hooks/useOriginAgentStream";
-import type { SlashCommand, GoalStateWsPayload } from "@/lib/types";
+import type { SendAttachment, SendOptions } from "@/hooks/useOriginAgentStream";
+import type { SlashCommand, GoalStateWsPayload, UIMediaKind } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { applyMeasuredTextareaHeight } from "@/lib/pretextTextarea";
 
 /** ``<input accept>``: aligned with the server's MIME whitelist. SVG is
  * deliberately excluded to avoid an embedded-script XSS surface. */
-const ACCEPT_ATTR = "image/png,image/jpeg,image/webp,image/gif";
+const ACCEPT_ATTR = [
+  "image/png",
+  "image/jpeg",
+  "image/webp",
+  "image/gif",
+  "video/mp4",
+  "video/webm",
+  "video/quicktime",
+  "audio/mpeg",
+  "audio/mp3",
+  "audio/mp4",
+  "audio/x-m4a",
+  "audio/wav",
+  "audio/x-wav",
+  "audio/ogg",
+  "audio/webm",
+  "audio/flac",
+  "audio/aac",
+  "application/pdf",
+].join(",");
 
 function formatBytes(n: number): string {
   if (n < 1024) return `${n} B`;
@@ -58,8 +83,12 @@ function formatBytes(n: number): string {
   return `${(n / (1024 * 1024)).toFixed(1)} MB`;
 }
 
+function previewKind(kind: AttachedAttachment["kind"]): UIMediaKind {
+  return kind === "document" ? "file" : kind;
+}
+
 interface ThreadComposerProps {
-  onSend: (content: string, images?: SendImage[], options?: SendOptions) => void;
+  onSend: (content: string, attachments?: SendAttachment[], options?: SendOptions) => void;
   disabled?: boolean;
   placeholder?: string;
   isStreaming?: boolean;
@@ -449,8 +478,13 @@ export function ThreadComposer({
 
   const formatRejection = useCallback(
     (reason: AttachmentError): string => {
-      const key = `thread.composer.imageRejected.${reason}`;
-      return t(key, { max: MAX_IMAGES_PER_MESSAGE });
+      const key = `thread.composer.attachmentRejected.${reason}`;
+      return t(key, {
+        max: MAX_ATTACHMENTS_PER_MESSAGE,
+        imageMax: MAX_IMAGES_PER_MESSAGE,
+        videoMax: MAX_VIDEOS_PER_MESSAGE,
+        audioMax: MAX_AUDIOS_PER_MESSAGE,
+      });
     },
     [t],
   );
@@ -486,7 +520,7 @@ export function ThreadComposer({
   }, [disabled]);
 
   const readyImages = useMemo(
-    () => images.filter((img): img is AttachedImage & { dataUrl: string } =>
+    () => images.filter((img): img is AttachedAttachment & { dataUrl: string } =>
       img.status === "ready" && typeof img.dataUrl === "string",
     ),
     [images],
@@ -653,14 +687,18 @@ export function ThreadComposer({
     // the optimistic bubble preview: data URLs are self-contained (no blob
     // lifetime, safe under React StrictMode double-mount) and keep the
     // bubble in sync with whatever the backend actually sees.
-    const payload: SendImage[] | undefined =
+    const payload: SendAttachment[] | undefined =
       readyImages.length > 0
         ? readyImages.map((img) => ({
             media: {
               data_url: img.dataUrl,
               name: img.file.name,
             },
-            preview: { url: img.dataUrl, name: img.file.name },
+            preview: {
+              kind: previewKind(img.kind),
+              url: img.dataUrl,
+              name: img.file.name,
+            },
           }))
         : undefined;
     const options: SendOptions | undefined = imageMode
@@ -798,7 +836,7 @@ export function ThreadComposer({
         {images.length > 0 ? (
           <div
             className="flex flex-wrap gap-2 px-3 pt-3"
-            aria-label={t("thread.composer.attachImage")}
+            aria-label={t("thread.composer.attachAttachment")}
           >
             {images.map((img) => (
               <AttachmentChip
@@ -881,7 +919,7 @@ export function ThreadComposer({
               size="icon"
               variant="ghost"
               disabled={attachButtonDisabled}
-              aria-label={t("thread.composer.attachImage")}
+              aria-label={t("thread.composer.attachAttachment")}
               onClick={() => fileInputRef.current?.click()}
               className={cn(
                 "rounded-full text-muted-foreground hover:text-foreground",
@@ -1163,7 +1201,7 @@ function SlashCommandPalette({
 }
 
 interface AttachmentChipProps {
-  image: AttachedImage;
+  image: AttachedAttachment;
   labelRemove: string;
   labelEncoding: string;
   normalizedHint: (origBytes: number, currentBytes: number) => string;
@@ -1183,6 +1221,14 @@ function AttachmentChip({
   onKeyDown,
   registerRef,
 }: AttachmentChipProps) {
+  const PreviewIcon =
+    image.kind === "video"
+      ? Film
+      : image.kind === "audio"
+        ? Music4
+        : image.kind === "document"
+          ? FileIcon
+          : ImageIcon;
   const sizeLabel =
     image.status === "ready" && image.normalized && image.encodedBytes
       ? normalizedHint(image.file.size, image.encodedBytes)
@@ -1213,7 +1259,7 @@ function AttachmentChip({
           />
         ) : (
           <div className="flex h-full w-full items-center justify-center">
-            <ImageIcon className="h-4 w-4 text-muted-foreground" aria-hidden />
+            <PreviewIcon className="h-4 w-4 text-muted-foreground" aria-hidden />
           </div>
         )}
         {image.status === "encoding" ? (

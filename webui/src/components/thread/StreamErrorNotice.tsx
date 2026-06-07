@@ -62,6 +62,11 @@ function resolveCopy(
         title: t("errors.messageTooBig.title"),
         body: t("errors.messageTooBig.body"),
       };
+    case "attachment_rejected":
+      return {
+        title: t("errors.attachmentRejected.title"),
+        body: t(`errors.attachmentRejected.reasons.${error.reason ?? "default"}`),
+      };
     default: {
       // Exhaustiveness guard: if a new StreamError kind is added, TS will
       // complain here until we add a corresponding i18n branch.

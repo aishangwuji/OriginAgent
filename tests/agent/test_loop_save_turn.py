@@ -492,6 +492,46 @@ async def test_process_message_uses_context_chat_id_for_runtime_prompt(tmp_path:
     assert loop._run_agent_loop.call_args.kwargs["chat_id"] == "thread-777"
 
 
+@pytest.mark.asyncio
+async def test_system_message_passes_media_into_prompt_build(tmp_path: Path) -> None:
+    loop = _make_full_loop(tmp_path)
+    loop.consolidator.maybe_consolidate_by_tokens = AsyncMock(return_value=False)  # type: ignore[method-assign]
+    loop.context.build_messages = MagicMock(  # type: ignore[method-assign]
+        return_value=[
+            {"role": "system", "content": "system"},
+            {"role": "user", "content": "subagent result"},
+        ]
+    )
+    loop._run_agent_loop = AsyncMock(return_value=(  # type: ignore[method-assign]
+        "done",
+        [],
+        [
+            {"role": "system", "content": "system"},
+            {"role": "user", "content": "subagent result"},
+            {"role": "assistant", "content": "done"},
+        ],
+        "stop",
+        False,
+    ))
+
+    image = tmp_path / "subagent.png"
+    image.write_bytes(_PNG_1X1)
+
+    outbound = await loop._process_system_message(
+        InboundMessage(
+            channel="system",
+            sender_id="subagent",
+            chat_id="cli:media",
+            content="subagent result",
+            media=[str(image)],
+            metadata={"injected_event": "subagent_result"},
+        )
+    )
+
+    assert outbound is not None
+    assert loop.context.build_messages.call_args.kwargs["media"] == [str(image)]
+
+
 def test_set_tool_context_uses_effective_key_for_spawn_tool(tmp_path: Path) -> None:
     loop = _make_full_loop(tmp_path)
     spawn_tool = loop.tools.get("spawn")

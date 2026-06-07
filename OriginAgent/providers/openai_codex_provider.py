@@ -43,7 +43,10 @@ class OpenAICodexProvider(LLMProvider):
     ) -> LLMResponse:
         """Shared request logic for both chat() and chat_stream()."""
         model = model or self.default_model
-        system_prompt, input_items = convert_messages(messages)
+        system_prompt, input_items = convert_messages(
+            messages,
+            native_attachment_kinds={"image", "video", "audio", "document"},
+        )
 
         token = await asyncio.to_thread(get_codex_token)
         headers = _build_headers(token.account_id, token.access)

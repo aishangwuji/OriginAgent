@@ -9,6 +9,7 @@ import type {
   OutboundImageGeneration,
   OutboundMedia,
   GoalStateWsPayload,
+  UIMediaKind,
   ToolProgressEvent,
   UIImage,
   UIMessage,
@@ -214,15 +215,20 @@ function absorbCompleteAssistantMessage(
  * separately (e.g. via ``fetchWebuiThread``) since the server only replays
  * live events.
  */
-/** Payload passed to ``send`` when the user attaches one or more images.
+/** Payload passed to ``send`` when the user attaches one or more files.
  *
  * ``media`` is handed to the wire client verbatim; ``preview`` powers the
- * optimistic user bubble (blob URLs so the preview appears before the server
- * acks the frame). Keeping the two separate lets the bubble re-use the local
- * blob URL even after the server persists the file under a different name. */
-export interface SendImage {
+ * optimistic user bubble. Keeping the two separate lets the bubble render a
+ * local preview immediately even after the server persists the file under a
+ * different name or URL.
+ */
+export interface SendAttachment {
   media: OutboundMedia;
-  preview: UIImage;
+  preview: {
+    kind: UIMediaKind;
+    url?: string;
+    name?: string;
+  };
 }
 
 export interface SendOptions {
@@ -241,7 +247,7 @@ export function useOriginAgentStream(
   runStartedAt: number | null;
   /** Latest sustained goal for this ``chatId`` (``goal_state`` WS events). */
   goalState: GoalStateWsPayload | undefined;
-  send: (content: string, images?: SendImage[], options?: SendOptions) => void;
+  send: (content: string, attachments?: SendAttachment[], options?: SendOptions) => void;
   stop: () => void;
   setMessages: React.Dispatch<React.SetStateAction<UIMessage[]>>;
   /** Latest transport-level fault raised since the last ``dismissStreamError``.
@@ -531,14 +537,16 @@ export function useOriginAgentStream(
   }, [chatId, client, onTurnEnd]);
 
   const send = useCallback(
-    (content: string, images?: SendImage[], options?: SendOptions) => {
+    (content: string, attachments?: SendAttachment[], options?: SendOptions) => {
       if (!chatId) return;
-      const hasImages = !!images && images.length > 0;
-      // Text is optional when images are attached — the agent will still see
-      // the image blocks via ``media`` paths.
-      if (!hasImages && !content.trim()) return;
+      const hasAttachments = !!attachments && attachments.length > 0;
+      if (!hasAttachments && !content.trim()) return;
 
-      const previews = hasImages ? images!.map((i) => i.preview) : undefined;
+      const previews = hasAttachments ? attachments!.map((item) => item.preview) : [];
+      const imagePreviews = previews
+        .filter((item) => item.kind === "image")
+        .map(({ url, name }) => ({ url, name }));
+      const mediaPreviews = previews.map(({ kind, url, name }) => ({ kind, url, name }));
       setMessages((prev) => [
         ...pruneReasoningOnlyPlaceholders(prev),
         {
@@ -546,13 +554,14 @@ export function useOriginAgentStream(
           role: "user",
           content,
           createdAt: Date.now(),
-          ...(previews ? { images: previews } : {}),
+          ...(imagePreviews.length > 0 ? { images: imagePreviews as UIImage[] } : {}),
+          ...(mediaPreviews.length > 0 ? { media: mediaPreviews } : {}),
         },
       ]);
       // Mark streaming immediately so the UI shows the loading indicator
       // right away, before the first delta arrives from the server.
       setIsStreaming(true);
-      const wireMedia = hasImages ? images!.map((i) => i.media) : undefined;
+      const wireMedia = hasAttachments ? attachments!.map((i) => i.media) : undefined;
       const lang = localStorage.getItem("OriginAgent.locale") || undefined;
       const mergedOptions = { ...options, ...(lang ? { lang } : {}) };
       if (options) {

@@ -35,9 +35,10 @@ from OriginAgent.bus.events import OUTBOUND_META_AGENT_UI, OutboundMessage
 from OriginAgent.bus.queue import MessageBus
 from OriginAgent.channels.base import BaseChannel
 from OriginAgent.command.builtin import builtin_command_palette
-from OriginAgent.config.paths import get_media_dir, get_webui_dir
+from OriginAgent.config.paths import get_media_dir, get_webui_dir, get_workspace_upload_dir
 from OriginAgent.config.schema import Base
 from OriginAgent.session.goal_state import goal_state_ws_blob
+from OriginAgent.utils.attachments import describe_attachment
 from OriginAgent.utils.helpers import safe_filename
 from OriginAgent.utils.media_decode import (
     FileSizeExceeded,
@@ -510,6 +511,10 @@ _MAX_IMAGES_PER_MESSAGE = 4
 _MAX_IMAGE_BYTES = 8 * 1024 * 1024
 _MAX_VIDEOS_PER_MESSAGE = 1
 _MAX_VIDEO_BYTES = 20 * 1024 * 1024
+_MAX_AUDIOS_PER_MESSAGE = 2
+_MAX_AUDIO_BYTES = 12 * 1024 * 1024
+_MAX_DOCUMENTS_PER_MESSAGE = 2
+_MAX_DOCUMENT_BYTES = 10 * 1024 * 1024
 
 # Image MIME whitelist — matches the Composer's ``accept`` list. SVG is
 # explicitly excluded to avoid the XSS surface inside embedded scripts.
@@ -526,7 +531,29 @@ _VIDEO_MIME_ALLOWED: frozenset[str] = frozenset({
     "video/quicktime",
 })
 
-_UPLOAD_MIME_ALLOWED: frozenset[str] = _IMAGE_MIME_ALLOWED | _VIDEO_MIME_ALLOWED
+_AUDIO_MIME_ALLOWED: frozenset[str] = frozenset({
+    "audio/mpeg",
+    "audio/mp3",
+    "audio/mp4",
+    "audio/x-m4a",
+    "audio/wav",
+    "audio/x-wav",
+    "audio/ogg",
+    "audio/webm",
+    "audio/flac",
+    "audio/aac",
+})
+
+_DOCUMENT_MIME_ALLOWED: frozenset[str] = frozenset({
+    "application/pdf",
+})
+
+_UPLOAD_MIME_ALLOWED: frozenset[str] = (
+    _IMAGE_MIME_ALLOWED
+    | _VIDEO_MIME_ALLOWED
+    | _AUDIO_MIME_ALLOWED
+    | _DOCUMENT_MIME_ALLOWED
+)
 
 _DATA_URL_MIME_RE = re.compile(r"^data:([^;]+);base64,", re.DOTALL)
 
@@ -539,6 +566,25 @@ def _extract_data_url_mime(url: str) -> str | None:
     if not m:
         return None
     return m.group(1).strip().lower() or None
+
+
+def _ui_media_kind_for_path(path: str | Path) -> str:
+    descriptor = describe_attachment(path)
+    if descriptor is None:
+        p = Path(path)
+        mime, _ = mimetypes.guess_type(p.name)
+        if mime and mime.startswith("video/"):
+            return "video"
+        if mime and mime.startswith("audio/"):
+            return "audio"
+        return "file"
+    if descriptor.kind == "image":
+        return "image"
+    if descriptor.kind == "video":
+        return "video"
+    if descriptor.kind == "audio":
+        return "audio"
+    return "file"
 
 
 _LOCALHOSTS = frozenset({"127.0.0.1", "::1", "localhost"})
@@ -649,6 +695,17 @@ _MEDIA_ALLOWED_MIMES: frozenset[str] = frozenset({
     "video/mp4",
     "video/webm",
     "video/quicktime",
+    "audio/mpeg",
+    "audio/mp3",
+    "audio/mp4",
+    "audio/x-m4a",
+    "audio/wav",
+    "audio/x-wav",
+    "audio/ogg",
+    "audio/webm",
+    "audio/flac",
+    "audio/aac",
+    "application/pdf",
 })
 
 
@@ -2018,10 +2075,19 @@ class WebSocketChannel(BaseChannel):
             media = msg.get("media_urls")
             if isinstance(media, list) and media:
                 row["media"] = [
-                    {"kind": "image", "url": str(m["url"]), "name": str(m.get("name") or "")}
+                    {
+                        "kind": _ui_media_kind_for_path(str(m.get("name") or "")),
+                        "url": str(m["url"]),
+                        "name": str(m.get("name") or ""),
+                    }
                     for m in media
                     if isinstance(m, dict) and m.get("url")
                 ]
+                if row["media"] and all(item.get("kind") == "image" for item in row["media"]):
+                    row["images"] = [
+                        {"url": item.get("url"), "name": item.get("name")}
+                        for item in row["media"]
+                    ]
             if row["content"].strip() or row.get("media"):
                 ui_messages.append(row)
         if not ui_messages:
@@ -2058,8 +2124,7 @@ class WebSocketChannel(BaseChannel):
             att = self._sign_or_stage_media_path(path)
             if att is None:
                 continue
-            mime, _ = mimetypes.guess_type(path.name)
-            kind = "video" if mime and mime.startswith("video/") else "image"
+            kind = _ui_media_kind_for_path(path)
             out.append({"kind": kind, "url": att["url"], "name": att.get("name", path.name)})
         return out
 
@@ -2068,9 +2133,9 @@ class WebSocketChannel(BaseChannel):
         replaced by a parallel ``media_urls`` list of signed fetch URLs.
 
         Messages without media or with non-string path entries are left
-        untouched. Paths that no longer live inside ``media_dir`` (e.g. the
-        file was deleted, or the dir was relocated) are silently skipped;
-        the client falls back to the historical-replay placeholder tile.
+        untouched. Paths that cannot be signed or staged (e.g. the file was
+        deleted) are silently skipped; the client falls back to the
+        historical-replay placeholder tile.
         """
         messages = payload.get("messages")
         if not isinstance(messages, list):
@@ -2085,10 +2150,10 @@ class WebSocketChannel(BaseChannel):
             for entry in media:
                 if not isinstance(entry, str) or not entry:
                     continue
-                signed = self._sign_media_path(Path(entry))
+                signed = self._sign_or_stage_media_path(Path(entry))
                 if signed is None:
                     continue
-                urls.append({"url": signed, "name": Path(entry).name})
+                urls.append(signed)
             if urls:
                 msg["media_urls"] = urls
             # Always drop the raw paths from the wire payload.
@@ -2117,11 +2182,11 @@ class WebSocketChannel(BaseChannel):
     def _sign_or_stage_media_path(self, path: Path) -> dict[str, str] | None:
         """Return a signed media URL payload for *path*.
 
-        Persisted inbound media already lives under ``get_media_dir`` and can
-        be signed directly. Outbound bot-generated files may live anywhere on
-        disk; copy those into the websocket media bucket first so the browser
-        can fetch them through the existing signed media route without
-        exposing arbitrary filesystem paths.
+        Persisted inbound media may already live under ``get_media_dir`` and
+        can be signed directly. Workspace uploads and outbound bot-generated
+        files may live elsewhere on disk; copy those into the websocket media
+        bucket first so the browser can fetch them through the existing
+        signed media route without exposing arbitrary filesystem paths.
         """
         signed = self._sign_media_path(path)
         if signed is not None:
@@ -2140,6 +2205,16 @@ class WebSocketChannel(BaseChannel):
         if signed is None:
             return None
         return {"url": signed, "name": path.name}
+
+    def _workspace_upload_dir(self) -> Path:
+        workspace: str | Path | None = None
+        if self._session_manager is not None:
+            candidate = getattr(self._session_manager, "workspace", None)
+            if isinstance(candidate, Path):
+                workspace = candidate
+            elif isinstance(candidate, str) and candidate.strip():
+                workspace = candidate
+        return get_workspace_upload_dir(workspace, "websocket")
 
     def _handle_media_fetch(self, sig: str, payload: str) -> Response:
         """Serve a single media file previously signed via
@@ -2392,18 +2467,28 @@ class WebSocketChannel(BaseChannel):
         """
         image_count = 0
         video_count = 0
+        audio_count = 0
+        document_count = 0
         for item in media:
             mime = _extract_data_url_mime(item.get("data_url", "")) if isinstance(item, dict) else None
             if mime in _VIDEO_MIME_ALLOWED:
                 video_count += 1
             elif mime in _IMAGE_MIME_ALLOWED:
                 image_count += 1
+            elif mime in _AUDIO_MIME_ALLOWED:
+                audio_count += 1
+            elif mime in _DOCUMENT_MIME_ALLOWED:
+                document_count += 1
         if image_count > _MAX_IMAGES_PER_MESSAGE:
             return [], "too_many_images"
         if video_count > _MAX_VIDEOS_PER_MESSAGE:
             return [], "too_many_videos"
+        if audio_count > _MAX_AUDIOS_PER_MESSAGE:
+            return [], "too_many_audio"
+        if document_count > _MAX_DOCUMENTS_PER_MESSAGE:
+            return [], "too_many_attachments"
 
-        media_dir = get_media_dir("websocket")
+        media_dir = self._workspace_upload_dir()
         paths: list[str] = []
 
         def _abort(reason: str) -> tuple[list[str], str]:
@@ -2427,8 +2512,14 @@ class WebSocketChannel(BaseChannel):
                 return _abort("decode")
             if mime not in _UPLOAD_MIME_ALLOWED:
                 return _abort("mime")
-            is_video = mime in _VIDEO_MIME_ALLOWED
-            max_bytes = _MAX_VIDEO_BYTES if is_video else _MAX_IMAGE_BYTES
+            if mime in _VIDEO_MIME_ALLOWED:
+                max_bytes = _MAX_VIDEO_BYTES
+            elif mime in _AUDIO_MIME_ALLOWED:
+                max_bytes = _MAX_AUDIO_BYTES
+            elif mime in _DOCUMENT_MIME_ALLOWED:
+                max_bytes = _MAX_DOCUMENT_BYTES
+            else:
+                max_bytes = _MAX_IMAGE_BYTES
             try:
                 saved = save_base64_data_url(
                     data_url, media_dir, max_bytes=max_bytes,
@@ -2482,14 +2573,14 @@ class WebSocketChannel(BaseChannel):
                 if not isinstance(raw_media, list):
                     await self._send_event(
                         connection, "error",
-                        detail="image_rejected", reason="malformed",
+                        chat_id=cid, detail="attachment_rejected", reason="malformed",
                     )
                     return
                 media_paths, reason = self._save_envelope_media(raw_media)
                 if reason is not None:
                     await self._send_event(
                         connection, "error",
-                        detail="image_rejected", reason=reason,
+                        chat_id=cid, detail="attachment_rejected", reason=reason,
                     )
                     return
 
