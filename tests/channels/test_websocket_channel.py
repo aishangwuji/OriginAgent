@@ -654,7 +654,10 @@ async def test_settings_api_returns_safe_subset_and_updates_whitelist(
         providers = {provider["name"]: provider for provider in body["providers"]}
         assert providers["openai"]["configured"] is True
         assert providers["openai"]["api_key_hint"] == "secr••••-key"
+        assert providers["openai"]["model_catalog_kind"] == "official"
         assert providers["openrouter"]["configured"] is False
+        assert providers["openrouter"]["model_catalog_kind"] == "catalog"
+        assert providers["custom"]["model_catalog_kind"] == "custom"
         assert body["agent"]["has_api_key"] is True
         assert body["web_search"]["provider"] == "brave"
         assert body["web_search"]["api_key_hint"] == "brav••••cret"
@@ -694,6 +697,7 @@ async def test_settings_api_returns_safe_subset_and_updates_whitelist(
         assert provider_body["requires_restart"] is False
         provider_rows = {provider["name"]: provider for provider in provider_body["providers"]}
         assert provider_rows["openrouter"]["configured"] is True
+        assert provider_rows["openrouter"]["model_catalog_kind"] == "catalog"
         assert "sk-or-test" not in provider_updated.text
 
         updated = await _http_get(
@@ -1011,8 +1015,13 @@ async def test_settings_provider_models_contract_route_validates_scope(
             new=AsyncMock(return_value=MagicMock(
                 to_json=lambda: {
                     "provider": "openrouter",
+                    "status": "available",
+                    "catalog_kind": "catalog",
                     "models": [{"id": "gpt-4o-mini", "owned_by": "openai"}],
+                    "model_count": 1,
+                    "fetched_at": 1_717_171_717.0,
                     "source_url": "https://openrouter.ai/api/v1/models",
+                    "cached": False,
                 },
             )),
         ) as fetch_mock:
@@ -1024,14 +1033,44 @@ async def test_settings_provider_models_contract_route_validates_scope(
         assert supported.status_code == 200
         assert supported.json() == {
             "provider": "openrouter",
+            "status": "available",
+            "catalog_kind": "catalog",
             "models": [{"id": "gpt-4o-mini", "owned_by": "openai"}],
+            "model_count": 1,
+            "fetched_at": 1_717_171_717.0,
             "source_url": "https://openrouter.ai/api/v1/models",
+            "cached": False,
             "phase": "fetch",
         }
         request_contract = fetch_mock.await_args.args[0]
         assert request_contract.api_key == "saved-openrouter-key"
         assert request_contract.api_base == "https://openrouter.ai/api/v1"
+        assert request_contract.force_refresh is False
         assert "saved-openrouter-key" not in supported.text
+
+        with patch(
+            "OriginAgent.providers.model_fetch_contract.fetch_provider_models",
+            new=AsyncMock(return_value=MagicMock(
+                to_json=lambda: {
+                    "provider": "openrouter",
+                    "status": "available",
+                    "catalog_kind": "catalog",
+                    "models": [{"id": "gpt-4.1", "owned_by": "openai"}],
+                    "model_count": 1,
+                    "fetched_at": 1_717_171_718.0,
+                    "source_url": "https://openrouter.ai/api/v1/models",
+                    "cached": False,
+                },
+            )),
+        ) as refresh_mock:
+            refreshed = await _http_get(
+                "http://127.0.0.1:"
+                f"{port}/api/settings/provider/models?provider=openrouter&force_refresh=true",
+                headers=auth,
+            )
+        assert refreshed.status_code == 200
+        refresh_contract = refresh_mock.await_args.args[0]
+        assert refresh_contract.force_refresh is True
 
         from OriginAgent.providers.model_fetch_contract import ProviderModelFetchHttpError
 

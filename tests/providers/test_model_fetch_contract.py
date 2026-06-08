@@ -4,11 +4,18 @@ import pytest
 from OriginAgent.providers.model_fetch_contract import (
     ProviderModelFetchError,
     ProviderModelFetchHttpError,
+    _clear_provider_models_cache,
     build_models_url_candidates,
     build_provider_model_fetch_request,
     fetch_provider_models,
+    get_provider_model_catalog_kind,
     is_provider_model_fetch_supported,
 )
+
+
+@pytest.fixture(autouse=True)
+def clear_provider_models_cache() -> None:
+    _clear_provider_models_cache()
 
 
 def test_openai_compat_provider_is_supported_for_phase1() -> None:
@@ -30,6 +37,15 @@ def test_special_providers_are_not_supported_for_phase1() -> None:
     assert is_provider_model_fetch_supported("custom") is False
     assert is_provider_model_fetch_supported("huggingface") is False
     assert is_provider_model_fetch_supported("qianfan") is False
+
+
+def test_provider_model_catalog_kind_explains_frontend_capabilities() -> None:
+    assert get_provider_model_catalog_kind("openai") == "official"
+    assert get_provider_model_catalog_kind("openrouter") == "catalog"
+    assert get_provider_model_catalog_kind("custom") == "custom"
+    assert get_provider_model_catalog_kind("ollama") == "local"
+    assert get_provider_model_catalog_kind("anthropic") == "unsupported"
+    assert get_provider_model_catalog_kind("missing-provider") == "unsupported"
 
 
 def test_build_request_requires_provider_support_and_api_key() -> None:
@@ -121,7 +137,12 @@ async def test_fetch_provider_models_returns_sorted_models_from_first_success() 
         response = await fetch_provider_models(request, http_client=client)
 
     assert response.provider == "openrouter"
+    assert response.status == "available"
+    assert response.catalog_kind == "catalog"
     assert response.source_url == "https://openrouter.ai/api/v1/models"
+    assert response.model_count == 2
+    assert response.fetched_at > 0
+    assert response.cached is False
     assert [item.id for item in response.models] == ["a-model", "z-model"]
 
 
@@ -153,6 +174,7 @@ async def test_fetch_provider_models_tries_fallback_candidate_after_404() -> Non
     ]
     assert [item.id for item in response.models] == ["deepseek-chat"]
     assert response.source_url == "https://api.deepseek.com/v1/models"
+    assert response.catalog_kind == "official"
 
 
 @pytest.mark.asyncio
@@ -210,3 +232,63 @@ async def test_fetch_provider_models_reports_parse_failures() -> None:
 
     assert exc.value.status == 502
     assert exc.value.reason == "parse_failed"
+
+
+@pytest.mark.asyncio
+async def test_fetch_provider_models_returns_cached_payload_on_repeat_call() -> None:
+    request = build_provider_model_fetch_request(
+        "openrouter",
+        api_key="sk-or-test",
+        api_base="https://openrouter.ai/api/v1",
+    )
+
+    call_count = 0
+
+    def handler(_: httpx.Request) -> httpx.Response:
+        nonlocal call_count
+        call_count += 1
+        return httpx.Response(200, json={"data": [{"id": "gpt-4o-mini"}]})
+
+    transport = httpx.MockTransport(handler)
+    async with httpx.AsyncClient(transport=transport) as client:
+        first = await fetch_provider_models(request, http_client=client)
+        second = await fetch_provider_models(request, http_client=client)
+
+    assert call_count == 1
+    assert first.cached is False
+    assert second.cached is True
+    assert second.fetched_at == first.fetched_at
+    assert [item.id for item in second.models] == ["gpt-4o-mini"]
+
+
+@pytest.mark.asyncio
+async def test_fetch_provider_models_force_refresh_bypasses_cache() -> None:
+    initial = build_provider_model_fetch_request(
+        "openrouter",
+        api_key="sk-or-test",
+        api_base="https://openrouter.ai/api/v1",
+    )
+    force_refresh = build_provider_model_fetch_request(
+        "openrouter",
+        api_key="sk-or-test",
+        api_base="https://openrouter.ai/api/v1",
+        force_refresh=True,
+    )
+
+    call_count = 0
+
+    def handler(_: httpx.Request) -> httpx.Response:
+        nonlocal call_count
+        call_count += 1
+        return httpx.Response(200, json={"data": [{"id": f"gpt-4o-mini-{call_count}"}]})
+
+    transport = httpx.MockTransport(handler)
+    async with httpx.AsyncClient(transport=transport) as client:
+        first = await fetch_provider_models(initial, http_client=client)
+        second = await fetch_provider_models(force_refresh, http_client=client)
+
+    assert call_count == 2
+    assert first.cached is False
+    assert second.cached is False
+    assert [item.id for item in first.models] == ["gpt-4o-mini-1"]
+    assert [item.id for item in second.models] == ["gpt-4o-mini-2"]

@@ -117,6 +117,7 @@ export interface SettingsPayload {
     api_key_hint?: string | null;
     api_base?: string | null;
     default_api_base?: string | null;
+    model_catalog_kind?: "official" | "catalog" | "local" | "custom" | "unsupported";
   }>;
   web_search: {
     provider: string;
@@ -233,6 +234,7 @@ export interface ProviderSettingsUpdate {
   provider: string;
   apiKey?: string;
   apiBase?: string;
+  forceRefresh?: boolean;
 }
 
 export interface FetchedProviderModel {
@@ -242,8 +244,13 @@ export interface FetchedProviderModel {
 
 export interface ProviderModelsResponse {
   provider: string;
+  status: "available";
+  catalog_kind: "official" | "catalog" | "local" | "custom" | "unsupported";
   models: FetchedProviderModel[];
+  model_count: number;
+  fetched_at: number;
   source_url?: string | null;
+  cached?: boolean;
   phase?: "contract" | "fetch" | string;
 }
 

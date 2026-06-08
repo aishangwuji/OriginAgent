@@ -502,12 +502,14 @@ describe("App layout", () => {
                   label: "OpenAI",
                   configured: true,
                   api_key_hint: "open••••-key",
+                  model_catalog_kind: "official",
                 },
                 {
                   name: "openrouter",
                   label: "OpenRouter",
                   configured: false,
                   default_api_base: "https://openrouter.ai/api/v1",
+                  model_catalog_kind: "catalog",
                 },
               ],
               web_search: {
@@ -1184,7 +1186,7 @@ describe("App layout", () => {
                 resolved_provider: "openai",
                 has_api_key: true,
               },
-              providers: [{ name: "openai", label: "OpenAI", configured: true }],
+              providers: [{ name: "openai", label: "OpenAI", configured: true, model_catalog_kind: "official" }],
               web_search: {
                 provider: "duckduckgo",
                 api_key_hint: null,
@@ -1316,7 +1318,7 @@ describe("App layout", () => {
                 resolved_provider: "openai",
                 has_api_key: true,
               },
-              providers: [{ name: "openai", label: "OpenAI", configured: true }],
+              providers: [{ name: "openai", label: "OpenAI", configured: true, model_catalog_kind: "official" }],
               web_search: {
                 provider: "duckduckgo",
                 api_key_hint: null,
@@ -1502,7 +1504,7 @@ describe("App layout", () => {
                 resolved_provider: "openai",
                 has_api_key: true,
               },
-              providers: [{ name: "openai", label: "OpenAI", configured: true }],
+              providers: [{ name: "openai", label: "OpenAI", configured: true, model_catalog_kind: "official" }],
               web_search: {
                 provider: "duckduckgo",
                 api_key_hint: null,
@@ -1760,11 +1762,16 @@ describe("App layout", () => {
             status: 200,
             json: async () => ({
               provider: "openai",
+              status: "available",
+              catalog_kind: "official",
               models: [
                 { id: "gpt-4o-mini", owned_by: "openai" },
                 { id: "gpt-4.1", owned_by: "openai" },
               ],
+              model_count: 2,
+              fetched_at: 1717171717,
               source_url: "https://api.openai.com/v1/models",
+              cached: false,
               phase: "fetch",
             }),
           };
@@ -1788,6 +1795,7 @@ describe("App layout", () => {
                   api_key_hint: "open••••-key",
                   api_base: "https://api.openai.com/v1",
                   default_api_base: "https://api.openai.com/v1",
+                  model_catalog_kind: "official",
                 },
               ],
               web_search: {
@@ -1920,6 +1928,7 @@ describe("App layout", () => {
                   api_key_hint: "open••••-key",
                   api_base: "https://openrouter.ai/api/v1",
                   default_api_base: "https://openrouter.ai/api/v1",
+                  model_catalog_kind: "catalog",
                 },
               ],
               web_search: {

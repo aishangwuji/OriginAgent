@@ -1179,6 +1179,7 @@ class WebSocketChannel(BaseChannel):
 
     def _settings_payload(self, *, requires_restart: bool = False) -> dict[str, Any]:
         from OriginAgent.config.loader import get_config_path, load_config
+        from OriginAgent.providers.model_fetch_contract import get_provider_model_catalog_kind
         from OriginAgent.providers.registry import PROVIDERS, find_by_name
 
         config = load_config()
@@ -1211,6 +1212,7 @@ class WebSocketChannel(BaseChannel):
                     "api_key_hint": _mask_secret_hint(provider_config.api_key),
                     "api_base": provider_config.api_base,
                     "default_api_base": spec.default_api_base or None,
+                    "model_catalog_kind": get_provider_model_catalog_kind(spec.name),
                 }
             )
         search_config = config.tools.web.search
@@ -1645,6 +1647,9 @@ class WebSocketChannel(BaseChannel):
         api_base = _query_first(query, "api_base")
         if api_base is None:
             api_base = _query_first(query, "apiBase")
+        force_refresh = _query_bool(query, "force_refresh")
+        if force_refresh is None:
+            force_refresh = _query_bool(query, "forceRefresh") or False
         if provider_name:
             provider_config = getattr(load_config().providers, provider_name, None)
             if provider_config is not None:
@@ -1656,6 +1661,7 @@ class WebSocketChannel(BaseChannel):
                 provider_name,
                 api_key=api_key,
                 api_base=api_base,
+                force_refresh=force_refresh,
             )
         except ProviderModelFetchError as exc:
             return _http_json_response(exc.to_json(), status=exc.status)

@@ -409,16 +409,16 @@ export async function fetchProviderModels(
   token: string,
   update: ProviderSettingsUpdate,
   base: string = "",
-): Promise<FetchedProviderModel[]> {
+): Promise<ProviderModelsResponse> {
   const query = new URLSearchParams();
   query.set("provider", update.provider);
   if (update.apiKey !== undefined) query.set("api_key", update.apiKey);
   if (update.apiBase !== undefined) query.set("api_base", update.apiBase);
-  const body = await request<ProviderModelsResponse>(
+  if (update.forceRefresh !== undefined) query.set("force_refresh", update.forceRefresh ? "true" : "false");
+  return request<ProviderModelsResponse>(
     `${base}/api/settings/provider/models?${query}`,
     token,
   );
-  return body.models;
 }
 
 export async function updateWebSearchSettings(

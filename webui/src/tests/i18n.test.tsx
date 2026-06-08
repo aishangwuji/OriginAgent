@@ -90,7 +90,16 @@ describe("webui i18n", () => {
       expect(common.settings.modelFetch.fetchModelsNetworkFailed).toBeTruthy();
       expect(common.settings.modelFetch.fetchModelsParseFailed).toBeTruthy();
       expect(common.settings.modelFetch.fetchModelsFailed).toBeTruthy();
+      expect(common.settings.modelFetch.fetchModelsLocal).toBeTruthy();
       expect(common.settings.modelFetch.noFetchedModels).toBeTruthy();
+      expect(common.settings.modelFetch.catalogNoMatches).toBeTruthy();
+      expect(common.settings.modelFetch.refreshModels).toBeTruthy();
+      expect(common.settings.modelFetch.cachedModels).toBeTruthy();
+      expect(common.settings.modelFetch.lastFetchedAt).toBeTruthy();
+      expect(common.settings.modelFetch.fetchedModelCount).toBeTruthy();
+      expect(common.settings.modelFetch.searchToLoadCatalog).toBeTruthy();
+      expect(common.settings.modelFetch.manualInputStillAllowed).toBeTruthy();
+      expect(common.settings.modelFetch.openListHint).toBeTruthy();
       expect(common.settings.skills.description).toBeTruthy();
       expect(common.settings.skills.actions.verify).toBeTruthy();
       expect(common.settings.skills.actions.activate).toBeTruthy();

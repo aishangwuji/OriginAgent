@@ -72,9 +72,9 @@ import { useClient } from "@/providers/ClientProvider";
 import type {
   DomainPackGovernanceStats,
   DomainPackRecord,
-  FetchedProviderModel,
   McpServerSettings,
   McpServerSettingsUpdate,
+  ProviderModelsResponse,
   McpTransportType,
   RuntimeSettingsUpdate,
   SettingsPayload,
@@ -139,6 +139,14 @@ function mapModelFetchError(
   return t("settings.modelFetch.fetchModelsFailed");
 }
 
+function findProviderCapability(
+  settings: SettingsPayload | null,
+  providerName: string,
+): "official" | "catalog" | "local" | "custom" | "unsupported" {
+  const provider = settings?.providers.find((item) => item.name === providerName);
+  return provider?.model_catalog_kind ?? "unsupported";
+}
+
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => window.setTimeout(resolve, ms));
 }
@@ -192,6 +200,7 @@ export function SettingsView({
   const [mcpDeleting, setMcpDeleting] = useState<string | null>(null);
   const [homeAssistantMcpSaving, setHomeAssistantMcpSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [modelFetchError, setModelFetchError] = useState<string | null>(null);
   const [activeSection, setActiveSection] = useState<SettingsSectionKey>("general");
   const [expandedProvider, setExpandedProvider] = useState<string | null>(null);
   const [providerForms, setProviderForms] = useState<Record<string, { apiKey: string; apiBase: string }>>({});
@@ -211,7 +220,7 @@ export function SettingsView({
   const [runtimeForm, setRuntimeForm] = useState<RuntimeSettingsForm | null>(null);
   const [runtimeSaving, setRuntimeSaving] = useState(false);
   const [modelFetchLoadingProvider, setModelFetchLoadingProvider] = useState<string | null>(null);
-  const [fetchedModelsByProvider, setFetchedModelsByProvider] = useState<Record<string, FetchedProviderModel[]>>({});
+  const [fetchedModelPayloadsByProvider, setFetchedModelPayloadsByProvider] = useState<Record<string, ProviderModelsResponse>>({});
   const [modelFetchAttemptedProviders, setModelFetchAttemptedProviders] = useState<Record<string, boolean>>({});
   const [mcpEditing, setMcpEditing] = useState<string | null>(null);
   const [mcpForms, setMcpForms] = useState<Record<string, McpFormState>>({});
@@ -233,6 +242,7 @@ export function SettingsView({
       baseUrl: payload.web_search.base_url ?? "",
     }));
     setRuntimeForm(payload.runtime_controls);
+    setModelFetchError(null);
   }, []);
 
   useEffect(() => {
@@ -418,10 +428,10 @@ export function SettingsView({
     }
   };
 
-  const fetchModelsForSelectedProvider = async () => {
+  const fetchModelsForSelectedProvider = async (options?: { forceRefresh?: boolean }) => {
     const providerName = form.provider.trim();
     if (!providerName) {
-      setError(t("settings.modelFetch.providerRequired"));
+      setModelFetchError(t("settings.modelFetch.providerRequired"));
       return;
     }
 
@@ -439,26 +449,28 @@ export function SettingsView({
     const canUseSavedProviderKey = !!provider?.configured;
 
     if (!apiKey && !canUseSavedProviderKey) {
-      setError(t("settings.modelFetch.apiKeyRequired"));
+      setModelFetchError(t("settings.modelFetch.fetchModelsNeedConfig"));
       return;
     }
 
     setModelFetchLoadingProvider(providerName);
+    setModelFetchError(null);
     try {
-      const models = await withTokenRefresh(token, refreshToken, (freshToken) =>
+      const payload = await withTokenRefresh(token, refreshToken, (freshToken) =>
         fetchProviderModels(freshToken, {
           provider: providerName,
           apiKey: apiKey || undefined,
           apiBase: apiBase || undefined,
+          forceRefresh: options?.forceRefresh,
         }),
       );
-      setFetchedModelsByProvider((prev) => ({ ...prev, [providerName]: models }));
+      setFetchedModelPayloadsByProvider((prev) => ({ ...prev, [providerName]: payload }));
       setModelFetchAttemptedProviders((prev) => ({ ...prev, [providerName]: true }));
-      setError(null);
+      setModelFetchError(null);
     } catch (err) {
       setModelFetchAttemptedProviders((prev) => ({ ...prev, [providerName]: true }));
       const message = mapModelFetchError(err, t);
-      setError(message);
+      setModelFetchError(message);
     } finally {
       setModelFetchLoadingProvider(null);
     }
@@ -693,10 +705,13 @@ export function SettingsView({
                   onToggleTheme={onToggleTheme}
                   form={form}
                   setForm={setForm}
-                  fetchedModels={fetchedModelsByProvider[form.provider] ?? []}
+                  fetchedModels={fetchedModelPayloadsByProvider[form.provider]?.models ?? []}
+                  fetchedModelPayload={fetchedModelPayloadsByProvider[form.provider] ?? null}
                   hasFetchedModels={!!modelFetchAttemptedProviders[form.provider]}
                   modelFetchLoading={modelFetchLoadingProvider === form.provider}
                   onFetchModels={fetchModelsForSelectedProvider}
+                  onRefreshModels={() => fetchModelsForSelectedProvider({ forceRefresh: true })}
+                  modelFetchError={modelFetchError}
                   runtimeForm={runtimeForm}
                   setRuntimeForm={setRuntimeForm}
                   settings={settings}
@@ -876,9 +891,12 @@ function GeneralSettings({
   form,
   setForm,
   fetchedModels,
+  fetchedModelPayload,
   hasFetchedModels,
   modelFetchLoading,
   onFetchModels,
+  onRefreshModels,
+  modelFetchError,
   runtimeForm,
   setRuntimeForm,
   settings,
@@ -904,10 +922,13 @@ function GeneralSettings({
     model: string;
     provider: string;
   }>>;
-  fetchedModels: FetchedProviderModel[];
+  fetchedModels: ProviderModelsResponse["models"];
+  fetchedModelPayload: ProviderModelsResponse | null;
   hasFetchedModels: boolean;
   modelFetchLoading: boolean;
-  onFetchModels: () => void;
+  onFetchModels: (options?: { forceRefresh?: boolean }) => void;
+  onRefreshModels: () => void;
+  modelFetchError: string | null;
   runtimeForm: RuntimeSettingsForm | null;
   setRuntimeForm: Dispatch<SetStateAction<RuntimeSettingsForm | null>>;
   settings: SettingsPayload;
@@ -928,6 +949,8 @@ function GeneralSettings({
   const providerValue = configuredProviders.some((provider) => provider.name === form.provider)
     ? form.provider
     : "";
+  const selectedProvider = settings.providers.find((provider) => provider.name === form.provider);
+  const providerCatalogKind = findProviderCapability(settings, form.provider);
   const optionLabels = {
     providerRetryMode: [
       { value: "standard", label: "标准" },
@@ -1048,7 +1071,10 @@ function GeneralSettings({
               providers={configuredProviders}
               value={providerValue}
               emptyLabel={t("settings.byok.noConfiguredProviders")}
-              onChange={(provider) => setForm((prev) => ({ ...prev, provider }))}
+              onChange={(provider) => {
+                setForm((prev) => ({ ...prev, provider }));
+                setModelFetchError(null);
+              }}
             />
           </SettingsRow>
 
@@ -1059,11 +1085,16 @@ function GeneralSettings({
             <ModelInputWithFetch
               value={form.model}
               onChange={(value) => setForm((prev) => ({ ...prev, model: value }))}
-              onFetch={onFetchModels}
+              onFetch={() => onFetchModels()}
+              onRefresh={onRefreshModels}
               fetchedModels={fetchedModels}
+              fetchPayload={fetchedModelPayload}
               hasFetched={hasFetchedModels}
               isLoading={modelFetchLoading}
               placeholder={t("settings.modelFetch.placeholder")}
+              providerLabel={selectedProvider?.label}
+              providerCatalogKind={providerCatalogKind}
+              errorMessage={modelFetchError}
             />
           </SettingsRow>
 

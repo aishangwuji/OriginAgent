@@ -107,14 +107,88 @@ describe("webui API helpers", () => {
       provider: "openrouter",
       apiKey: "sk-or-test",
       apiBase: "https://openrouter.ai/api/v1",
+      forceRefresh: true,
     });
 
     expect(fetch).toHaveBeenCalledWith(
-      "/api/settings/provider/models?provider=openrouter&api_key=sk-or-test&api_base=https%3A%2F%2Fopenrouter.ai%2Fapi%2Fv1",
+      "/api/settings/provider/models?provider=openrouter&api_key=sk-or-test&api_base=https%3A%2F%2Fopenrouter.ai%2Fapi%2Fv1&force_refresh=true",
       expect.objectContaining({
         headers: { Authorization: "Bearer tok" },
       }),
     );
+  });
+
+  it("returns the richer provider models payload", async () => {
+    vi.mocked(fetch).mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      text: async () => JSON.stringify({
+        provider: "openrouter",
+        status: "available",
+        catalog_kind: "catalog",
+        models: [{ id: "gpt-4o-mini", owned_by: "openai" }],
+        model_count: 1,
+        fetched_at: 1717171717,
+        source_url: "https://openrouter.ai/api/v1/models",
+        cached: true,
+        phase: "fetch",
+      }),
+      headers: new Headers({ "content-type": "application/json" }),
+    } as Response);
+
+    await expect(
+      fetchProviderModels("tok", {
+        provider: "openrouter",
+      }),
+    ).resolves.toMatchObject({
+      provider: "openrouter",
+      status: "available",
+      catalog_kind: "catalog",
+      model_count: 1,
+      cached: true,
+      models: [{ id: "gpt-4o-mini", owned_by: "openai" }],
+    });
+  });
+
+  it("preserves provider capability metadata in settings payloads", async () => {
+    vi.mocked(fetch).mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      text: async () => JSON.stringify({
+        agent: {
+          model: "openrouter/openai/gpt-4o-mini",
+          provider: "openrouter",
+          resolved_provider: "openrouter",
+          has_api_key: true,
+        },
+        providers: [
+          {
+            name: "openrouter",
+            label: "OpenRouter",
+            configured: true,
+            default_api_base: "https://openrouter.ai/api/v1",
+            model_catalog_kind: "catalog",
+          },
+        ],
+        web_search: { provider: "duckduckgo", providers: [] },
+        learning: { background_review: { enabled: false } },
+        runtime_controls: {} as Record<string, unknown>,
+        mcp: { servers: [] },
+        runtime: { config_path: "config.json" },
+        requires_restart: false,
+      }),
+      headers: new Headers({ "content-type": "application/json" }),
+    } as Response);
+
+    const { fetchSettings } = await import("@/lib/api");
+    await expect(fetchSettings("tok")).resolves.toMatchObject({
+      providers: [
+        expect.objectContaining({
+          name: "openrouter",
+          model_catalog_kind: "catalog",
+        }),
+      ],
+    });
   });
 
   it("surfaces provider model fetch error bodies instead of collapsing to HTTP status", async () => {
