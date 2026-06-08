@@ -1,12 +1,13 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
 
 from OriginAgent.agent.loop import AgentLoop
-from OriginAgent.agent.reminders import ReminderRecord, ReminderStore
 from OriginAgent.agent.subagent_records import SubagentTaskRecord
 from OriginAgent.agent.agent_runtime_context import set_tool_context
 from OriginAgent.agent.evolution import (
@@ -24,6 +25,7 @@ from OriginAgent.config.schema import (
     NearlineMemoryConfig,
     ToolAuditConfig,
 )
+from OriginAgent.cron.types import CronSchedule
 
 RUNTIME_TOOL_NAMES = {
     "originagent_runtime_status",
@@ -166,23 +168,30 @@ async def test_runtime_status_reports_subagent_summary(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_runtime_status_reports_reminder_summary(tmp_path: Path) -> None:
+async def test_runtime_status_reports_cron_backed_reminder_summary(tmp_path: Path) -> None:
     loop = AgentLoop(
         bus=MessageBus(),
         provider=_provider(),
         workspace=tmp_path,
         model="test-model",
     )
-    store = ReminderStore(tmp_path)
-    store.upsert(ReminderRecord.create(
-        session_key="cli:direct",
-        channel="cli",
-        chat_id="direct",
-        content="Ping me now",
-        due_at="2026-05-28T00:00:00+00:00",
-        reminder_id="rem-1",
-    ))
-    store.mark_fired("rem-1")
+    assert loop.cron_service is None
+    last_run_at_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
+    cron = SimpleNamespace(
+        list_jobs=lambda include_disabled=True: [
+            SimpleNamespace(
+                enabled=True,
+                payload=SimpleNamespace(deliver=True),
+                state=SimpleNamespace(
+                    next_run_at_ms=last_run_at_ms + 60_000,
+                    last_run_at_ms=last_run_at_ms,
+                    last_status="success",
+                ),
+            )
+        ]
+    )
+    loop.cron_service = cron
+    loop.introspection._cron_service = cron
 
     result = await loop.tools.execute("originagent_runtime_status", {})
 

@@ -11,7 +11,6 @@ import pytest
 from OriginAgent.agent.active_intents import ActiveIntentConfig, ActiveIntentService
 from OriginAgent.agent.confirmation import ConfirmationRequest, PendingConfirmationStore
 from OriginAgent.agent.facts import FactStore
-from OriginAgent.agent.reminders import ReminderRecord, ReminderStore
 from OriginAgent.bus.events import InboundMessage
 from OriginAgent.bus.queue import MessageBus
 from OriginAgent.config.schema import AgentDefaults, NearlineMemoryConfig
@@ -43,14 +42,12 @@ def _make_service(
 ) -> tuple[ActiveIntentService, MessageBus, SessionManager]:
     bus = MessageBus()
     sessions = SessionManager(tmp_path)
-    reminders = ReminderStore(tmp_path)
     service = ActiveIntentService(
         workspace=tmp_path,
         bus=bus,
         sessions=sessions,
         confirmation_store=PendingConfirmationStore(tmp_path),
         fact_store=FactStore(tmp_path),
-        reminder_store=reminders,
         config=ActiveIntentConfig(
             enabled=enabled,
             interval_seconds=30,
@@ -205,56 +202,22 @@ async def test_active_intents_skip_busy_session(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_active_intents_emit_due_reminder_once(tmp_path: Path) -> None:
-    service, bus, sessions = _make_service(tmp_path, enabled=True)
-    session = sessions.get_or_create("cli:test")
-    sessions.save(session)
-    due_at = (datetime.now(timezone.utc) - timedelta(minutes=1)).isoformat()
-    reminder = ReminderRecord.create(
-        session_key="cli:test",
-        channel="cli",
-        chat_id="test",
-        content="Join the meeting now",
-        due_at=due_at,
-    )
-    service.reminder_store.upsert(reminder)
+async def test_active_intents_do_not_consume_legacy_reminder_store_records(tmp_path: Path) -> None:
+    from OriginAgent.agent.reminders import ReminderRecord, ReminderStore
 
-    emitted = await service.process_session(
-        "cli:test",
-        active_task_count=0,
-        running_subagents=0,
-    )
-
-    assert len(emitted) == 1
-    msg = await asyncio.wait_for(bus.consume_inbound(), timeout=0.2)
-    assert msg.metadata["active_intent_type"] == "scheduled_reminder"
-    fired = service.reminder_store.get(reminder.reminder_id)
-    assert fired is not None
-    assert fired.status == "fired"
-    assert fired.delivery_count == 1
-
-    second = await service.process_session(
-        "cli:test",
-        active_task_count=0,
-        running_subagents=0,
-    )
-    assert second == []
-
-
-@pytest.mark.asyncio
-async def test_active_intents_do_not_emit_future_reminder(tmp_path: Path) -> None:
     service, _bus, sessions = _make_service(tmp_path, enabled=True)
     session = sessions.get_or_create("cli:test")
     sessions.save(session)
-    due_at = (datetime.now(timezone.utc) + timedelta(days=3650)).isoformat()
-    reminder = ReminderRecord.create(
+    due_at = (datetime.now(timezone.utc) - timedelta(minutes=1)).isoformat()
+    store = ReminderStore(tmp_path)
+    store.upsert(ReminderRecord.create(
         session_key="cli:test",
         channel="cli",
         chat_id="test",
-        content="Future reminder",
+        content="Legacy reminder",
         due_at=due_at,
-    )
-    service.reminder_store.upsert(reminder)
+        reminder_id="legacy-reminder",
+    ))
 
     emitted = await service.process_session(
         "cli:test",
@@ -263,69 +226,8 @@ async def test_active_intents_do_not_emit_future_reminder(tmp_path: Path) -> Non
     )
 
     assert emitted == []
-
-
-@pytest.mark.asyncio
-async def test_active_intents_do_not_emit_cancelled_or_completed_reminders(tmp_path: Path) -> None:
-    service, _bus, sessions = _make_service(tmp_path, enabled=True)
-    session = sessions.get_or_create("cli:test")
-    sessions.save(session)
-    due_at = (datetime.now(timezone.utc) - timedelta(minutes=1)).isoformat()
-    cancelled = ReminderRecord.create(
-        session_key="cli:test",
-        channel="cli",
-        chat_id="test",
-        content="Cancelled reminder",
-        due_at=due_at,
-        reminder_id="cancelled-1",
-    )
-    completed = ReminderRecord.create(
-        session_key="cli:test",
-        channel="cli",
-        chat_id="test",
-        content="Completed reminder",
-        due_at=due_at,
-        reminder_id="completed-1",
-    )
-    service.reminder_store.upsert(cancelled)
-    service.reminder_store.upsert(completed)
-    service.reminder_store.mark_cancelled("cancelled-1")
-    service.reminder_store.mark_completed("completed-1")
-
-    emitted = await service.process_session(
-        "cli:test",
-        active_task_count=0,
-        running_subagents=0,
-    )
-
-    assert emitted == []
-
-
-@pytest.mark.asyncio
-async def test_active_intents_busy_session_suppresses_due_reminder(tmp_path: Path) -> None:
-    service, _bus, sessions = _make_service(tmp_path, enabled=True)
-    session = sessions.get_or_create("cli:test")
-    sessions.save(session)
-    due_at = (datetime.now(timezone.utc) - timedelta(minutes=1)).isoformat()
-    reminder = ReminderRecord.create(
-        session_key="cli:test",
-        channel="cli",
-        chat_id="test",
-        content="Busy reminder",
-        due_at=due_at,
-    )
-    service.reminder_store.upsert(reminder)
-
-    emitted = await service.process_session(
-        "cli:test",
-        active_task_count=1,
-        running_subagents=0,
-    )
-
-    assert emitted == []
-    unchanged = service.reminder_store.get(reminder.reminder_id)
-    assert unchanged is not None
-    assert unchanged.status == "pending"
+    recent = service.ledger.recent()
+    assert recent == []
 
 
 @pytest.mark.asyncio

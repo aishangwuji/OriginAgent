@@ -155,6 +155,37 @@ async def test_cron_summary_does_not_expose_message_or_routing(tmp_path) -> None
 
 
 @pytest.mark.asyncio
+async def test_runtime_status_uses_cron_for_reminder_summary(tmp_path) -> None:
+    last_run_at_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
+    service = SimpleNamespace(
+        list_jobs=lambda include_disabled=True: [
+            SimpleNamespace(
+                enabled=True,
+                payload=SimpleNamespace(deliver=True),
+                state=SimpleNamespace(
+                    next_run_at_ms=last_run_at_ms + 60_000,
+                    last_run_at_ms=last_run_at_ms,
+                    last_status="success",
+                ),
+            )
+        ]
+    )
+
+    result = await RuntimeStatusTool(
+        workspace=tmp_path,
+        registry=SimpleNamespace(tool_names=["a"]),
+        sessions=object(),
+        pending_queues={},
+        cron_service=service,
+    ).execute()
+
+    assert result["cron_available"] is True
+    assert result["reminder_total"] == 1
+    assert result["reminder_status_counts"] == {"fired": 1}
+    assert result["reminder_last_fired_at"] is not None
+
+
+@pytest.mark.asyncio
 async def test_cron_summary_accepts_object_capability_snapshot(tmp_path) -> None:
     @dataclass
     class SnapshotObject:
