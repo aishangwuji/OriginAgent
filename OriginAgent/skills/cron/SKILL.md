@@ -7,6 +7,8 @@ description: Schedule reminders and recurring tasks.
 
 Use the `cron` tool to schedule reminders or recurring tasks.
 
+This is the production reminder entrypoint. User-visible reminders should be created through `cron`, not by writing `ReminderStore` records directly.
+
 ## Three Modes
 
 1. **Reminder** - message is sent directly to user

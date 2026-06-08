@@ -12,7 +12,6 @@ from typing import Any, Literal
 
 from OriginAgent.agent.confirmation import PendingConfirmationStore
 from OriginAgent.agent.facts import FactStore
-from OriginAgent.agent.reminders import ReminderStore
 from OriginAgent.bus.events import InboundMessage
 from OriginAgent.bus.queue import MessageBus
 from OriginAgent.memory.policy import nearline_runtime_enabled
@@ -22,7 +21,7 @@ from OriginAgent.session.manager import Session, SessionManager
 from OriginAgent.utils.helpers import ensure_dir, truncate_text
 
 ActiveIntentOutcome = Literal["emitted", "suppressed", "skipped"]
-ActiveIntentType = Literal["goal_nudge", "pending_confirmation_nudge", "scheduled_reminder", "foresight_nudge"]
+ActiveIntentType = Literal["goal_nudge", "pending_confirmation_nudge", "foresight_nudge"]
 
 _SUMMARY_MAX_CHARS = 240
 _RECENT_SCAN_LIMIT = 200
@@ -141,7 +140,6 @@ class ActiveIntentService:
         sessions: SessionManager,
         confirmation_store: PendingConfirmationStore,
         fact_store: FactStore,
-        reminder_store: ReminderStore | None = None,
         config: ActiveIntentConfig,
         nearline_memory_config: Any | None = None,
     ) -> None:
@@ -150,7 +148,6 @@ class ActiveIntentService:
         self.sessions = sessions
         self.confirmation_store = confirmation_store
         self.fact_store = fact_store
-        self.reminder_store = reminder_store or ReminderStore(workspace)
         self.nearline_store = NearlineMemoryStore(workspace)
         self.config = config
         self._nearline_memory_config = nearline_memory_config
@@ -216,8 +213,6 @@ class ActiveIntentService:
                 ))
                 continue
             await self.bus.publish_inbound(self._build_message(session, candidate))
-            if candidate.intent_type == "scheduled_reminder" and candidate.source_reference:
-                self.reminder_store.mark_fired(candidate.source_reference)
             self.ledger.append(ActiveIntentRecord(
                 timestamp=_utcnow_iso(),
                 session_key=session_key,
@@ -241,9 +236,6 @@ class ActiveIntentService:
         confirmation_candidate = self._pending_confirmation_candidate(session)
         if confirmation_candidate is not None:
             candidates.append(confirmation_candidate)
-        reminder_candidate = self._scheduled_reminder_candidate(session)
-        if reminder_candidate is not None:
-            candidates.append(reminder_candidate)
         foresight_candidate = self._foresight_candidate(session)
         if foresight_candidate is not None:
             candidates.append(foresight_candidate)
@@ -311,28 +303,6 @@ class ActiveIntentService:
             ),
             source_type="pending_fact",
             source_reference=fact.fact_id,
-            summary=summary,
-        )
-
-    def _scheduled_reminder_candidate(self, session: Session) -> ActiveIntentCandidate | None:
-        due = [
-            record for record in self.reminder_store.list_due()
-            if record.session_key == session.key
-        ]
-        if not due:
-            return None
-        reminder = due[0]
-        summary = _summarize_text(reminder.content, max_chars=160)
-        return ActiveIntentCandidate(
-            intent_type="scheduled_reminder",
-            intent_id=f"reminder:{reminder.reminder_id}",
-            content=(
-                "Scheduled reminder: the due time for this reminder has arrived.\n"
-                f"Reminder: {summary}\n"
-                "Deliver this reminder clearly to the user and keep the follow-up bounded to the reminder itself."
-            ),
-            source_type="reminder",
-            source_reference=reminder.reminder_id,
             summary=summary,
         )
 

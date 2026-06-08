@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 from OriginAgent.agent.confirmation import PendingConfirmationStore
-from OriginAgent.agent.reminders import ReminderStore
 from OriginAgent.agent.domain_pack_governance import summarize_domain_pack_governance
 from OriginAgent.agent.facts import FactStore, summarize_facts
 from OriginAgent.agent.memory import MemoryStore
@@ -38,7 +38,6 @@ class RuntimeIntrospectionService:
         nearline_memory_config: Any | None = None,
         cron_service: Any | None = None,
         confirmation_store: PendingConfirmationStore | None = None,
-        reminder_store: ReminderStore | None = None,
         audit_mode: str = "minimal",
         runtime_profile: str = "default",
         domain_pack_manager: Any | None = None,
@@ -56,7 +55,6 @@ class RuntimeIntrospectionService:
         self._nearline_memory_config = nearline_memory_config
         self._cron_service = cron_service
         self._confirmation_store = confirmation_store
-        self._reminder_store = reminder_store
         self._audit_mode = audit_mode
         self._runtime_profile = runtime_profile
         self._domain_pack_manager = domain_pack_manager
@@ -119,7 +117,7 @@ class RuntimeIntrospectionService:
         session_search_status = self._session_search_status(self._session_search_index_service)
         evolution_status = self._evolution_status(self._workspace, self._evolution_config)
         subagent_status = self._subagent_status(self._loop)
-        reminder_status = self._reminder_status(self._reminder_store)
+        reminder_status = self._reminder_status(self._cron_service)
         background_tasks = self.background_task_summary(
             background_review_status=background_review_status,
             curator_status=curator_status,
@@ -466,23 +464,66 @@ class RuntimeIntrospectionService:
         }
 
     @staticmethod
-    def _reminder_status(store: ReminderStore | None) -> dict[str, Any]:
-        if store is None:
-            return {
-                "reminder_total": 0,
-                "reminder_status_counts": {},
-                "reminder_due_count": 0,
-                "reminder_last_fired_at": None,
-            }
+    def _reminder_status(cron_service: Any | None) -> dict[str, Any]:
+        defaults = {
+            "reminder_total": 0,
+            "reminder_status_counts": {},
+            "reminder_due_count": 0,
+            "reminder_last_fired_at": None,
+        }
+        if cron_service is None:
+            return defaults
         try:
-            return store.stats()
+            jobs = cron_service.list_jobs(include_disabled=True)
         except Exception:
-            return {
-                "reminder_total": 0,
-                "reminder_status_counts": {},
-                "reminder_due_count": 0,
-                "reminder_last_fired_at": None,
-            }
+            return defaults
+
+        reminders = []
+        for job in jobs:
+            payload = getattr(job, "payload", None)
+            if payload is None or not getattr(payload, "deliver", False):
+                continue
+            reminders.append(job)
+        if not reminders:
+            return defaults
+
+        status_counts: dict[str, int] = {}
+        due_count = 0
+        last_fired_at: str | None = None
+        now = datetime.now(timezone.utc)
+
+        for job in reminders:
+            state = getattr(job, "state", None)
+            next_run_at_ms = getattr(state, "next_run_at_ms", None)
+            last_run_at_ms = getattr(state, "last_run_at_ms", None)
+            last_status = getattr(state, "last_status", None)
+
+            if getattr(job, "enabled", False) is not True:
+                status = "disabled"
+            elif last_status == "success":
+                status = "fired"
+            elif next_run_at_ms is None:
+                status = "completed"
+            else:
+                status = "pending"
+            status_counts[status] = status_counts.get(status, 0) + 1
+
+            if status == "pending" and isinstance(next_run_at_ms, int):
+                next_run_at = datetime.fromtimestamp(next_run_at_ms / 1000, tz=timezone.utc)
+                if next_run_at <= now:
+                    due_count += 1
+
+            if isinstance(last_run_at_ms, int):
+                fired_at = datetime.fromtimestamp(last_run_at_ms / 1000, tz=timezone.utc).isoformat()
+                if last_fired_at is None or fired_at > last_fired_at:
+                    last_fired_at = fired_at
+
+        return {
+            "reminder_total": len(reminders),
+            "reminder_status_counts": status_counts,
+            "reminder_due_count": due_count,
+            "reminder_last_fired_at": last_fired_at,
+        }
 
     @staticmethod
     def _workflow_artifact_status(workspace: Path) -> dict[str, Any]:

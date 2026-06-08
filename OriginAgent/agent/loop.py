@@ -31,7 +31,6 @@ from OriginAgent.agent.agent_tool_setup import (
     should_register_exec,
 )
 from OriginAgent.agent.active_intents import ActiveIntentConfig, ActiveIntentService
-from OriginAgent.agent.reminders import ReminderStore
 from OriginAgent.agent.agent_turn_persist import TurnPersistManager
 from OriginAgent.agent.autocompact import AutoCompact
 from OriginAgent.agent.auxiliary_llm import AuxiliaryLLMRouter
@@ -456,7 +455,6 @@ class AgentLoop:
             background_review_service=self.background_review,
             curator_service=self.curator,
         )
-        self._reminder_store = ReminderStore(workspace)
         self._active_intent_config = ActiveIntentConfig(
             enabled=(
                 defaults.allow_agent_initiated_messages
@@ -490,7 +488,6 @@ class AgentLoop:
             sessions=self.sessions,
             confirmation_store=self._confirmation_store,
             fact_store=self.context.memory.fact_store,
-            reminder_store=self._reminder_store,
             config=self._active_intent_config,
             nearline_memory_config=self._nearline_memory_config,
         )
@@ -506,7 +503,6 @@ class AgentLoop:
             pending_queues=self._pending_queues,
             cron_service=self.cron_service,
             confirmation_store=self._confirmation_store,
-            reminder_store=self._reminder_store,
             audit_mode=self._tool_audit_config.mode,
             runtime_profile=self._runtime_profile,
             domain_pack_manager=self.domain_packs,
