@@ -20,15 +20,6 @@ FETCH_TIMEOUT_SECONDS = 15.0
 ERROR_BODY_MAX_CHARS = 300
 MODEL_FETCH_CACHE_TTL_SECONDS = 12 * 60 * 60
 OPENAI_DEFAULT_API_BASE = "https://api.openai.com/v1"
-SUPPORTED_PROVIDER_NAMES = frozenset({
-    "openai",
-    "openrouter",
-    "deepseek",
-    "zhipu",
-    "dashscope",
-    "moonshot",
-    "groq",
-})
 KNOWN_COMPAT_SUFFIXES: tuple[str, ...] = (
     "/compatible-mode/v1",
     "/compatible-mode",
@@ -38,7 +29,6 @@ KNOWN_COMPAT_SUFFIXES: tuple[str, ...] = (
 CATALOG_PROVIDER_NAMES = frozenset({
     "openrouter",
 })
-OFFICIAL_PROVIDER_NAMES = SUPPORTED_PROVIDER_NAMES - CATALOG_PROVIDER_NAMES
 ProviderModelCatalogKind = Literal["official", "catalog", "local", "custom", "unsupported"]
 
 
@@ -131,16 +121,16 @@ class ProviderModelFetchHttpError(RuntimeError):
 
 
 def is_provider_model_fetch_supported(provider_name: str) -> bool:
-    """Return True when the provider is in the V1 auto-fetch scope."""
+    """Return True when the provider can use the OpenAI-compatible `/models` flow."""
 
     spec = find_by_name(provider_name)
     if spec is None:
         return False
-    if spec.name not in SUPPORTED_PROVIDER_NAMES:
-        return False
     if spec.backend != "openai_compat":
         return False
     if spec.is_oauth or spec.is_local or spec.is_direct:
+        return False
+    if spec.name == "custom":
         return False
     return True
 

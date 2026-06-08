@@ -21,11 +21,26 @@ def clear_provider_models_cache() -> None:
 def test_openai_compat_provider_is_supported_for_phase1() -> None:
     assert is_provider_model_fetch_supported("openai") is True
     assert is_provider_model_fetch_supported("openrouter") is True
+    assert is_provider_model_fetch_supported("huggingface") is True
+    assert is_provider_model_fetch_supported("aihubmix") is True
+    assert is_provider_model_fetch_supported("siliconflow") is True
+    assert is_provider_model_fetch_supported("volcengine") is True
+    assert is_provider_model_fetch_supported("volcengine_coding_plan") is True
+    assert is_provider_model_fetch_supported("byteplus") is True
+    assert is_provider_model_fetch_supported("byteplus_coding_plan") is True
     assert is_provider_model_fetch_supported("deepseek") is True
+    assert is_provider_model_fetch_supported("gemini") is True
     assert is_provider_model_fetch_supported("zhipu") is True
     assert is_provider_model_fetch_supported("dashscope") is True
     assert is_provider_model_fetch_supported("moonshot") is True
+    assert is_provider_model_fetch_supported("minimax") is True
+    assert is_provider_model_fetch_supported("mistral") is True
+    assert is_provider_model_fetch_supported("stepfun") is True
+    assert is_provider_model_fetch_supported("xiaomi_mimo") is True
+    assert is_provider_model_fetch_supported("longcat") is True
+    assert is_provider_model_fetch_supported("nvidia") is True
     assert is_provider_model_fetch_supported("groq") is True
+    assert is_provider_model_fetch_supported("qianfan") is True
 
 
 def test_special_providers_are_not_supported_for_phase1() -> None:
@@ -35,13 +50,18 @@ def test_special_providers_are_not_supported_for_phase1() -> None:
     assert is_provider_model_fetch_supported("azure_openai") is False
     assert is_provider_model_fetch_supported("bedrock") is False
     assert is_provider_model_fetch_supported("custom") is False
-    assert is_provider_model_fetch_supported("huggingface") is False
-    assert is_provider_model_fetch_supported("qianfan") is False
+    assert is_provider_model_fetch_supported("minimax_anthropic") is False
+    assert is_provider_model_fetch_supported("atomic_chat") is False
+    assert is_provider_model_fetch_supported("vllm") is False
+    assert is_provider_model_fetch_supported("ollama") is False
+    assert is_provider_model_fetch_supported("lm_studio") is False
+    assert is_provider_model_fetch_supported("ovms") is False
 
 
 def test_provider_model_catalog_kind_explains_frontend_capabilities() -> None:
     assert get_provider_model_catalog_kind("openai") == "official"
     assert get_provider_model_catalog_kind("openrouter") == "catalog"
+    assert get_provider_model_catalog_kind("huggingface") == "official"
     assert get_provider_model_catalog_kind("custom") == "custom"
     assert get_provider_model_catalog_kind("ollama") == "local"
     assert get_provider_model_catalog_kind("anthropic") == "unsupported"

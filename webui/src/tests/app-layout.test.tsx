@@ -79,6 +79,135 @@ vi.mock("@/lib/OriginAgent-client", () => {
 
 import App from "@/App";
 
+function makeSettingsPayload(overrides: Record<string, unknown> = {}) {
+  return {
+    agent: {
+      model: "openai/gpt-4o",
+      provider: "openai",
+      resolved_provider: "openai",
+      has_api_key: true,
+    },
+    providers: [
+      {
+        name: "openai",
+        label: "OpenAI",
+        configured: true,
+        api_key_hint: "open••••-key",
+        api_base: "https://api.openai.com/v1",
+        default_api_base: "https://api.openai.com/v1",
+        model_catalog_kind: "official",
+      },
+      {
+        name: "openrouter",
+        label: "OpenRouter",
+        configured: false,
+        default_api_base: "https://openrouter.ai/api/v1",
+        model_catalog_kind: "catalog",
+      },
+    ],
+    web_search: {
+      provider: "duckduckgo",
+      api_key_hint: null,
+      base_url: null,
+      providers: [
+        { name: "duckduckgo", label: "DuckDuckGo", credential: "none" },
+        { name: "brave", label: "Brave Search", credential: "api_key" },
+        { name: "tavily", label: "Tavily", credential: "api_key" },
+      ],
+    },
+    mcp: {
+      servers: [
+        {
+          name: "github",
+          type: "stdio",
+          command: "npx",
+          args: ["-y", "@modelcontextprotocol/server-github"],
+          env: { GITHUB_TOKEN: "••••" },
+          url: "",
+          headers: {},
+          tool_timeout: 30,
+          enabled_tools: ["*"],
+        },
+      ],
+    },
+    runtime: {
+      config_path: "/tmp/config.json",
+    },
+    learning: {
+      background_review: { enabled: false },
+    },
+    runtime_controls: {
+      channels: { send_progress: true, send_tool_hints: false, show_reasoning: true },
+      agent: {
+        unified_session: false,
+        cold_archive_enabled: true,
+        allow_agent_initiated_messages: false,
+        auxiliary_enabled: true,
+        domain_packs_enabled: true,
+        provider_retry_mode: "standard",
+        dream_annotate_line_ages: true,
+      },
+      learning: { background_review_enabled: false, curator_enabled: false },
+      evolution: {
+        mode: "conservative",
+        allow_manual_override: false,
+        dry_run: true,
+        outcome_archive_enabled: true,
+        dependency_stale_cleanup_enabled: true,
+        auto_verify_workflows: false,
+        skill_candidates_enabled: false,
+        feedback_calibration_enabled: true,
+        sandbox_enabled: true,
+        trial_enabled: true,
+        trial_isolated_workspace: true,
+        trial_read_only_tools_only: true,
+      },
+      gateway: { heartbeat_enabled: true },
+      security: { pairing_enabled: false, pairing_allow_self_approve: false },
+      search: {
+        web_enabled: true,
+        web_fetch_use_jina_reader: true,
+        session_search_enabled: true,
+        session_search_backend: "auto",
+        session_search_semantic_enabled: true,
+        session_search_rebuild_on_start: false,
+        content_read_enabled: false,
+        content_read_use_jina_reader: true,
+      },
+      execution: {
+        exec_enabled: true,
+        exec_profile: "secure",
+        exec_allow_unsafe_exec: false,
+        exec_shell_syntax_policy: "restricted",
+        my_enabled: true,
+        my_allow_set: false,
+        restrict_to_workspace: false,
+      },
+      media: { image_generation_enabled: false },
+      devices: {
+        device_enabled: false,
+        device_lighting_enabled: false,
+        device_mode: "dry_run",
+        device_backend: "none",
+      },
+      subagent: { mode: "normal" },
+      audit: { audit_mode: "minimal", audit_security_on_policy_denial: true },
+      runtime: { profile: "default" },
+    },
+    requires_restart: false,
+    ...overrides,
+  };
+}
+
+function jsonTextResponse(body: unknown) {
+  return {
+    ok: true,
+    status: 200,
+    headers: new Headers({ "content-type": "application/json" }),
+    text: async () => JSON.stringify(body),
+  };
+}
+
 describe("App layout", () => {
   beforeEach(() => {
     vi.useRealTimers();
@@ -2018,5 +2147,142 @@ describe("App layout", () => {
     expect(
       await screen.findByText("This provider endpoint does not expose a compatible model list endpoint."),
     ).toBeInTheDocument();
+  });
+
+  it("shows review fetch errors from the shared API error parser", async () => {
+    await i18n.changeLanguage("en");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url === "/api/reviews?status=pending&limit=50") {
+          return {
+            ok: false,
+            status: 502,
+            text: async () => JSON.stringify({
+              message: "Review service unavailable",
+              reason: "upstream_error",
+              phase: "fetch",
+            }),
+          };
+        }
+        return { ok: false, status: 404, json: async () => ({}) };
+      }),
+    );
+
+    render(<App />);
+
+    await waitFor(() => expect(connectSpy).toHaveBeenCalled());
+    const sidebar = screen.getByRole("navigation", { name: "Sidebar navigation" });
+    fireEvent.click(within(sidebar).getByRole("button", { name: "Reviews" }));
+
+    expect(await screen.findByRole("heading", { name: "Learning Reviews" })).toBeInTheDocument();
+    expect(await screen.findByText("Review service unavailable")).toBeInTheDocument();
+  });
+
+  it("shows skills loading errors from the shared API error parser", async () => {
+    const user = userEvent.setup();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url === "/api/settings") {
+          return jsonTextResponse(makeSettingsPayload());
+        }
+        if (url === "/api/skills?source=workspace&limit=100") {
+          return {
+            ok: false,
+            status: 500,
+            text: async () => "Skill index failed to load",
+          };
+        }
+        return { ok: false, status: 404, json: async () => ({}) };
+      }),
+    );
+
+    render(<App />);
+
+    await waitFor(() => expect(connectSpy).toHaveBeenCalled());
+    const sidebar = screen.getByRole("navigation", { name: "Sidebar navigation" });
+    await user.click(within(sidebar).getByRole("button", { name: "Settings" }));
+    const settingsNav = await screen.findByRole("navigation", { name: "Settings sections" });
+    await user.click(within(settingsNav).getByRole("button", { name: "Skills" }));
+
+    expect(await screen.findByText("Skill index failed to load")).toBeInTheDocument();
+  });
+
+  it("shows domain loading errors from the shared API error parser", async () => {
+    const user = userEvent.setup();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url === "/api/settings") {
+          return jsonTextResponse(makeSettingsPayload());
+        }
+        if (url === "/api/domains?limit=100") {
+          return {
+            ok: true,
+            status: 200,
+            text: async () => "<!doctype html><html></html>",
+            headers: new Headers({ "content-type": "text/html" }),
+          };
+        }
+        return { ok: false, status: 404, json: async () => ({}) };
+      }),
+    );
+
+    render(<App />);
+
+    await waitFor(() => expect(connectSpy).toHaveBeenCalled());
+    const sidebar = screen.getByRole("navigation", { name: "Sidebar navigation" });
+    await user.click(within(sidebar).getByRole("button", { name: "Settings" }));
+    const settingsNav = await screen.findByRole("navigation", { name: "Settings sections" });
+    await user.click(within(settingsNav).getByRole("button", { name: "Domains" }));
+
+    expect(
+      await screen.findByText(
+        "API returned HTML instead of JSON. Refresh the page or restart OriginAgent so the latest backend routes are active.",
+      ),
+    ).toBeInTheDocument();
+  });
+
+  it("shows MCP save errors from the shared API error parser", async () => {
+    const user = userEvent.setup();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url === "/api/settings") {
+          return jsonTextResponse(makeSettingsPayload());
+        }
+        if (url.startsWith("/api/settings/mcp/upsert?")) {
+          return {
+            ok: false,
+            status: 400,
+            text: async () => JSON.stringify({
+              message: "MCP config is invalid",
+              reason: "validation_failed",
+              phase: "contract",
+            }),
+          };
+        }
+        return { ok: false, status: 404, json: async () => ({}) };
+      }),
+    );
+
+    render(<App />);
+
+    await waitFor(() => expect(connectSpy).toHaveBeenCalled());
+    const sidebar = screen.getByRole("navigation", { name: "Sidebar navigation" });
+    await user.click(within(sidebar).getByRole("button", { name: "Settings" }));
+    const settingsNav = await screen.findByRole("navigation", { name: "Settings sections" });
+    await user.click(within(settingsNav).getByRole("button", { name: "MCP" }));
+    await user.click(await screen.findByRole("button", { name: "Add MCP" }));
+    await user.type(screen.getByPlaceholderText("github"), "demo");
+    await user.type(screen.getByPlaceholderText("npx"), "npx");
+    await user.click(screen.getByRole("button", { name: "Save" }));
+
+    expect(await screen.findByText("MCP config is invalid")).toBeInTheDocument();
   });
 });
