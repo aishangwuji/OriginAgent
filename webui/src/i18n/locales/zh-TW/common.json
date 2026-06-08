@@ -170,6 +170,27 @@
         "saveHint": "變更會套用到新的 web search 請求。"
       }
     },
+    "modelFetch": {
+      "fetchModels": "取得模型",
+      "fetchingModels": "正在取得模型...",
+      "fetchModelsUnsupported": "這個 provider 目前暫不支援自動取得模型。",
+      "fetchModelsNeedConfig": "請先完成這個 provider 的設定，再取得模型。",
+      "fetchModelsAuthFailed": "取得模型時驗證失敗，請檢查這個 provider 的 API key 或憑證。",
+      "fetchModelsEndpointMissing": "這個 provider 目前的位址沒有開放相容的模型列表端點。",
+      "fetchModelsTimeout": "取得模型逾時了，請檢查 provider 位址後再試一次。",
+      "fetchModelsNetworkFailed": "OriginAgent 無法連上這個 provider，請檢查網路或 API base。",
+      "fetchModelsParseFailed": "這個 provider 回傳了無法識別的模型列表格式。",
+      "fetchModelsFailed": "無法從這個 provider 取得模型列表。",
+      "noFetchedModels": "沒有返回可選模型，你仍然可以手動輸入模型名稱。",
+      "fetch": "取得模型",
+      "fetching": "正在取得模型...",
+      "openList": "打開已取得模型列表",
+      "placeholder": "輸入模型名稱，或從 provider 取得",
+      "providerRequired": "請先選擇已設定的 provider 再取得模型。",
+      "apiKeyRequired": "請先填寫這個 provider 的 API key 再取得模型。",
+      "apiBaseRequired": "請先填寫這個 provider 的 API base 再取得模型。",
+      "fetchFailed": "無法從這個 provider 取得模型列表。"
+    },
     "mcp": {
       "description": "不用手動編輯 config.json，在這裡設定 MCP server。變更會儲存到目前 OriginAgent 設定檔。",
       "quickConfig": "快速設定",

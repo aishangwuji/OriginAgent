@@ -1,4 +1,5 @@
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { ChatSummary } from "@/lib/types";
@@ -1741,5 +1742,272 @@ describe("App layout", () => {
     await act(async () => {
       resolveHistory?.({ ok: true, status: 200, json: async () => ({ schemaVersion: 3, messages: [] }) });
     });
+  });
+
+  it("fetches provider models in settings and lets the user choose one", async () => {
+    const user = userEvent.setup();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        if (url.includes("/api/settings/provider/models")) {
+          const auth = (init?.headers as Record<string, string> | undefined)?.Authorization;
+          if (auth !== "Bearer tok") {
+            return { ok: false, status: 401, json: async () => ({}) };
+          }
+          return {
+            ok: true,
+            status: 200,
+            json: async () => ({
+              provider: "openai",
+              models: [
+                { id: "gpt-4o-mini", owned_by: "openai" },
+                { id: "gpt-4.1", owned_by: "openai" },
+              ],
+              source_url: "https://api.openai.com/v1/models",
+              phase: "fetch",
+            }),
+          };
+        }
+        if (url.includes("/api/settings")) {
+          return {
+            ok: true,
+            status: 200,
+            json: async () => ({
+              agent: {
+                model: "openai/gpt-4o",
+                provider: "openai",
+                resolved_provider: "openai",
+                has_api_key: true,
+              },
+              providers: [
+                {
+                  name: "openai",
+                  label: "OpenAI",
+                  configured: true,
+                  api_key_hint: "open••••-key",
+                  api_base: "https://api.openai.com/v1",
+                  default_api_base: "https://api.openai.com/v1",
+                },
+              ],
+              web_search: {
+                provider: "duckduckgo",
+                api_key_hint: null,
+                base_url: null,
+                providers: [{ name: "duckduckgo", label: "DuckDuckGo", credential: "none" }],
+              },
+              mcp: { servers: [] },
+              runtime: { config_path: "/tmp/config.json" },
+              learning: { background_review: { enabled: false } },
+              runtime_controls: {
+                channels: { send_progress: true, send_tool_hints: false, show_reasoning: true },
+                agent: {
+                  unified_session: false,
+                  cold_archive_enabled: true,
+                  allow_agent_initiated_messages: false,
+                  auxiliary_enabled: true,
+                  domain_packs_enabled: true,
+                  provider_retry_mode: "standard",
+                  dream_annotate_line_ages: true,
+                },
+                learning: { background_review_enabled: false, curator_enabled: false },
+                evolution: {
+                  mode: "conservative",
+                  allow_manual_override: false,
+                  dry_run: true,
+                  outcome_archive_enabled: true,
+                  dependency_stale_cleanup_enabled: true,
+                  auto_verify_workflows: false,
+                  skill_candidates_enabled: false,
+                  feedback_calibration_enabled: true,
+                  sandbox_enabled: true,
+                  trial_enabled: true,
+                  trial_isolated_workspace: true,
+                  trial_read_only_tools_only: true,
+                },
+                gateway: { heartbeat_enabled: true },
+                security: { pairing_enabled: false, pairing_allow_self_approve: false },
+                search: {
+                  web_enabled: true,
+                  web_fetch_use_jina_reader: true,
+                  session_search_enabled: true,
+                  session_search_backend: "auto",
+                  session_search_semantic_enabled: true,
+                  session_search_rebuild_on_start: false,
+                  content_read_enabled: false,
+                  content_read_use_jina_reader: true,
+                },
+                execution: {
+                  exec_enabled: true,
+                  exec_profile: "secure",
+                  exec_allow_unsafe_exec: false,
+                  exec_shell_syntax_policy: "restricted",
+                  my_enabled: true,
+                  my_allow_set: false,
+                  restrict_to_workspace: false,
+                },
+                media: { image_generation_enabled: false },
+                devices: {
+                  device_enabled: false,
+                  device_lighting_enabled: false,
+                  device_mode: "dry_run",
+                  device_backend: "none",
+                },
+                subagent: { mode: "normal" },
+                audit: { audit_mode: "minimal", audit_security_on_policy_denial: true },
+                runtime: { profile: "default" },
+              },
+              requires_restart: false,
+            }),
+          };
+        }
+        return { ok: false, status: 404, json: async () => ({}) };
+      }),
+    );
+
+    render(<App />);
+
+    await waitFor(() => expect(connectSpy).toHaveBeenCalled());
+    const sidebar = screen.getByRole("navigation", { name: "Sidebar navigation" });
+    fireEvent.click(within(sidebar).getByRole("button", { name: "Settings" }));
+    expect(await screen.findByRole("heading", { name: "General" })).toBeInTheDocument();
+
+    const fetchButton = await screen.findByRole("button", { name: "Fetch models" });
+    await user.click(fetchButton);
+
+    const openListButton = await screen.findByRole("button", { name: "Open fetched models" });
+    await user.click(openListButton);
+    await user.click(await screen.findByRole("menuitem", { name: "gpt-4o-mini" }));
+
+    await waitFor(() =>
+      expect(screen.getByDisplayValue("gpt-4o-mini")).toBeInTheDocument(),
+    );
+  });
+
+  it("shows a specific error when the provider does not expose a compatible models endpoint", async () => {
+    const user = userEvent.setup();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.includes("/api/settings/provider/models")) {
+          return {
+            ok: false,
+            status: 404,
+            text: async () => JSON.stringify({
+              message: "All candidates failed: HTTP 404: missing",
+              reason: "models_endpoint_missing",
+              phase: "fetch",
+            }),
+          };
+        }
+        if (url.includes("/api/settings")) {
+          return {
+            ok: true,
+            status: 200,
+            json: async () => ({
+              agent: {
+                model: "openrouter/openai/gpt-4o-mini",
+                provider: "openrouter",
+                resolved_provider: "openrouter",
+                has_api_key: true,
+              },
+              providers: [
+                {
+                  name: "openrouter",
+                  label: "OpenRouter",
+                  configured: true,
+                  api_key_hint: "open••••-key",
+                  api_base: "https://openrouter.ai/api/v1",
+                  default_api_base: "https://openrouter.ai/api/v1",
+                },
+              ],
+              web_search: {
+                provider: "duckduckgo",
+                api_key_hint: null,
+                base_url: null,
+                providers: [{ name: "duckduckgo", label: "DuckDuckGo", credential: "none" }],
+              },
+              mcp: { servers: [] },
+              runtime: { config_path: "/tmp/config.json" },
+              learning: { background_review: { enabled: false } },
+              runtime_controls: {
+                channels: { send_progress: true, send_tool_hints: false, show_reasoning: true },
+                agent: {
+                  unified_session: false,
+                  cold_archive_enabled: true,
+                  allow_agent_initiated_messages: false,
+                  auxiliary_enabled: true,
+                  domain_packs_enabled: true,
+                  provider_retry_mode: "standard",
+                  dream_annotate_line_ages: true,
+                },
+                learning: { background_review_enabled: false, curator_enabled: false },
+                evolution: {
+                  mode: "conservative",
+                  allow_manual_override: false,
+                  dry_run: true,
+                  outcome_archive_enabled: true,
+                  dependency_stale_cleanup_enabled: true,
+                  auto_verify_workflows: false,
+                  skill_candidates_enabled: false,
+                  feedback_calibration_enabled: true,
+                  sandbox_enabled: true,
+                  trial_enabled: true,
+                  trial_isolated_workspace: true,
+                  trial_read_only_tools_only: true,
+                },
+                gateway: { heartbeat_enabled: true },
+                security: { pairing_enabled: false, pairing_allow_self_approve: false },
+                search: {
+                  web_enabled: true,
+                  web_fetch_use_jina_reader: true,
+                  session_search_enabled: true,
+                  session_search_backend: "auto",
+                  session_search_semantic_enabled: true,
+                  session_search_rebuild_on_start: false,
+                  content_read_enabled: false,
+                  content_read_use_jina_reader: true,
+                },
+                execution: {
+                  exec_enabled: true,
+                  exec_profile: "secure",
+                  exec_allow_unsafe_exec: false,
+                  exec_shell_syntax_policy: "restricted",
+                  my_enabled: true,
+                  my_allow_set: false,
+                  restrict_to_workspace: false,
+                },
+                media: { image_generation_enabled: false },
+                devices: {
+                  device_enabled: false,
+                  device_lighting_enabled: false,
+                  device_mode: "dry_run",
+                  device_backend: "none",
+                },
+                subagent: { mode: "normal" },
+                audit: { audit_mode: "minimal", audit_security_on_policy_denial: true },
+                runtime: { profile: "default" },
+              },
+              requires_restart: false,
+            }),
+          };
+        }
+        return { ok: false, status: 404, json: async () => ({}) };
+      }),
+    );
+
+    render(<App />);
+
+    await waitFor(() => expect(connectSpy).toHaveBeenCalled());
+    const sidebar = screen.getByRole("navigation", { name: "Sidebar navigation" });
+    fireEvent.click(within(sidebar).getByRole("button", { name: "Settings" }));
+    expect(await screen.findByRole("heading", { name: "General" })).toBeInTheDocument();
+
+    await user.click(await screen.findByRole("button", { name: "Fetch models" }));
+
+    expect(
+      await screen.findByText("This provider endpoint does not expose a compatible model list endpoint."),
+    ).toBeInTheDocument();
   });
 });

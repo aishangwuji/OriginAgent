@@ -235,6 +235,24 @@ export interface ProviderSettingsUpdate {
   apiBase?: string;
 }
 
+export interface FetchedProviderModel {
+  id: string;
+  owned_by?: string | null;
+}
+
+export interface ProviderModelsResponse {
+  provider: string;
+  models: FetchedProviderModel[];
+  source_url?: string | null;
+  phase?: "contract" | "fetch" | string;
+}
+
+export interface ProviderModelsErrorResponse {
+  message: string;
+  reason?: string;
+  phase?: "contract" | "fetch" | string;
+}
+
 export interface WebSearchSettingsUpdate {
   provider: string;
   apiKey?: string;

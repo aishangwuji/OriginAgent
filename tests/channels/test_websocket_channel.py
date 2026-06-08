@@ -5,7 +5,7 @@ import functools
 import json
 import time
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 from urllib.parse import quote
 
 import httpx
@@ -951,6 +951,135 @@ async def test_settings_mcp_routes_validate_input(
             headers=auth,
         )
         assert missing_ha_token.status_code == 400
+    finally:
+        await channel.stop()
+        await server_task
+
+
+@pytest.mark.asyncio
+async def test_settings_provider_models_contract_route_validates_scope(
+    bus: MagicMock,
+    monkeypatch,
+    tmp_path,
+) -> None:
+    port = 29896
+    config_path = tmp_path / "config.json"
+    config = Config()
+    config.providers.openrouter.api_key = "saved-openrouter-key"
+    config.providers.openrouter.api_base = "https://openrouter.ai/api/v1"
+    save_config(config, config_path)
+    monkeypatch.setattr("OriginAgent.config.loader._current_config_path", config_path)
+
+    channel = _ch(bus, port=port)
+    channel._api_tokens["tok"] = time.monotonic() + 300
+
+    server_task = asyncio.create_task(channel.start())
+    await asyncio.sleep(0.3)
+
+    try:
+        auth = {"Authorization": "Bearer tok"}
+
+        denied = await _http_get(
+            f"http://127.0.0.1:{port}/api/settings/provider/models?provider=openrouter&api_key=sk-or-test",
+        )
+        assert denied.status_code == 401
+
+        unsupported = await _http_get(
+            f"http://127.0.0.1:{port}/api/settings/provider/models?provider=anthropic&api_key=sk-ant-test",
+            headers=auth,
+        )
+        assert unsupported.status_code == 400
+        assert unsupported.json() == {
+            "message": "provider does not support automatic model discovery",
+            "phase": "contract",
+            "reason": "unsupported",
+        }
+
+        missing_key = await _http_get(
+            f"http://127.0.0.1:{port}/api/settings/provider/models?provider=groq",
+            headers=auth,
+        )
+        assert missing_key.status_code == 400
+        assert missing_key.json() == {
+            "message": "api_key is required",
+            "phase": "contract",
+            "reason": "api_key_required",
+        }
+
+        with patch(
+            "OriginAgent.providers.model_fetch_contract.fetch_provider_models",
+            new=AsyncMock(return_value=MagicMock(
+                to_json=lambda: {
+                    "provider": "openrouter",
+                    "models": [{"id": "gpt-4o-mini", "owned_by": "openai"}],
+                    "source_url": "https://openrouter.ai/api/v1/models",
+                },
+            )),
+        ) as fetch_mock:
+            supported = await _http_get(
+                "http://127.0.0.1:"
+                f"{port}/api/settings/provider/models?provider=openrouter",
+                headers=auth,
+            )
+        assert supported.status_code == 200
+        assert supported.json() == {
+            "provider": "openrouter",
+            "models": [{"id": "gpt-4o-mini", "owned_by": "openai"}],
+            "source_url": "https://openrouter.ai/api/v1/models",
+            "phase": "fetch",
+        }
+        request_contract = fetch_mock.await_args.args[0]
+        assert request_contract.api_key == "saved-openrouter-key"
+        assert request_contract.api_base == "https://openrouter.ai/api/v1"
+        assert "saved-openrouter-key" not in supported.text
+
+        from OriginAgent.providers.model_fetch_contract import ProviderModelFetchHttpError
+
+        with patch(
+            "OriginAgent.providers.model_fetch_contract.fetch_provider_models",
+            new=AsyncMock(
+                side_effect=ProviderModelFetchHttpError(
+                    "auth_failed",
+                    "HTTP 401: authentication failed",
+                    status=401,
+                ),
+            ),
+        ):
+            upstream_unauthorized = await _http_get(
+                "http://127.0.0.1:"
+                f"{port}/api/settings/provider/models?provider=openrouter"
+                "&api_key=sk-or-test&api_base=https%3A%2F%2Fopenrouter.ai%2Fapi%2Fv1",
+                headers=auth,
+            )
+        assert upstream_unauthorized.status_code == 401
+        assert upstream_unauthorized.json() == {
+            "message": "HTTP 401: authentication failed",
+            "phase": "fetch",
+            "reason": "auth_failed",
+        }
+
+        with patch(
+            "OriginAgent.providers.model_fetch_contract.fetch_provider_models",
+            new=AsyncMock(
+                side_effect=ProviderModelFetchHttpError(
+                    "models_endpoint_missing",
+                    "All candidates failed: HTTP 404: missing",
+                    status=404,
+                ),
+            ),
+        ):
+            upstream_not_found = await _http_get(
+                "http://127.0.0.1:"
+                f"{port}/api/settings/provider/models?provider=openrouter"
+                "&api_key=sk-or-test&api_base=https%3A%2F%2Fopenrouter.ai%2Fapi%2Fv1",
+                headers=auth,
+            )
+        assert upstream_not_found.status_code == 404
+        assert upstream_not_found.json() == {
+            "message": "All candidates failed: HTTP 404: missing",
+            "phase": "fetch",
+            "reason": "models_endpoint_missing",
+        }
     finally:
         await channel.stop()
         await server_task

@@ -80,6 +80,17 @@ describe("webui i18n", () => {
       expect(common.settings.byok.showApiKey).toBeTruthy();
       expect(common.settings.byok.hideApiKey).toBeTruthy();
       expect(common.settings.byok.configuredKeyHint).toBeTruthy();
+      expect(common.settings.modelFetch.fetchModels).toBeTruthy();
+      expect(common.settings.modelFetch.fetchingModels).toBeTruthy();
+      expect(common.settings.modelFetch.fetchModelsUnsupported).toBeTruthy();
+      expect(common.settings.modelFetch.fetchModelsNeedConfig).toBeTruthy();
+      expect(common.settings.modelFetch.fetchModelsAuthFailed).toBeTruthy();
+      expect(common.settings.modelFetch.fetchModelsEndpointMissing).toBeTruthy();
+      expect(common.settings.modelFetch.fetchModelsTimeout).toBeTruthy();
+      expect(common.settings.modelFetch.fetchModelsNetworkFailed).toBeTruthy();
+      expect(common.settings.modelFetch.fetchModelsParseFailed).toBeTruthy();
+      expect(common.settings.modelFetch.fetchModelsFailed).toBeTruthy();
+      expect(common.settings.modelFetch.noFetchedModels).toBeTruthy();
       expect(common.settings.skills.description).toBeTruthy();
       expect(common.settings.skills.actions.verify).toBeTruthy();
       expect(common.settings.skills.actions.activate).toBeTruthy();

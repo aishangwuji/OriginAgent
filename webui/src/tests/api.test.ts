@@ -6,6 +6,7 @@ import {
   deleteSession,
   domainPackAction,
   fetchDomain,
+  fetchProviderModels,
   fetchSelfModel,
   fetchWebuiThread,
   fetchReviewProposal,
@@ -99,6 +100,45 @@ describe("webui API helpers", () => {
         headers: { Authorization: "Bearer tok" },
       }),
     );
+  });
+
+  it("serializes provider model fetch requests using the Phase 1 contract route", async () => {
+    await fetchProviderModels("tok", {
+      provider: "openrouter",
+      apiKey: "sk-or-test",
+      apiBase: "https://openrouter.ai/api/v1",
+    });
+
+    expect(fetch).toHaveBeenCalledWith(
+      "/api/settings/provider/models?provider=openrouter&api_key=sk-or-test&api_base=https%3A%2F%2Fopenrouter.ai%2Fapi%2Fv1",
+      expect.objectContaining({
+        headers: { Authorization: "Bearer tok" },
+      }),
+    );
+  });
+
+  it("surfaces provider model fetch error bodies instead of collapsing to HTTP status", async () => {
+    vi.mocked(fetch).mockResolvedValueOnce({
+      ok: false,
+      status: 404,
+      text: async () => JSON.stringify({
+        message: "All candidates failed: HTTP 404: missing",
+        reason: "models_endpoint_missing",
+        phase: "fetch",
+      }),
+    } as Response);
+
+    await expect(
+      fetchProviderModels("tok", {
+        provider: "openrouter",
+        apiBase: "https://openrouter.ai/api/v1",
+      }),
+    ).rejects.toMatchObject({
+      status: 404,
+      message: "All candidates failed: HTTP 404: missing",
+      reason: "models_endpoint_missing",
+      phase: "fetch",
+    });
   });
 
   it("serializes web search settings updates", async () => {

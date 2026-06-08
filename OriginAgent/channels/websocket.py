@@ -918,6 +918,9 @@ class WebSocketChannel(BaseChannel):
         if got == "/api/settings/provider/update":
             return self._handle_settings_provider_update(request)
 
+        if got == "/api/settings/provider/models":
+            return await self._handle_settings_provider_models(request)
+
         if got == "/api/settings/web-search/update":
             return self._handle_settings_web_search_update(request)
 
@@ -1622,6 +1625,52 @@ class WebSocketChannel(BaseChannel):
             save_config(config)
         # API key/base changes are picked up by the next provider snapshot refresh.
         return _http_json_response(self._settings_payload(requires_restart=False))
+
+    async def _handle_settings_provider_models(self, request: WsRequest) -> Response:
+        if not self._check_api_token(request):
+            return _http_error(401, "Unauthorized")
+        from OriginAgent.config.loader import load_config
+        from OriginAgent.providers.model_fetch_contract import (
+            ProviderModelFetchError,
+            ProviderModelFetchHttpError,
+            build_provider_model_fetch_request,
+            fetch_provider_models,
+        )
+
+        query = _parse_query(request.path)
+        provider_name = (_query_first(query, "provider") or "").strip()
+        api_key = _query_first(query, "api_key")
+        if api_key is None:
+            api_key = _query_first(query, "apiKey")
+        api_base = _query_first(query, "api_base")
+        if api_base is None:
+            api_base = _query_first(query, "apiBase")
+        if provider_name:
+            provider_config = getattr(load_config().providers, provider_name, None)
+            if provider_config is not None:
+                api_key = api_key or provider_config.api_key
+                api_base = api_base or provider_config.api_base
+
+        try:
+            request_contract = build_provider_model_fetch_request(
+                provider_name,
+                api_key=api_key,
+                api_base=api_base,
+            )
+        except ProviderModelFetchError as exc:
+            return _http_json_response(exc.to_json(), status=exc.status)
+
+        try:
+            response = await fetch_provider_models(request_contract)
+        except ProviderModelFetchHttpError as exc:
+            status = 500
+            if exc.status is not None:
+                status = exc.status
+            return _http_json_response(exc.to_json(), status=status)
+
+        payload = response.to_json()
+        payload["phase"] = "fetch"
+        return _http_json_response(payload)
 
     def _handle_settings_web_search_update(self, request: WsRequest) -> Response:
         if not self._check_api_token(request):

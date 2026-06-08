@@ -130,6 +130,27 @@
         "saveHint": "変更は新しい web search リクエストに適用されます。"
       }
     },
+    "modelFetch": {
+      "fetchModels": "Fetch models",
+      "fetchingModels": "Fetching models...",
+      "fetchModelsUnsupported": "Automatic model fetching is not supported for this provider yet.",
+      "fetchModelsNeedConfig": "Finish configuring this provider before fetching models.",
+      "fetchModelsAuthFailed": "The provider rejected the API key or credentials while fetching models.",
+      "fetchModelsEndpointMissing": "This provider endpoint does not expose a compatible model list endpoint.",
+      "fetchModelsTimeout": "Fetching models timed out. Check the provider endpoint and try again.",
+      "fetchModelsNetworkFailed": "OriginAgent could not reach the provider endpoint. Check the network and API base.",
+      "fetchModelsParseFailed": "The provider returned an unexpected model list response.",
+      "fetchModelsFailed": "Could not fetch models from this provider.",
+      "noFetchedModels": "No models were returned. You can still enter one manually.",
+      "fetch": "Fetch models",
+      "fetching": "Fetching models...",
+      "openList": "Open fetched models",
+      "placeholder": "Enter model name or fetch from provider",
+      "providerRequired": "Select a configured provider before fetching models.",
+      "apiKeyRequired": "Add the provider API key before fetching models.",
+      "apiBaseRequired": "Add the provider API base before fetching models.",
+      "fetchFailed": "Could not fetch models from this provider."
+    },
     "mcp": {
       "description": "Configure MCP servers without editing config.json by hand. Changes are saved to the current OriginAgent config.",
       "quickConfig": "Quick config",

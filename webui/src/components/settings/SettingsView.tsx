@@ -36,6 +36,7 @@ import {
 import { useTranslation } from "react-i18next";
 
 import { LanguageSwitcher } from "@/components/LanguageSwitcher";
+import { ModelInputWithFetch } from "@/components/settings/ModelInputWithFetch";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -45,9 +46,11 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
 import {
+  ApiError,
   deleteMcpServerSettings,
   domainPackAction,
   fetchSelfModel,
+  fetchProviderModels,
   fetchSettings,
   fetchDomain,
   fetchSkill,
@@ -69,6 +72,7 @@ import { useClient } from "@/providers/ClientProvider";
 import type {
   DomainPackGovernanceStats,
   DomainPackRecord,
+  FetchedProviderModel,
   McpServerSettings,
   McpServerSettingsUpdate,
   McpTransportType,
@@ -100,6 +104,40 @@ type HomeAssistantMcpFormState = {
 };
 type RuntimeSettingsForm = SettingsPayload["runtime_controls"];
 const SETTINGS_LOAD_RETRY_DELAYS_MS = [350, 900, 1600] as const;
+
+function mapModelFetchError(
+  err: unknown,
+  t: (key: string) => string,
+): string {
+  if (err instanceof ApiError) {
+    switch (err.reason) {
+      case "provider_required":
+        return t("settings.modelFetch.providerRequired");
+      case "unsupported":
+        return t("settings.modelFetch.fetchModelsUnsupported");
+      case "api_key_required":
+        return t("settings.modelFetch.apiKeyRequired");
+      case "api_base_required":
+        return t("settings.modelFetch.apiBaseRequired");
+      case "auth_failed":
+        return t("settings.modelFetch.fetchModelsAuthFailed");
+      case "models_endpoint_missing":
+        return t("settings.modelFetch.fetchModelsEndpointMissing");
+      case "timeout":
+        return t("settings.modelFetch.fetchModelsTimeout");
+      case "network_failed":
+        return t("settings.modelFetch.fetchModelsNetworkFailed");
+      case "parse_failed":
+        return t("settings.modelFetch.fetchModelsParseFailed");
+      default:
+        if (err.status === 400) {
+          return t("settings.modelFetch.fetchModelsNeedConfig");
+        }
+        return t("settings.modelFetch.fetchModelsFailed");
+    }
+  }
+  return t("settings.modelFetch.fetchModelsFailed");
+}
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => window.setTimeout(resolve, ms));
@@ -172,6 +210,9 @@ export function SettingsView({
   });
   const [runtimeForm, setRuntimeForm] = useState<RuntimeSettingsForm | null>(null);
   const [runtimeSaving, setRuntimeSaving] = useState(false);
+  const [modelFetchLoadingProvider, setModelFetchLoadingProvider] = useState<string | null>(null);
+  const [fetchedModelsByProvider, setFetchedModelsByProvider] = useState<Record<string, FetchedProviderModel[]>>({});
+  const [modelFetchAttemptedProviders, setModelFetchAttemptedProviders] = useState<Record<string, boolean>>({});
   const [mcpEditing, setMcpEditing] = useState<string | null>(null);
   const [mcpForms, setMcpForms] = useState<Record<string, McpFormState>>({});
   const [homeAssistantMcpForm, setHomeAssistantMcpForm] = useState<HomeAssistantMcpFormState>({
@@ -374,6 +415,52 @@ export function SettingsView({
       setError((err as Error).message);
     } finally {
       setRuntimeSaving(false);
+    }
+  };
+
+  const fetchModelsForSelectedProvider = async () => {
+    const providerName = form.provider.trim();
+    if (!providerName) {
+      setError(t("settings.modelFetch.providerRequired"));
+      return;
+    }
+
+    const provider = settings?.providers.find((item) => item.name === providerName);
+    const providerDraft = providerForms[providerName] ?? {
+      apiKey: "",
+      apiBase: provider?.api_base ?? provider?.default_api_base ?? "",
+    };
+    const apiKey = providerDraft.apiKey.trim();
+    const apiBase =
+      providerDraft.apiBase.trim() ||
+      provider?.api_base?.trim() ||
+      provider?.default_api_base?.trim() ||
+      "";
+    const canUseSavedProviderKey = !!provider?.configured;
+
+    if (!apiKey && !canUseSavedProviderKey) {
+      setError(t("settings.modelFetch.apiKeyRequired"));
+      return;
+    }
+
+    setModelFetchLoadingProvider(providerName);
+    try {
+      const models = await withTokenRefresh(token, refreshToken, (freshToken) =>
+        fetchProviderModels(freshToken, {
+          provider: providerName,
+          apiKey: apiKey || undefined,
+          apiBase: apiBase || undefined,
+        }),
+      );
+      setFetchedModelsByProvider((prev) => ({ ...prev, [providerName]: models }));
+      setModelFetchAttemptedProviders((prev) => ({ ...prev, [providerName]: true }));
+      setError(null);
+    } catch (err) {
+      setModelFetchAttemptedProviders((prev) => ({ ...prev, [providerName]: true }));
+      const message = mapModelFetchError(err, t);
+      setError(message);
+    } finally {
+      setModelFetchLoadingProvider(null);
     }
   };
 
@@ -606,6 +693,10 @@ export function SettingsView({
                   onToggleTheme={onToggleTheme}
                   form={form}
                   setForm={setForm}
+                  fetchedModels={fetchedModelsByProvider[form.provider] ?? []}
+                  hasFetchedModels={!!modelFetchAttemptedProviders[form.provider]}
+                  modelFetchLoading={modelFetchLoadingProvider === form.provider}
+                  onFetchModels={fetchModelsForSelectedProvider}
                   runtimeForm={runtimeForm}
                   setRuntimeForm={setRuntimeForm}
                   settings={settings}
@@ -784,6 +875,10 @@ function GeneralSettings({
   onToggleTheme,
   form,
   setForm,
+  fetchedModels,
+  hasFetchedModels,
+  modelFetchLoading,
+  onFetchModels,
   runtimeForm,
   setRuntimeForm,
   settings,
@@ -809,6 +904,10 @@ function GeneralSettings({
     model: string;
     provider: string;
   }>>;
+  fetchedModels: FetchedProviderModel[];
+  hasFetchedModels: boolean;
+  modelFetchLoading: boolean;
+  onFetchModels: () => void;
   runtimeForm: RuntimeSettingsForm | null;
   setRuntimeForm: Dispatch<SetStateAction<RuntimeSettingsForm | null>>;
   settings: SettingsPayload;
@@ -957,10 +1056,14 @@ function GeneralSettings({
             title={t("settings.rows.model")}
             description={t("settings.help.model")}
           >
-            <Input
+            <ModelInputWithFetch
               value={form.model}
-              onChange={(event) => setForm((prev) => ({ ...prev, model: event.target.value }))}
-              className="h-8 w-[280px] rounded-full text-[13px]"
+              onChange={(value) => setForm((prev) => ({ ...prev, model: value }))}
+              onFetch={onFetchModels}
+              fetchedModels={fetchedModels}
+              hasFetched={hasFetchedModels}
+              isLoading={modelFetchLoading}
+              placeholder={t("settings.modelFetch.placeholder")}
             />
           </SettingsRow>
 

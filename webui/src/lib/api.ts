@@ -3,9 +3,12 @@ import type {
   DomainPackGovernanceResult,
   DomainPackGovernanceStats,
   DomainPackRecord,
+  FetchedProviderModel,
   HomeAssistantMcpSettingsUpdate,
   McpServerSettingsUpdate,
+  ProviderModelsErrorResponse,
   ProviderSettingsUpdate,
+  ProviderModelsResponse,
   ReviewDecisionResult,
   ReviewProposal,
   ReviewProposalStats,
@@ -23,9 +26,13 @@ import type {
 
 export class ApiError extends Error {
   status: number;
-  constructor(status: number, message: string) {
+  reason?: string;
+  phase?: string;
+  constructor(status: number, message: string, options?: { reason?: string; phase?: string }) {
     super(message);
     this.status = status;
+    this.reason = options?.reason;
+    this.phase = options?.phase;
     this.name = "ApiError";
   }
 }
@@ -83,7 +90,29 @@ async function request<T>(
     credentials: "same-origin",
   });
   if (!res.ok) {
-    throw new ApiError(res.status, `HTTP ${res.status}`);
+    let message = `HTTP ${res.status}`;
+    let reason: string | undefined;
+    let phase: string | undefined;
+    try {
+      const text = typeof res.text === "function" ? await res.text() : "";
+      if (text.trim()) {
+        try {
+          const parsed = JSON.parse(text) as ProviderModelsErrorResponse;
+          if (parsed && typeof parsed.message === "string" && parsed.message.trim()) {
+            message = parsed.message;
+            reason = typeof parsed.reason === "string" ? parsed.reason : undefined;
+            phase = typeof parsed.phase === "string" ? parsed.phase : undefined;
+          } else {
+            message = text;
+          }
+        } catch {
+          message = text;
+        }
+      }
+    } catch {
+      // Fall back to the generic status message when the error body cannot be read.
+    }
+    throw new ApiError(res.status, message, { reason, phase });
   }
   return parseJsonResponse<T>(res);
 }
@@ -374,6 +403,22 @@ export async function updateProviderSettings(
     `${base}/api/settings/provider/update?${query}`,
     token,
   );
+}
+
+export async function fetchProviderModels(
+  token: string,
+  update: ProviderSettingsUpdate,
+  base: string = "",
+): Promise<FetchedProviderModel[]> {
+  const query = new URLSearchParams();
+  query.set("provider", update.provider);
+  if (update.apiKey !== undefined) query.set("api_key", update.apiKey);
+  if (update.apiBase !== undefined) query.set("api_base", update.apiBase);
+  const body = await request<ProviderModelsResponse>(
+    `${base}/api/settings/provider/models?${query}`,
+    token,
+  );
+  return body.models;
 }
 
 export async function updateWebSearchSettings(
