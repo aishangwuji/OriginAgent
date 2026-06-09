@@ -6,6 +6,8 @@
 
 ## 当前文档
 
+- [`red_queen_master_plan.md`](./red_queen_master_plan.md)：OriginAgent 向“红后式智能体”演进的总计划书，覆盖后台认知、分层感知、世界模型、动作安全、阶段路线与任务拆包规则。
+- [`continuity_memory_os_outline.md`](./continuity_memory_os_outline.md)：连续性与记忆操作系统独立架构提纲，覆盖身份层、作用域、工作记忆、检索融合、上下文构造、晋升与遗忘。
 - [`plan1.md`](./plan1.md)：历史 OriginAgent 第一阶段改造清单，保留作迁移参考。
 - [`originagent-v1-development-plan.md`](./originagent-v1-development-plan.md)：历史 OriginAgent v1 总体开发任务清单与技术落地方案。
 - [`runtime_security.md`](./runtime_security.md)：runtime/tools 安全边界与审计说明。
