@@ -18,6 +18,7 @@ from OriginAgent.agent.world_state import WorldStateManager
 from OriginAgent.bus.events import InboundMessage
 from OriginAgent.bus.queue import MessageBus
 from OriginAgent.providers.base import LLMResponse
+from OriginAgent.agent.confirmation import ConfirmationRequest, PendingConfirmationStore
 from OriginAgent.session.manager import SessionManager
 
 
@@ -136,7 +137,12 @@ def test_context_builder_injects_continuity_and_working_memory_blocks(tmp_path: 
         "objective": "Keep current task state",
         "ui_summary": "task",
     }
-    builder = ContextBuilder(workspace=workspace, timezone="UTC", sessions=sessions)
+    builder = ContextBuilder(
+        workspace=workspace,
+        timezone="UTC",
+        sessions=sessions,
+        confirmation_store=PendingConfirmationStore(workspace),
+    )
     runtime_context = ActorResolver().resolve_runtime_context(
         channel="cli",
         chat_id="direct",
@@ -173,7 +179,12 @@ def test_context_builder_uses_real_world_state_snapshot(tmp_path: Path):
     workspace.mkdir()
     sessions = SessionManager(workspace)
     session = sessions.get_or_create("cli:direct")
-    builder = ContextBuilder(workspace=workspace, timezone="UTC", sessions=sessions)
+    builder = ContextBuilder(
+        workspace=workspace,
+        timezone="UTC",
+        sessions=sessions,
+        confirmation_store=PendingConfirmationStore(workspace),
+    )
     builder.world_state = WorldStateManager(workspace, sessions)
     runtime_context = ActorResolver().resolve_runtime_context(
         channel="cli",
@@ -218,6 +229,49 @@ def test_context_builder_uses_real_world_state_snapshot(tmp_path: Path):
     assert "Desk shows a notebook and a lamp." in world_block["text"]
     assert '"snapshots"' not in world_block["text"]
     assert '"media_path"' not in world_block["text"]
+
+
+def test_build_action_continuity_inputs_includes_arc_session_pending_confirmation(tmp_path: Path):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    sessions = SessionManager(workspace)
+    session = sessions.get_or_create("cli:direct")
+    builder = ContextBuilder(
+        workspace=workspace,
+        timezone="UTC",
+        sessions=sessions,
+        confirmation_store=PendingConfirmationStore(workspace),
+    )
+    runtime_context = ActorResolver().resolve_runtime_context(
+        channel="cli",
+        chat_id="direct",
+        sender_id="user-1",
+        metadata={},
+        session_key="cli:direct",
+    )
+    confirmation = ConfirmationRequest(
+        confirmation_id="confirmation_auto_1",
+        kind="action_confirmation",
+        status="pending",
+        prompt="Continue?",
+        action="set_light_power",
+        scope="home.lighting.ceiling_light",
+        trigger="automation",
+        risk="low",
+        requested_by="user-1",
+        decision_reason="automation pending confirmation",
+        presence_status="unknown",
+        related_fact_ids=[],
+        created_at="2026-06-09T00:00:00+00:00",
+        expires_at="2026-06-09T00:02:00+00:00",
+        metadata={"arc_session": "cli:direct"},
+    )
+    builder._confirmation_store.upsert(confirmation)
+
+    continuity = builder.build_action_continuity_inputs("cli:direct", runtime_context)
+
+    assert len(continuity.pending_confirmations) == 1
+    assert continuity.pending_confirmations[0]["confirmation_id"] == "confirmation_auto_1"
 
 
 def test_world_state_apply_inspection_marks_contested_and_attention_prefixes(tmp_path: Path):

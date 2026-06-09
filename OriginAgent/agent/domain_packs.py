@@ -143,6 +143,8 @@ class DomainRuntimeContribution:
     safety_gates: tuple[Any, ...] = ()
     permission_resolvers: tuple[Any, ...] = ()
     context_fragments: tuple[str, ...] = ()
+    action_continuity_provider: Any = None
+    action_continuity_writeback_adapter: Any = None
 
 
 @dataclass(frozen=True)

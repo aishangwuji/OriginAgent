@@ -12,6 +12,7 @@ from typing import Any, Mapping
 from loguru import logger
 
 from OriginAgent.agent.context_assembler import ContextAssemblerV2
+from OriginAgent.agent.action_continuity import ActionContinuityInputs, ActionWorldView
 from OriginAgent.agent.domain_packs import DomainPackManager
 from OriginAgent.agent.memory import MemoryStore
 from OriginAgent.agent.retrieval_fusion import RetrievalFusion
@@ -473,6 +474,67 @@ class ContextBuilder:
                 "updated_at": current_time_str(self.timezone),
             }))
         return blocks
+
+    def build_action_continuity_inputs(
+        self,
+        session_key: str,
+        runtime_context: Any,
+    ) -> ActionContinuityInputs:
+        if self._sessions is None:
+            raise ValueError("sessions are required for action continuity inputs")
+        if runtime_context is None:
+            raise ValueError("runtime_context is required for action continuity inputs")
+        session = self._sessions.get_or_create(session_key)
+        working_memory = {}
+        if self.working_memory is not None:
+            working_memory = self.working_memory.inspect(
+                session,
+                identity=runtime_context.identity if hasattr(runtime_context, "identity") else None,
+            )
+        if self.world_state is not None:
+            filtered = self.world_state.filtered_candidates(
+                session,
+                runtime_context=runtime_context,
+                current_message=(
+                    self._last_context_assembly_audit.get("current_message_preview", "")
+                    if isinstance(self._last_context_assembly_audit, dict)
+                    else ""
+                ),
+            )
+            world_view = ActionWorldView(
+                included_summary=dict(filtered.get("included_summary") or {}),
+                contested_summary=dict(filtered.get("contested_summary") or {}),
+                freshness=dict(filtered.get("freshness") or {}),
+                selection_reasons=list(filtered.get("selection_reasons") or []),
+            )
+        else:
+            world_view = ActionWorldView()
+        governance_summary = dict(self._last_governance_audit or {})
+        retrieval_hints = dict(self._last_retrieval_fusion or {})
+        pending_confirmations: list[dict[str, Any]] = []
+        if self._confirmation_store is not None:
+            try:
+                pending_confirmations = [
+                    confirmation.to_dict()
+                    for confirmation in self._confirmation_store.read_all()
+                    if str(getattr(confirmation, "status", "") or "") in {"pending", "notified", "confirmed_once"}
+                    and (
+                        not getattr(confirmation, "scope", None)
+                        or str(getattr(confirmation, "scope", "")).startswith(str(session_key))
+                        or str(getattr(confirmation, "scope", "")) == str(session_key)
+                        or str(getattr(confirmation, "metadata", {}).get("arc_session") or "").strip() == str(session_key)
+                    )
+                ]
+            except Exception:
+                pending_confirmations = []
+        return ActionContinuityInputs(
+            runtime_context=runtime_context,
+            working_memory=working_memory,
+            world_view=world_view,
+            governance_summary=governance_summary,
+            retrieval_hints=retrieval_hints,
+            pending_confirmations=pending_confirmations,
+        )
 
     def prepare_prewarm_bundle(
         self,

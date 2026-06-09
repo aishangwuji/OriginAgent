@@ -377,6 +377,8 @@ def test_manifest_parses_domain_runtime_contribution(tmp_path: Path) -> None:
     assert pack_state.runtime is not None
     assert pack_state.runtime.status == "available"
     assert [contribution.tool_context for contribution in contributions] == [{"demo": "research"}]
+    assert contributions[0].action_continuity_provider is None
+    assert contributions[0].action_continuity_writeback_adapter is None
 
 
 def test_inactive_domain_pack_does_not_expose_skill_entries_or_tools(tmp_path: Path) -> None:
