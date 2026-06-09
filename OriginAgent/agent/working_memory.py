@@ -141,6 +141,32 @@ class WorkingMemoryManager:
     def clear(self, session: Session) -> None:
         session.metadata.pop(WORKING_MEMORY_METADATA_KEY, None)
 
+    def append_attention_item(
+        self,
+        session: Session,
+        item: str,
+        *,
+        identity: IdentityDescriptor | None = None,
+    ) -> WorkingMemorySnapshot:
+        text = str(item or "").strip()
+        snapshot = self.load(session, identity=identity)
+        if text:
+            snapshot.attention_items = _normalize_items([*snapshot.attention_items, text])
+        return self.save(session, snapshot)
+
+    def append_pending_question(
+        self,
+        session: Session,
+        question: str,
+        *,
+        identity: IdentityDescriptor | None = None,
+    ) -> WorkingMemorySnapshot:
+        text = str(question or "").strip()
+        snapshot = self.load(session, identity=identity)
+        if text:
+            snapshot.pending_questions = _normalize_items([*snapshot.pending_questions, text])
+        return self.save(session, snapshot)
+
     @staticmethod
     def _hydrate_goal(snapshot: WorkingMemorySnapshot, session: Session) -> None:
         goal = parse_goal_state(goal_state_raw(session.metadata))

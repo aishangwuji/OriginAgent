@@ -163,6 +163,18 @@ class ActiveIntentService:
                 keys.append(key)
         return keys
 
+    def collect_candidates(self, session_key: str) -> list[ActiveIntentCandidate]:
+        """Return bounded proactive candidates without publishing them."""
+
+        session = self.sessions.get_or_create(session_key)
+        return self._build_candidates(session)
+
+    def build_message(self, session_key: str, candidate: ActiveIntentCandidate) -> InboundMessage:
+        """Build the internal inbound message for a proactive candidate."""
+
+        session = self.sessions.get_or_create(session_key)
+        return self._build_message(session, candidate)
+
     def eligible_session(
         self,
         session_key: str,

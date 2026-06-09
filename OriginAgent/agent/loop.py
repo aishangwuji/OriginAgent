@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import asyncio
 import dataclasses
+import json
 import os
 import time
 from contextlib import AsyncExitStack, nullcontext, suppress
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from enum import Enum, auto
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Awaitable, Callable
@@ -30,11 +32,14 @@ from OriginAgent.agent.agent_tool_setup import (
     register_plugin_tools,
     should_register_exec,
 )
-from OriginAgent.agent.active_intents import ActiveIntentConfig, ActiveIntentService
+from OriginAgent.agent.active_intents import ActiveIntentConfig, ActiveIntentRecord, ActiveIntentService
 from OriginAgent.agent.agent_turn_persist import TurnPersistManager
 from OriginAgent.agent.autocompact import AutoCompact
 from OriginAgent.agent.auxiliary_llm import AuxiliaryLLMRouter
 from OriginAgent.agent.background_review import BackgroundReviewService
+from OriginAgent.agent.cognitive_audit import JsonlCognitiveAuditLedger
+from OriginAgent.agent.cognitive_events import CognitiveDecision, CognitiveEvent
+from OriginAgent.agent.cognitive_loop import CognitiveLoop, CognitiveLoopConfig
 from OriginAgent.agent.context import ContextBuilder
 from OriginAgent.agent.curator import CuratorService
 from OriginAgent.agent.domain_packs import DomainPackManager
@@ -110,6 +115,19 @@ _SENSITIVE_TOOL_LOG_NAMES = {
     "message",
     "web_fetch",
 }
+
+
+def _utcnow_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _trim_text(value: Any, *, max_chars: int = 240) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    if len(text) > max_chars:
+        return text[:max_chars].rstrip() + "..."
+    return text
 
 
 class TurnState(Enum):
@@ -499,6 +517,18 @@ class AgentLoop:
             config=self._active_intent_config,
             nearline_memory_config=self._nearline_memory_config,
         )
+        self._cognitive_audit = JsonlCognitiveAuditLedger(workspace)
+        self._cognitive_loop_enabled = bool(self._active_intent_config.enabled)
+        self.cognitive_loop = CognitiveLoop(
+            config=CognitiveLoopConfig(
+                enabled=self._active_intent_config.enabled,
+                interval_seconds=self._active_intent_config.interval_seconds,
+            ),
+            session_keys_provider=self.active_intents.session_keys,
+            active_task_count_provider=self._active_task_count,
+            running_subagents_provider=self.subagents.get_running_count_by_session,
+            session_processor=self._run_cognitive_pass_for_session,
+        )
         self.nearline_memory = NearlineMemoryPipeline(
             workspace=workspace,
             config=self._nearline_memory_config,
@@ -572,6 +602,7 @@ class AgentLoop:
         self._last_runtime_context: RuntimeContext | None = None
         self._last_continuity_session_key: str | None = None
         self._last_context_assembly: dict[str, Any] = {}
+        self._last_cognitive_scan: dict[str, Any] = {}
         self.commands = CommandRouter()
         register_builtin_commands(self.commands)
 
@@ -1757,26 +1788,294 @@ class AgentLoop:
         task.add_done_callback(self._background_tasks.discard)
 
     def _start_active_intent_loop(self) -> None:
-        if not self._active_intent_config.enabled or self._active_intent_task is not None:
+        if not self.cognitive_loop.config.enabled or self._active_intent_task is not None:
             return
         self._active_intent_task = asyncio.create_task(self._active_intent_loop())
 
     async def _active_intent_loop(self) -> None:
-        interval = max(1, int(self._active_intent_config.interval_seconds))
         try:
-            while self._running:
-                await asyncio.sleep(interval)
-                for session_key in self.active_intents.session_keys():
-                    active_tasks = self._active_tasks.get(session_key, [])
-                    active_count = sum(1 for task in active_tasks if not task.done())
-                    running_subagents = self.subagents.get_running_count_by_session(session_key)
-                    await self.active_intents.process_session(
-                        session_key,
-                        active_task_count=active_count,
-                        running_subagents=running_subagents,
-                    )
+            await self.cognitive_loop.run_forever(lambda: self._running)
         except asyncio.CancelledError:
             raise
+
+    async def _run_cognitive_pass_for_session(
+        self,
+        session_key: str,
+        *,
+        active_task_count: int,
+        running_subagents: int,
+    ) -> list[CognitiveDecision]:
+        eligible, reason = self.active_intents.eligible_session(
+            session_key,
+            active_task_count=active_task_count,
+            running_subagents=running_subagents,
+        )
+        if not eligible:
+            event = CognitiveEvent(
+                event_id=f"skip:{session_key}:{reason or 'ineligible'}",
+                session_key=session_key,
+                event_type="goal_nudge",
+                source_type="runtime",
+                source_reference="eligibility",
+                summary=f"Skipped cognitive pass: {reason or 'ineligible'}",
+                priority="low",
+                payload={
+                    "active_task_count": active_task_count,
+                    "running_subagents": running_subagents,
+                },
+            )
+            decision = CognitiveDecision(
+                decision_id=f"decision:{event.event_id}",
+                event_id=event.event_id,
+                session_key=session_key,
+                action="skip",
+                outcome="skipped",
+                suppression_reason=reason or "ineligible",
+                payload=event.payload,
+            )
+            self._cognitive_audit.append_event(event)
+            self._cognitive_audit.append_decision(decision)
+            self._last_cognitive_scan = {
+                "session_key": session_key,
+                "eligible": False,
+                "reason": reason or "ineligible",
+                "candidate_count": 0,
+                "decision_count": 1,
+                "timestamp": _utcnow_iso(),
+            }
+            return [decision]
+
+        session = self.sessions.get_or_create(session_key)
+        runtime_context = self._build_cognitive_runtime_context(session_key)
+        candidates = self._collect_cognitive_candidates(session_key)
+        decisions: list[CognitiveDecision] = []
+        emitted_count = 0
+        for candidate in candidates:
+            event = candidate["event"]
+            self._cognitive_audit.append_event(event)
+            written_to_working_memory = self._write_cognitive_event_to_working_memory(
+                session,
+                runtime_context=runtime_context,
+                event=event,
+            )
+            allowed, suppression_reason = self.active_intents._passes_cooldown(
+                session_key,
+                candidate["cooldown_key"],
+            )
+            published_internal_event = False
+            action = "emit"
+            outcome = "emitted"
+            if emitted_count >= self._active_intent_config.max_messages_per_session_per_pass:
+                allowed = False
+                suppression_reason = "session_message_limit"
+            if not allowed:
+                action = "suppress"
+                outcome = "suppressed"
+                self.active_intents.ledger.append(ActiveIntentRecord(
+                    timestamp=_utcnow_iso(),
+                    session_key=session_key,
+                    intent_type=event.event_type,
+                    intent_id=candidate["cooldown_key"],
+                    source_type=event.source_type,
+                    source_reference=event.source_reference,
+                    outcome="suppressed",
+                    summary=event.summary,
+                    suppression_reason=suppression_reason,
+                ))
+            else:
+                await self.bus.publish_inbound(candidate["message"])
+                published_internal_event = True
+                emitted_count += 1
+                if event.event_type == "scheduled_reminder":
+                    self._reminder_store.mark_fired(event.source_reference)
+                self.active_intents.ledger.append(ActiveIntentRecord(
+                    timestamp=_utcnow_iso(),
+                    session_key=session_key,
+                    intent_type=event.event_type,
+                    intent_id=candidate["cooldown_key"],
+                    source_type=event.source_type,
+                    source_reference=event.source_reference,
+                    outcome="emitted",
+                    summary=event.summary,
+                ))
+            decision = CognitiveDecision(
+                decision_id=f"decision:{event.event_id}",
+                event_id=event.event_id,
+                session_key=session_key,
+                action=action,
+                outcome=outcome,
+                suppression_reason=suppression_reason,
+                cooldown_key=candidate["cooldown_key"],
+                written_to_working_memory=written_to_working_memory,
+                published_internal_event=published_internal_event,
+                payload={
+                    "event_type": event.event_type,
+                    "source_type": event.source_type,
+                    "source_reference": event.source_reference,
+                },
+            )
+            self._cognitive_audit.append_decision(decision)
+            decisions.append(decision)
+        self._last_cognitive_scan = {
+            "session_key": session_key,
+            "eligible": True,
+            "reason": None,
+            "candidate_count": len(candidates),
+            "decision_count": len(decisions),
+            "emitted_count": sum(1 for item in decisions if item.outcome == "emitted"),
+            "suppressed_count": sum(1 for item in decisions if item.outcome == "suppressed"),
+            "event_types": [item["event"].event_type for item in candidates],
+            "timestamp": _utcnow_iso(),
+        }
+        return decisions
+
+    def _active_task_count(self, session_key: str) -> int:
+        active_tasks = self._active_tasks.get(session_key, [])
+        return sum(1 for task in active_tasks if not task.done())
+
+    def _build_cognitive_runtime_context(self, session_key: str) -> RuntimeContext:
+        channel, chat_id = (
+            session_key.split(":", 1)
+            if ":" in session_key
+            else ("cli", session_key)
+        )
+        msg = InboundMessage(
+            channel="system",
+            sender_id="agent_cognitive",
+            chat_id=session_key,
+            content="",
+            metadata={
+                "injected_event": "cognitive_event",
+                "user_id": "agent_cognitive",
+                "scope": "session",
+            },
+            session_key_override=session_key,
+        )
+        return self._resolve_runtime_context(
+            msg,
+            channel=channel,
+            chat_id=chat_id,
+            session_key=session_key,
+        )
+
+    def _collect_cognitive_candidates(self, session_key: str) -> list[dict[str, Any]]:
+        items: list[dict[str, Any]] = []
+        for candidate in self.active_intents.collect_candidates(session_key):
+            items.append({
+                "event": self._candidate_to_cognitive_event(session_key, {
+                    "kind": "active_intent",
+                    "candidate": candidate,
+                    "cooldown_key": candidate.intent_id,
+                    "message": self.active_intents.build_message(session_key, candidate),
+                }),
+                "message": self.active_intents.build_message(session_key, candidate),
+                "cooldown_key": candidate.intent_id,
+                "working_memory_attention": candidate.summary or candidate.content,
+                "working_memory_question": (
+                    "Should this pending item be confirmed now?"
+                    if candidate.intent_type == "pending_confirmation_nudge"
+                    else None
+                ),
+                "raw_candidate": candidate,
+            })
+        for record in self._reminder_store.list_due():
+            if record.session_key != session_key:
+                continue
+            content = (
+                "Scheduled reminder follow-up: a previously scheduled reminder is now due.\n"
+                f"Reminder: {record.content}\n"
+                "If helpful, continue from this due reminder and keep the follow-up bounded."
+            )
+            message = InboundMessage(
+                channel="system",
+                sender_id="agent_cognitive",
+                chat_id=record.chat_id or session_key,
+                content=content,
+                session_key_override=session_key,
+                metadata={
+                    "injected_event": "cognitive_event",
+                    "_from_active": True,
+                    "cognitive_event_type": "scheduled_reminder",
+                    "cognitive_event_id": f"reminder:{record.reminder_id}",
+                    "reminder_id": record.reminder_id,
+                },
+            )
+            event = CognitiveEvent(
+                event_id=f"reminder:{record.reminder_id}",
+                session_key=session_key,
+                event_type="scheduled_reminder",
+                source_type="reminder_store",
+                source_reference=record.reminder_id,
+                summary=_trim_text(record.content, max_chars=160),
+                priority="high",
+                payload={
+                    "due_at": record.due_at,
+                    "channel": record.channel,
+                    "chat_id": record.chat_id,
+                },
+            )
+            items.append({
+                "event": event,
+                "message": message,
+                "cooldown_key": event.event_id,
+                "working_memory_attention": record.content,
+                "working_memory_question": "Is this reminder still relevant and ready to act on?",
+                "raw_candidate": record,
+            })
+        priority_order = {"high": 0, "medium": 1, "low": 2}
+        items.sort(key=lambda item: (priority_order.get(item["event"].priority, 9), item["event"].created_at))
+        return items
+
+    def _candidate_to_cognitive_event(self, session_key: str, item: Any) -> CognitiveEvent:
+        if isinstance(item, dict) and "event" in item and isinstance(item["event"], CognitiveEvent):
+            return item["event"]
+        candidate = item["candidate"] if isinstance(item, dict) and "candidate" in item else item
+        priority = "medium"
+        if getattr(candidate, "intent_type", "") in {"pending_confirmation_nudge", "goal_nudge"}:
+            priority = "high"
+        return CognitiveEvent(
+            event_id=str(getattr(candidate, "intent_id", "")),
+            session_key=session_key,
+            event_type=str(getattr(candidate, "intent_type", "goal_nudge")),
+            source_type=str(getattr(candidate, "source_type", "active_intent")),
+            source_reference=str(getattr(candidate, "source_reference", "")),
+            summary=_trim_text(getattr(candidate, "summary", "") or getattr(candidate, "content", ""), max_chars=160),
+            priority=priority,
+            payload={
+                "content": str(getattr(candidate, "content", "")),
+            },
+        )
+
+    def _write_cognitive_event_to_working_memory(
+        self,
+        session: Session,
+        *,
+        runtime_context: RuntimeContext,
+        event: CognitiveEvent,
+    ) -> bool:
+        written = False
+        if event.summary:
+            self.working_memory.append_attention_item(
+                session,
+                event.summary,
+                identity=runtime_context.identity,
+            )
+            written = True
+        if event.event_type in {"pending_confirmation_nudge", "scheduled_reminder"}:
+            question = (
+                "Should this pending confirmation be resolved now?"
+                if event.event_type == "pending_confirmation_nudge"
+                else "Is this due reminder still relevant and ready to act on?"
+            )
+            self.working_memory.append_pending_question(
+                session,
+                question,
+                identity=runtime_context.identity,
+            )
+            written = True
+        if written:
+            self.sessions.save(session)
+        return written
 
     def stop(self) -> None:
         """Stop the agent loop."""
@@ -1816,6 +2115,7 @@ class AgentLoop:
         event_kind = str(msg.metadata.get("injected_event") or "").strip()
         is_subagent = msg.sender_id == "subagent" or event_kind == "subagent_result"
         is_active_intent = event_kind == "active_intent"
+        is_cognitive_event = event_kind == "cognitive_event"
         persisted_subagent = False
         if is_subagent and self._persist_subagent_followup(session, msg):
             persisted_subagent = True
@@ -1833,8 +2133,8 @@ class AgentLoop:
         self._update_working_memory_from_turn(
             session,
             runtime_context=runtime_context,
-            current_message=None if (is_subagent or is_active_intent) else msg.content,
-            internal_event=msg.content if (is_subagent or is_active_intent) else None,
+            current_message=None if (is_subagent or is_active_intent or is_cognitive_event) else msg.content,
+            internal_event=msg.content if (is_subagent or is_active_intent or is_cognitive_event) else None,
         )
         self._set_tool_context(
             channel, chat_id, msg.metadata.get("message_id"),
@@ -1862,7 +2162,7 @@ class AgentLoop:
 
         messages = self.context.build_messages(
             history=history_for_model,
-            current_message=None if (is_subagent or is_active_intent) else msg.content,
+            current_message=None if (is_subagent or is_active_intent or is_cognitive_event) else msg.content,
             media=msg.media if msg.media else None,
             channel=channel,
             chat_id=chat_id,
@@ -1873,7 +2173,9 @@ class AgentLoop:
             internal_event=(
                 ("subagent_result", msg.content)
                 if is_subagent
-                else ("active_intent", msg.content) if is_active_intent else None
+                else ("active_intent", msg.content)
+                if is_active_intent
+                else ("cognitive_event", msg.content) if is_cognitive_event else None
             ),
             runtime_context=runtime_context,
             session_key=key,
@@ -1893,7 +2195,9 @@ class AgentLoop:
             trigger=runtime_context.trigger,
             capability_snapshot=snapshot,
         )
-        save_skip = 1 + len(history_for_model) + (1 if (is_subagent or is_active_intent) else 0)
+        save_skip = 1 + len(history_for_model) + (
+            1 if (is_subagent or is_active_intent or is_cognitive_event) else 0
+        )
         self._save_turn(session, all_msgs, save_skip)
         session.enforce_file_cap(on_archive=self._archive_session_file_cap)
         self._clear_runtime_checkpoint(session)
@@ -1951,7 +2255,7 @@ class AgentLoop:
         lowered = text.lower()
         if text and ("?" in text or lowered.startswith(("how ", "what ", "why ", "can ", "should ", "do ", "is ", "are "))):
             pending_questions = [text]
-        if internal_event and runtime_context.source == "user_turn":
+        if internal_event and runtime_context.source in {"user_turn", "system"}:
             attention_items = [str(internal_event).strip()]
         self.working_memory.upsert(
             session,

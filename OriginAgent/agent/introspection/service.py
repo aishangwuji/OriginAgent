@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from OriginAgent.agent.confirmation import PendingConfirmationStore
+from OriginAgent.agent.cognitive_audit import JsonlCognitiveAuditLedger
 from OriginAgent.agent.domain_pack_governance import summarize_domain_pack_governance
 from OriginAgent.agent.facts import FactStore, summarize_facts
 from OriginAgent.agent.memory import MemoryStore
@@ -84,6 +85,7 @@ class RuntimeIntrospectionService:
             "_last_usage": getattr(loop, "_last_usage", None),
             "scratchpad": getattr(loop, "_runtime_vars", {}),
             "continuity": self.continuity_summary(),
+            "cognition": self.cognition_summary(),
         }
 
     def system_status(self) -> dict[str, Any]:
@@ -247,6 +249,22 @@ class RuntimeIntrospectionService:
             except Exception:
                 out["working_memory"] = {}
         return out
+
+    def cognition_summary(self) -> dict[str, Any]:
+        loop = self._loop
+        enabled = bool(getattr(loop, "_cognitive_loop_enabled", False)) if loop is not None else False
+        sidecar = getattr(loop, "cognitive_loop", None) if loop is not None else None
+        ledger = JsonlCognitiveAuditLedger(self._workspace)
+        summary = ledger.summary(limit=20)
+        summary["enabled"] = enabled
+        if loop is not None:
+            summary["latest_scan"] = getattr(loop, "_last_cognitive_scan", {})
+        if sidecar is not None:
+            summary["config"] = {
+                "enabled": bool(getattr(sidecar.config, "enabled", False)),
+                "interval_seconds": int(getattr(sidecar.config, "interval_seconds", 0) or 0),
+            }
+        return summary
 
     def background_task_summary(
         self,

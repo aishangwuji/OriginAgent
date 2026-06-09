@@ -376,6 +376,13 @@ async def test_agent_loop_starts_active_intent_loop_when_enabled(tmp_path: Path)
         allow_agent_initiated_messages=True,
     )
     loop.active_intents.process_session = AsyncMock(return_value=[])
+    loop.cognitive_loop = type(loop.cognitive_loop)(
+        config=loop.cognitive_loop.config,
+        session_keys_provider=loop.active_intents.session_keys,
+        active_task_count_provider=loop._active_task_count,
+        running_subagents_provider=loop.subagents.get_running_count_by_session,
+        session_processor=loop.active_intents.process_session,
+    )
     loop._running = True
 
     loop._start_active_intent_loop()
@@ -390,3 +397,86 @@ async def test_agent_loop_starts_active_intent_loop_when_enabled(tmp_path: Path)
 def test_agent_defaults_active_intents_disabled_by_default() -> None:
     defaults = AgentDefaults()
     assert defaults.allow_agent_initiated_messages is False
+
+
+@pytest.mark.asyncio
+async def test_agent_loop_cognitive_pass_emits_due_reminder_and_writes_working_memory(tmp_path: Path) -> None:
+    from OriginAgent.agent.loop import AgentLoop
+    from OriginAgent.agent.reminders import ReminderRecord
+
+    loop = AgentLoop(
+        bus=MessageBus(),
+        provider=FakeProvider(LLMResponse(content="ok", finish_reason="stop")),
+        workspace=tmp_path,
+        model="fake-model",
+        allow_agent_initiated_messages=True,
+    )
+    session = loop.sessions.get_or_create("cli:test")
+    loop.sessions.save(session)
+    due_at = (datetime.now(timezone.utc) - timedelta(minutes=1)).isoformat()
+    loop._reminder_store.upsert(ReminderRecord.create(
+        session_key="cli:test",
+        channel="cli",
+        chat_id="test",
+        content="Follow up on the current plan",
+        due_at=due_at,
+        reminder_id="r-1",
+    ))
+
+    decisions = await loop._run_cognitive_pass_for_session(
+        "cli:test",
+        active_task_count=0,
+        running_subagents=0,
+    )
+
+    assert any(item.outcome == "emitted" for item in decisions)
+    msg = await asyncio.wait_for(loop.bus.consume_inbound(), timeout=0.2)
+    assert msg.metadata["injected_event"] == "cognitive_event"
+    assert msg.metadata["cognitive_event_type"] == "scheduled_reminder"
+    snapshot = loop.working_memory.inspect(session)
+    assert "Follow up on the current plan" in snapshot["attention_items"]
+    assert "Is this due reminder still relevant and ready to act on?" in snapshot["pending_questions"]
+    reminder = loop._reminder_store.get("r-1")
+    assert reminder is not None
+    assert reminder.status == "fired"
+    cognition = loop.introspection.cognition_summary()
+    assert cognition["latest_scan"]["session_key"] == "cli:test"
+    assert cognition["latest_scan"]["emitted_count"] == 1
+
+
+@pytest.mark.asyncio
+async def test_agent_loop_processes_cognitive_event_as_internal_event(tmp_path: Path) -> None:
+    from OriginAgent.agent.loop import AgentLoop
+
+    provider = MagicMock(spec=FakeProvider(LLMResponse(content="ok", finish_reason="stop")))
+    provider.get_default_model.return_value = "fake-model"
+    provider.generation.max_tokens = 4096
+    provider.chat_with_retry = AsyncMock(return_value=LLMResponse(content="Handled.", finish_reason="stop"))
+    provider.chat_stream_with_retry = AsyncMock(return_value=LLMResponse(content="Handled.", finish_reason="stop"))
+
+    loop = AgentLoop(
+        bus=MessageBus(),
+        provider=provider,
+        workspace=tmp_path,
+        model="fake-model",
+    )
+
+    result = await loop._process_message(
+        InboundMessage(
+            channel="system",
+            sender_id="agent_cognitive",
+            chat_id="cli:test",
+            content="Reminder: Follow up on the current plan",
+            metadata={
+                "injected_event": "cognitive_event",
+                "cognitive_event_type": "scheduled_reminder",
+                "cognitive_event_id": "reminder:r-1",
+            },
+            session_key_override="cli:test",
+        )
+    )
+
+    assert result is not None
+    continuity = loop.introspection.continuity_summary()
+    assert "Reminder: Follow up on the current plan" in continuity["working_memory"]["attention_items"]
+    assert "internal_event" in continuity["last_context_assembly"]["block_kinds"]

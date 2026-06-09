@@ -7,9 +7,17 @@
 ## 当前文档
 
 - [`red_queen_master_plan.md`](./red_queen_master_plan.md)：OriginAgent 向“红后式智能体”演进的总计划书，覆盖后台认知、分层感知、世界模型、动作安全、阶段路线与任务拆包规则。
+- [`red_queen_phase1_remaining_plan.md`](./red_queen_phase1_remaining_plan.md)：红后化总主线 `Phase 1` 剩余部分计划书，聚焦后台认知闭环、认知事件模型、统一编排与进入 `Phase 2` 前的止损条件。
 - [`continuity_memory_os_outline.md`](./continuity_memory_os_outline.md)：连续性与记忆操作系统独立架构提纲，覆盖身份层、作用域、工作记忆、检索融合、上下文构造、晋升与遗忘。
+- [`continuity_memory_phase1_plan.md`](./continuity_memory_phase1_plan.md)：连续性与记忆主线 `Phase 1` 计划书，收敛 identity、scope、working memory、context assembler 的最小落地骨架。
+- [`rq-001-cognitive-orchestration-boundary.md`](./rq-001-cognitive-orchestration-boundary.md)：`RQ-001` 任务包，定义后台认知编排层的职责边界与现有 runtime 的关系。
 - [`plan1.md`](./plan1.md)：历史 OriginAgent 第一阶段改造清单，保留作迁移参考。
 - [`originagent-v1-development-plan.md`](./originagent-v1-development-plan.md)：历史 OriginAgent v1 总体开发任务清单与技术落地方案。
+- [`rq-002-continuity-memory-os-boundary.md`](./rq-002-continuity-memory-os-boundary.md)：`RQ-002` 任务包，冻结连续性与记忆操作系统的 Phase 1 术语、四层视图与作用域传播默认规则。
+- [`rq-003-identity-scope-model.md`](./rq-003-identity-scope-model.md)：`RQ-003` 任务包，定义 identity 与 scope 的最小实现边界。
+- [`rq-004-working-memory-context-assembler-v2.md`](./rq-004-working-memory-context-assembler-v2.md)：`RQ-004` 任务包，定义 working memory 与 `ContextAssembler` v2 的最小落地方案。
+- [`rq-005-cognitive-event-audit-model.md`](./rq-005-cognitive-event-audit-model.md)：`RQ-005` 任务包，定义后台认知事件、决策与审计模型。
+- [`p1-backend-cognition-integration-task-package.md`](./p1-backend-cognition-integration-task-package.md)：`P1 Integration` 任务包，聚焦后台认知闭环的实现型集成。
 - [`runtime_security.md`](./runtime_security.md)：runtime/tools 安全边界与审计说明。
 - [`governed_evolution.md`](./governed_evolution.md)：受治理自进化的控制面、trial 隔离、日志保留、健康历史与硬安全边界。
 - [`runtime_profiles.md`](./runtime_profiles.md)：runtime profile presets 与适用场景。
