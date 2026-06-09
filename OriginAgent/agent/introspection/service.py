@@ -586,6 +586,11 @@ class RuntimeIntrospectionService:
                 session_summary=None,
                 session_key=session_key,
                 runtime_context=runtime_context,
+                current_message=(
+                    getattr(self._loop, "_last_context_assembly", {}).get("current_message_preview", "")
+                    if self._loop is not None
+                    else ""
+                ),
             )
         except Exception:
             return defaults
@@ -619,6 +624,13 @@ class RuntimeIntrospectionService:
                 if isinstance(entry.get("source"), str) and entry["source"]
             ],
             "dialogue_blocks": dialogue_blocks,
+            "fusion_enabled": bool(getattr(builder, "_last_retrieval_fusion", {}).get("enabled")),
+            "fusion_sources_used": list(getattr(builder, "_last_retrieval_fusion", {}).get("sources_used", [])),
+            "fusion_source_counts": dict(getattr(builder, "_last_retrieval_fusion", {}).get("source_counts", {})),
+            "fusion_deduped_count": int(getattr(builder, "_last_retrieval_fusion", {}).get("deduped_count", 0) or 0),
+            "fusion_trimmed_count": int(getattr(builder, "_last_retrieval_fusion", {}).get("trimmed_count", 0) or 0),
+            "fusion_scope_filtered": list(getattr(builder, "_last_retrieval_fusion", {}).get("scope_filtered", [])),
+            "fusion_hits": dict(getattr(builder, "_last_retrieval_fusion", {}).get("hits", {})),
         }
 
     def _world_view(

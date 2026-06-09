@@ -255,6 +255,23 @@ async def test_inspect_context_reports_phase1_views_and_scope_filter(tmp_path) -
     )
     context_builder = SimpleNamespace(
         _context_config=SimpleNamespace(enable_phase1_continuity=True),
+        _last_retrieval_fusion={
+            "enabled": True,
+            "sources_used": ["fact_store", "nearline_retrieval", "session_search"],
+            "source_counts": {
+                "fact_store": 1,
+                "nearline_retrieval": 1,
+                "session_search": 1,
+            },
+            "deduped_count": 1,
+            "trimmed_count": 2,
+            "scope_filtered": [{"source": "session_search", "reason": "scope_hidden"}],
+            "hits": {
+                "fact_store": [{"source": "fact_store", "title": "facts"}],
+                "nearline_retrieval": [{"source": "nearline_retrieval", "title": "layered_memory"}],
+                "session_search": [{"source": "session_search", "title": "sessions"}],
+            },
+        },
         build_reference_context_blocks=lambda **kwargs: [
             {
                 "type": "text",
@@ -340,6 +357,11 @@ async def test_inspect_context_reports_phase1_views_and_scope_filter(tmp_path) -
     assert result["views"]["working"]["working_memory"]["pending_questions"] == ["What should we do next?"]
     assert result["views"]["retrieval"]["sources"] == ["memory_retrieval"]
     assert result["views"]["retrieval"]["dialogue_sources"] == ["recent_history"]
+    assert result["views"]["retrieval"]["fusion_enabled"] is True
+    assert result["views"]["retrieval"]["fusion_source_counts"]["fact_store"] == 1
+    assert result["views"]["retrieval"]["fusion_deduped_count"] == 1
+    assert result["views"]["retrieval"]["fusion_trimmed_count"] == 2
+    assert result["views"]["retrieval"]["fusion_scope_filtered"][0]["reason"] == "scope_hidden"
     assert result["views"]["world"]["snapshot"]["status"] == "active"
     assert result["views"]["world"]["summary"]["focus"] == ["Desk has a notebook."]
     assert result["views"]["world"]["source_snapshot_ids"] == ["snap_1"]

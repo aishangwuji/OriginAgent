@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 from unittest.mock import MagicMock
+import json
 
 import pytest
 
@@ -329,6 +330,197 @@ def test_loop_introspection_exposes_world_state_after_media_ingest(tmp_path: Pat
     assert continuity["world_state"]["version"] == "phase2"
     assert continuity["world_state"]["world_summary"]["focus"] == ["Kitchen counter has a kettle."]
     assert "world_attention: Kitchen counter has a kettle." in continuity["working_memory"]["attention_items"]
+
+
+def test_context_builder_retrieval_fusion_injects_multi_source_blocks_and_audit(tmp_path: Path):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    sessions = SessionManager(workspace)
+    session = sessions.get_or_create("cli:direct")
+    builder = ContextBuilder(
+        workspace=workspace,
+        timezone="UTC",
+        sessions=sessions,
+        memory_feature_flags={"semantic_retrieval_enabled": True},
+    )
+    builder.memory.upsert_fact_and_rebuild_memory(
+        "User prefers dark mode",
+        category="preference",
+        scope="user.interface.theme",
+        owner="user",
+        source_cursors=[1],
+        source_excerpt="please use dark mode",
+    )
+    nearline = workspace / "memory" / "nearline"
+    nearline.mkdir(parents=True, exist_ok=True)
+    sessions_dir = workspace / "sessions"
+    sessions_dir.mkdir(parents=True, exist_ok=True)
+    (sessions_dir / "cli_direct.jsonl").write_text(
+        "\n".join([
+            json.dumps({"_type": "metadata", "key": "cli:direct"}, ensure_ascii=False),
+            json.dumps(
+                {
+                    "role": "user",
+                    "content": "Need a deployment checklist for Friday release.",
+                    "timestamp": "2026-06-05T10:00:00+08:00",
+                },
+                ensure_ascii=False,
+            ),
+        ]) + "\n",
+        encoding="utf-8",
+    )
+    (nearline / "episodes.jsonl").write_text(
+        (
+            '{"episode_id":"ep_1","memcell_id":"mem_1","session_key":"cli:direct",'
+            '"owner_id":"user-1","summary":"Prepare deployment checklist.",'
+            '"content":"Prepare deployment checklist before release.",'
+            '"timestamp":"2026-06-05T10:00:00+08:00","source_message_ids":["msg_1"],"metadata":{}}'
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    builder.memory.append_history("Need a deployment checklist for Friday release.")
+    runtime_context = ActorResolver().resolve_runtime_context(
+        channel="cli",
+        chat_id="direct",
+        sender_id="user-1",
+        metadata={},
+        session_key="cli:direct",
+    )
+
+    messages = builder.build_messages(
+        history=[],
+        current_message="Need a deployment checklist for Friday release.",
+        channel="cli",
+        chat_id="direct",
+        sender_id="user-1",
+        session_metadata=session.metadata,
+        runtime_context=runtime_context,
+        session_key="cli:direct",
+    )
+
+    user_content = messages[-1]["content"]
+    sources = [
+        block.get("_meta", {}).get("source")
+        for block in user_content
+        if isinstance(block, dict) and block.get("_meta", {}).get("kind") == ContextBuilder.REFERENCE_CONTEXT_KIND
+    ]
+
+    assert "memory_retrieval" in sources
+    assert "layered_memory" in sources
+    assert "retrieval_session_search" in sources
+    assert "recent_history" in sources
+    assert builder._last_retrieval_fusion["source_counts"]["fact_store"] >= 1
+    assert builder._last_retrieval_fusion["source_counts"]["nearline_retrieval"] >= 1
+    assert builder._last_retrieval_fusion["source_counts"]["session_search"] >= 1
+
+
+def test_context_builder_retrieval_fusion_respects_user_scope_prefix(tmp_path: Path):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    sessions = SessionManager(workspace)
+    builder = ContextBuilder(
+        workspace=workspace,
+        timezone="UTC",
+        sessions=sessions,
+        memory_feature_flags={"semantic_retrieval_enabled": True},
+    )
+    builder.memory.upsert_fact_and_rebuild_memory(
+        "User one prefers dark mode",
+        category="preference",
+        scope="user.preference.theme",
+        owner="user",
+        source_cursors=[1],
+        source_excerpt="user one preference",
+    )
+    builder.memory.upsert_fact_and_rebuild_memory(
+        "Workspace prefers concise replies",
+        category="preference",
+        scope="workspace.preference.style",
+        owner="user",
+        source_cursors=[2],
+        source_excerpt="user two preference",
+    )
+    runtime_context = ActorResolver().resolve_runtime_context(
+        channel="cli",
+        chat_id="direct",
+        sender_id="user-1",
+        metadata={"scope": "user"},
+        session_key="cli:direct",
+    )
+
+    blocks = builder.build_reference_context_blocks(
+        session_key="cli:direct",
+        runtime_context=runtime_context,
+        current_message="What do I prefer?",
+    )
+    text = "\n".join(block.get("text", "") for block in blocks if isinstance(block, dict))
+
+    assert "User one prefers dark mode" in text
+    assert "Workspace prefers concise replies" not in text
+
+
+def test_context_builder_retrieval_fusion_records_trimming(tmp_path: Path):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    sessions = SessionManager(workspace)
+    builder = ContextBuilder(
+        workspace=workspace,
+        timezone="UTC",
+        sessions=sessions,
+        context_config=ContextConfig(
+            max_retrieval_blocks=1,
+            max_retrieval_chars=400,
+            max_retrieval_hits_per_source=1,
+        ),
+        memory_feature_flags={"semantic_retrieval_enabled": True},
+    )
+    builder.memory.upsert_fact_and_rebuild_memory(
+        "User prefers dark mode",
+        category="preference",
+        scope="user.interface.theme",
+        owner="user",
+        source_cursors=[1],
+        source_excerpt="please use dark mode",
+    )
+    nearline = workspace / "memory" / "nearline"
+    nearline.mkdir(parents=True, exist_ok=True)
+    (nearline / "episodes.jsonl").write_text(
+        (
+            '{"episode_id":"ep_1","memcell_id":"mem_1","session_key":"cli:direct",'
+            '"owner_id":"user-1","summary":"Prepare deployment checklist.",'
+            '"content":"Prepare deployment checklist before release.",'
+            '"timestamp":"2026-06-05T10:00:00+08:00","source_message_ids":["msg_1"],"metadata":{}}'
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    builder.memory.append_history("Need a deployment checklist for Friday release.")
+    runtime_context = ActorResolver().resolve_runtime_context(
+        channel="cli",
+        chat_id="direct",
+        sender_id="user-1",
+        metadata={},
+        session_key="cli:direct",
+    )
+
+    blocks = builder.build_reference_context_blocks(
+        session_key="cli:direct",
+        runtime_context=runtime_context,
+        current_message="Need a deployment checklist for Friday release.",
+    )
+
+    retrieval_blocks = [
+        block for block in blocks
+        if isinstance(block, dict) and block.get("_meta", {}).get("source") in {
+            "memory_retrieval",
+            "layered_memory",
+            "retrieval_session_search",
+        }
+    ]
+
+    assert len(retrieval_blocks) == 1
+    assert builder._last_retrieval_fusion["trimmed_count"] >= 1
 
 
 def test_world_state_filters_device_scoped_snapshot_with_mismatched_device(tmp_path: Path):

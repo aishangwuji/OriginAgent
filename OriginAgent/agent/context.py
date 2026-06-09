@@ -14,12 +14,14 @@ from loguru import logger
 from OriginAgent.agent.context_assembler import ContextAssemblerV2
 from OriginAgent.agent.domain_packs import DomainPackManager
 from OriginAgent.agent.memory import MemoryStore
+from OriginAgent.agent.retrieval_fusion import RetrievalFusion
 from OriginAgent.agent.working_memory import WorkingMemoryManager
 from OriginAgent.agent.self_model import SelfModelRenderer, SelfModelService
 from OriginAgent.agent.skills import SkillsLoader
 from OriginAgent.config.schema import ContextConfig
 from OriginAgent.memory.policy import nearline_runtime_enabled
 from OriginAgent.memory.retrieval import NearlineMemoryRetriever
+from OriginAgent.session.search import SessionSearchService
 from OriginAgent.session.goal_state import goal_state_runtime_lines
 from OriginAgent.utils.attachments import (
     attachment_block,
@@ -70,6 +72,7 @@ class ContextBuilder:
         sessions: Any | None = None,
         pending_queues: dict[str, Any] | None = None,
         nearline_memory_config: Any | None = None,
+        session_search_index_service: Any | None = None,
         cron_service: Any | None = None,
         confirmation_store: Any | None = None,
         background_review_service: Any | None = None,
@@ -83,6 +86,12 @@ class ContextBuilder:
         self.nearline_memory = NearlineMemoryRetriever(
             workspace,
             fact_store=self.memory.fact_store,
+        )
+        self._session_search_index_service = session_search_index_service
+        self.session_search = SessionSearchService(
+            workspace,
+            index_service=self._session_search_index_service,
+            nearline_memory_config=nearline_memory_config,
         )
         self.domain_packs = domain_pack_manager or DomainPackManager(
             workspace,
@@ -107,6 +116,15 @@ class ContextBuilder:
             WorkingMemoryManager(self._sessions) if self._sessions is not None else None
         )
         self.world_state: Any | None = None
+        self._last_retrieval_fusion: dict[str, Any] = {}
+        self.retrieval_fusion = RetrievalFusion(
+            workspace,
+            memory=self.memory,
+            nearline_memory=self.nearline_memory,
+            session_search=self.session_search,
+            context_config=self._context_config,
+            nearline_memory_config=nearline_memory_config,
+        )
         self.assembler_v2 = ContextAssemblerV2(self)
 
     def build_system_prompt(
@@ -163,6 +181,7 @@ class ContextBuilder:
         session_summary: str | None = None,
         session_key: str | None = None,
         runtime_context: Any | None = None,
+        current_message: str | None = None,
     ) -> list[dict[str, Any]]:
         """Build untrusted user-side reference context blocks."""
         blocks: list[dict[str, Any]] = []
@@ -172,27 +191,17 @@ class ContextBuilder:
             blocks.append(self.build_reference_context_block("user_profile", user_file))
 
         entries = self.memory.read_unprocessed_history(since_cursor=self.memory.get_last_dream_cursor())
-        layered = (
-            self.nearline_memory.retrieve(recent_history=entries[-6:] if entries else None)
-            if self._nearline_memory_enabled()
-            else None
+        fusion = self.retrieval_fusion.retrieve(
+            query=current_message,
+            session_key=session_key,
+            runtime_context=runtime_context,
+            current_message=current_message,
+            recent_history=entries[-6:] if entries else None,
+            session_summary=session_summary,
         )
-        if layered is not None and layered.has_primary_content and layered.rendered_text.strip():
-            blocks.append(self.build_reference_context_block("layered_memory", layered.rendered_text))
-        else:
-            scope_prefix = None
-            if runtime_context is not None:
-                if getattr(runtime_context, "default_scope", None) == "user":
-                    scope_prefix = "user"
-            memory_bundle = self.memory.get_memory_context_bundle(scope_prefix=scope_prefix)
-            memory = memory_bundle.rendered_text
-            if memory:
-                source = "memory_retrieval" if not memory_bundle.fallback_used else "memory"
-                if not memory_bundle.fallback_used or not self._is_template_content(
-                    self.memory.read_memory(),
-                    "memory/MEMORY.md",
-                ):
-                    blocks.append(self.build_reference_context_block(source, memory))
+        self._last_retrieval_fusion = fusion.audit
+        for block in fusion.retrieved_blocks:
+            blocks.append(self.build_reference_context_block(block.source, block.text))
 
         if entries:
             capped = entries[-self._context_config.max_recent_history:]

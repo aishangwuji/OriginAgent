@@ -478,6 +478,7 @@ class AgentLoop:
             sessions=self.sessions,
             pending_queues=self._pending_queues,
             nearline_memory_config=self._nearline_memory_config,
+            session_search_index_service=self.session_search_index,
             cron_service=self.cron_service,
             confirmation_store=self._confirmation_store,
             background_review_service=self.background_review,
@@ -1159,6 +1160,7 @@ class AgentLoop:
                         session_summary=pending_summary,
                         session_key=session.key,
                         runtime_context=self._last_runtime_context,
+                        current_message=msg.content,
                     ),
                 ],
             })
@@ -1174,6 +1176,7 @@ class AgentLoop:
                             session_summary=pending_summary,
                             session_key=session.key,
                             runtime_context=self._last_runtime_context,
+                            current_message=msg.content,
                         )
                     ],
                 ],

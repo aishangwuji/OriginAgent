@@ -450,6 +450,27 @@ class ContextConfig(Base):
         validation_alias=AliasChoices("maxHistoryChars", "max_history_chars"),
         serialization_alias="maxHistoryChars",
     )
+    max_retrieval_blocks: int = Field(
+        default=4,
+        ge=1,
+        le=32,
+        validation_alias=AliasChoices("maxRetrievalBlocks", "max_retrieval_blocks"),
+        serialization_alias="maxRetrievalBlocks",
+    )
+    max_retrieval_chars: int = Field(
+        default=8_000,
+        ge=200,
+        le=100_000,
+        validation_alias=AliasChoices("maxRetrievalChars", "max_retrieval_chars"),
+        serialization_alias="maxRetrievalChars",
+    )
+    max_retrieval_hits_per_source: int = Field(
+        default=4,
+        ge=1,
+        le=32,
+        validation_alias=AliasChoices("maxRetrievalHitsPerSource", "max_retrieval_hits_per_source"),
+        serialization_alias="maxRetrievalHitsPerSource",
+    )
     max_media_files: int = Field(
         default=8,
         ge=1,

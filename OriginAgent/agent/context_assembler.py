@@ -66,6 +66,7 @@ class ContextAssemblerV2:
             session_summary=session_summary,
             session_key=session_key,
             runtime_context=runtime_context,
+            current_message=current_message,
         )
 
         merged: list[dict[str, Any]] = [
@@ -94,6 +95,12 @@ class ContextAssemblerV2:
                 for block in reference_blocks
                 if isinstance(block, dict)
             ],
+            "retrieval_fusion_enabled": True,
+            "retrieval_sources_used": list(self._builder._last_retrieval_fusion.get("sources_used", [])),
+            "retrieval_source_counts": dict(self._builder._last_retrieval_fusion.get("source_counts", {})),
+            "retrieval_deduped_count": int(self._builder._last_retrieval_fusion.get("deduped_count", 0) or 0),
+            "retrieval_trimmed_count": int(self._builder._last_retrieval_fusion.get("trimmed_count", 0) or 0),
+            "retrieval_hits": dict(self._builder._last_retrieval_fusion.get("hits", {})),
             "internal_event_source": internal_event[0] if internal_event is not None else None,
             "runtime_context": (
                 {
