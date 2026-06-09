@@ -83,6 +83,76 @@ class RuntimeStatusTool(Tool):
         return service.system_status()
 
 
+class InspectContextTool(Tool):
+    name = "originagent_inspect_context"
+
+    def __init__(
+        self,
+        *,
+        workspace: Path,
+        registry: Any,
+        sessions: Any,
+        pending_queues: dict[str, Any],
+        cron_service: CronService | None = None,
+        confirmation_store: PendingConfirmationStore | None = None,
+        audit_mode: str = "minimal",
+        runtime_profile: str = "default",
+        domain_pack_manager: Any | None = None,
+        background_review_service: Any | None = None,
+        curator_service: Any | None = None,
+        session_search_index_service: Any | None = None,
+        evolution_config: Any | None = None,
+        nearline_memory_config: Any | None = None,
+        introspection_service: RuntimeIntrospectionService | None = None,
+    ) -> None:
+        self._workspace = Path(workspace)
+        self._registry = registry
+        self._sessions = sessions
+        self._pending_queues = pending_queues
+        self._cron_service = cron_service
+        self._confirmation_store = confirmation_store
+        self._audit_mode = audit_mode
+        self._runtime_profile = runtime_profile
+        self._domain_pack_manager = domain_pack_manager
+        self._background_review_service = background_review_service
+        self._curator_service = curator_service
+        self._session_search_index_service = session_search_index_service
+        self._evolution_config = evolution_config
+        self._nearline_memory_config = nearline_memory_config
+        self._introspection_service = introspection_service
+
+    @property
+    def description(self) -> str:
+        return "Return a minimal debug view of the current turn context assembly."
+
+    @property
+    def parameters(self) -> dict[str, Any]:
+        return {"type": "object", "properties": {}, "additionalProperties": False}
+
+    @property
+    def read_only(self) -> bool:
+        return True
+
+    async def execute(self) -> dict[str, Any]:
+        service = self._introspection_service or RuntimeIntrospectionService(
+            workspace=self._workspace,
+            registry=self._registry,
+            sessions=self._sessions,
+            pending_queues=self._pending_queues,
+            nearline_memory_config=self._nearline_memory_config,
+            cron_service=self._cron_service,
+            confirmation_store=self._confirmation_store,
+            audit_mode=self._audit_mode,
+            runtime_profile=self._runtime_profile,
+            domain_pack_manager=self._domain_pack_manager,
+            background_review_service=self._background_review_service,
+            curator_service=self._curator_service,
+            session_search_index_service=self._session_search_index_service,
+            evolution_config=self._evolution_config,
+        )
+        return service.inspect_context()
+
+
 class ToolAuditSummaryTool(Tool):
     name = "originagent_tool_audit_summary"
 

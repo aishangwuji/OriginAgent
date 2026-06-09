@@ -28,6 +28,7 @@ from OriginAgent.config.schema import (
 from OriginAgent.cron.types import CronSchedule
 
 RUNTIME_TOOL_NAMES = {
+    "originagent_inspect_context",
     "originagent_runtime_status",
     "originagent_tool_audit_summary",
     "originagent_cron_summary",

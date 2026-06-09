@@ -9,10 +9,12 @@ import pytest
 
 from OriginAgent.agent.confirmation import ConfirmationRequest, PendingConfirmationStore
 from OriginAgent.agent.domain_packs import DomainPackManager
+from OriginAgent.agent.introspection.service import RuntimeIntrospectionService
 from OriginAgent.agent.tools.filesystem import ReadFileTool
 from OriginAgent.agent.tools.runtime_status import (
     ConfirmationSummaryTool,
     CronSummaryTool,
+    InspectContextTool,
     RuntimeStatusTool,
     ToolAuditSummaryTool,
 )
@@ -183,6 +185,104 @@ async def test_runtime_status_uses_cron_for_reminder_summary(tmp_path) -> None:
     assert result["reminder_total"] == 1
     assert result["reminder_status_counts"] == {"fired": 1}
     assert result["reminder_last_fired_at"] is not None
+
+
+@pytest.mark.asyncio
+async def test_inspect_context_reports_phase1_views_and_scope_filter(tmp_path) -> None:
+    session = SimpleNamespace(
+        metadata={
+            "working_memory_v1": {
+                "scope": "session",
+                "owner_id": "user-1",
+                "pending_questions": ["What should we do next?"],
+            }
+        },
+        get_history=lambda **kwargs: [
+            {"role": "user", "content": "Earlier message"},
+            {"role": "assistant", "content": "Earlier answer"},
+        ],
+    )
+    sessions = SimpleNamespace(get_or_create=lambda key: session)
+    runtime_context = SimpleNamespace(
+        actor_id="user-1",
+        user_id="user-1",
+        session_id="cli:direct",
+        device_id="device-a",
+        trigger="user_initiated",
+        source="user_turn",
+        default_scope="session",
+        identity=SimpleNamespace(user_id="user-1"),
+    )
+    context_builder = SimpleNamespace(
+        _context_config=SimpleNamespace(enable_phase1_continuity=True),
+        build_reference_context_blocks=lambda **kwargs: [
+            {
+                "type": "text",
+                "text": "<reference_context source='memory_retrieval'>retrieved fact</reference_context>",
+                "_meta": {"kind": "reference_context", "source": "memory_retrieval"},
+            },
+            {
+                "type": "text",
+                "text": "<reference_context source='recent_history'>dialogue remainder</reference_context>",
+                "_meta": {"kind": "reference_context", "source": "recent_history"},
+            },
+        ],
+    )
+    loop = SimpleNamespace(
+        _last_runtime_context=runtime_context,
+        _last_continuity_session_key="cli:direct",
+        _last_context_assembly={
+            "enabled": True,
+            "block_kinds": [
+                "runtime_context",
+                "continuity_context",
+                "working_memory_context",
+                "world_state_context",
+                "reference_context",
+            ],
+            "reference_sources": ["memory_retrieval", "recent_history"],
+            "current_message_preview": "Please continue the task",
+        },
+        _max_messages=120,
+        context=context_builder,
+        sessions=sessions,
+        _replay_token_budget=lambda: 0,
+        working_memory=SimpleNamespace(
+            inspect=lambda session, identity=None: {
+                "scope": "session",
+                "owner_id": "user-1",
+                "pending_questions": ["What should we do next?"],
+            }
+        ),
+    )
+
+    result = await InspectContextTool(
+        workspace=tmp_path,
+        registry=SimpleNamespace(tool_names=["originagent_inspect_context"]),
+        sessions=sessions,
+        pending_queues={},
+        introspection_service=RuntimeIntrospectionService(
+            loop=loop,
+            workspace=tmp_path,
+            registry=SimpleNamespace(tool_names=["originagent_inspect_context"]),
+            sessions=sessions,
+            pending_queues={},
+        ),
+    ).execute()
+
+    assert result["enabled"] is True
+    assert result["views"]["conversation"]["message_count"] == 2
+    assert result["views"]["conversation"]["current_message_preview"] == "Please continue the task"
+    assert result["views"]["working"]["working_memory"]["pending_questions"] == ["What should we do next?"]
+    assert result["views"]["retrieval"]["sources"] == ["memory_retrieval"]
+    assert result["views"]["retrieval"]["dialogue_sources"] == ["recent_history"]
+    assert result["views"]["world"]["placeholder"]["status"] == "placeholder"
+    assert result["scope_filter"]["current_scope"] == "session"
+    assert result["scope_filter"]["visibility_matrix"]["task"] is False
+    assert any(
+        candidate["source"] == "working_memory" and candidate["visible"] is True
+        for candidate in result["scope_filter"]["candidates"]
+    )
 
 
 @pytest.mark.asyncio

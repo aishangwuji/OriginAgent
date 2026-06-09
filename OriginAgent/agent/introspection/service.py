@@ -13,6 +13,7 @@ from OriginAgent.agent.domain_pack_governance import summarize_domain_pack_gover
 from OriginAgent.agent.facts import FactStore, summarize_facts
 from OriginAgent.agent.memory import MemoryStore
 from OriginAgent.agent.runtime_models import RuntimeContextSnapshot
+from OriginAgent.agent.scope import ScopeResolver
 from OriginAgent.agent.self_model import SelfModelService
 from OriginAgent.agent.skills import SkillsLoader
 from OriginAgent.agent.workflow_artifacts import summarize_workflow_artifacts
@@ -272,6 +273,59 @@ class RuntimeIntrospectionService:
             summary["scheduler"] = scheduler.runtime_status()
         return summary
 
+    def inspect_context(self) -> dict[str, Any]:
+        """Return a minimal Phase 1 debug view of the assembled context."""
+
+        loop = self._loop
+        runtime_context = getattr(loop, "_last_runtime_context", None) if loop is not None else None
+        session_key = getattr(loop, "_last_continuity_session_key", None) if loop is not None else None
+        continuity = self.continuity_summary()
+        conversation_view = self._conversation_view(session_key)
+        retrieval_view = self._retrieval_view(
+            session_key=session_key,
+            runtime_context=runtime_context,
+        )
+        world_view = self._world_view()
+        working_memory = continuity.get("working_memory", {}) if isinstance(continuity, dict) else {}
+        current_scope = ScopeResolver.normalize_scope(
+            getattr(runtime_context, "default_scope", None),
+        )
+        return {
+            "enabled": bool(
+                getattr(getattr(loop, "context", None), "_context_config", None)
+                and getattr(loop.context._context_config, "enable_phase1_continuity", False)
+            )
+            if loop is not None
+            else False,
+            "session_key": session_key,
+            "runtime_context": continuity.get("runtime_context", {}),
+            "last_context_assembly": continuity.get("last_context_assembly", {}),
+            "views": {
+                "conversation": {
+                    **conversation_view,
+                    "current_message_preview": (
+                        continuity.get("last_context_assembly", {}).get("current_message_preview", "")
+                        if isinstance(continuity, dict)
+                        else ""
+                    ),
+                    "injected_reference_sources": retrieval_view.get("dialogue_sources", []),
+                    "injected_reference_blocks": retrieval_view.get("dialogue_blocks", []),
+                },
+                "working": {
+                    "source": "RuntimeIntrospectionService.continuity_summary",
+                    "runtime_context": continuity.get("runtime_context", {}),
+                    "working_memory": working_memory,
+                },
+                "retrieval": retrieval_view,
+                "world": world_view,
+            },
+            "scope_filter": self._scope_filter_summary(
+                current_scope=current_scope,
+                current_owner_id=getattr(runtime_context, "user_id", None),
+                working_memory=working_memory if isinstance(working_memory, dict) else {},
+            ),
+        }
+
     def background_task_summary(
         self,
         *,
@@ -458,6 +512,212 @@ class RuntimeIntrospectionService:
             "type_counts": type_counts,
             "origin_counts": origin_counts,
         }
+
+    def _conversation_view(self, session_key: str | None) -> dict[str, Any]:
+        defaults = {
+            "source": "SessionManager.get_history",
+            "message_count": 0,
+            "messages": [],
+        }
+        sessions = self._sessions
+        if not session_key or sessions is None or not hasattr(sessions, "get_or_create"):
+            return defaults
+        try:
+            session = sessions.get_or_create(session_key)
+        except Exception:
+            return defaults
+        if session is None or not hasattr(session, "get_history"):
+            return defaults
+        max_messages = int(getattr(self._loop, "_max_messages", 120) or 120)
+        max_tokens = 0
+        replay_budget = getattr(self._loop, "_replay_token_budget", None) if self._loop is not None else None
+        if callable(replay_budget):
+            try:
+                max_tokens = int(replay_budget() or 0)
+            except Exception:
+                max_tokens = 0
+        try:
+            history = session.get_history(
+                max_messages=max_messages,
+                max_tokens=max_tokens,
+                include_timestamps=True,
+            )
+        except Exception:
+            return defaults
+        return {
+            **defaults,
+            "message_count": len(history),
+            "messages": [self._message_view(message) for message in history],
+        }
+
+    def _retrieval_view(
+        self,
+        *,
+        session_key: str | None,
+        runtime_context: Any | None,
+    ) -> dict[str, Any]:
+        defaults = {
+            "source": "ContextBuilder.build_reference_context_blocks",
+            "block_count": 0,
+            "sources": [],
+            "blocks": [],
+            "dialogue_sources": [],
+            "dialogue_blocks": [],
+        }
+        builder = getattr(self._loop, "context", None) if self._loop is not None else None
+        if builder is None or not hasattr(builder, "build_reference_context_blocks"):
+            return defaults
+        try:
+            blocks = builder.build_reference_context_blocks(
+                session_summary=None,
+                session_key=session_key,
+                runtime_context=runtime_context,
+            )
+        except Exception:
+            return defaults
+        retrieval_blocks: list[dict[str, Any]] = []
+        dialogue_blocks: list[dict[str, Any]] = []
+        for block in blocks:
+            if not isinstance(block, dict):
+                continue
+            meta = block.get("_meta", {}) if isinstance(block.get("_meta"), dict) else {}
+            entry = {
+                "kind": meta.get("kind"),
+                "source": meta.get("source"),
+                "text": _preview_text(block.get("text")),
+            }
+            if meta.get("source") == "recent_history":
+                dialogue_blocks.append(entry)
+            else:
+                retrieval_blocks.append(entry)
+        return {
+            **defaults,
+            "block_count": len(retrieval_blocks),
+            "sources": [
+                entry["source"]
+                for entry in retrieval_blocks
+                if isinstance(entry.get("source"), str) and entry["source"]
+            ],
+            "blocks": retrieval_blocks,
+            "dialogue_sources": [
+                entry["source"]
+                for entry in dialogue_blocks
+                if isinstance(entry.get("source"), str) and entry["source"]
+            ],
+            "dialogue_blocks": dialogue_blocks,
+        }
+
+    def _world_view(self) -> dict[str, Any]:
+        return {
+            "source": "ContextBuilder.build_phase1_continuity_blocks",
+            "placeholder": {
+                "status": "placeholder",
+                "version": "phase1",
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+            },
+        }
+
+    def _scope_filter_summary(
+        self,
+        *,
+        current_scope: str,
+        current_owner_id: str | None,
+        working_memory: dict[str, Any],
+    ) -> dict[str, Any]:
+        resolver = ScopeResolver()
+        retrieval_scope = "user" if current_scope == "user" else "session"
+        candidates = [
+            self._scope_candidate(
+                source="conversation_view",
+                scope="session",
+                owner_id=current_owner_id,
+                current_scope=current_scope,
+                current_owner_id=current_owner_id,
+                resolver=resolver,
+            ),
+            self._scope_candidate(
+                source="working_memory",
+                scope=working_memory.get("scope"),
+                owner_id=working_memory.get("owner_id"),
+                current_scope=current_scope,
+                current_owner_id=current_owner_id,
+                resolver=resolver,
+            ),
+            self._scope_candidate(
+                source="retrieval_view",
+                scope=retrieval_scope,
+                owner_id=current_owner_id if retrieval_scope == "user" else None,
+                current_scope=current_scope,
+                current_owner_id=current_owner_id,
+                resolver=resolver,
+            ),
+            self._scope_candidate(
+                source="world_view",
+                scope="session",
+                owner_id=None,
+                current_scope=current_scope,
+                current_owner_id=current_owner_id,
+                resolver=resolver,
+            ),
+        ]
+        return {
+            "source": "ScopeResolver.is_visible",
+            "current_scope": current_scope,
+            "current_owner_id": current_owner_id,
+            "retrieval_scope_prefix_before": None,
+            "retrieval_scope_prefix_after": "user" if current_scope == "user" else None,
+            "visibility_matrix": {
+                scope: resolver.is_visible(
+                    scope=scope,
+                    current_scope=current_scope,
+                    owner_id=current_owner_id,
+                    current_owner_id=current_owner_id,
+                )
+                for scope in ("task", "session", "user")
+            },
+            "candidates": candidates,
+        }
+
+    @staticmethod
+    def _scope_candidate(
+        *,
+        source: str,
+        scope: str | None,
+        owner_id: str | None,
+        current_scope: str,
+        current_owner_id: str | None,
+        resolver: ScopeResolver,
+    ) -> dict[str, Any]:
+        normalized_scope = resolver.normalize_scope(scope)
+        visible = resolver.is_visible(
+            scope=normalized_scope,
+            current_scope=current_scope,
+            owner_id=owner_id,
+            current_owner_id=current_owner_id,
+        )
+        return {
+            "source": source,
+            "scope": normalized_scope,
+            "owner_id": owner_id,
+            "visible": visible,
+            "reason": _visibility_reason(
+                visible=visible,
+                scope=normalized_scope,
+                owner_id=owner_id,
+                current_owner_id=current_owner_id,
+            ),
+        }
+
+    @staticmethod
+    def _message_view(message: dict[str, Any]) -> dict[str, Any]:
+        view = {
+            "role": message.get("role"),
+            "content": _preview_message_content(message.get("content")),
+        }
+        tool_calls = message.get("tool_calls")
+        if isinstance(tool_calls, list) and tool_calls:
+            view["tool_call_count"] = len(tool_calls)
+        return view
 
     @staticmethod
     def _domain_pack_status(manager: Any | None) -> dict[str, Any]:
@@ -782,6 +1042,41 @@ def _session_count(sessions: Any) -> int:
         if value is not None:
             return _safe_len(value)
     return 0
+
+
+def _preview_text(value: Any, *, max_chars: int = 4000) -> str:
+    text = str(value or "").strip()
+    if len(text) > max_chars:
+        return text[:max_chars].rstrip() + "..."
+    return text
+
+
+def _preview_message_content(content: Any) -> str:
+    if isinstance(content, str):
+        return _preview_text(content)
+    if isinstance(content, list):
+        text_parts: list[str] = []
+        for block in content:
+            if isinstance(block, dict) and isinstance(block.get("text"), str):
+                text_parts.append(block["text"])
+            else:
+                text_parts.append(str(block))
+        return _preview_text("\n".join(part for part in text_parts if part))
+    return _preview_text(content)
+
+
+def _visibility_reason(
+    *,
+    visible: bool,
+    scope: str,
+    owner_id: str | None,
+    current_owner_id: str | None,
+) -> str:
+    if visible:
+        return "included"
+    if scope == "user" and owner_id and current_owner_id and owner_id != current_owner_id:
+        return "owner_mismatch"
+    return "scope_not_visible"
 
 
 def _evolution_maintenance_policy(config: Any | None) -> dict[str, Any]:
