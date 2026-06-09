@@ -66,6 +66,37 @@ def test_list_sessions_uses_assistant_preview_when_no_user_message(tmp_path):
     assert rows[0]["preview"] == "assistant only"
 
 
+def test_list_sessions_exposes_continuity_identity_summary(tmp_path):
+    manager = SessionManager(tmp_path)
+    session = manager.get_or_create("websocket:identity")
+    session.metadata["continuity_runtime_identity_v1"] = {
+        "user_id": "user-1",
+        "device_id": "device-a",
+        "session_id": "websocket:identity",
+        "scope": "session",
+        "updated_at": "2026-06-09T00:00:00+00:00",
+    }
+    manager.save(session)
+
+    rows = manager.list_sessions()
+
+    assert rows[0]["user_id"] == "user-1"
+    assert rows[0]["device_id"] == "device-a"
+    assert rows[0]["continuity_identity_updated_at"] == "2026-06-09T00:00:00+00:00"
+
+
+def test_list_sessions_returns_none_for_missing_continuity_identity(tmp_path):
+    manager = SessionManager(tmp_path)
+    session = manager.get_or_create("websocket:no-identity")
+    manager.save(session)
+
+    rows = manager.list_sessions()
+
+    assert rows[0]["user_id"] is None
+    assert rows[0]["device_id"] is None
+    assert rows[0]["continuity_identity_updated_at"] is None
+
+
 # --- Original regression test (from PR 2075) ---
 
 def test_get_history_drops_orphan_tool_results_when_window_cuts_tool_calls():

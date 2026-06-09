@@ -133,3 +133,105 @@ def test_retrieval_fusion_prefers_nearline_over_session_search_duplicates():
     assert result.audit["deduped_count"] == 1
     assert result.audit["source_counts"]["nearline_retrieval"] == 1
     assert result.audit["source_counts"]["session_search"] == 0
+
+
+def test_retrieval_fusion_prefers_prewarm_seed_over_session_search_duplicates():
+    fusion = _fusion(
+        fact_bundle=FactRetrievalBundle(facts=[], rendered_text="", fallback_used=False, retrievals=[]),
+        nearline_result=NearlineRetrievalResult(),
+        search_rows=[
+            {
+                "source": "sessions",
+                "snippet": "Prepare deployment checklist",
+                "timestamp": "2026-06-09T00:00:00+00:00",
+                "locator": {"message_index": 0},
+                "score": 0.7,
+                "match_type": "semantic",
+            }
+        ],
+    )
+
+    result = fusion.retrieve(
+        query="deployment checklist",
+        session_key="cli:direct",
+        runtime_context=SimpleNamespace(default_scope="session", user_id="user-1", device_id="device-a"),
+        current_message="deployment checklist",
+        recent_history=[],
+        session_summary=None,
+        prewarm_seed=[
+            {
+                "title": "recent_session:cli:other",
+                "text": "Prepare deployment checklist",
+                "scope": "session",
+                "owner_id": "user-1",
+                "timestamp": "2026-06-09T00:00:00+00:00",
+                "details": {"device_id": "device-a"},
+            }
+        ],
+    )
+
+    assert result.audit["deduped_count"] == 1
+    assert result.audit["source_counts"]["prewarm_seed"] == 1
+    assert result.audit["source_counts"]["session_search"] == 0
+    assert result.retrieved_blocks[0].source == "retrieval_prewarm_seed"
+
+
+def test_retrieval_fusion_reports_owner_hidden_for_user_scope_mismatch():
+    fusion = _fusion(
+        fact_bundle=FactRetrievalBundle(facts=[], rendered_text="", fallback_used=False, retrievals=[]),
+        nearline_result=NearlineRetrievalResult(),
+        search_rows=[],
+    )
+
+    result = fusion.retrieve(
+        query="prewarm",
+        session_key="cli:direct",
+        runtime_context=SimpleNamespace(default_scope="session", user_id="user-1", device_id="device-a"),
+        current_message="prewarm",
+        recent_history=[],
+        session_summary=None,
+        prewarm_seed=[
+            {
+                "title": "recent_session:cli:other",
+                "text": "Cross-user memory",
+                "scope": "user",
+                "owner_id": "user-2",
+                "timestamp": "2026-06-09T00:00:00+00:00",
+            }
+        ],
+    )
+
+    assert result.audit["scope_filtered"] == [
+        {"source": "prewarm_seed", "title": "recent_session:cli:other", "reason": "owner_hidden"}
+    ]
+
+
+def test_retrieval_fusion_reports_device_hidden_for_device_scope_mismatch():
+    fusion = _fusion(
+        fact_bundle=FactRetrievalBundle(facts=[], rendered_text="", fallback_used=False, retrievals=[]),
+        nearline_result=NearlineRetrievalResult(),
+        search_rows=[],
+    )
+
+    result = fusion.retrieve(
+        query="prewarm",
+        session_key="cli:direct",
+        runtime_context=SimpleNamespace(default_scope="device", user_id="user-1", device_id="device-a"),
+        current_message="prewarm",
+        recent_history=[],
+        session_summary=None,
+        prewarm_seed=[
+            {
+                "title": "recent_session:cli:other",
+                "text": "Other device memory",
+                "scope": "device",
+                "owner_id": "user-1",
+                "timestamp": "2026-06-09T00:00:00+00:00",
+                "details": {"device_id": "device-b"},
+            }
+        ],
+    )
+
+    assert result.audit["scope_filtered"] == [
+        {"source": "prewarm_seed", "title": "recent_session:cli:other", "reason": "device_hidden"}
+    ]

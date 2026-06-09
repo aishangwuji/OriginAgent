@@ -250,6 +250,7 @@ class RuntimeIntrospectionService:
                 )
             except Exception:
                 out["working_memory"] = {}
+        out["governance"] = dict(getattr(loop, "_last_governance_audit", {}))
         world_state = getattr(loop, "world_state", None)
         if world_state is not None and sessions is not None and session_key:
             try:
@@ -328,9 +329,25 @@ class RuntimeIntrospectionService:
                     "source": "RuntimeIntrospectionService.continuity_summary",
                     "runtime_context": continuity.get("runtime_context", {}),
                     "working_memory": working_memory,
+                    "seeded_items": list(
+                        continuity.get("last_context_assembly", {}).get("prewarm_seeded_items", {}).get("working", [])
+                    )
+                    if isinstance(continuity.get("last_context_assembly"), dict)
+                    else [],
                 },
                 "retrieval": retrieval_view,
                 "world": world_view,
+            },
+            "governance": {
+                "promotions": list(continuity.get("governance", {}).get("promotion_candidates", []))
+                if isinstance(continuity.get("governance"), dict)
+                else [],
+                "forgetting": list(continuity.get("governance", {}).get("forgetting_actions", []))
+                if isinstance(continuity.get("governance"), dict)
+                else [],
+                "conflicts": int(continuity.get("governance", {}).get("promotion_conflict_count", 0) or 0)
+                if isinstance(continuity.get("governance"), dict)
+                else 0,
             },
             "scope_filter": self._scope_filter_summary(
                 current_scope=current_scope,
@@ -631,6 +648,7 @@ class RuntimeIntrospectionService:
             "fusion_trimmed_count": int(getattr(builder, "_last_retrieval_fusion", {}).get("trimmed_count", 0) or 0),
             "fusion_scope_filtered": list(getattr(builder, "_last_retrieval_fusion", {}).get("scope_filtered", [])),
             "fusion_hits": dict(getattr(builder, "_last_retrieval_fusion", {}).get("hits", {})),
+            "prewarm_hits": list(getattr(builder, "_last_retrieval_fusion", {}).get("hits", {}).get("prewarm_seed", [])),
         }
 
     def _world_view(
@@ -702,6 +720,11 @@ class RuntimeIntrospectionService:
                 filtered.get("freshness", defaults["freshness"])
                 if isinstance(filtered, dict)
                 else defaults["freshness"]
+            ),
+            "contested": (
+                filtered.get("contested_summary", {})
+                if isinstance(filtered, dict)
+                else {}
             ),
         }
 

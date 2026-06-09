@@ -142,6 +142,11 @@ class InspectionResult:
     new_details: list[str] = field(default_factory=list)
     uncertain: list[str] = field(default_factory=list)
     confidence: float = 0.5
+    status: str = "pending"
+    contested: bool = False
+    contested_reasons: list[str] = field(default_factory=list)
+    evidence_excerpt: list[str] = field(default_factory=list)
+    inspector: str = ""
 
     def to_json(self) -> dict[str, Any]:
         return asdict(self)
@@ -169,6 +174,11 @@ class InspectionResult:
             new_details=_string_list(raw.get("new_details")),
             uncertain=_string_list(raw.get("uncertain")),
             confidence=confidence,
+            status=str(raw.get("status") or "pending").strip() or "pending",
+            contested=bool(raw.get("contested")),
+            contested_reasons=_string_list(raw.get("contested_reasons")),
+            evidence_excerpt=_string_list(raw.get("evidence_excerpt")),
+            inspector=str(raw.get("inspector") or "").strip(),
         )
 
 
@@ -184,6 +194,10 @@ class WorldSummary:
     uncertainties: list[str] = field(default_factory=list)
     source_snapshot_ids: list[str] = field(default_factory=list)
     inspection_ids: list[str] = field(default_factory=list)
+    contested: bool = False
+    contested_items: list[str] = field(default_factory=list)
+    source_count: int = 0
+    last_inspected_at: str | None = None
 
     def to_json(self) -> dict[str, Any]:
         return asdict(self)
@@ -206,6 +220,10 @@ class WorldSummary:
             uncertainties=_string_list(raw.get("uncertainties")),
             source_snapshot_ids=_string_list(raw.get("source_snapshot_ids")),
             inspection_ids=_string_list(raw.get("inspection_ids")),
+            contested=bool(raw.get("contested")),
+            contested_items=_string_list(raw.get("contested_items")),
+            source_count=max(0, int(raw.get("source_count", 0) or 0)),
+            last_inspected_at=str(raw.get("last_inspected_at")).strip() if raw.get("last_inspected_at") else None,
         )
 
 
@@ -262,9 +280,15 @@ class WorldStateSnapshot:
 class WorldStateManager:
     """Session-backed minimal world-state manager for Phase 2."""
 
-    def __init__(self, workspace: Path, sessions: SessionManager) -> None:
+    def __init__(
+        self,
+        workspace: Path,
+        sessions: SessionManager,
+        context_config: Any | None = None,
+    ) -> None:
         self._workspace = Path(workspace)
         self._sessions = sessions
+        self._context_config = context_config
 
     def load(self, session: Session, *, identity: RuntimeContext | None = None) -> WorldStateSnapshot:
         snapshot = WorldStateSnapshot.from_json(session.metadata.get(WORLD_STATE_METADATA_KEY))
@@ -359,26 +383,57 @@ class WorldStateManager:
         summary = filtered.get("included_summary") or {}
         if not summary:
             return []
-        items = [
-            *list(summary.get("focus") or []),
-            *list(summary.get("uncertainties") or []),
+        grouped_items: list[tuple[str, list[str]]] = [
+            # Surface contested state first so a small attention budget still
+            # preserves disagreements uncovered by inspection.
+            ("world_contested", list(summary.get("contested_items") or [])),
+            ("world_uncertainty", list(summary.get("uncertainties") or [])),
+            ("world_attention", list(summary.get("focus") or [])),
         ]
         trimmed: list[str] = []
-        for item in items:
-            text = str(item or "").strip()
-            if text and text not in trimmed:
-                trimmed.append(f"world_attention: {text}")
+        # First pass: preserve one item per category when possible.
+        for prefix, items in grouped_items:
+            for item in items:
+                text = str(item or "").strip()
+                candidate = f"{prefix}: {text}"
+                if text and candidate not in trimmed:
+                    trimmed.append(candidate)
+                    break
             if len(trimmed) >= limit:
-                break
+                return trimmed[:limit]
+        # Second pass: backfill remaining budget with extra items in priority order.
+        for prefix, items in grouped_items:
+            for item in items:
+                text = str(item or "").strip()
+                candidate = f"{prefix}: {text}"
+                if not text or candidate in trimmed:
+                    continue
+                trimmed.append(candidate)
+                if len(trimmed) >= limit:
+                    return trimmed[:limit]
         return trimmed
 
-    def inspect_snapshot(
+    def get_snapshot(
+        self,
+        session: Session,
+        *,
+        identity: RuntimeContext | None = None,
+        snapshot_id: str,
+    ) -> SceneSnapshot | None:
+        snapshot = self.load(session, identity=identity)
+        return next(
+            (item for item in snapshot.snapshots if item.snapshot_id == str(snapshot_id).strip()),
+            None,
+        )
+
+    def apply_inspection(
         self,
         session: Session,
         *,
         runtime_context: RuntimeContext,
         snapshot_id: str,
-        requested_by: str = "user_turn",
+        inspection_payload: dict[str, Any],
+        requested_by: str | None = None,
     ) -> dict[str, Any]:
         snapshot = self.load(session, identity=runtime_context)
         target = next(
@@ -387,21 +442,27 @@ class WorldStateManager:
         )
         if target is None:
             return {"error": f"snapshot '{snapshot_id}' not found"}
+        try:
+            confidence = float(inspection_payload.get("confidence", target.confidence))
+        except (TypeError, ValueError):
+            confidence = target.confidence
+        confidence = max(0.0, min(1.0, confidence))
+        corrected = _string_list(inspection_payload.get("corrected"))
         inspection = InspectionResult(
             inspection_id=f"inspect_{uuid.uuid4().hex[:12]}",
             snapshot_id=target.snapshot_id,
-            requested_by=str(requested_by or "user_turn").strip() or "user_turn",
-            requested_at=_utcnow_iso(),
-            confirmed=[line for line in target.relationships if line][:4],
-            corrected=[],
-            new_details=[
-                line for line in [
-                    f"objects observed: {', '.join(target.objects)}" if target.objects else "",
-                    f"source media path: {target.media_path}",
-                ] if line
-            ][:4],
-            uncertain=target.uncertainties[:4],
-            confidence=max(0.4, min(0.95, target.confidence)),
+            requested_by=str(requested_by or inspection_payload.get("requested_by") or "user_turn").strip() or "user_turn",
+            requested_at=str(inspection_payload.get("requested_at") or _utcnow_iso()).strip(),
+            confirmed=_string_list(inspection_payload.get("confirmed")),
+            corrected=corrected,
+            new_details=_string_list(inspection_payload.get("new_details")),
+            uncertain=_string_list(inspection_payload.get("uncertain")),
+            confidence=confidence,
+            status=str(inspection_payload.get("status") or "completed").strip() or "completed",
+            contested=bool(inspection_payload.get("contested")) or bool(corrected),
+            contested_reasons=_string_list(inspection_payload.get("contested_reasons")) or corrected[:4],
+            evidence_excerpt=_string_list(inspection_payload.get("evidence_excerpt")),
+            inspector=str(inspection_payload.get("inspector") or "").strip(),
         )
         snapshot.inspections.append(inspection)
         refreshed = self._refresh_summary(snapshot)
@@ -411,6 +472,47 @@ class WorldStateManager:
             "inspection": inspection.to_json(),
             "world_summary": refreshed.world_summary.to_json() if refreshed.world_summary is not None else {},
         }
+
+    def inspect_snapshot(
+        self,
+        session: Session,
+        *,
+        runtime_context: RuntimeContext,
+        snapshot_id: str,
+        requested_by: str = "user_turn",
+    ) -> dict[str, Any]:
+        target = self.get_snapshot(
+            session,
+            identity=runtime_context,
+            snapshot_id=snapshot_id,
+        )
+        if target is None:
+            return {"error": f"snapshot '{snapshot_id}' not found"}
+        result = self.apply_inspection(
+            session,
+            runtime_context=runtime_context,
+            snapshot_id=snapshot_id,
+            requested_by=requested_by,
+            inspection_payload={
+                "confirmed": [line for line in target.relationships if line][:4],
+                "corrected": [],
+                "new_details": [
+                    line for line in [
+                        f"objects observed: {', '.join(target.objects)}" if target.objects else "",
+                        f"source media path: {target.media_path}",
+                    ] if line
+                ][:4],
+                "uncertain": target.uncertainties[:4],
+                "confidence": max(0.4, min(0.95, target.confidence)),
+                "status": "completed",
+                "contested": False,
+                "contested_reasons": [],
+                "evidence_excerpt": [f"media_path: {target.media_path}"],
+                "inspector": "legacy_world_state",
+            },
+        )
+        result["inspection_path"] = "legacy"
+        return result
 
     def filtered_candidates(
         self,
@@ -432,6 +534,7 @@ class WorldStateManager:
         scope_resolver = runtime_context.identity and runtime_context
         visible: list[SceneSnapshot] = []
         filtered_candidates: list[dict[str, Any]] = []
+        selection_reasons: list[str] = []
         for candidate in snapshot.snapshots:
             reasons: list[str] = []
             if not self._is_snapshot_fresh(candidate, now=now):
@@ -442,11 +545,23 @@ class WorldStateManager:
                 filtered_candidates.append(self._candidate_view(candidate, included=False, reasons=reasons))
                 continue
             visible.append(candidate)
-        relevant = [
-            item for item in visible
-            if self._is_relevant(item, session_tokens=session_tokens)
-        ]
-        included = relevant or visible[-1:] if visible else []
+        relevant = [item for item in visible if self._is_relevant(item, session_tokens=session_tokens)]
+        included: list[SceneSnapshot]
+        if relevant:
+            included = relevant
+            selection_reasons.append("relevant_to_message")
+        else:
+            inspected_override = [
+                item for item in visible
+                if self._has_completed_inspection_with_findings(snapshot, item.snapshot_id)
+            ]
+            if inspected_override:
+                included = inspected_override
+                selection_reasons.append("inspected_override")
+            else:
+                included = visible[-1:] if visible else []
+                if included:
+                    selection_reasons.append("fresh_visible_fallback")
         for candidate in visible:
             if candidate in included:
                 continue
@@ -458,6 +573,10 @@ class WorldStateManager:
             included_snapshots=included,
             now=now,
         )
+        contested_summary = {
+            "contested": bool(included_summary.contested) if included_summary is not None else False,
+            "items": list(included_summary.contested_items) if included_summary is not None else [],
+        }
         return {
             "included_summary": included_summary.to_json() if included_summary is not None else {},
             "filtered_candidates": filtered_candidates,
@@ -470,6 +589,8 @@ class WorldStateManager:
                     and _parse_dt(included_summary.fresh_until) >= now
                 ),
             },
+            "selection_reasons": selection_reasons,
+            "contested_summary": contested_summary,
         }
 
     def _refresh_summary(self, snapshot: WorldStateSnapshot) -> WorldStateSnapshot:
@@ -527,6 +648,8 @@ class WorldStateManager:
         constraints: list[str] = []
         uncertainties: list[str] = []
         inspection_ids: list[str] = []
+        contested_items: list[str] = []
+        last_inspected_at: str | None = None
         by_snapshot = {item.snapshot_id: item for item in snapshot.snapshots}
         for item in snapshot.snapshots:
             if item.summary and item.summary not in focus:
@@ -543,6 +666,7 @@ class WorldStateManager:
             if inspection.snapshot_id not in by_snapshot:
                 continue
             inspection_ids.append(inspection.inspection_id)
+            last_inspected_at = inspection.requested_at
             for line in inspection.corrected:
                 if line and line not in focus:
                     focus.append(line)
@@ -552,8 +676,16 @@ class WorldStateManager:
             for line in inspection.uncertain:
                 if line and line not in uncertainties:
                     uncertainties.append(line)
+            if inspection.contested:
+                for line in [*inspection.contested_reasons, *inspection.corrected]:
+                    if line and line not in contested_items:
+                        contested_items.append(line)
         generated_at = now.isoformat()
-        fresh_until = (now + timedelta(minutes=5)).isoformat()
+        summary_ttl_minutes = max(
+            1,
+            int(getattr(self._context_config, "world_summary_ttl_minutes", 5) or 5),
+        )
+        fresh_until = (now + timedelta(minutes=summary_ttl_minutes)).isoformat()
         return WorldSummary(
             summary_id=f"world_{uuid.uuid4().hex[:12]}",
             scope=snapshot.scope or "session",
@@ -565,6 +697,10 @@ class WorldStateManager:
             uncertainties=_string_list(uncertainties, limit=6, max_chars=200),
             source_snapshot_ids=[item.snapshot_id for item in snapshot.snapshots],
             inspection_ids=inspection_ids[:6],
+            contested=bool(contested_items),
+            contested_items=_string_list(contested_items, limit=6, max_chars=200),
+            source_count=len(snapshot.snapshots),
+            last_inspected_at=last_inspected_at,
         )
 
     @staticmethod
@@ -600,6 +736,20 @@ class WorldStateManager:
         if session_tokens & env_tokens:
             return True
         return any(token in haystack for token in session_tokens if len(token) >= 3)
+
+    @staticmethod
+    def _has_completed_inspection_with_findings(
+        snapshot: WorldStateSnapshot,
+        snapshot_id: str,
+    ) -> bool:
+        for inspection in snapshot.inspections:
+            if inspection.snapshot_id != snapshot_id:
+                continue
+            if inspection.status != "completed":
+                continue
+            if inspection.corrected or inspection.new_details:
+                return True
+        return False
 
     @staticmethod
     def _scope_visible(snapshot: SceneSnapshot, *, runtime_context: RuntimeContext) -> bool:
@@ -680,9 +830,12 @@ class WorldStateManager:
             return None
         return data if isinstance(data, dict) else None
 
-    @staticmethod
-    def _is_snapshot_fresh(snapshot: SceneSnapshot, *, now: datetime) -> bool:
+    def _is_snapshot_fresh(self, snapshot: SceneSnapshot, *, now: datetime) -> bool:
         captured_at = _parse_dt(snapshot.captured_at)
         if captured_at is None:
             return True
-        return now - captured_at <= timedelta(minutes=30)
+        freshness_minutes = max(
+            1,
+            int(getattr(self._context_config, "snapshot_freshness_minutes", 30) or 30),
+        )
+        return now - captured_at <= timedelta(minutes=freshness_minutes)

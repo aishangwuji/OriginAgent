@@ -4,6 +4,7 @@ import json
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -255,11 +256,23 @@ async def test_inspect_context_reports_phase1_views_and_scope_filter(tmp_path) -
     )
     context_builder = SimpleNamespace(
         _context_config=SimpleNamespace(enable_phase1_continuity=True),
+        _last_prewarm_audit={
+            "prewarm_enabled": True,
+            "prewarm_empty": False,
+            "prewarm_reason": "prepared",
+            "prewarm_sources": ["recent_sessions"],
+            "prewarm_seed_counts": {
+                "working_memory_seed": 1,
+                "world_view_seed": 0,
+                "retrieval_seed": 1,
+            },
+        },
         _last_retrieval_fusion={
             "enabled": True,
-            "sources_used": ["fact_store", "nearline_retrieval", "session_search"],
+            "sources_used": ["fact_store", "prewarm_seed", "nearline_retrieval", "session_search"],
             "source_counts": {
                 "fact_store": 1,
+                "prewarm_seed": 1,
                 "nearline_retrieval": 1,
                 "session_search": 1,
             },
@@ -268,6 +281,7 @@ async def test_inspect_context_reports_phase1_views_and_scope_filter(tmp_path) -
             "scope_filtered": [{"source": "session_search", "reason": "scope_hidden"}],
             "hits": {
                 "fact_store": [{"source": "fact_store", "title": "facts"}],
+                "prewarm_seed": [{"source": "prewarm_seed", "title": "recent_session"}],
                 "nearline_retrieval": [{"source": "nearline_retrieval", "title": "layered_memory"}],
                 "session_search": [{"source": "session_search", "title": "sessions"}],
             },
@@ -299,6 +313,12 @@ async def test_inspect_context_reports_phase1_views_and_scope_filter(tmp_path) -
             ],
             "reference_sources": ["memory_retrieval", "recent_history"],
             "current_message_preview": "Please continue the task",
+            "prewarm_seed_counts": {"working_memory_seed": 1, "world_view_seed": 0, "retrieval_seed": 1},
+        },
+        _last_governance_audit={
+            "promotion_candidates": [{"candidate_key": "candidate_1", "applied": True}],
+            "promotion_conflict_count": 1,
+            "forgetting_actions": [{"kind": "empty_turn", "retained": True}],
         },
         _max_messages=120,
         context=context_builder,
@@ -333,6 +353,7 @@ async def test_inspect_context_reports_phase1_views_and_scope_filter(tmp_path) -
                     "fresh_until": "2026-06-09T00:05:00+00:00",
                     "is_fresh": True,
                 },
+                "contested_summary": {"contested": True, "items": ["desk state disputed"]},
             },
         ),
     )
@@ -359,6 +380,8 @@ async def test_inspect_context_reports_phase1_views_and_scope_filter(tmp_path) -
     assert result["views"]["retrieval"]["dialogue_sources"] == ["recent_history"]
     assert result["views"]["retrieval"]["fusion_enabled"] is True
     assert result["views"]["retrieval"]["fusion_source_counts"]["fact_store"] == 1
+    assert result["views"]["retrieval"]["fusion_source_counts"]["prewarm_seed"] == 1
+    assert result["views"]["retrieval"]["prewarm_hits"][0]["source"] == "prewarm_seed"
     assert result["views"]["retrieval"]["fusion_deduped_count"] == 1
     assert result["views"]["retrieval"]["fusion_trimmed_count"] == 2
     assert result["views"]["retrieval"]["fusion_scope_filtered"][0]["reason"] == "scope_hidden"
@@ -367,6 +390,10 @@ async def test_inspect_context_reports_phase1_views_and_scope_filter(tmp_path) -
     assert result["views"]["world"]["source_snapshot_ids"] == ["snap_1"]
     assert result["views"]["world"]["filtered_candidates"][0]["reasons"] == ["scope_hidden"]
     assert result["views"]["world"]["freshness"]["is_fresh"] is True
+    assert result["views"]["world"]["contested"]["contested"] is True
+    assert result["governance"]["promotions"][0]["candidate_key"] == "candidate_1"
+    assert result["governance"]["conflicts"] == 1
+    assert result["governance"]["forgetting"][0]["kind"] == "empty_turn"
     assert result["scope_filter"]["current_scope"] == "session"
     assert result["scope_filter"]["visibility_matrix"]["device"] is True
     assert result["scope_filter"]["visibility_matrix"]["task"] is False
@@ -385,22 +412,26 @@ async def test_inspect_snapshot_tool_writes_back_minimal_inspection(tmp_path) ->
     session = SimpleNamespace(key="cli:direct")
     sessions = SimpleNamespace(get_or_create=lambda key: session)
     calls: list[dict[str, object]] = []
-    world_state = SimpleNamespace(
-        inspect_snapshot=lambda session, runtime_context=None, snapshot_id=None, requested_by=None: (
-            calls.append(
-                {
-                    "snapshot_id": snapshot_id,
-                    "requested_by": requested_by,
-                    "runtime_context": runtime_context,
+    inspection_service = SimpleNamespace(
+        inspect=AsyncMock(
+            side_effect=lambda session, runtime_context=None, snapshot_id=None, requested_by=None: (
+                calls.append(
+                    {
+                        "snapshot_id": snapshot_id,
+                        "requested_by": requested_by,
+                        "runtime_context": runtime_context,
+                    }
+                )
+                or {
+                    "snapshot": {"snapshot_id": snapshot_id},
+                    "inspection": {"inspection_id": "inspect_1"},
+                    "world_summary": {"focus": ["verified scene"]},
+                    "inspection_path": "service",
                 }
             )
-            or {
-                "snapshot": {"snapshot_id": snapshot_id},
-                "inspection": {"inspection_id": "inspect_1"},
-                "world_summary": {"focus": ["verified scene"]},
-            }
         )
     )
+    world_state = SimpleNamespace()
     loop = SimpleNamespace(world_state=world_state)
     tool = InspectSnapshotTool(
         sessions=sessions,
@@ -411,6 +442,7 @@ async def test_inspect_snapshot_tool_writes_back_minimal_inspection(tmp_path) ->
             sessions=sessions,
             pending_queues={},
         ),
+        inspection_service=inspection_service,
     )
     runtime_context = SimpleNamespace(source="user_turn")
     tool.set_context(
@@ -425,8 +457,59 @@ async def test_inspect_snapshot_tool_writes_back_minimal_inspection(tmp_path) ->
     result = await tool.execute(snapshot_id="snap_1")
 
     assert result["inspection"]["inspection_id"] == "inspect_1"
+    assert result["inspection_path"] == "service"
     assert calls[0]["snapshot_id"] == "snap_1"
     assert calls[0]["requested_by"] == "user_turn"
+
+
+@pytest.mark.asyncio
+async def test_inspect_snapshot_tool_falls_back_to_legacy_path_when_service_missing(tmp_path) -> None:
+    session = SimpleNamespace(key="cli:direct")
+    sessions = SimpleNamespace(get_or_create=lambda key: session)
+    calls: list[dict[str, object]] = []
+    world_state = SimpleNamespace(
+        inspect_snapshot=lambda session, runtime_context=None, snapshot_id=None, requested_by=None: (
+            calls.append(
+                {
+                    "snapshot_id": snapshot_id,
+                    "requested_by": requested_by,
+                    "runtime_context": runtime_context,
+                }
+            )
+            or {
+                "snapshot": {"snapshot_id": snapshot_id},
+                "inspection": {"inspection_id": "inspect_legacy"},
+                "world_summary": {"focus": ["verified scene"]},
+            }
+        )
+    )
+    loop = SimpleNamespace(world_state=world_state, provider=None, model=None, auxiliary_router=None)
+    tool = InspectSnapshotTool(
+        sessions=sessions,
+        introspection_service=RuntimeIntrospectionService(
+            loop=loop,
+            workspace=tmp_path,
+            registry=SimpleNamespace(tool_names=["originagent_inspect_snapshot"]),
+            sessions=sessions,
+            pending_queues={},
+        ),
+        inspection_service=None,
+    )
+    runtime_context = SimpleNamespace(source="user_turn")
+    tool.set_context(
+        RequestContext(
+            channel="cli",
+            chat_id="direct",
+            session_key="cli:direct",
+            runtime_context=runtime_context,
+        )
+    )
+
+    result = await tool.execute(snapshot_id="snap_legacy")
+
+    assert result["inspection"]["inspection_id"] == "inspect_legacy"
+    assert result["inspection_path"] == "legacy_fallback"
+    assert calls[0]["snapshot_id"] == "snap_legacy"
 
 
 @pytest.mark.asyncio

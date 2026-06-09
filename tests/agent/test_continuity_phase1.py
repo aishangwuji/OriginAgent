@@ -3,13 +3,14 @@ from __future__ import annotations
 from pathlib import Path
 from unittest.mock import MagicMock
 import json
-
 import pytest
 
 from OriginAgent.config.schema import ContextConfig
 from OriginAgent.agent.context import ContextBuilder
 from OriginAgent.agent.identity import ActorResolver
-from OriginAgent.agent.loop import AgentLoop
+from OriginAgent.agent.loop import AgentLoop, CONTINUITY_RUNTIME_IDENTITY_KEY, TurnContext, TurnState
+from OriginAgent.agent.memory_governance import MemoryGovernance
+from OriginAgent.agent.roaming_prewarm import RoamingPrewarmService
 from OriginAgent.agent.reminders import ReminderRecord, ReminderStore
 from OriginAgent.agent.scope import ScopeResolver
 from OriginAgent.agent.working_memory import WORKING_MEMORY_METADATA_KEY, WorkingMemoryManager
@@ -217,6 +218,157 @@ def test_context_builder_uses_real_world_state_snapshot(tmp_path: Path):
     assert "Desk shows a notebook and a lamp." in world_block["text"]
     assert '"snapshots"' not in world_block["text"]
     assert '"media_path"' not in world_block["text"]
+
+
+def test_world_state_apply_inspection_marks_contested_and_attention_prefixes(tmp_path: Path):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    sessions = SessionManager(workspace)
+    session = sessions.get_or_create("cli:direct")
+    world_state = WorldStateManager(workspace, sessions)
+    runtime_context = ActorResolver().resolve_runtime_context(
+        channel="cli",
+        chat_id="direct",
+        sender_id="user-1",
+        metadata={"device_id": "device-a"},
+        session_key="cli:direct",
+    )
+    image = workspace / "desk.png"
+    image.write_bytes(b"\x89PNG\r\n\x1a\n" + b"\x00" * 64)
+    (workspace / "desk.png.json").write_text(
+        '{"summary":"Desk looks empty.","objects":["desk"],"relationships":["desk is clear"],"confidence":0.84}',
+        encoding="utf-8",
+    )
+    world_state.ingest_media(
+        session,
+        runtime_context=runtime_context,
+        media_paths=[str(image)],
+    )
+    snapshot = world_state.load(session, identity=runtime_context).snapshots[0]
+
+    result = world_state.apply_inspection(
+        session,
+        runtime_context=runtime_context,
+        snapshot_id=snapshot.snapshot_id,
+        inspection_payload={
+            "confirmed": [],
+            "corrected": ["desk is not clear"],
+            "new_details": ["package observed near the lamp"],
+            "uncertain": ["package label unreadable"],
+            "confidence": 0.91,
+            "status": "completed",
+            "contested": True,
+            "contested_reasons": ["desk is not clear"],
+            "evidence_excerpt": ["package visible in lower-right area"],
+            "inspector": "test-model",
+        },
+    )
+
+    assert result["inspection"]["contested"] is True
+    assert result["world_summary"]["contested"] is True
+    assert "desk is not clear" in result["world_summary"]["contested_items"]
+
+    attention = world_state.current_attention_items(
+        session,
+        runtime_context=runtime_context,
+        limit=3,
+    )
+    assert any(item.startswith("world_attention: ") for item in attention)
+    assert any(item.startswith("world_uncertainty: ") for item in attention)
+    assert any(item.startswith("world_contested: ") for item in attention)
+
+
+def test_world_state_filtered_candidates_reports_selection_reasons_and_contested_summary(tmp_path: Path):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    sessions = SessionManager(workspace)
+    session = sessions.get_or_create("cli:direct")
+    world_state = WorldStateManager(workspace, sessions)
+    runtime_context = ActorResolver().resolve_runtime_context(
+        channel="cli",
+        chat_id="direct",
+        sender_id="user-1",
+        metadata={"device_id": "device-a"},
+        session_key="cli:direct",
+    )
+    image = workspace / "camera.png"
+    image.write_bytes(b"\x89PNG\r\n\x1a\n" + b"\x00" * 64)
+    (workspace / "camera.png.json").write_text(
+        '{"summary":"Front door area appears empty.","objects":["door"],"confidence":0.84}',
+        encoding="utf-8",
+    )
+    world_state.ingest_media(
+        session,
+        runtime_context=runtime_context,
+        media_paths=[str(image)],
+    )
+    snapshot = world_state.load(session, identity=runtime_context).snapshots[0]
+    world_state.apply_inspection(
+        session,
+        runtime_context=runtime_context,
+        snapshot_id=snapshot.snapshot_id,
+        inspection_payload={
+            "confirmed": [],
+            "corrected": ["parcel is visible near the door"],
+            "new_details": [],
+            "uncertain": [],
+            "confidence": 0.88,
+            "status": "completed",
+            "contested": True,
+            "contested_reasons": ["parcel is visible near the door"],
+            "evidence_excerpt": [],
+            "inspector": "test-model",
+        },
+    )
+
+    filtered = world_state.filtered_candidates(
+        session,
+        runtime_context=runtime_context,
+        current_message="show me the current doorway scene",
+    )
+
+    assert filtered["selection_reasons"] == ["relevant_to_message"]
+    assert filtered["contested_summary"]["contested"] is True
+    assert filtered["contested_summary"]["items"] == ["parcel is visible near the door"]
+
+
+@pytest.mark.asyncio
+async def test_loop_state_build_writes_continuity_runtime_identity_metadata(tmp_path: Path):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    loop = AgentLoop(
+        bus=MessageBus(),
+        provider=_provider(),
+        workspace=workspace,
+        model="test-model",
+    )
+    session = loop.sessions.get_or_create("cli:direct")
+    msg = InboundMessage(
+        channel="cli",
+        chat_id="direct",
+        sender_id="user-1",
+        content="Continue the work",
+        metadata={"device_id": "device-a"},
+    )
+
+    ctx = TurnContext(
+        msg=msg,
+        session=session,
+        session_key="cli:direct",
+        state=TurnState.BUILD,
+        turn_id="cli:direct:test",
+    )
+
+    result = await loop._state_build(ctx)
+
+    assert result == "ok"
+    assert CONTINUITY_RUNTIME_IDENTITY_KEY in session.metadata
+    identity = session.metadata[CONTINUITY_RUNTIME_IDENTITY_KEY]
+    assert identity["user_id"] == "user-1"
+    assert identity["device_id"] == "device-a"
+    assert identity["session_id"] == "cli:direct"
+    assert identity["scope"] == "session"
+    assert identity["updated_at"]
 
 
 def test_context_builder_can_disable_phase1_continuity_blocks(tmp_path: Path):
@@ -523,6 +675,159 @@ def test_context_builder_retrieval_fusion_records_trimming(tmp_path: Path):
     assert builder._last_retrieval_fusion["trimmed_count"] >= 1
 
 
+def test_memory_governance_promotes_after_two_independent_turns(tmp_path: Path):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    sessions = SessionManager(workspace)
+    session = sessions.get_or_create("cli:direct")
+    runtime_context = ActorResolver().resolve_runtime_context(
+        channel="cli",
+        chat_id="direct",
+        sender_id="user-1",
+        metadata={},
+        session_key="cli:direct",
+    )
+    working = WorkingMemoryManager(sessions)
+    working.upsert(
+        session,
+        identity=runtime_context.identity,
+        current_goal="I prefer concise answers by default",
+    )
+    world = WorldStateManager(workspace, sessions, context_config=ContextConfig())
+    builder = ContextBuilder(workspace=workspace, timezone="UTC", sessions=sessions)
+    governance = MemoryGovernance(
+        workspace=workspace,
+        memory=builder.memory,
+        context_config=ContextConfig(),
+        working_memory=working,
+        world_state=world,
+    )
+
+    decision_one = governance.evaluate_turn(
+        session,
+        runtime_context=runtime_context,
+        turn_id="turn-1",
+        current_message="remember my preference",
+    )
+    applied_one = governance.apply_turn(session, decision_one)
+    decision_two = governance.evaluate_turn(
+        session,
+        runtime_context=runtime_context,
+        turn_id="turn-2",
+        current_message="remember my preference again",
+    )
+    applied_two = governance.apply_turn(session, decision_two)
+
+    assert applied_one["promotion_applied_count"] == 0
+    assert applied_two["promotion_applied_count"] >= 1
+    assert any("concise answers" in fact.content for fact in builder.memory.fact_store.read_all())
+
+
+def test_roaming_prewarm_returns_none_when_no_candidates(tmp_path: Path):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    sessions = SessionManager(workspace)
+    current = sessions.get_or_create("cli:direct")
+    current.metadata["continuity_runtime_identity_v1"] = {
+        "user_id": "user-1",
+        "device_id": "device-a",
+        "session_id": "cli:direct",
+        "scope": "session",
+        "updated_at": "2026-06-09T00:00:00+00:00",
+    }
+    sessions.save(current)
+    builder = ContextBuilder(workspace=workspace, timezone="UTC", sessions=sessions)
+    service = RoamingPrewarmService(
+        workspace=workspace,
+        sessions=sessions,
+        memory=builder.memory,
+        nearline_memory=builder.nearline_memory,
+        context_config=ContextConfig(),
+    )
+    runtime_context = ActorResolver().resolve_runtime_context(
+        channel="cli",
+        chat_id="direct",
+        sender_id="user-1",
+        metadata={"device_id": "device-a"},
+        session_key="cli:direct",
+    )
+
+    bundle = service.prepare("cli:direct", runtime_context=runtime_context)
+
+    assert bundle is None
+    assert service.runtime_status()["prewarm_empty"] is True
+
+
+def test_roaming_prewarm_collects_world_view_seed_from_candidate_session(tmp_path: Path):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    sessions = SessionManager(workspace)
+    current = sessions.get_or_create("cli:direct")
+    current.metadata["continuity_runtime_identity_v1"] = {
+        "user_id": "user-1",
+        "device_id": "device-a",
+        "session_id": "cli:direct",
+        "scope": "session",
+        "updated_at": "2026-06-09T00:00:00+00:00",
+    }
+    other = sessions.get_or_create("cli:other")
+    other.metadata["continuity_runtime_identity_v1"] = {
+        "user_id": "user-1",
+        "device_id": "device-a",
+        "session_id": "cli:other",
+        "scope": "session",
+        "updated_at": "2026-06-09T00:01:00+00:00",
+    }
+    other.metadata["world_state_v1"] = {
+        "status": "active",
+        "version": "phase2",
+        "updated_at": "2026-06-09T00:01:00+00:00",
+        "scope": "session",
+        "owner_id": "user-1",
+        "snapshots": [],
+        "inspections": [],
+        "world_summary": {
+            "summary_id": "world_1",
+            "scope": "session",
+            "owner_id": "user-1",
+            "generated_at": "2026-06-09T00:01:00+00:00",
+            "fresh_until": "2099-06-09T00:06:00+00:00",
+            "focus": ["Desk has a printed checklist."],
+            "constraints": [],
+            "uncertainties": ["Checklist owner is unclear."],
+            "source_snapshot_ids": [],
+            "inspection_ids": [],
+            "contested": True,
+            "contested_items": ["Checklist may be outdated."],
+            "source_count": 1,
+            "last_inspected_at": "2026-06-09T00:01:00+00:00",
+        },
+    }
+    sessions.save(current)
+    sessions.save(other)
+    builder = ContextBuilder(workspace=workspace, timezone="UTC", sessions=sessions)
+    service = RoamingPrewarmService(
+        workspace=workspace,
+        sessions=sessions,
+        memory=builder.memory,
+        nearline_memory=builder.nearline_memory,
+        context_config=ContextConfig(),
+    )
+    runtime_context = ActorResolver().resolve_runtime_context(
+        channel="cli",
+        chat_id="direct",
+        sender_id="user-1",
+        metadata={"device_id": "device-a"},
+        session_key="cli:direct",
+    )
+
+    bundle = service.prepare("cli:direct", runtime_context=runtime_context)
+
+    assert bundle is not None
+    assert any(item.startswith("prewarm_world: ") for item in bundle.world_view_seed)
+    assert "world_summary" in bundle.sources
+
+
 def test_world_state_filters_device_scoped_snapshot_with_mismatched_device(tmp_path: Path):
     loop = AgentLoop(
         bus=MessageBus(),
@@ -568,6 +873,47 @@ def test_world_state_filters_device_scoped_snapshot_with_mismatched_device(tmp_p
 
     assert filtered["included_summary"] == {}
     assert filtered["filtered_candidates"][0]["reasons"] == ["scope_hidden"]
+
+
+def test_loop_world_attention_cap_applies_after_dedupe(tmp_path: Path):
+    loop = AgentLoop(
+        bus=MessageBus(),
+        provider=_provider(),
+        workspace=tmp_path,
+        model="test-model",
+    )
+    session = loop.sessions.get_or_create("cli:direct")
+    runtime_context = ActorResolver().resolve_runtime_context(
+        channel="cli",
+        chat_id="direct",
+        sender_id="user-1",
+        metadata={},
+        session_key="cli:direct",
+    )
+    loop.world_state = MagicMock()
+    loop.world_state.current_attention_items.return_value = [
+        "world_attention: duplicate item",
+        "world_attention: duplicate item",
+        "world_uncertainty: open question",
+        "world_contested: disputed state",
+        "world_attention: extra item",
+    ]
+    loop.working_memory = MagicMock()
+
+    loop._update_working_memory_from_turn(
+        session,
+        runtime_context=runtime_context,
+        current_message="continue",
+        internal_event="world_attention: duplicate item",
+    )
+
+    saved_attention = loop.working_memory.upsert.call_args.kwargs["attention_items"]
+    assert saved_attention == [
+        "world_attention: duplicate item",
+        "world_uncertainty: open question",
+        "world_contested: disputed state",
+        "world_attention: extra item",
+    ]
 
 
 @pytest.mark.asyncio

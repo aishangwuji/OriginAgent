@@ -471,6 +471,66 @@ class ContextConfig(Base):
         validation_alias=AliasChoices("maxRetrievalHitsPerSource", "max_retrieval_hits_per_source"),
         serialization_alias="maxRetrievalHitsPerSource",
     )
+    world_summary_ttl_minutes: int = Field(
+        default=5,
+        ge=1,
+        le=60,
+        validation_alias=AliasChoices("worldSummaryTtlMinutes", "world_summary_ttl_minutes"),
+        serialization_alias="worldSummaryTtlMinutes",
+    )
+    snapshot_freshness_minutes: int = Field(
+        default=30,
+        ge=5,
+        le=1440,
+        validation_alias=AliasChoices("snapshotFreshnessMinutes", "snapshot_freshness_minutes"),
+        serialization_alias="snapshotFreshnessMinutes",
+    )
+    world_attention_max_items: int = Field(
+        default=3,
+        ge=1,
+        le=10,
+        validation_alias=AliasChoices("worldAttentionMaxItems", "world_attention_max_items"),
+        serialization_alias="worldAttentionMaxItems",
+    )
+    governance_enabled: bool = Field(
+        default=True,
+        validation_alias=AliasChoices("governanceEnabled", "governance_enabled"),
+        serialization_alias="governanceEnabled",
+    )
+    prewarm_enabled: bool = Field(
+        default=True,
+        validation_alias=AliasChoices("prewarmEnabled", "prewarm_enabled"),
+        serialization_alias="prewarmEnabled",
+    )
+    promotion_confidence_threshold: float = Field(
+        default=0.8,
+        ge=0.5,
+        le=1.0,
+        validation_alias=AliasChoices("promotionConfidenceThreshold", "promotion_confidence_threshold"),
+        serialization_alias="promotionConfidenceThreshold",
+    )
+    promotion_min_confirmations: int = Field(
+        default=2,
+        ge=1,
+        le=20,
+        validation_alias=AliasChoices("promotionMinConfirmations", "promotion_min_confirmations"),
+        serialization_alias="promotionMinConfirmations",
+    )
+    promotion_require_user_confirmation_for_sensitive: bool = Field(
+        default=True,
+        validation_alias=AliasChoices(
+            "promotionRequireUserConfirmationForSensitive",
+            "promotion_require_user_confirmation_for_sensitive",
+        ),
+        serialization_alias="promotionRequireUserConfirmationForSensitive",
+    )
+    prewarm_max_items: int = Field(
+        default=8,
+        ge=1,
+        le=32,
+        validation_alias=AliasChoices("prewarmMaxItems", "prewarm_max_items"),
+        serialization_alias="prewarmMaxItems",
+    )
     max_media_files: int = Field(
         default=8,
         ge=1,

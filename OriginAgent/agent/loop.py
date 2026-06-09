@@ -48,6 +48,8 @@ from OriginAgent.agent.hook import AgentHook, CompositeHook
 from OriginAgent.agent.identity import ActorResolver, RuntimeContext
 from OriginAgent.agent.introspection.service import RuntimeIntrospectionService
 from OriginAgent.agent.memory import Consolidator, Dream, dream_feature_flags
+from OriginAgent.agent.memory_governance import MemoryGovernance
+from OriginAgent.agent.roaming_prewarm import RoamingPrewarmService
 from OriginAgent.agent.progress_hook import AgentProgressHook
 from OriginAgent.agent.runner import _MAX_INJECTIONS_PER_TURN, AgentRunner, AgentRunSpec
 from OriginAgent.agent.self_model import SelfModelService
@@ -130,6 +132,9 @@ def _trim_text(value: Any, *, max_chars: int = 240) -> str:
     if len(text) > max_chars:
         return text[:max_chars].rstrip() + "..."
     return text
+
+
+CONTINUITY_RUNTIME_IDENTITY_KEY = "continuity_runtime_identity_v1"
 
 
 class TurnState(Enum):
@@ -410,7 +415,11 @@ class AgentLoop:
             self.sessions,
             reminder_store=self._reminder_store,
         )
-        self.world_state = WorldStateManager(workspace, self.sessions)
+        self.world_state = WorldStateManager(
+            workspace,
+            self.sessions,
+            context_config=defaults.context,
+        )
         self.tools = ToolRegistry(
             audit_sink=JsonlToolAuditSink(workspace),
             audit_config=self._tool_audit_config,
@@ -486,6 +495,23 @@ class AgentLoop:
         )
         self.context.working_memory = self.working_memory
         self.context.world_state = self.world_state
+        self.memory_governance = MemoryGovernance(
+            workspace=workspace,
+            memory=self.context.memory,
+            context_config=defaults.context,
+            working_memory=self.working_memory,
+            world_state=self.world_state,
+        )
+        self.roaming_prewarm = RoamingPrewarmService(
+            workspace=workspace,
+            sessions=self.sessions,
+            memory=self.context.memory,
+            nearline_memory=self.context.nearline_memory,
+            context_config=defaults.context,
+            world_state=self.world_state,
+        )
+        self.context.memory_governance = self.memory_governance
+        self.context._roaming_prewarm = self.roaming_prewarm
         self._active_intent_config = ActiveIntentConfig(
             enabled=(
                 defaults.allow_agent_initiated_messages
@@ -619,6 +645,7 @@ class AgentLoop:
         self._last_runtime_context: RuntimeContext | None = None
         self._last_continuity_session_key: str | None = None
         self._last_context_assembly: dict[str, Any] = {}
+        self._last_governance_audit: dict[str, Any] = {}
         self._last_cognitive_scan: dict[str, Any] = {}
         self.commands = CommandRouter()
         register_builtin_commands(self.commands)
@@ -1196,11 +1223,13 @@ class AgentLoop:
             runtime_context=self._last_runtime_context,
             session_key=session.key,
         )
-        self._last_context_assembly = self._snapshot_context_assembly_from_messages(
-            built,
-            session_key=session.key,
-            runtime_context=self._last_runtime_context,
-        )
+        self._last_context_assembly = dict(getattr(self.context, "_last_context_assembly_audit", {}) or {})
+        if not self._last_context_assembly:
+            self._last_context_assembly = self._snapshot_context_assembly_from_messages(
+                built,
+                session_key=session.key,
+                runtime_context=self._last_runtime_context,
+            )
         return built
 
     def _build_prompt_self_model(self) -> dict[str, Any]:
@@ -1279,6 +1308,21 @@ class AgentLoop:
             )
         except (TypeError, ValueError, OSError) as e:
             logger.warning("webui command transcript append failed: {}", e)
+
+    def _write_continuity_runtime_identity(
+        self,
+        session: Session,
+        runtime_context: RuntimeContext | None,
+    ) -> None:
+        if runtime_context is None:
+            return
+        session.metadata[CONTINUITY_RUNTIME_IDENTITY_KEY] = {
+            "user_id": runtime_context.user_id,
+            "device_id": runtime_context.device_id,
+            "session_id": runtime_context.session_id,
+            "scope": runtime_context.default_scope,
+            "updated_at": _utcnow_iso(),
+        }
 
     def _persist_shortcut_command_turn(
         self,
@@ -2292,10 +2336,28 @@ class AgentLoop:
             runtime_context=runtime_context,
         )
         if world_attention_items:
-            attention_items = [
-                *([item for item in (attention_items or []) if item]),
-                *[item for item in world_attention_items if item],
-            ]
+            max_world_items = max(
+                1,
+                int(getattr(self.context._context_config, "world_attention_max_items", 3) or 3),
+            )
+            merged_attention = [*([item for item in (attention_items or []) if item])]
+            world_seen: set[str] = set()
+            world_kept = 0
+            for item in world_attention_items:
+                text = str(item or "").strip()
+                if not text:
+                    continue
+                normalized = text.casefold()
+                if normalized in world_seen:
+                    continue
+                world_seen.add(normalized)
+                if any(str(existing or "").strip().casefold() == normalized for existing in merged_attention):
+                    continue
+                merged_attention.append(text)
+                world_kept += 1
+                if world_kept >= max_world_items:
+                    break
+            attention_items = merged_attention
         self.working_memory.upsert(
             session,
             identity=runtime_context.identity,
@@ -2545,6 +2607,7 @@ class AgentLoop:
         ctx.runtime_context = runtime_context
         self._last_runtime_context = runtime_context
         self._last_continuity_session_key = ctx.session_key
+        self._write_continuity_runtime_identity(ctx.session, runtime_context)
         snapshot = ctx.capability_snapshot or self._snapshot_for_trigger(runtime_context.trigger)
         self._update_working_memory_from_turn(
             ctx.session,
@@ -2667,6 +2730,23 @@ class AgentLoop:
         ctx.session.enforce_file_cap(on_archive=self._archive_session_file_cap)
         self._clear_pending_user_turn(ctx.session)
         self._clear_runtime_checkpoint(ctx.session)
+        governance_audit: dict[str, Any] = {
+            "governance_enabled": bool(getattr(self.context._context_config, "governance_enabled", False)),
+            "promotion_candidates": [],
+            "promotion_applied_count": 0,
+            "promotion_conflict_count": 0,
+            "forgetting_actions": [],
+        }
+        if governance_audit["governance_enabled"]:
+            decision = self.memory_governance.evaluate_turn(
+                ctx.session,
+                runtime_context=ctx.runtime_context,
+                turn_id=ctx.turn_id,
+                current_message=ctx.msg.content,
+            )
+            governance_audit = self.memory_governance.apply_turn(ctx.session, decision)
+        self._last_governance_audit = dict(governance_audit)
+        self.context._last_governance_audit = dict(governance_audit)
         self.sessions.save(ctx.session)
         self._schedule_session_search_refresh(sources=["sessions", "history"])
         self._schedule_background(

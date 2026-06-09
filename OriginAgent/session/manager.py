@@ -28,6 +28,7 @@ _MESSAGE_TIME_PREFIX_RE = re.compile(r"^\[Message Time: [^\]]+\]\n?")
 _LOCAL_IMAGE_BREADCRUMB_RE = re.compile(r"^\[image: (?:/|~)[^\]]+\]\s*$")
 _TOOL_CALL_ECHO_RE = re.compile(r'^\s*(?:generate_image|message)\([^)]*\)\s*$')
 _SESSION_PREVIEW_MAX_CHARS = 120
+_CONTINUITY_RUNTIME_IDENTITY_KEY = "continuity_runtime_identity_v1"
 
 
 def _call_archive_callback(
@@ -95,6 +96,18 @@ def _message_preview_text(message: dict[str, Any]) -> str:
     if message.get("injected_event") == "subagent_result" and isinstance(content, str):
         content = scrub_subagent_announce_body(content)
     return _text_preview(content)
+
+
+def _continuity_identity_summary(metadata: Any) -> tuple[str | None, str | None, str | None]:
+    if not isinstance(metadata, dict):
+        return None, None, None
+    raw = metadata.get(_CONTINUITY_RUNTIME_IDENTITY_KEY)
+    if not isinstance(raw, dict):
+        return None, None, None
+    user_id = str(raw.get("user_id")).strip() if raw.get("user_id") else None
+    device_id = str(raw.get("device_id")).strip() if raw.get("device_id") else None
+    updated_at = str(raw.get("updated_at")).strip() if raw.get("updated_at") else None
+    return user_id, device_id, updated_at
 
 
 @dataclass
@@ -638,6 +651,7 @@ class SessionManager:
                             key = data.get("key") or path.stem.replace("_", ":", 1)
                             metadata = data.get("metadata", {})
                             title = metadata.get("title") if isinstance(metadata, dict) else None
+                            user_id, device_id, identity_updated_at = _continuity_identity_summary(metadata)
                             preview = ""
                             fallback_preview = ""
                             for line in f:
@@ -661,11 +675,15 @@ class SessionManager:
                                 "updated_at": data.get("updated_at"),
                                 "title": title if isinstance(title, str) else "",
                                 "preview": preview,
-                                "path": str(path)
+                                "path": str(path),
+                                "user_id": user_id,
+                                "device_id": device_id,
+                                "continuity_identity_updated_at": identity_updated_at,
                             })
             except Exception:
                 repaired = self._repair(fallback_key)
                 if repaired is not None:
+                    user_id, device_id, identity_updated_at = _continuity_identity_summary(repaired.metadata)
                     sessions.append({
                         "key": repaired.key,
                         "created_at": repaired.created_at.isoformat(),
@@ -683,7 +701,10 @@ class SessionManager:
                             ),
                             "",
                         ),
-                        "path": str(path)
+                        "path": str(path),
+                        "user_id": user_id,
+                        "device_id": device_id,
+                        "continuity_identity_updated_at": identity_updated_at,
                     })
                 continue
 

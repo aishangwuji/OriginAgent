@@ -6,6 +6,15 @@ def test_context_config_defaults() -> None:
     assert cfg.enable_phase1_continuity is True
     assert cfg.max_recent_history == 50
     assert cfg.max_history_chars == 32_000
+    assert cfg.world_summary_ttl_minutes == 5
+    assert cfg.snapshot_freshness_minutes == 30
+    assert cfg.world_attention_max_items == 3
+    assert cfg.governance_enabled is True
+    assert cfg.prewarm_enabled is True
+    assert cfg.promotion_confidence_threshold == 0.8
+    assert cfg.promotion_min_confirmations == 2
+    assert cfg.promotion_require_user_confirmation_for_sensitive is True
+    assert cfg.prewarm_max_items == 8
     assert cfg.max_media_files == 8
     assert cfg.max_media_bytes == 8 * 1024 * 1024
 

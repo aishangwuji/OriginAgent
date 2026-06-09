@@ -15,6 +15,7 @@ from OriginAgent.agent.context_assembler import ContextAssemblerV2
 from OriginAgent.agent.domain_packs import DomainPackManager
 from OriginAgent.agent.memory import MemoryStore
 from OriginAgent.agent.retrieval_fusion import RetrievalFusion
+from OriginAgent.agent.scope import ScopeResolver
 from OriginAgent.agent.working_memory import WorkingMemoryManager
 from OriginAgent.agent.self_model import SelfModelRenderer, SelfModelService
 from OriginAgent.agent.skills import SkillsLoader
@@ -116,7 +117,12 @@ class ContextBuilder:
             WorkingMemoryManager(self._sessions) if self._sessions is not None else None
         )
         self.world_state: Any | None = None
+        self.memory_governance: Any | None = None
+        self._roaming_prewarm: Any | None = None
         self._last_retrieval_fusion: dict[str, Any] = {}
+        self._last_prewarm_audit: dict[str, Any] = {}
+        self._last_governance_audit: dict[str, Any] = {}
+        self._last_context_assembly_audit: dict[str, Any] = {}
         self.retrieval_fusion = RetrievalFusion(
             workspace,
             memory=self.memory,
@@ -182,6 +188,8 @@ class ContextBuilder:
         session_key: str | None = None,
         runtime_context: Any | None = None,
         current_message: str | None = None,
+        *,
+        prewarm_bundle: Any | None = None,
     ) -> list[dict[str, Any]]:
         """Build untrusted user-side reference context blocks."""
         blocks: list[dict[str, Any]] = []
@@ -198,6 +206,11 @@ class ContextBuilder:
             current_message=current_message,
             recent_history=entries[-6:] if entries else None,
             session_summary=session_summary,
+            prewarm_seed=(
+                list(getattr(prewarm_bundle, "retrieval_seed", []) or [])
+                if prewarm_bundle is not None
+                else None
+            ),
         )
         self._last_retrieval_fusion = fusion.audit
         for block in fusion.retrieved_blocks:
@@ -408,6 +421,7 @@ class ContextBuilder:
         session_key: str | None,
         runtime_context: Any | None,
         current_message: str | None = None,
+        prewarm_bundle: Any | None = None,
     ) -> list[dict[str, Any]]:
         blocks: list[dict[str, Any]] = []
         session = (
@@ -428,22 +442,28 @@ class ContextBuilder:
                 "source": runtime_context.source,
             }))
         if self.working_memory is not None and session is not None:
+            working_snapshot = self.working_memory.inspect(
+                session,
+                identity=runtime_context.identity if runtime_context is not None else None,
+            )
+            if prewarm_bundle is not None and getattr(prewarm_bundle, "working_memory_seed", None):
+                working_snapshot["seeded_items"] = list(prewarm_bundle.working_memory_seed)
             blocks.append(
                 self.build_working_memory_block(
-                    self.working_memory.inspect(
-                        session,
-                        identity=runtime_context.identity if runtime_context is not None else None,
-                    )
+                    working_snapshot
                 )
             )
         if self.world_state is not None and session is not None:
+            world_snapshot = self.world_state.snapshot_prompt_payload(
+                session,
+                identity=runtime_context if runtime_context is not None else None,
+                current_message=current_message,
+            )
+            if prewarm_bundle is not None and getattr(prewarm_bundle, "world_view_seed", None):
+                world_snapshot["seeded_items"] = list(prewarm_bundle.world_view_seed)
             blocks.append(
                 self.build_world_state_block(
-                    self.world_state.snapshot_prompt_payload(
-                        session,
-                        identity=runtime_context if runtime_context is not None else None,
-                        current_message=current_message,
-                    )
+                    world_snapshot
                 )
             )
         else:
@@ -453,6 +473,41 @@ class ContextBuilder:
                 "updated_at": current_time_str(self.timezone),
             }))
         return blocks
+
+    def prepare_prewarm_bundle(
+        self,
+        session_key: str | None,
+        runtime_context: Any | None,
+    ) -> Any | None:
+        if not session_key or runtime_context is None:
+            self._last_prewarm_audit = {
+                "prewarm_enabled": bool(getattr(self._context_config, "prewarm_enabled", False)),
+                "prewarm_empty": True,
+                "prewarm_reason": "missing_runtime_context",
+                "prewarm_sources": [],
+                "prewarm_seed_counts": {},
+            }
+            return None
+        if self._roaming_prewarm is None:
+            self._last_prewarm_audit = {
+                "prewarm_enabled": False,
+                "prewarm_empty": True,
+                "prewarm_reason": "service_unavailable",
+                "prewarm_sources": [],
+                "prewarm_seed_counts": {},
+            }
+            return None
+        bundle = self._roaming_prewarm.prepare(
+            session_key,
+            runtime_context=runtime_context,
+            scope_resolver=ScopeResolver(),
+        )
+        if bundle is None:
+            status = dict(self._roaming_prewarm.runtime_status())
+            self._last_prewarm_audit = status
+            return None
+        self._last_prewarm_audit = bundle.audit()
+        return bundle
 
     @staticmethod
     def _merge_message_content(left: Any, right: Any) -> str | list[dict[str, Any]]:
@@ -535,6 +590,7 @@ class ContextBuilder:
                     session_key=session_key,
                     include_current_message=True,
                 )
+                self._last_context_assembly_audit = dict(assembled.audit)
                 merged = assembled.blocks
             else:
                 merged = [

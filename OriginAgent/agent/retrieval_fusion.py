@@ -11,6 +11,7 @@ from typing import Any, Iterable
 
 from OriginAgent.agent.facts import FactRetrievalBundle
 from OriginAgent.agent.memory import MemoryStore
+from OriginAgent.agent.scope import ScopeResolver
 from OriginAgent.memory.policy import nearline_runtime_enabled
 from OriginAgent.memory.retrieval import NearlineRetrievalResult
 from OriginAgent.session.search import SessionSearchService
@@ -113,11 +114,13 @@ class RetrievalFusion:
 
     _SOURCE_ORDER = {
         "fact_store": 0,
-        "nearline_retrieval": 1,
-        "session_search": 2,
+        "prewarm_seed": 1,
+        "nearline_retrieval": 2,
+        "session_search": 3,
     }
     _BLOCK_SOURCE_NAME = {
         "fact_store": "memory_retrieval",
+        "prewarm_seed": "retrieval_prewarm_seed",
         "nearline_retrieval": "layered_memory",
         "session_search": "retrieval_session_search",
     }
@@ -149,9 +152,17 @@ class RetrievalFusion:
         current_message: str | None,
         recent_history: Iterable[dict[str, Any]] | None,
         session_summary: str | None,
+        prewarm_seed: list[dict[str, Any]] | None = None,
+        working_memory_hints: list[str] | None = None,
+        world_summary_hints: list[str] | None = None,
     ) -> RetrievalFusionResult:
         del query, session_summary
-        message = str(current_message or "").strip()
+        hint_segments = [
+            str(current_message or "").strip(),
+            *[str(item or "").strip() for item in (working_memory_hints or [])],
+            *[str(item or "").strip() for item in (world_summary_hints or [])],
+        ]
+        message = "\n".join(segment for segment in hint_segments if segment)
         current_scope = str(getattr(runtime_context, "default_scope", "session") or "session")
         current_owner_id = str(getattr(runtime_context, "user_id", "") or "") or None
         current_device_id = str(getattr(runtime_context, "device_id", "") or "") or None
@@ -183,6 +194,7 @@ class RetrievalFusion:
 
         source_hits: dict[str, list[RetrievalHit]] = {
             "fact_store": self._fact_hits(fact_bundle, fallback_bundle=fallback_bundle),
+            "prewarm_seed": self._prewarm_hits(prewarm_seed),
             "nearline_retrieval": self._nearline_hits(nearline_result),
             "session_search": self._session_search_hits(search_result),
         }
@@ -421,6 +433,31 @@ class RetrievalFusion:
             )
         return hits
 
+    def _prewarm_hits(self, rows: list[dict[str, Any]] | None) -> list[RetrievalHit]:
+        hits: list[RetrievalHit] = []
+        for row in rows or []:
+            if not isinstance(row, dict):
+                continue
+            text = str(row.get("text") or "").strip()
+            if not text:
+                continue
+            hits.append(
+                RetrievalHit(
+                    source="prewarm_seed",
+                    title=str(row.get("title") or "prewarm"),
+                    text=text,
+                    scope=str(row.get("scope") or "session").strip() or "session",
+                    owner_id=str(row.get("owner_id")).strip() if row.get("owner_id") else None,
+                    timestamp=str(row.get("timestamp") or "").strip() or None,
+                    confidence=float(row.get("confidence") or 0.65),
+                    score=float(row.get("score") or 0.65),
+                    dedupe_key=_normalize_text(text),
+                    locator=dict(row.get("locator") or {}),
+                    details=dict(row.get("details") or {}),
+                )
+            )
+        return hits
+
     def _scope_hidden_reason(
         self,
         hit: RetrievalHit,
@@ -429,24 +466,31 @@ class RetrievalFusion:
         current_owner_id: str | None,
         current_device_id: str | None,
     ) -> str | None:
-        scope = str(hit.scope or "session").strip() or "session"
-        if scope == "user" and hit.owner_id and current_owner_id and hit.owner_id != current_owner_id:
-            return "owner_hidden"
-        if scope == "device":
-            hit_device_id = str(hit.details.get("device_id") or "").strip() or None
+        resolver = ScopeResolver()
+        normalized_scope = resolver.normalize_scope(hit.scope)
+        normalized_current_scope = resolver.normalize_scope(current_scope)
+        hit_device_id = str(hit.details.get("device_id") or "").strip() or None
+        if normalized_scope == "user":
+            if hit.owner_id and current_owner_id and hit.owner_id != current_owner_id:
+                return "owner_hidden"
+        if normalized_scope == "device":
             if hit_device_id and current_device_id and hit_device_id != current_device_id:
                 return "device_hidden"
-        order = {"task": 0, "device": 1, "session": 2, "user": 3}
-        if scope == "task" and current_scope != "task":
+        if normalized_scope == "task" and normalized_current_scope != "task":
             return "scope_hidden"
-        if scope == "user":
-            return None
-        if scope == "device" and current_scope not in {"device", "session", "task"}:
+        if not resolver.is_visible(
+            scope=hit.scope,
+            current_scope=current_scope,
+            owner_id=hit.owner_id,
+            current_owner_id=current_owner_id,
+            device_id=hit_device_id,
+            current_device_id=current_device_id,
+        ):
+            if normalized_scope == "user" and hit.owner_id and current_owner_id and hit.owner_id != current_owner_id:
+                return "owner_hidden"
+            if normalized_scope == "device" and hit_device_id and current_device_id and hit_device_id != current_device_id:
+                return "device_hidden"
             return "scope_hidden"
-        if scope == "session" and current_scope not in {"session", "task", "device"}:
-            return "scope_hidden"
-        if scope in order and current_scope in order:
-            return None
         return None
 
     def _trim_by_source(self, source_hits: dict[str, list[RetrievalHit]]) -> dict[str, Any]:
@@ -525,6 +569,8 @@ class RetrievalFusion:
     def _block_heading(source: str) -> str:
         if source == "fact_store":
             return "## Relevant Facts"
+        if source == "prewarm_seed":
+            return "## Relevant Context (from your recent sessions)"
         if source == "nearline_retrieval":
             return "## Relevant Nearline Memory"
         return "## Relevant Session Recall"

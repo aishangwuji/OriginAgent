@@ -57,16 +57,22 @@ class ContextAssemblerV2:
             session_metadata=session_metadata,
             extra_lines=runtime_extra_lines,
         )
+        prewarm_bundle = self._builder.prepare_prewarm_bundle(
+            session_key,
+            runtime_context,
+        )
         continuity_blocks = self._builder.build_phase1_continuity_blocks(
             session_key=session_key,
             runtime_context=runtime_context,
             current_message=current_message,
+            prewarm_bundle=prewarm_bundle,
         )
         reference_blocks = self._builder.build_reference_context_blocks(
             session_summary=session_summary,
             session_key=session_key,
             runtime_context=runtime_context,
             current_message=current_message,
+            prewarm_bundle=prewarm_bundle,
         )
 
         merged: list[dict[str, Any]] = [
@@ -102,6 +108,17 @@ class ContextAssemblerV2:
             "retrieval_trimmed_count": int(self._builder._last_retrieval_fusion.get("trimmed_count", 0) or 0),
             "retrieval_hits": dict(self._builder._last_retrieval_fusion.get("hits", {})),
             "internal_event_source": internal_event[0] if internal_event is not None else None,
+            "governance_enabled": bool(getattr(self._builder._context_config, "governance_enabled", False)),
+            "promotion_candidates": list(self._builder._last_governance_audit.get("promotion_candidates", [])),
+            "promotion_applied_count": int(self._builder._last_governance_audit.get("promotion_applied_count", 0) or 0),
+            "promotion_conflict_count": int(self._builder._last_governance_audit.get("promotion_conflict_count", 0) or 0),
+            "forgetting_actions": list(self._builder._last_governance_audit.get("forgetting_actions", [])),
+            "prewarm_enabled": bool(getattr(self._builder._context_config, "prewarm_enabled", False)),
+            "prewarm_empty": bool(self._builder._last_prewarm_audit.get("prewarm_empty", True)),
+            "prewarm_reason": self._builder._last_prewarm_audit.get("prewarm_reason"),
+            "prewarm_sources": list(self._builder._last_prewarm_audit.get("prewarm_sources", [])),
+            "prewarm_seeded_items": dict(self._builder._last_prewarm_audit.get("prewarm_seeded_items", {})),
+            "prewarm_seed_counts": dict(self._builder._last_prewarm_audit.get("prewarm_seed_counts", {})),
             "runtime_context": (
                 {
                     "actor_id": runtime_context.actor_id,
@@ -137,4 +154,7 @@ class ContextAssemblerV2:
                 audit["world_summary"] = filtered.get("included_summary", {})
                 audit["world_filtered_candidates"] = filtered.get("filtered_candidates", [])
                 audit["world_freshness"] = filtered.get("freshness", {})
+                audit["world_contested"] = filtered.get("contested_summary", {})
+                audit["world_selection_reasons"] = list(filtered.get("selection_reasons", []))
+        self._builder._last_context_assembly_audit = dict(audit)
         return ContextAssemblyResult(blocks=merged, audit=audit)

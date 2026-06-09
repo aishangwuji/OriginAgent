@@ -222,6 +222,15 @@ def register_default_tools(
         lambda: InspectSnapshotTool(
             sessions=sessions,
             introspection_service=introspection_service,
+            provider=getattr(introspection_service._loop, "provider", None)
+            if introspection_service is not None and getattr(introspection_service, "_loop", None) is not None
+            else None,
+            model=getattr(introspection_service._loop, "model", None)
+            if introspection_service is not None and getattr(introspection_service, "_loop", None) is not None
+            else None,
+            auxiliary_router=getattr(introspection_service._loop, "auxiliary_router", None)
+            if introspection_service is not None and getattr(introspection_service, "_loop", None) is not None
+            else None,
         )
     )
     _register_named(

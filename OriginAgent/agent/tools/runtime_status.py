@@ -10,6 +10,7 @@ from typing import Any
 
 from OriginAgent.agent.confirmation import PendingConfirmationStore
 from OriginAgent.agent.introspection.service import RuntimeIntrospectionService
+from OriginAgent.agent.snapshot_inspection import SnapshotInspectionService
 from OriginAgent.agent.tools.base import Tool
 from OriginAgent.agent.tools.context import RequestContext
 from OriginAgent.cron.service import CronService
@@ -163,9 +164,17 @@ class InspectSnapshotTool(Tool):
         *,
         sessions: Any,
         introspection_service: RuntimeIntrospectionService | None = None,
+        inspection_service: SnapshotInspectionService | None = None,
+        provider: Any | None = None,
+        model: str | None = None,
+        auxiliary_router: Any | None = None,
     ) -> None:
         self._sessions = sessions
         self._introspection_service = introspection_service
+        self._inspection_service = inspection_service
+        self._provider = provider
+        self._model = model
+        self._auxiliary_router = auxiliary_router
         self._request_ctx: ContextVar[RequestContext | None] = ContextVar(
             "inspect_snapshot_request_ctx",
             default=None,
@@ -206,12 +215,43 @@ class InspectSnapshotTool(Tool):
         if world_state is None:
             return "Error: world state manager is unavailable."
         session = self._sessions.get_or_create(ctx.session_key)
-        result = world_state.inspect_snapshot(
-            session,
-            runtime_context=runtime_context,
-            snapshot_id=snapshot_id,
-            requested_by=str(runtime_context.source or "user_turn"),
+        inspection_service = self._inspection_service
+        provider = self._provider or getattr(loop, "provider", None) if loop is not None else self._provider
+        auxiliary_router = (
+            self._auxiliary_router or getattr(loop, "auxiliary_router", None)
+            if loop is not None
+            else self._auxiliary_router
         )
+        can_build_service = (
+            loop is not None
+            and (provider is not None or auxiliary_router is not None)
+            and hasattr(world_state, "get_snapshot")
+            and hasattr(world_state, "apply_inspection")
+        )
+        if inspection_service is None and can_build_service:
+            inspection_service = SnapshotInspectionService(
+                world_state=world_state,
+                provider=provider,
+                model=self._model or getattr(loop, "model", None),
+                auxiliary_router=auxiliary_router,
+            )
+            self._inspection_service = inspection_service
+        if inspection_service is not None:
+            result = await inspection_service.inspect(
+                session,
+                runtime_context=runtime_context,
+                snapshot_id=snapshot_id,
+                requested_by=str(runtime_context.source or "user_turn"),
+            )
+        else:
+            result = world_state.inspect_snapshot(
+                session,
+                runtime_context=runtime_context,
+                snapshot_id=snapshot_id,
+                requested_by=str(runtime_context.source or "user_turn"),
+            )
+            if isinstance(result, dict):
+                result["inspection_path"] = "legacy_fallback"
         if "error" in result:
             return f"Error: {result['error']}"
         return result
