@@ -54,6 +54,7 @@ from OriginAgent.agent.self_model import SelfModelService
 from OriginAgent.agent.reminders import ReminderStore
 from OriginAgent.agent.working_memory import WorkingMemoryManager
 from OriginAgent.agent.subagent import SubagentManager
+from OriginAgent.agent.world_state import WorldStateManager
 from OriginAgent.memory.pipeline import NearlineMemoryPipeline
 from OriginAgent.agent.tools.ask import (
     ask_user_options_from_messages,
@@ -409,6 +410,7 @@ class AgentLoop:
             self.sessions,
             reminder_store=self._reminder_store,
         )
+        self.world_state = WorldStateManager(workspace, self.sessions)
         self.tools = ToolRegistry(
             audit_sink=JsonlToolAuditSink(workspace),
             audit_config=self._tool_audit_config,
@@ -482,6 +484,7 @@ class AgentLoop:
             curator_service=self.curator,
         )
         self.context.working_memory = self.working_memory
+        self.context.world_state = self.world_state
         self._active_intent_config = ActiveIntentConfig(
             enabled=(
                 defaults.allow_agent_initiated_messages
@@ -2151,6 +2154,7 @@ class AgentLoop:
             runtime_context=runtime_context,
             current_message=None if (is_subagent or is_active_intent or is_cognitive_event) else msg.content,
             internal_event=msg.content if (is_subagent or is_active_intent or is_cognitive_event) else None,
+            media_paths=msg.media if msg.media else None,
         )
         self._set_tool_context(
             channel, chat_id, msg.metadata.get("message_id"),
@@ -2264,6 +2268,7 @@ class AgentLoop:
         runtime_context: RuntimeContext,
         current_message: str | None,
         internal_event: str | None = None,
+        media_paths: list[str] | None = None,
     ) -> None:
         pending_questions = None
         attention_items = None
@@ -2273,6 +2278,21 @@ class AgentLoop:
             pending_questions = [text]
         if internal_event and runtime_context.source in {"user_turn", "system"}:
             attention_items = [str(internal_event).strip()]
+        if media_paths:
+            self.world_state.ingest_media(
+                session,
+                runtime_context=runtime_context,
+                media_paths=media_paths,
+            )
+        world_attention_items = self.world_state.current_attention_items(
+            session,
+            runtime_context=runtime_context,
+        )
+        if world_attention_items:
+            attention_items = [
+                *([item for item in (attention_items or []) if item]),
+                *[item for item in world_attention_items if item],
+            ]
         self.working_memory.upsert(
             session,
             identity=runtime_context.identity,
@@ -2527,6 +2547,7 @@ class AgentLoop:
             ctx.session,
             runtime_context=runtime_context,
             current_message=ctx.msg.content,
+            media_paths=ctx.msg.media if ctx.msg.media else None,
         )
         self._set_tool_context(
             ctx.msg.channel,

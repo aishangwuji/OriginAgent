@@ -6,7 +6,7 @@ from dataclasses import asdict, dataclass
 from typing import Any, Literal
 
 
-ScopeName = Literal["user", "session", "task"]
+ScopeName = Literal["device", "user", "session", "task"]
 
 
 @dataclass(frozen=True)
@@ -26,7 +26,7 @@ class ScopeResolver:
     @staticmethod
     def normalize_scope(scope: str | None, *, default: ScopeName = "session") -> ScopeName:
         value = str(scope or "").strip().lower()
-        if value in {"user", "session", "task"}:
+        if value in {"device", "user", "session", "task"}:
             return value  # type: ignore[return-value]
         return default
 
@@ -37,17 +37,23 @@ class ScopeResolver:
         current_scope: str | None,
         owner_id: str | None = None,
         current_owner_id: str | None = None,
+        device_id: str | None = None,
+        current_device_id: str | None = None,
     ) -> bool:
         normalized = self.normalize_scope(scope)
         current = self.normalize_scope(current_scope)
+        if normalized == "device":
+            if device_id and current_device_id and device_id != current_device_id:
+                return False
+            return current in {"device", "session", "task"}
         if normalized == "task":
             return current == "task"
         if normalized == "session":
-            return current in {"session", "task"}
+            return current in {"session", "task", "device"}
         if normalized == "user":
             if owner_id and current_owner_id and owner_id != current_owner_id:
                 return False
-            return current in {"user", "session", "task"}
+            return current in {"user", "session", "task", "device"}
         return False
 
     def can_propagate(
@@ -63,5 +69,5 @@ class ScopeResolver:
             return True
         if not allow_propagation:
             return False
-        order = {"task": 0, "session": 1, "user": 2}
+        order = {"task": 0, "device": 1, "session": 2, "user": 3}
         return order[left] <= order[right]

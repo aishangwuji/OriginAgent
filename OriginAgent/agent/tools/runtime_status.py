@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import json
 from collections import Counter
+from contextvars import ContextVar
 from pathlib import Path
 from typing import Any
 
 from OriginAgent.agent.confirmation import PendingConfirmationStore
 from OriginAgent.agent.introspection.service import RuntimeIntrospectionService
 from OriginAgent.agent.tools.base import Tool
+from OriginAgent.agent.tools.context import RequestContext
 from OriginAgent.cron.service import CronService
 
 
@@ -151,6 +153,68 @@ class InspectContextTool(Tool):
             evolution_config=self._evolution_config,
         )
         return service.inspect_context()
+
+
+class InspectSnapshotTool(Tool):
+    name = "originagent_inspect_snapshot"
+
+    def __init__(
+        self,
+        *,
+        sessions: Any,
+        introspection_service: RuntimeIntrospectionService | None = None,
+    ) -> None:
+        self._sessions = sessions
+        self._introspection_service = introspection_service
+        self._request_ctx: ContextVar[RequestContext | None] = ContextVar(
+            "inspect_snapshot_request_ctx",
+            default=None,
+        )
+
+    def set_context(self, ctx: RequestContext) -> None:
+        self._request_ctx.set(ctx)
+
+    @property
+    def description(self) -> str:
+        return "Inspect a specific world snapshot in the current session and write back a minimal inspection result."
+
+    @property
+    def parameters(self) -> dict[str, Any]:
+        return {
+            "type": "object",
+            "properties": {
+                "snapshot_id": {"type": "string", "minLength": 1},
+            },
+            "required": ["snapshot_id"],
+            "additionalProperties": False,
+        }
+
+    @property
+    def read_only(self) -> bool:
+        return False
+
+    async def execute(self, snapshot_id: str, **_: Any) -> dict[str, Any] | str:
+        ctx = self._request_ctx.get()
+        if ctx is None or not ctx.session_key:
+            return "Error: inspect_snapshot requires an active session context."
+        runtime_context = getattr(ctx, "runtime_context", None)
+        if runtime_context is None:
+            return "Error: inspect_snapshot requires runtime identity context."
+        service = self._introspection_service
+        loop = getattr(service, "_loop", None) if service is not None else None
+        world_state = getattr(loop, "world_state", None) if loop is not None else None
+        if world_state is None:
+            return "Error: world state manager is unavailable."
+        session = self._sessions.get_or_create(ctx.session_key)
+        result = world_state.inspect_snapshot(
+            session,
+            runtime_context=runtime_context,
+            snapshot_id=snapshot_id,
+            requested_by=str(runtime_context.source or "user_turn"),
+        )
+        if "error" in result:
+            return f"Error: {result['error']}"
+        return result
 
 
 class ToolAuditSummaryTool(Tool):

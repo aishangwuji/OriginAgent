@@ -60,6 +60,7 @@ class ContextAssemblerV2:
         continuity_blocks = self._builder.build_phase1_continuity_blocks(
             session_key=session_key,
             runtime_context=runtime_context,
+            current_message=current_message,
         )
         reference_blocks = self._builder.build_reference_context_blocks(
             session_summary=session_summary,
@@ -118,4 +119,15 @@ class ContextAssemblerV2:
                 if isinstance(block, dict)
             ),
         }
+        if runtime_context is not None and self._builder.world_state is not None and session_key:
+            session = self._builder._sessions.get_or_create(session_key) if self._builder._sessions is not None else None
+            if session is not None:
+                filtered = self._builder.world_state.filtered_candidates(
+                    session,
+                    runtime_context=runtime_context,
+                    current_message=current_message,
+                )
+                audit["world_summary"] = filtered.get("included_summary", {})
+                audit["world_filtered_candidates"] = filtered.get("filtered_candidates", [])
+                audit["world_freshness"] = filtered.get("freshness", {})
         return ContextAssemblyResult(blocks=merged, audit=audit)

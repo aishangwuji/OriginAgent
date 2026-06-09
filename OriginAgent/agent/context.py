@@ -106,6 +106,7 @@ class ContextBuilder:
         self.working_memory: WorkingMemoryManager | None = (
             WorkingMemoryManager(self._sessions) if self._sessions is not None else None
         )
+        self.world_state: Any | None = None
         self.assembler_v2 = ContextAssemblerV2(self)
 
     def build_system_prompt(
@@ -397,8 +398,14 @@ class ContextBuilder:
         *,
         session_key: str | None,
         runtime_context: Any | None,
+        current_message: str | None = None,
     ) -> list[dict[str, Any]]:
         blocks: list[dict[str, Any]] = []
+        session = (
+            self._sessions.get_or_create(session_key)
+            if self._sessions is not None and session_key
+            else None
+        )
         if runtime_context is not None:
             blocks.append(self.build_continuity_context_block({
                 "identity": {
@@ -411,8 +418,7 @@ class ContextBuilder:
                 "trigger": runtime_context.trigger,
                 "source": runtime_context.source,
             }))
-        if self.working_memory is not None and self._sessions is not None and session_key:
-            session = self._sessions.get_or_create(session_key)
+        if self.working_memory is not None and session is not None:
             blocks.append(
                 self.build_working_memory_block(
                     self.working_memory.inspect(
@@ -421,11 +427,22 @@ class ContextBuilder:
                     )
                 )
             )
-        blocks.append(self.build_world_state_block({
-            "status": "placeholder",
-            "version": "phase1",
-            "updated_at": current_time_str(self.timezone),
-        }))
+        if self.world_state is not None and session is not None:
+            blocks.append(
+                self.build_world_state_block(
+                    self.world_state.snapshot_prompt_payload(
+                        session,
+                        identity=runtime_context if runtime_context is not None else None,
+                        current_message=current_message,
+                    )
+                )
+            )
+        else:
+            blocks.append(self.build_world_state_block({
+                "status": "placeholder",
+                "version": "phase1",
+                "updated_at": current_time_str(self.timezone),
+            }))
         return blocks
 
     @staticmethod

@@ -15,9 +15,11 @@ from OriginAgent.agent.tools.runtime_status import (
     ConfirmationSummaryTool,
     CronSummaryTool,
     InspectContextTool,
+    InspectSnapshotTool,
     RuntimeStatusTool,
     ToolAuditSummaryTool,
 )
+from OriginAgent.agent.tools.context import RequestContext
 from OriginAgent.config.schema import DomainPacksConfig, NearlineMemoryConfig
 from OriginAgent.cron.service import CronService
 from OriginAgent.cron.types import CronSchedule
@@ -195,7 +197,45 @@ async def test_inspect_context_reports_phase1_views_and_scope_filter(tmp_path) -
                 "scope": "session",
                 "owner_id": "user-1",
                 "pending_questions": ["What should we do next?"],
-            }
+            },
+            "world_state_v1": {
+                "status": "active",
+                "version": "phase2",
+                "updated_at": "2026-06-09T00:00:00+00:00",
+                "scope": "session",
+                "owner_id": "user-1",
+                "snapshots": [
+                    {
+                        "snapshot_id": "snap_1",
+                        "kind": "image",
+                        "source": "media.image",
+                        "scope": "session",
+                        "owner_id": "user-1",
+                        "device_id": "device-a",
+                        "captured_at": "2026-06-09T00:00:00+00:00",
+                        "media_path": "uploads/desk.png",
+                        "summary": "Desk has a notebook.",
+                        "objects": ["notebook"],
+                        "relationships": [],
+                        "confidence": 0.8,
+                        "uncertainties": [],
+                        "provenance": {"producer": "test"},
+                    }
+                ],
+                "inspections": [],
+                "world_summary": {
+                    "summary_id": "world_1",
+                    "scope": "session",
+                    "owner_id": "user-1",
+                    "generated_at": "2026-06-09T00:00:00+00:00",
+                    "fresh_until": "2026-06-09T00:05:00+00:00",
+                    "focus": ["Desk has a notebook."],
+                    "constraints": ["snapshot confidence is high"],
+                    "uncertainties": [],
+                    "source_snapshot_ids": ["snap_1"],
+                    "inspection_ids": [],
+                },
+            },
         },
         get_history=lambda **kwargs: [
             {"role": "user", "content": "Earlier message"},
@@ -254,6 +294,30 @@ async def test_inspect_context_reports_phase1_views_and_scope_filter(tmp_path) -
                 "pending_questions": ["What should we do next?"],
             }
         ),
+        world_state=SimpleNamespace(
+            load=lambda session, identity=None: SimpleNamespace(
+                to_json=lambda: session.metadata["world_state_v1"],
+                world_summary=SimpleNamespace(
+                    to_json=lambda: session.metadata["world_state_v1"]["world_summary"],
+                ),
+            ),
+            filtered_candidates=lambda session, runtime_context=None, current_message=None: {
+                "included_summary": session.metadata["world_state_v1"]["world_summary"],
+                "filtered_candidates": [
+                    {
+                        "snapshot_id": "snap_old",
+                        "scope": "device",
+                        "included": False,
+                        "reasons": ["scope_hidden"],
+                    }
+                ],
+                "freshness": {
+                    "generated_at": "2026-06-09T00:00:00+00:00",
+                    "fresh_until": "2026-06-09T00:05:00+00:00",
+                    "is_fresh": True,
+                },
+            },
+        ),
     )
 
     result = await InspectContextTool(
@@ -276,13 +340,71 @@ async def test_inspect_context_reports_phase1_views_and_scope_filter(tmp_path) -
     assert result["views"]["working"]["working_memory"]["pending_questions"] == ["What should we do next?"]
     assert result["views"]["retrieval"]["sources"] == ["memory_retrieval"]
     assert result["views"]["retrieval"]["dialogue_sources"] == ["recent_history"]
-    assert result["views"]["world"]["placeholder"]["status"] == "placeholder"
+    assert result["views"]["world"]["snapshot"]["status"] == "active"
+    assert result["views"]["world"]["summary"]["focus"] == ["Desk has a notebook."]
+    assert result["views"]["world"]["source_snapshot_ids"] == ["snap_1"]
+    assert result["views"]["world"]["filtered_candidates"][0]["reasons"] == ["scope_hidden"]
+    assert result["views"]["world"]["freshness"]["is_fresh"] is True
     assert result["scope_filter"]["current_scope"] == "session"
+    assert result["scope_filter"]["visibility_matrix"]["device"] is True
     assert result["scope_filter"]["visibility_matrix"]["task"] is False
     assert any(
         candidate["source"] == "working_memory" and candidate["visible"] is True
         for candidate in result["scope_filter"]["candidates"]
     )
+    assert any(
+        candidate["source"] == "world_view" and candidate["visible"] is True
+        for candidate in result["scope_filter"]["candidates"]
+    )
+
+
+@pytest.mark.asyncio
+async def test_inspect_snapshot_tool_writes_back_minimal_inspection(tmp_path) -> None:
+    session = SimpleNamespace(key="cli:direct")
+    sessions = SimpleNamespace(get_or_create=lambda key: session)
+    calls: list[dict[str, object]] = []
+    world_state = SimpleNamespace(
+        inspect_snapshot=lambda session, runtime_context=None, snapshot_id=None, requested_by=None: (
+            calls.append(
+                {
+                    "snapshot_id": snapshot_id,
+                    "requested_by": requested_by,
+                    "runtime_context": runtime_context,
+                }
+            )
+            or {
+                "snapshot": {"snapshot_id": snapshot_id},
+                "inspection": {"inspection_id": "inspect_1"},
+                "world_summary": {"focus": ["verified scene"]},
+            }
+        )
+    )
+    loop = SimpleNamespace(world_state=world_state)
+    tool = InspectSnapshotTool(
+        sessions=sessions,
+        introspection_service=RuntimeIntrospectionService(
+            loop=loop,
+            workspace=tmp_path,
+            registry=SimpleNamespace(tool_names=["originagent_inspect_snapshot"]),
+            sessions=sessions,
+            pending_queues={},
+        ),
+    )
+    runtime_context = SimpleNamespace(source="user_turn")
+    tool.set_context(
+        RequestContext(
+            channel="cli",
+            chat_id="direct",
+            session_key="cli:direct",
+            runtime_context=runtime_context,
+        )
+    )
+
+    result = await tool.execute(snapshot_id="snap_1")
+
+    assert result["inspection"]["inspection_id"] == "inspect_1"
+    assert calls[0]["snapshot_id"] == "snap_1"
+    assert calls[0]["requested_by"] == "user_turn"
 
 
 @pytest.mark.asyncio

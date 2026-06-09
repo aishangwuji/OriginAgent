@@ -84,6 +84,7 @@ def set_tool_context(
         actor_id=actor_id,
         trigger=trigger,
         capability_snapshot=capability_snapshot,
+        runtime_context=runtime_context,
     )
     if hasattr(tools, "set_capability_snapshot"):
         tools.set_capability_snapshot(capability_snapshot)

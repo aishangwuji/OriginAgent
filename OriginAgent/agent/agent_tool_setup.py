@@ -27,6 +27,7 @@ from OriginAgent.agent.tools.runtime_status import (
     ConfirmationSummaryTool,
     CronSummaryTool,
     InspectContextTool,
+    InspectSnapshotTool,
     RuntimeStatusTool,
     ToolAuditSummaryTool,
 )
@@ -213,6 +214,13 @@ def register_default_tools(
             nearline_memory_config=getattr(introspection_service, "_nearline_memory_config", None)
             if introspection_service is not None
             else None,
+            introspection_service=introspection_service,
+        )
+    )
+    _register_named(
+        InspectSnapshotTool.name,
+        lambda: InspectSnapshotTool(
+            sessions=sessions,
             introspection_service=introspection_service,
         )
     )

@@ -16,6 +16,7 @@ class RequestContext:
     actor_id: str | None = None
     trigger: str | None = None
     capability_snapshot: Any | None = None
+    runtime_context: Any | None = None
 
 
 @runtime_checkable

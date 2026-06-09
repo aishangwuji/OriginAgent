@@ -250,6 +250,16 @@ class RuntimeIntrospectionService:
                 )
             except Exception:
                 out["working_memory"] = {}
+        world_state = getattr(loop, "world_state", None)
+        if world_state is not None and sessions is not None and session_key:
+            try:
+                session = sessions.get_or_create(session_key)
+                out["world_state"] = world_state.inspect(
+                    session,
+                    identity=runtime_context if runtime_context is not None else None,
+                )
+            except Exception:
+                out["world_state"] = {}
         return out
 
     def cognition_summary(self) -> dict[str, Any]:
@@ -285,7 +295,10 @@ class RuntimeIntrospectionService:
             session_key=session_key,
             runtime_context=runtime_context,
         )
-        world_view = self._world_view()
+        world_view = self._world_view(
+            session_key=session_key,
+            runtime_context=runtime_context,
+        )
         working_memory = continuity.get("working_memory", {}) if isinstance(continuity, dict) else {}
         current_scope = ScopeResolver.normalize_scope(
             getattr(runtime_context, "default_scope", None),
@@ -323,6 +336,7 @@ class RuntimeIntrospectionService:
                 current_scope=current_scope,
                 current_owner_id=getattr(runtime_context, "user_id", None),
                 working_memory=working_memory if isinstance(working_memory, dict) else {},
+                world_view=world_view if isinstance(world_view, dict) else {},
             ),
         }
 
@@ -607,14 +621,76 @@ class RuntimeIntrospectionService:
             "dialogue_blocks": dialogue_blocks,
         }
 
-    def _world_view(self) -> dict[str, Any]:
-        return {
+    def _world_view(
+        self,
+        *,
+        session_key: str | None,
+        runtime_context: Any | None,
+    ) -> dict[str, Any]:
+        defaults = {
             "source": "ContextBuilder.build_phase1_continuity_blocks",
-            "placeholder": {
+            "snapshot": {
                 "status": "placeholder",
                 "version": "phase1",
                 "updated_at": datetime.now(timezone.utc).isoformat(),
             },
+            "summary": {},
+            "source_snapshot_ids": [],
+            "fresh_until": None,
+            "filtered_candidates": [],
+            "freshness": {
+                "generated_at": None,
+                "fresh_until": None,
+                "is_fresh": False,
+            },
+        }
+        loop = self._loop
+        sessions = getattr(loop, "sessions", None) if loop is not None else None
+        world_state = getattr(loop, "world_state", None) if loop is not None else None
+        if world_state is None or sessions is None or not session_key:
+            return defaults
+        try:
+            session = sessions.get_or_create(session_key)
+            snapshot = world_state.load(
+                session,
+                identity=runtime_context if runtime_context is not None else None,
+            )
+            filtered = (
+                world_state.filtered_candidates(
+                    session,
+                    runtime_context=runtime_context,
+                    current_message=(
+                        getattr(loop, "_last_context_assembly", {}).get("current_message_preview", "")
+                        if loop is not None
+                        else ""
+                    ),
+                )
+                if runtime_context is not None
+                else {}
+            )
+        except Exception:
+            return defaults
+        summary = (
+            filtered.get("included_summary")
+            if isinstance(filtered, dict) and filtered.get("included_summary")
+            else snapshot.world_summary.to_json() if snapshot.world_summary is not None else {}
+        )
+        return {
+            **defaults,
+            "snapshot": snapshot.to_json(),
+            "summary": summary,
+            "source_snapshot_ids": list(summary.get("source_snapshot_ids") or []),
+            "fresh_until": summary.get("fresh_until"),
+            "filtered_candidates": (
+                filtered.get("filtered_candidates", [])
+                if isinstance(filtered, dict)
+                else []
+            ),
+            "freshness": (
+                filtered.get("freshness", defaults["freshness"])
+                if isinstance(filtered, dict)
+                else defaults["freshness"]
+            ),
         }
 
     def _scope_filter_summary(
@@ -623,6 +699,7 @@ class RuntimeIntrospectionService:
         current_scope: str,
         current_owner_id: str | None,
         working_memory: dict[str, Any],
+        world_view: dict[str, Any],
     ) -> dict[str, Any]:
         resolver = ScopeResolver()
         retrieval_scope = "user" if current_scope == "user" else "session"
@@ -653,10 +730,25 @@ class RuntimeIntrospectionService:
             ),
             self._scope_candidate(
                 source="world_view",
-                scope="session",
-                owner_id=None,
+                scope=(
+                    world_scope
+                    if (world_scope := world_view.get("summary", {}).get("scope"))
+                    else world_view.get("snapshot", {}).get("scope")
+                ),
+                owner_id=(
+                    world_view.get("summary", {}).get("owner_id")
+                    or world_view.get("snapshot", {}).get("owner_id")
+                ),
+                device_id=(
+                    world_view.get("snapshot", {}).get("snapshots", [{}])[0].get("device_id")
+                    if world_view.get("snapshot", {}).get("snapshots")
+                    else None
+                ),
                 current_scope=current_scope,
                 current_owner_id=current_owner_id,
+                current_device_id=(
+                    self.continuity_summary().get("runtime_context", {}).get("device_id")
+                ),
                 resolver=resolver,
             ),
         ]
@@ -672,8 +764,9 @@ class RuntimeIntrospectionService:
                     current_scope=current_scope,
                     owner_id=current_owner_id,
                     current_owner_id=current_owner_id,
+                    current_device_id=self.continuity_summary().get("runtime_context", {}).get("device_id"),
                 )
-                for scope in ("task", "session", "user")
+                for scope in ("task", "device", "session", "user")
             },
             "candidates": candidates,
         }
@@ -684,8 +777,10 @@ class RuntimeIntrospectionService:
         source: str,
         scope: str | None,
         owner_id: str | None,
+        device_id: str | None = None,
         current_scope: str,
         current_owner_id: str | None,
+        current_device_id: str | None = None,
         resolver: ScopeResolver,
     ) -> dict[str, Any]:
         normalized_scope = resolver.normalize_scope(scope)
@@ -694,17 +789,22 @@ class RuntimeIntrospectionService:
             current_scope=current_scope,
             owner_id=owner_id,
             current_owner_id=current_owner_id,
+            device_id=device_id,
+            current_device_id=current_device_id,
         )
         return {
             "source": source,
             "scope": normalized_scope,
             "owner_id": owner_id,
+            "device_id": device_id,
             "visible": visible,
             "reason": _visibility_reason(
                 visible=visible,
                 scope=normalized_scope,
                 owner_id=owner_id,
                 current_owner_id=current_owner_id,
+                device_id=device_id,
+                current_device_id=current_device_id,
             ),
         }
 
@@ -1071,9 +1171,13 @@ def _visibility_reason(
     scope: str,
     owner_id: str | None,
     current_owner_id: str | None,
+    device_id: str | None = None,
+    current_device_id: str | None = None,
 ) -> str:
     if visible:
         return "included"
+    if scope == "device" and device_id and current_device_id and device_id != current_device_id:
+        return "device_mismatch"
     if scope == "user" and owner_id and current_owner_id and owner_id != current_owner_id:
         return "owner_mismatch"
     return "scope_not_visible"
