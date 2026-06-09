@@ -31,6 +31,7 @@ class TaskRunReport:
 @dataclass(frozen=True)
 class RuntimeContextSnapshot:
     runtime: dict[str, Any] = field(default_factory=dict)
+    continuity: dict[str, Any] = field(default_factory=dict)
     confirmations: dict[str, Any] = field(default_factory=dict)
     reviews: dict[str, Any] = field(default_factory=dict)
     background_tasks: dict[str, Any] = field(default_factory=dict)

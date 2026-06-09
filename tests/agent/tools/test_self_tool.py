@@ -967,6 +967,22 @@ class TestReadOnlyMode:
         assert "40" in result
 
     @pytest.mark.asyncio
+    async def test_inspect_continuity_allowed_in_readonly(self):
+        loop = _make_mock_loop()
+        service = MagicMock()
+        service.current_loop_summary.return_value = {
+            "max_iterations": 40,
+            "context_window_tokens": 65536,
+            "continuity": {
+                "enabled": True,
+                "last_context_assembly": {"block_kinds": ["runtime_context", "continuity_context"]},
+            },
+        }
+        tool = MyTool(loop=loop, modify_allowed=False, introspection_service=service)
+        result = await tool.execute(action="check", key="continuity")
+        assert "continuity" in result
+
+    @pytest.mark.asyncio
     async def test_modify_blocked_in_readonly(self):
         tool = self._make_readonly_tool()
         result = await tool.execute(action="set", key="max_iterations", value=80)

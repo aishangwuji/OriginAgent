@@ -83,6 +83,7 @@ class RuntimeIntrospectionService:
             "subagents": getattr(loop, "subagents", None),
             "_last_usage": getattr(loop, "_last_usage", None),
             "scratchpad": getattr(loop, "_runtime_vars", {}),
+            "continuity": self.continuity_summary(),
         }
 
     def system_status(self) -> dict[str, Any]:
@@ -202,6 +203,7 @@ class RuntimeIntrospectionService:
                 "background_review_enabled": bool(background_review_status.get("background_review_enabled")),
                 "curator_enabled": bool(curator_status.get("curator_enabled")),
             },
+            continuity=self.continuity_summary(),
             confirmations=confirmations,
             reviews=reviews,
             background_tasks=background_tasks,
@@ -211,6 +213,40 @@ class RuntimeIntrospectionService:
             memory_summary=memory_summary,
             nearline_memory_summary=nearline_memory_summary,
         )
+
+    def continuity_summary(self) -> dict[str, Any]:
+        loop = self._loop
+        if loop is None:
+            return {}
+        working_memory = getattr(loop, "working_memory", None)
+        sessions = getattr(loop, "sessions", None)
+        runtime_context = getattr(loop, "_last_runtime_context", None)
+        session_key = getattr(loop, "_last_continuity_session_key", None)
+        out: dict[str, Any] = {
+            "enabled": bool(working_memory is not None),
+            "current_session_key": session_key,
+            "last_context_assembly": getattr(loop, "_last_context_assembly", {}),
+        }
+        if runtime_context is not None:
+            out["runtime_context"] = {
+                "actor_id": runtime_context.actor_id,
+                "user_id": runtime_context.user_id,
+                "session_id": runtime_context.session_id,
+                "device_id": runtime_context.device_id,
+                "trigger": runtime_context.trigger,
+                "source": runtime_context.source,
+                "scope": runtime_context.default_scope,
+            }
+        if working_memory is not None and sessions is not None and session_key:
+            try:
+                session = sessions.get_or_create(session_key)
+                out["working_memory"] = working_memory.inspect(
+                    session,
+                    identity=runtime_context.identity if runtime_context is not None else None,
+                )
+            except Exception:
+                out["working_memory"] = {}
+        return out
 
     def background_task_summary(
         self,

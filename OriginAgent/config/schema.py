@@ -430,6 +430,12 @@ class CuratorConfig(Base):
 class ContextConfig(Base):
     """Prompt context construction limits."""
 
+    enable_phase1_continuity: bool = Field(
+        default=True,
+        validation_alias=AliasChoices("enablePhase1Continuity", "enable_phase1_continuity"),
+        serialization_alias="enablePhase1Continuity",
+    )
+
     max_recent_history: int = Field(
         default=50,
         ge=1,

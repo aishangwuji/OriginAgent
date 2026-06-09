@@ -11,8 +11,10 @@ from typing import Any, Mapping
 
 from loguru import logger
 
+from OriginAgent.agent.context_assembler import ContextAssemblerV2
 from OriginAgent.agent.domain_packs import DomainPackManager
 from OriginAgent.agent.memory import MemoryStore
+from OriginAgent.agent.working_memory import WorkingMemoryManager
 from OriginAgent.agent.self_model import SelfModelRenderer, SelfModelService
 from OriginAgent.agent.skills import SkillsLoader
 from OriginAgent.config.schema import ContextConfig
@@ -49,6 +51,9 @@ class ContextBuilder:
     RUNTIME_CONTEXT_KIND = "runtime_context"
     REFERENCE_CONTEXT_KIND = "reference_context"
     INTERNAL_EVENT_KIND = "internal_event"
+    CONTINUITY_CONTEXT_KIND = "continuity_context"
+    WORKING_MEMORY_CONTEXT_KIND = "working_memory_context"
+    WORLD_STATE_CONTEXT_KIND = "world_state_context"
 
     def __init__(
         self,
@@ -98,6 +103,10 @@ class ContextBuilder:
         self._confirmation_store = confirmation_store
         self._background_review_service = background_review_service
         self._curator_service = curator_service
+        self.working_memory: WorkingMemoryManager | None = (
+            WorkingMemoryManager(self._sessions) if self._sessions is not None else None
+        )
+        self.assembler_v2 = ContextAssemblerV2(self)
 
     def build_system_prompt(
         self,
@@ -151,6 +160,8 @@ class ContextBuilder:
     def build_reference_context_blocks(
         self,
         session_summary: str | None = None,
+        session_key: str | None = None,
+        runtime_context: Any | None = None,
     ) -> list[dict[str, Any]]:
         """Build untrusted user-side reference context blocks."""
         blocks: list[dict[str, Any]] = []
@@ -168,7 +179,11 @@ class ContextBuilder:
         if layered is not None and layered.has_primary_content and layered.rendered_text.strip():
             blocks.append(self.build_reference_context_block("layered_memory", layered.rendered_text))
         else:
-            memory_bundle = self.memory.get_memory_context_bundle()
+            scope_prefix = None
+            if runtime_context is not None:
+                if getattr(runtime_context, "default_scope", None) == "user":
+                    scope_prefix = "user"
+            memory_bundle = self.memory.get_memory_context_bundle(scope_prefix=scope_prefix)
             memory = memory_bundle.rendered_text
             if memory:
                 source = "memory_retrieval" if not memory_bundle.fallback_used else "memory"
@@ -263,8 +278,12 @@ class ContextBuilder:
         channel: str | None, chat_id: str | None, timezone: str | None = None,
         sender_id: str | None = None,
         session_metadata: Mapping[str, Any] | None = None,
+        extra_lines: list[str] | None = None,
     ) -> dict[str, Any]:
         """Build a runtime metadata block for user-side model context."""
+        merged_lines = list(goal_state_runtime_lines(session_metadata))
+        if extra_lines:
+            merged_lines.extend(extra_lines)
         return {
             "type": "text",
             "text": ContextBuilder.build_runtime_context_text(
@@ -272,7 +291,7 @@ class ContextBuilder:
                 chat_id,
                 timezone,
                 sender_id=sender_id,
-                extra_lines=goal_state_runtime_lines(session_metadata),
+                extra_lines=merged_lines,
             ),
             "_meta": {
                 "kind": ContextBuilder.RUNTIME_CONTEXT_KIND,
@@ -326,6 +345,90 @@ class ContextBuilder:
         }
 
     @staticmethod
+    def build_continuity_context_block(snapshot: Mapping[str, Any]) -> dict[str, Any]:
+        return {
+            "type": "text",
+            "text": (
+                "<continuity_context trust='internal'>\n"
+                "Identity and scope metadata for context assembly.\n"
+                f"{json.dumps(dict(snapshot), ensure_ascii=False, indent=2)}\n"
+                "</continuity_context>"
+            ),
+            "_meta": {
+                "kind": ContextBuilder.CONTINUITY_CONTEXT_KIND,
+                "trust": "internal",
+            },
+        }
+
+    @staticmethod
+    def build_working_memory_block(snapshot: Mapping[str, Any]) -> dict[str, Any]:
+        return {
+            "type": "text",
+            "text": (
+                "<working_memory trust='internal'>\n"
+                "Current structured working set.\n"
+                f"{json.dumps(dict(snapshot), ensure_ascii=False, indent=2)}\n"
+                "</working_memory>"
+            ),
+            "_meta": {
+                "kind": ContextBuilder.WORKING_MEMORY_CONTEXT_KIND,
+                "trust": "internal",
+            },
+        }
+
+    @staticmethod
+    def build_world_state_block(snapshot: Mapping[str, Any]) -> dict[str, Any]:
+        return {
+            "type": "text",
+            "text": (
+                "<world_state trust='internal'>\n"
+                "Current world-state summary.\n"
+                f"{json.dumps(dict(snapshot), ensure_ascii=False, indent=2)}\n"
+                "</world_state>"
+            ),
+            "_meta": {
+                "kind": ContextBuilder.WORLD_STATE_CONTEXT_KIND,
+                "trust": "internal",
+            },
+        }
+
+    def build_phase1_continuity_blocks(
+        self,
+        *,
+        session_key: str | None,
+        runtime_context: Any | None,
+    ) -> list[dict[str, Any]]:
+        blocks: list[dict[str, Any]] = []
+        if runtime_context is not None:
+            blocks.append(self.build_continuity_context_block({
+                "identity": {
+                    "actor_id": runtime_context.actor_id,
+                    "user_id": runtime_context.user_id,
+                    "session_id": runtime_context.session_id,
+                    "device_id": runtime_context.device_id,
+                },
+                "scope": runtime_context.default_scope,
+                "trigger": runtime_context.trigger,
+                "source": runtime_context.source,
+            }))
+        if self.working_memory is not None and self._sessions is not None and session_key:
+            session = self._sessions.get_or_create(session_key)
+            blocks.append(
+                self.build_working_memory_block(
+                    self.working_memory.inspect(
+                        session,
+                        identity=runtime_context.identity if runtime_context is not None else None,
+                    )
+                )
+            )
+        blocks.append(self.build_world_state_block({
+            "status": "placeholder",
+            "version": "phase1",
+            "updated_at": current_time_str(self.timezone),
+        }))
+        return blocks
+
+    @staticmethod
     def _merge_message_content(left: Any, right: Any) -> str | list[dict[str, Any]]:
         if isinstance(left, str) and isinstance(right, str):
             return f"{left}\n\n{right}" if left else right
@@ -374,6 +477,8 @@ class ContextBuilder:
         session_metadata: Mapping[str, Any] | None = None,
         internal_event: tuple[str, str] | None = None,
         self_model_payload: dict[str, Any] | None = None,
+        runtime_context: Any | None = None,
+        session_key: str | None = None,
     ) -> list[dict[str, Any]]:
         """Build the complete message list for an LLM call."""
         messages = [
@@ -390,21 +495,41 @@ class ContextBuilder:
 
         user_content = self._build_user_content(current_message, media)
         if current_role == "user":
-            merged: list[dict[str, Any]] = [
-                self.build_runtime_context_block(
-                    channel,
-                    chat_id,
-                    self.timezone,
+            if self._context_config.enable_phase1_continuity:
+                assembled = self.assembler_v2.assemble(
+                    current_message=current_message,
+                    media=media,
+                    channel=channel,
+                    chat_id=chat_id,
                     sender_id=sender_id,
-                    session_metadata=session_metadata,
-                ),
-                *self.build_reference_context_blocks(session_summary=session_summary),
-            ]
-            if internal_event is not None:
-                source, content = internal_event
-                if content:
-                    merged.append(self.build_internal_event_block(source, content))
-            merged.extend(user_content)
+                    session_summary=session_summary,
+                    session_metadata=dict(session_metadata or {}),
+                    internal_event=internal_event,
+                    runtime_context=runtime_context,
+                    session_key=session_key,
+                    include_current_message=True,
+                )
+                merged = assembled.blocks
+            else:
+                merged = [
+                    self.build_runtime_context_block(
+                        channel,
+                        chat_id,
+                        self.timezone,
+                        sender_id=sender_id,
+                        session_metadata=session_metadata,
+                    ),
+                    *self.build_reference_context_blocks(
+                        session_summary=session_summary,
+                        session_key=session_key,
+                        runtime_context=runtime_context,
+                    ),
+                ]
+                if internal_event is not None:
+                    source, content = internal_event
+                    if content:
+                        merged.append(self.build_internal_event_block(source, content))
+                merged.extend(user_content)
             if merged:
                 messages.append({"role": "user", "content": merged})
             return messages

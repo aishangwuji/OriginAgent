@@ -11,6 +11,7 @@ from OriginAgent.agent.tools.registry import ToolRegistry
 from OriginAgent.agent.tools.schema import tool_parameters_schema
 from OriginAgent.bus.events import InboundMessage
 from OriginAgent.bus.queue import MessageBus
+from OriginAgent.config.schema import ContextConfig
 from OriginAgent.providers.base import GenerationSettings, LLMResponse, ToolCallRequest
 
 
@@ -171,6 +172,65 @@ async def test_ask_user_text_fallback_resumes_with_next_message(tmp_path):
         and message.get("content") == "Skip"
         for message in session.messages
     )
+    resumed_user_blocks = seen_messages[-1][-1]["content"]
+    rendered = "\n".join(
+        str(block.get("text") or "")
+        for block in resumed_user_blocks
+        if isinstance(block, dict)
+    )
+    assert "<continuity_context" in rendered
+    assert "<working_memory" in rendered
+    assert loop._last_context_assembly["enabled"] is True
+    assert "continuity_context" in loop._last_context_assembly["block_kinds"]
+
+
+@pytest.mark.asyncio
+async def test_ask_user_resume_uses_legacy_context_when_phase1_disabled(tmp_path):
+    seen_messages: list[list[dict]] = []
+
+    async def chat_with_retry(**kwargs):
+        seen_messages.append(kwargs["messages"])
+        if len(seen_messages) == 1:
+            return LLMResponse(
+                content="",
+                finish_reason="tool_calls",
+                tool_calls=[
+                    ToolCallRequest(
+                        id="call_ask",
+                        name="ask_user",
+                        arguments={
+                            "question": "Install the optional package?",
+                            "options": ["Install", "Skip"],
+                        },
+                    )
+                ],
+            )
+        return LLMResponse(content="Skipped install.", usage={})
+
+    loop = AgentLoop(
+        bus=MessageBus(),
+        provider=_make_provider(chat_with_retry),
+        workspace=tmp_path,
+        model="test-model",
+    )
+    loop.context._context_config = ContextConfig(enable_phase1_continuity=False)
+
+    await loop._process_message(
+        InboundMessage(channel="cli", sender_id="user", chat_id="direct", content="set it up")
+    )
+    await loop._process_message(
+        InboundMessage(channel="cli", sender_id="user", chat_id="direct", content="Skip")
+    )
+
+    resumed_user_blocks = seen_messages[-1][-1]["content"]
+    rendered = "\n".join(
+        str(block.get("text") or "")
+        for block in resumed_user_blocks
+        if isinstance(block, dict)
+    )
+    assert "[Runtime Context" in rendered
+    assert "<continuity_context" not in rendered
+    assert loop._last_context_assembly["enabled"] is False
 
 
 @pytest.mark.asyncio

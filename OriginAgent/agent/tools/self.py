@@ -59,6 +59,7 @@ class MyTool(Tool):
         "_current_iteration",  # updated by runner only
         "exec_config",  # inspect allowed (e.g. check sandbox), modify blocked
         "web_config",  # inspect allowed (e.g. check enable), modify blocked
+        "continuity",  # inspect allowed, modify blocked
     })
 
     _DENIED_ATTRS = frozenset({
@@ -273,6 +274,11 @@ class MyTool(Tool):
             "subagents": getattr(self._loop, "subagents", None),
             "_last_usage": getattr(self._loop, "_last_usage", None),
             "scratchpad": getattr(self._loop, "_runtime_vars", {}),
+            "continuity": (
+                self._introspection_service.continuity_summary()
+                if self._introspection_service is not None
+                else {}
+            ),
         }
 
     def _resolve_path(self, path: str) -> tuple[Any, str | None]:
@@ -725,7 +731,7 @@ class MyTool(Tool):
         for k in self.RESTRICTED:
             parts.append(self._format_value(summary.get(k), k))
         # Other useful top-level keys shown in description
-        for k in ("workspace", "provider_retry_mode", "max_tool_result_chars", "_current_iteration", "web_config", "exec_config", "subagents"):
+        for k in ("workspace", "provider_retry_mode", "max_tool_result_chars", "_current_iteration", "web_config", "exec_config", "subagents", "continuity"):
             if k in summary:
                 parts.append(self._format_value(summary.get(k), k))
         # Token usage

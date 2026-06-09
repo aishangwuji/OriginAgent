@@ -45,6 +45,8 @@ from OriginAgent.agent.memory import Consolidator, Dream, dream_feature_flags
 from OriginAgent.agent.progress_hook import AgentProgressHook
 from OriginAgent.agent.runner import _MAX_INJECTIONS_PER_TURN, AgentRunner, AgentRunSpec
 from OriginAgent.agent.self_model import SelfModelService
+from OriginAgent.agent.reminders import ReminderStore
+from OriginAgent.agent.working_memory import WorkingMemoryManager
 from OriginAgent.agent.subagent import SubagentManager
 from OriginAgent.memory.pipeline import NearlineMemoryPipeline
 from OriginAgent.agent.tools.ask import (
@@ -383,6 +385,11 @@ class AgentLoop:
             audit_logger=self._audit_logger,
             config=defaults.confirmation,
         )
+        self._reminder_store = ReminderStore(workspace)
+        self.working_memory = WorkingMemoryManager(
+            self.sessions,
+            reminder_store=self._reminder_store,
+        )
         self.tools = ToolRegistry(
             audit_sink=JsonlToolAuditSink(workspace),
             audit_config=self._tool_audit_config,
@@ -455,6 +462,7 @@ class AgentLoop:
             background_review_service=self.background_review,
             curator_service=self.curator,
         )
+        self.context.working_memory = self.working_memory
         self._active_intent_config = ActiveIntentConfig(
             enabled=(
                 defaults.allow_agent_initiated_messages
@@ -561,6 +569,9 @@ class AgentLoop:
         self._runtime_vars: dict[str, Any] = {}
         self._capability_snapshot: CapabilitySnapshot | None = None
         self._current_iteration: int = 0
+        self._last_runtime_context: RuntimeContext | None = None
+        self._last_continuity_session_key: str | None = None
+        self._last_context_assembly: dict[str, Any] = {}
         self.commands = CommandRouter()
         register_builtin_commands(self.commands)
 
@@ -1067,23 +1078,61 @@ class AgentLoop:
                 pending_ask_id,
                 image_generation_prompt(msg.content, msg.metadata),
             )
+            if self.context._context_config.enable_phase1_continuity:
+                assembled = self.context.assembler_v2.assemble(
+                    current_message=None,
+                    media=None,
+                    channel=msg.channel,
+                    chat_id=self._runtime_chat_id(msg),
+                    sender_id=msg.sender_id,
+                    session_summary=pending_summary,
+                    session_metadata=dict(session.metadata or {}),
+                    internal_event=None,
+                    runtime_context=self._last_runtime_context,
+                    session_key=session.key,
+                    include_current_message=False,
+                )
+                self._last_context_assembly = dict(assembled.audit)
+                messages.append({
+                    "role": "user",
+                    "content": assembled.blocks,
+                })
+                return messages
             messages.append({
                 "role": "user",
                 "content": [
-                self.context.build_runtime_context_block(
-                    msg.channel,
-                    self._runtime_chat_id(msg),
+                    self.context.build_runtime_context_block(
+                        msg.channel,
+                        self._runtime_chat_id(msg),
                         self.context.timezone,
                         sender_id=msg.sender_id,
                         session_metadata=session.metadata,
                     ),
                     *self.context.build_reference_context_blocks(
                         session_summary=pending_summary,
+                        session_key=session.key,
+                        runtime_context=self._last_runtime_context,
                     ),
                 ],
             })
+            self._last_context_assembly = {
+                "enabled": False,
+                "session_key": session.key,
+                "reason": "phase1_continuity_disabled",
+                "block_kinds": [
+                    self.context.RUNTIME_CONTEXT_KIND,
+                    *[
+                        block.get("_meta", {}).get("kind")
+                        for block in self.context.build_reference_context_blocks(
+                            session_summary=pending_summary,
+                            session_key=session.key,
+                            runtime_context=self._last_runtime_context,
+                        )
+                    ],
+                ],
+            }
             return messages
-        return self.context.build_messages(
+        built = self.context.build_messages(
             history=history,
             current_message=image_generation_prompt(msg.content, msg.metadata),
             media=msg.media if msg.media else None,
@@ -1094,7 +1143,15 @@ class AgentLoop:
             session_metadata=session.metadata,
             internal_event=internal_event,
             self_model_payload=self_model_payload,
+            runtime_context=self._last_runtime_context,
+            session_key=session.key,
         )
+        self._last_context_assembly = self._snapshot_context_assembly_from_messages(
+            built,
+            session_key=session.key,
+            runtime_context=self._last_runtime_context,
+        )
+        return built
 
     def _build_prompt_self_model(self) -> dict[str, Any]:
         snapshot = self.introspection.runtime_context_snapshot()
@@ -1770,7 +1827,15 @@ class AgentLoop:
             chat_id=chat_id,
             session_key=key,
         )
+        self._last_runtime_context = runtime_context
+        self._last_continuity_session_key = key
         snapshot = capability_snapshot or self._snapshot_for_trigger(runtime_context.trigger)
+        self._update_working_memory_from_turn(
+            session,
+            runtime_context=runtime_context,
+            current_message=None if (is_subagent or is_active_intent) else msg.content,
+            internal_event=msg.content if (is_subagent or is_active_intent) else None,
+        )
         self._set_tool_context(
             channel, chat_id, msg.metadata.get("message_id"),
             msg.metadata,
@@ -1810,6 +1875,13 @@ class AgentLoop:
                 if is_subagent
                 else ("active_intent", msg.content) if is_active_intent else None
             ),
+            runtime_context=runtime_context,
+            session_key=key,
+        )
+        self._last_context_assembly = self._snapshot_context_assembly_from_messages(
+            messages,
+            session_key=key,
+            runtime_context=runtime_context,
         )
         final_content, _, all_msgs, stop_reason, _ = await self._run_agent_loop(
             messages, session=session, channel=channel, chat_id=chat_id,
@@ -1864,6 +1936,79 @@ class AgentLoop:
             buttons=buttons,
             metadata=outbound_metadata,
         )
+
+    def _update_working_memory_from_turn(
+        self,
+        session: Session,
+        *,
+        runtime_context: RuntimeContext,
+        current_message: str | None,
+        internal_event: str | None = None,
+    ) -> None:
+        pending_questions = None
+        attention_items = None
+        text = str(current_message or "").strip()
+        lowered = text.lower()
+        if text and ("?" in text or lowered.startswith(("how ", "what ", "why ", "can ", "should ", "do ", "is ", "are "))):
+            pending_questions = [text]
+        if internal_event and runtime_context.source == "user_turn":
+            attention_items = [str(internal_event).strip()]
+        self.working_memory.upsert(
+            session,
+            identity=runtime_context.identity,
+            pending_questions=pending_questions,
+            attention_items=attention_items,
+        )
+
+    def _snapshot_context_assembly_from_messages(
+        self,
+        messages: list[dict[str, Any]],
+        *,
+        session_key: str | None,
+        runtime_context: RuntimeContext | None,
+    ) -> dict[str, Any]:
+        user_blocks: list[dict[str, Any]] = []
+        for message in reversed(messages):
+            if message.get("role") != "user":
+                continue
+            content = message.get("content")
+            if isinstance(content, list):
+                user_blocks = [block for block in content if isinstance(block, dict)]
+                break
+        return {
+            "enabled": bool(self.context._context_config.enable_phase1_continuity),
+            "session_key": session_key,
+            "runtime_context": (
+                {
+                    "actor_id": runtime_context.actor_id,
+                    "user_id": runtime_context.user_id,
+                    "session_id": runtime_context.session_id,
+                    "device_id": runtime_context.device_id,
+                    "trigger": runtime_context.trigger,
+                    "source": runtime_context.source,
+                    "scope": runtime_context.default_scope,
+                }
+                if runtime_context is not None
+                else {}
+            ),
+            "block_kinds": [
+                block.get("_meta", {}).get("kind")
+                for block in user_blocks
+            ],
+            "reference_sources": [
+                block.get("_meta", {}).get("source")
+                for block in user_blocks
+                if block.get("_meta", {}).get("kind") == self.context.REFERENCE_CONTEXT_KIND
+            ],
+            "current_message_preview": next(
+                (
+                    str(block.get("text") or "")[:200]
+                    for block in reversed(user_blocks)
+                    if block.get("type") == "text" and not block.get("_meta")
+                ),
+                "",
+            ),
+        }
 
     async def _process_message(
         self,
@@ -2055,7 +2200,14 @@ class AgentLoop:
         )
         runtime_context = self._resolve_runtime_context(ctx.msg, session_key=ctx.session_key)
         ctx.runtime_context = runtime_context
+        self._last_runtime_context = runtime_context
+        self._last_continuity_session_key = ctx.session_key
         snapshot = ctx.capability_snapshot or self._snapshot_for_trigger(runtime_context.trigger)
+        self._update_working_memory_from_turn(
+            ctx.session,
+            runtime_context=runtime_context,
+            current_message=ctx.msg.content,
+        )
         self._set_tool_context(
             ctx.msg.channel,
             ctx.msg.chat_id,

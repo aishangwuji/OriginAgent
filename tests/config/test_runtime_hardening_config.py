@@ -3,6 +3,7 @@ from OriginAgent.config.schema import AgentDefaults, BackgroundReviewConfig, Con
 
 def test_context_config_defaults() -> None:
     cfg = ContextConfig()
+    assert cfg.enable_phase1_continuity is True
     assert cfg.max_recent_history == 50
     assert cfg.max_history_chars == 32_000
     assert cfg.max_media_files == 8

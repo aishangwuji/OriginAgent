@@ -53,11 +53,15 @@ class RecordingResolver(ActorResolver):
         )
         return RuntimeContext(
             actor_id=self.actor_id,
+            user_id=base.user_id,
+            session_id=base.session_id,
+            device_id=base.device_id,
             trigger=base.trigger,
             channel=base.channel,
             chat_id=base.chat_id,
             session_key=base.session_key,
             source=base.source,
+            default_scope=base.default_scope,
         )
 
 
