@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 from loguru import logger
 
@@ -13,6 +14,7 @@ from OriginAgent.agent.facts import FactStore
 from OriginAgent.config.schema import DeviceToolsConfig
 
 from .action_safety import SmartHomeActionSafetyGate
+from .action_automation import ActionAutomationPreconditionGate
 from .confirmation_prompts import SmartHomeConfirmationPromptBuilder
 from .device_actions import DeviceActionSchemaRegistry, TypedActionPlanner
 from .device_backends import DeviceActionExecutor
@@ -42,6 +44,7 @@ def build_device_action_executor(
     presence_store: PresenceStore | None = None,
     fact_store: FactStore | None = None,
     permission_resolver: PermissionResolver | None = None,
+    device_registry: Any | None = None,
 ) -> DeviceActionExecutor | None:
     if not config.enabled:
         return None
@@ -77,4 +80,8 @@ def build_device_action_executor(
         TypedActionPlanner(DeviceActionSchemaRegistry()),
         safe_executor,
         audit_logger=audit,
+        automation_gate=ActionAutomationPreconditionGate(
+            device_registry=device_registry,
+            allowed_domains=tuple(config.automation_allowed_domains or ["lighting"]),
+        ),
     )

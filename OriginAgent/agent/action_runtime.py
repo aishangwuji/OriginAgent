@@ -57,6 +57,11 @@ class ActionIntent:
     uses_facts: list[str] = field(default_factory=list)
     payload: dict[str, Any] = field(default_factory=dict)
     idempotency_key: str | None = None
+    continuity_session_ref: str | None = None
+    continuity_world_ref: str | None = None
+    continuity_facts_ref: list[str] = field(default_factory=list)
+    continuity_origin: str | None = None
+    continuity_proposal_digest: str | None = None
 
     def to_request(self) -> ActionRequest:
         return ActionRequest(
@@ -73,6 +78,7 @@ class ActionIntent:
         return replace(
             self,
             uses_facts=list(self.uses_facts),
+            continuity_facts_ref=list(self.continuity_facts_ref),
             payload=sanitize_action_payload(self.payload),
         )
 
@@ -170,6 +176,7 @@ class SafeActionExecutor:
         permission_resolver: PermissionResolver | None = None,
         audit_logger: AuditLogger | None = None,
         scope_redactor: Callable[[str | None], str | None] | None = None,
+        resume_precheck: Callable[[ActionIntent, ConfirmationRequest, datetime], ActionDecision | None] | None = None,
     ):
         self.gate = gate
         self.confirmation_manager = confirmation_manager
@@ -177,6 +184,7 @@ class SafeActionExecutor:
         self.permission_resolver = permission_resolver or PermissionResolver()
         self.audit_logger = audit_logger
         self._scope_redactor = scope_redactor or _default_scope_redactor
+        self._resume_precheck = resume_precheck
         self.records: list[ActionExecutionRecord] = []
         workspace = getattr(confirmation_manager, "workspace", None)
         self._successful_key_store = (
@@ -187,6 +195,12 @@ class SafeActionExecutor:
             if self._successful_key_store is not None
             else set()
         )
+
+    def set_resume_precheck(
+        self,
+        callback: Callable[[ActionIntent, ConfirmationRequest, datetime], ActionDecision | None] | None,
+    ) -> None:
+        self._resume_precheck = callback
 
     def submit(
         self,
@@ -246,6 +260,7 @@ class SafeActionExecutor:
                     request,
                     decision,
                     now=current_time,
+                    metadata=_continuity_metadata(sanitized_intent),
                     action_payload=sanitized_intent.payload,
                     idempotency_key=sanitized_intent.idempotency_key,
                 )
@@ -451,7 +466,21 @@ class SafeActionExecutor:
                 intent=intent,
             )
 
-        decision = self.gate.evaluate(intent.to_request())
+        if self._resume_precheck is not None:
+            try:
+                resume_decision = self._resume_precheck(intent, confirmation, current_time)
+            except Exception as exc:
+                return self._resume_terminal_result(
+                    action_id,
+                    "failed",
+                    f"confirmation resume precheck failed: {exc}",
+                    current_time,
+                    confirmation_id=confirmation_id,
+                    intent=intent,
+                )
+            decision = resume_decision or self.gate.evaluate(intent.to_request())
+        else:
+            decision = self.gate.evaluate(intent.to_request())
         if decision.decision == "ask_confirmation":
             result = ActionExecutionResult(
                 status="pending_confirmation_still_required",
@@ -825,6 +854,11 @@ def sanitize_action_payload(payload: dict[str, Any] | Any) -> dict[str, str]:
 def _intent_from_confirmation(confirmation: ConfirmationRequest) -> ActionIntent | None:
     if not all([confirmation.action, confirmation.scope, confirmation.trigger, confirmation.risk]):
         return None
+    facts_ref = [
+        item.strip()
+        for item in str((confirmation.metadata or {}).get("arc_facts") or "").split(",")
+        if item.strip()
+    ]
     return ActionIntent(
         action=confirmation.action,
         scope=confirmation.scope,
@@ -835,6 +869,11 @@ def _intent_from_confirmation(confirmation: ConfirmationRequest) -> ActionIntent
         uses_facts=list(confirmation.uses_facts),
         payload=sanitize_action_payload(confirmation.action_payload),
         idempotency_key=confirmation.idempotency_key,
+        continuity_session_ref=str((confirmation.metadata or {}).get("arc_session") or "").strip() or None,
+        continuity_world_ref=str((confirmation.metadata or {}).get("arc_world") or "").strip() or None,
+        continuity_facts_ref=facts_ref,
+        continuity_origin=str((confirmation.metadata or {}).get("arc_origin") or "").strip() or None,
+        continuity_proposal_digest=str((confirmation.metadata or {}).get("arc_digest") or "").strip() or None,
     )
 
 
@@ -845,6 +884,23 @@ def _empty_action_intent() -> ActionIntent:
         trigger="system",
         risk="low",
     )
+
+
+def _continuity_metadata(intent: ActionIntent) -> dict[str, str]:
+    metadata: dict[str, str] = {}
+    if intent.continuity_session_ref:
+        metadata["arc_session"] = intent.continuity_session_ref
+    if intent.continuity_world_ref:
+        metadata["arc_world"] = intent.continuity_world_ref
+    if intent.continuity_facts_ref:
+        metadata["arc_facts"] = ",".join(
+            str(item).strip() for item in intent.continuity_facts_ref if str(item).strip()
+        )
+    if intent.continuity_origin:
+        metadata["arc_origin"] = intent.continuity_origin
+    if intent.continuity_proposal_digest:
+        metadata["arc_digest"] = intent.continuity_proposal_digest
+    return metadata
 
 
 def _sanitize_payload_value(value: Any) -> Any:

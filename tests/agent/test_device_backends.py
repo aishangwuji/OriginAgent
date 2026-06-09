@@ -4,12 +4,16 @@ from datetime import datetime, timezone
 
 import pytest
 
+from OriginAgent.agent.action_continuity import ActionContinuityInputs, ActionWorldView
 from OriginAgent.agent.action_runtime import ActionIntent, SafeActionExecutor
 from OriginAgent.agent.action_safety import ActionDecision
 from OriginAgent.agent.audit import AuditLogger
 from OriginAgent.agent.confirmation import ConfirmationManager
+from OriginAgent.agent.identity import RuntimeContext
 from OriginAgent.domain_packs.smart_home.runtime.device_actions import DeviceActionSchemaRegistry, TypedActionPlanner, TypedDeviceAction
 from OriginAgent.domain_packs.smart_home.runtime.device_backends import DeviceActionExecutor, LowRiskDeviceBackend
+from OriginAgent.domain_packs.smart_home.runtime.action_automation import ActionAutomationPreconditionGate
+from OriginAgent.domain_packs.smart_home.runtime.devices import DeviceRecord, DeviceRegistry
 from OriginAgent.agent.facts import FactStore
 from OriginAgent.domain_packs.smart_home.runtime.permissions import HouseholdActor, PermissionResolver
 from OriginAgent.domain_packs.smart_home.runtime.presence import PresenceStore
@@ -66,6 +70,34 @@ def typed_action(**kwargs):
     }
     defaults.update(kwargs)
     return TypedDeviceAction(**defaults)
+
+
+def continuity_inputs(*, fresh: bool = True, contested: bool = False) -> ActionContinuityInputs:
+    runtime_context = RuntimeContext(
+        actor_id="alice",
+        user_id="alice",
+        session_id="cli:home",
+        device_id="device-a",
+        trigger="automation",
+        channel="cli",
+        chat_id="home",
+        session_key="cli:home",
+        source="automation",
+        default_scope="session",
+    )
+    return ActionContinuityInputs(
+        runtime_context=runtime_context,
+        working_memory={"priority_facts": ["lights should help visibility"], "attention_items": [], "tool_residue": []},
+        world_view=ActionWorldView(
+            included_summary={"summary_id": "world_1", "focus": ["living room looks dark"]},
+            contested_summary={"contested": contested, "items": ["disagreement"] if contested else []},
+            freshness={"is_fresh": fresh, "generated_at": NOW.isoformat(), "fresh_until": NOW.isoformat()},
+            selection_reasons=["fresh_visible_fallback"],
+        ),
+        governance_summary={},
+        retrieval_hints={},
+        pending_confirmations=[],
+    )
 
 
 def device_executor(tmp_path, gate=None, backend=None, audit_logger=None, permission_resolver=None):
@@ -355,4 +387,66 @@ def test_medium_climate_action_follows_existing_gate_and_permission_path(tmp_pat
     assert result.decision.decision == "allow"
     assert result.permission_status == "allow"
     assert result.backend_result["domain"] == "climate"
+
+
+def test_automation_precondition_gate_denies_contested_world_state() -> None:
+    gate = ActionAutomationPreconditionGate(
+        device_registry=DeviceRegistry(
+            [DeviceRecord(device_id="ceiling_light", domain="lighting", room="living_room", device_ref="ceiling_light")]
+        ),
+    )
+
+    decision_result = gate.evaluate(typed_action(trigger="automation"), continuity_inputs(contested=True))
+
+    assert decision_result.outcome == "denied"
+    assert "contested" in decision_result.reason
+
+
+def test_automation_precondition_gate_audit_marks_fact_check_delegated() -> None:
+    gate = ActionAutomationPreconditionGate(
+        device_registry=DeviceRegistry(
+            [DeviceRecord(device_id="ceiling_light", domain="lighting", room="living_room", device_ref="ceiling_light")]
+        ),
+    )
+
+    decision_result = gate.evaluate(typed_action(trigger="automation"), continuity_inputs())
+
+    assert decision_result.outcome == "allow"
+    assert decision_result.audit["supporting_facts_check"] == "delegated_to_safety_gate"
+
+
+def test_submit_automation_uses_precondition_gate_before_safe_executor(tmp_path):
+    backend = CountingBackend({"dry_run": True, "backend": "test"})
+    safe_executor = SafeActionExecutor(
+        gate=CountingGate(decision("allow")),
+        confirmation_manager=ConfirmationManager(tmp_path),
+        backend=backend,
+        permission_resolver=permissions(),
+    )
+    executor = DeviceActionExecutor(
+        TypedActionPlanner(DeviceActionSchemaRegistry()),
+        safe_executor,
+        automation_gate=ActionAutomationPreconditionGate(
+            device_registry=DeviceRegistry(
+                [
+                    DeviceRecord(
+                        device_id="ceiling_light",
+                        domain="lighting",
+                        room="living_room",
+                        device_ref="ceiling_light",
+                    )
+                ]
+            ),
+        ),
+    )
+
+    result, precondition = executor.submit_automation(
+        typed_action(trigger="automation"),
+        continuity_inputs=continuity_inputs(),
+        now=NOW,
+    )
+
+    assert precondition.outcome == "allow"
+    assert result.status == "dry_run"
+    assert backend.calls == 1
 

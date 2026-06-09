@@ -8,8 +8,16 @@ from typing import Any
 
 from loguru import logger
 
-from OriginAgent.agent.action_runtime import ActionExecutionResult, ActionIntent, SafeActionExecutor
+from OriginAgent.agent.action_runtime import (
+    ActionExecutionResult,
+    ActionIntent,
+    SafeActionExecutor,
+    _continuity_metadata,
+)
+from OriginAgent.agent.action_safety import ActionDecision
 from OriginAgent.agent.audit import AuditLogger
+from OriginAgent.agent.action_continuity import ActionContinuityInputs, ActionProposal
+from .action_automation import ActionAutomationPreconditionGate, AutomationPreconditionDecision
 from .device_actions import (
     ALLOWED_DEVICE_DOMAINS,
     DISABLED_DEVICE_DOMAINS,
@@ -87,10 +95,12 @@ class DeviceActionExecutor:
         safe_executor: SafeActionExecutor,
         *,
         audit_logger: AuditLogger | None = None,
+        automation_gate: ActionAutomationPreconditionGate | None = None,
     ):
         self.planner = planner
         self.safe_executor = safe_executor
         self.audit_logger = audit_logger or safe_executor.audit_logger
+        self.automation_gate = automation_gate
 
     def submit_typed(
         self,
@@ -103,6 +113,124 @@ class DeviceActionExecutor:
         except DeviceActionSchemaError as exc:
             return self._schema_failure_result(action, exc, now=now)
         return self.safe_executor.submit(intent, now=now)
+
+    def submit_automation(
+        self,
+        action: TypedDeviceAction,
+        *,
+        continuity_inputs: ActionContinuityInputs,
+        proposal: ActionProposal | None = None,
+        now: datetime | None = None,
+        ) -> tuple[ActionExecutionResult, AutomationPreconditionDecision]:
+        if self.automation_gate is None:
+            decision = AutomationPreconditionDecision(
+                outcome="denied",
+                reason="automation gate is unavailable",
+                audit={"gate_available": False},
+            )
+            return (
+                ActionExecutionResult(
+                    status="denied",
+                    action_id=f"action_{uuid.uuid4().hex[:12]}",
+                    reason=decision.reason,
+                    backend_called=False,
+                ),
+                decision,
+            )
+        decision = self.automation_gate.evaluate(action, continuity_inputs)
+        if decision.resolved_device_id:
+            action = TypedDeviceAction(
+                action_type=action.action_type,
+                device_id=decision.resolved_device_id,
+                domain=action.domain,
+                room=decision.resolved_room or action.room,
+                parameters=dict(action.parameters),
+                requested_by=action.requested_by,
+                trigger=action.trigger,
+                idempotency_key=action.idempotency_key,
+            )
+        try:
+            intent = self.planner.to_intent(action)
+        except DeviceActionSchemaError as exc:
+            return self._schema_failure_result(action, exc, now=now), decision
+        if proposal is not None:
+            intent = self._with_proposal_evidence(intent, proposal)
+        if decision.outcome == "pending_confirmation":
+            confirmation = self.safe_executor.confirmation_manager.create_from_action_decision(
+                intent.to_request(),
+                ActionDecision(
+                    decision="ask_confirmation",
+                    reason=decision.reason,
+                    presence_status="unknown",
+                ),
+                now=now,
+                metadata=_continuity_metadata(intent),
+                action_payload=intent.sanitized().payload,
+                idempotency_key=intent.idempotency_key,
+            )
+            result = ActionExecutionResult(
+                status="pending_confirmation",
+                action_id=f"action_{uuid.uuid4().hex[:12]}",
+                reason=decision.reason,
+                confirmation_id=confirmation.confirmation_id if confirmation is not None else None,
+                backend_called=False,
+            )
+            return result, decision
+        if decision.outcome != "allow":
+            status = {
+                "recommended_only": "denied",
+                "denied": "denied",
+            }.get(decision.outcome, "denied")
+            result = ActionExecutionResult(
+                status=status,
+                action_id=f"action_{uuid.uuid4().hex[:12]}",
+                reason=decision.reason,
+                backend_called=False,
+            )
+            return result, decision
+        return self.safe_executor.submit(intent, now=now), decision
+
+    def automation_preconditions(
+        self,
+        action: TypedDeviceAction,
+        *,
+        continuity_inputs: ActionContinuityInputs,
+    ) -> AutomationPreconditionDecision:
+        if self.automation_gate is None:
+            return AutomationPreconditionDecision(
+                outcome="denied",
+                reason="automation gate is unavailable",
+                audit={"gate_available": False},
+            )
+        return self.automation_gate.evaluate(action, continuity_inputs)
+
+    @staticmethod
+    def _with_proposal_evidence(intent: ActionIntent, proposal: ActionProposal) -> ActionIntent:
+        evidence = proposal.evidence_refs or {}
+        facts_ref = evidence.get("facts_ref") or []
+        if not isinstance(facts_ref, list):
+            facts_ref = [str(facts_ref)]
+        world_ref = evidence.get("world_ref") or []
+        world_value = world_ref[0] if isinstance(world_ref, list) and world_ref else (
+            str(world_ref) if world_ref else None
+        )
+        digest = proposal.proposal_digest or str(evidence.get("proposal_digest") or "").strip() or None
+        return ActionIntent(
+            action=intent.action,
+            scope=intent.scope,
+            trigger=intent.trigger,
+            risk=intent.risk,
+            requested_by=intent.requested_by,
+            requires_presence_empty=intent.requires_presence_empty,
+            uses_facts=list(intent.uses_facts),
+            payload=dict(intent.payload),
+            idempotency_key=intent.idempotency_key,
+            continuity_session_ref=proposal.source_session_key,
+            continuity_world_ref=str(world_value).strip() if world_value else None,
+            continuity_facts_ref=[str(item).strip() for item in facts_ref if str(item).strip()],
+            continuity_origin=proposal.automation_origin,
+            continuity_proposal_digest=digest,
+        )
 
     def _schema_failure_result(
         self,
