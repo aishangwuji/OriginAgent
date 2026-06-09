@@ -14,7 +14,7 @@ VALID_PERMISSION_ACTIONS = {
 }
 VALID_PERMISSION_DECISIONS = {"allow", "deny", "ask_admin"}
 VALID_RISKS = {"low", "medium", "high"}
-VALID_TRIGGERS = {"user_initiated", "scheduled", "system", "subagent"}
+VALID_TRIGGERS = {"user_initiated", "scheduled", "system", "subagent", "automation"}
 
 
 @dataclass

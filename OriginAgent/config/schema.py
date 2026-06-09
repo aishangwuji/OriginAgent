@@ -1311,6 +1311,28 @@ class DeviceToolsConfig(Base):
     lighting_enabled: bool = False
     mode: Literal["dry_run", "real"] = "dry_run"
     backend: Literal["none", "fake", "lighting_client"] = "none"
+    automation_enabled: bool = Field(
+        default=False,
+        validation_alias=AliasChoices("automationEnabled", "automation_enabled"),
+        serialization_alias="automationEnabled",
+    )
+    automation_allowed_domains: list[str] = Field(
+        default_factory=lambda: ["lighting"],
+        validation_alias=AliasChoices("automationAllowedDomains", "automation_allowed_domains"),
+        serialization_alias="automationAllowedDomains",
+    )
+    automation_max_actions_per_pass: int = Field(
+        default=1,
+        ge=1,
+        le=8,
+        validation_alias=AliasChoices("automationMaxActionsPerPass", "automation_max_actions_per_pass"),
+        serialization_alias="automationMaxActionsPerPass",
+    )
+    automation_dry_run_only: bool = Field(
+        default=True,
+        validation_alias=AliasChoices("automationDryRunOnly", "automation_dry_run_only"),
+        serialization_alias="automationDryRunOnly",
+    )
 
 
 class ToolAuditConfig(Base):

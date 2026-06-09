@@ -97,3 +97,14 @@ def test_runtime_context_trigger_and_source_for_cron_system_subagent_and_user():
     assert (subagent_sender.trigger, subagent_sender.source) == ("subagent", "subagent")
     assert (subagent_event.trigger, subagent_event.source) == ("subagent", "subagent")
     assert (user.trigger, user.source) == ("user_initiated", "user_turn")
+
+
+def test_snapshot_for_automation_returns_automation_capability() -> None:
+    from OriginAgent.agent.agent_runtime_context import snapshot_for_trigger
+
+    snapshot = snapshot_for_trigger("automation")
+
+    assert snapshot.trigger == "automation"
+    assert snapshot.source == "automation"
+    assert snapshot.can_exec is False
+    assert snapshot.allowed_device_domains == ("lighting",)

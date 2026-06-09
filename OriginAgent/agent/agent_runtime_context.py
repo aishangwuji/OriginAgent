@@ -19,6 +19,8 @@ def runtime_chat_id(msg: InboundMessage) -> str:
 def snapshot_for_trigger(trigger: str | None) -> CapabilitySnapshot:
     if trigger == "scheduled":
         return CapabilitySnapshot.scheduled_default()
+    if trigger == "automation":
+        return CapabilitySnapshot.automation_lighting()
     if trigger == "subagent":
         return CapabilitySnapshot.system_default().derive_subagent()
     if trigger == "system":

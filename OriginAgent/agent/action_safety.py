@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Protocol, runtime_checkable
 
-VALID_TRIGGERS = {"user_initiated", "scheduled", "system", "subagent"}
+VALID_TRIGGERS = {"user_initiated", "scheduled", "system", "subagent", "automation"}
 VALID_RISKS = {"low", "medium", "high"}
 
 

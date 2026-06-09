@@ -25,7 +25,14 @@ def build_runtime_profile_defaults(profile: RuntimeProfile) -> Config:
     if profile == "automation":
         config.tools.audit = ToolAuditConfig(mode="minimal")
         config.tools.exec = ExecToolConfig(profile="secure", allow_unsafe_exec=False)
-        config.tools.device = DeviceToolsConfig(enabled=False, mode="dry_run")
+        config.tools.device = DeviceToolsConfig(
+            enabled=False,
+            mode="dry_run",
+            automation_enabled=False,
+            automation_allowed_domains=["lighting"],
+            automation_max_actions_per_pass=1,
+            automation_dry_run_only=True,
+        )
         return config
     return config
 

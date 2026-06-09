@@ -5,8 +5,8 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass
 from typing import Literal
 
-CapabilitySource = Literal["user_turn", "cron", "subagent", "system"]
-CapabilityTrigger = Literal["user_initiated", "scheduled", "system", "subagent"]
+CapabilitySource = Literal["user_turn", "cron", "subagent", "system", "automation"]
+CapabilityTrigger = Literal["user_initiated", "scheduled", "system", "subagent", "automation"]
 
 
 @dataclass(frozen=True)
@@ -52,6 +52,22 @@ class CapabilitySnapshot:
             can_create_cron=False,
             can_spawn=False,
             allowed_device_domains=(),
+            allowed_mcp_scopes=("read",),
+        )
+
+    @classmethod
+    def automation_lighting(cls) -> "CapabilitySnapshot":
+        return cls(
+            version=1,
+            source="automation",
+            trigger="automation",
+            can_exec=False,
+            can_read_files=False,
+            can_write_files=False,
+            can_send_cross_target=False,
+            can_create_cron=False,
+            can_spawn=False,
+            allowed_device_domains=("lighting",),
             allowed_mcp_scopes=("read",),
         )
 

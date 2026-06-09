@@ -71,6 +71,10 @@ def test_automation_profile_does_not_default_to_high_power_grants() -> None:
     assert cfg.tools.exec.profile == "secure"
     assert cfg.tools.exec.allow_unsafe_exec is False
     assert cfg.tools.device.enabled is False
+    assert cfg.tools.device.automation_enabled is False
+    assert cfg.tools.device.automation_allowed_domains == ["lighting"]
+    assert cfg.tools.device.automation_max_actions_per_pass == 1
+    assert cfg.tools.device.automation_dry_run_only is True
 
 
 def test_profile_application_does_not_override_explicit_values() -> None:

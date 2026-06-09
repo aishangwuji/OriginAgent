@@ -8,8 +8,8 @@ from typing import Literal
 from OriginAgent.agent.scope import IdentityDescriptor, ScopeResolver
 
 
-RuntimeTrigger = Literal["user_initiated", "scheduled", "system", "subagent"]
-RuntimeSource = Literal["user_turn", "cron", "system", "subagent"]
+RuntimeTrigger = Literal["user_initiated", "scheduled", "system", "subagent", "automation"]
+RuntimeSource = Literal["user_turn", "cron", "system", "subagent", "automation"]
 
 
 @dataclass(frozen=True)
