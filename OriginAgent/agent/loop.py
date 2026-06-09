@@ -42,6 +42,8 @@ from OriginAgent.agent.cognitive_events import CognitiveDecision, CognitiveEvent
 from OriginAgent.agent.cognitive_scheduler import CognitiveScheduler, CognitiveSchedulerConfig
 from OriginAgent.agent.cognitive_loop import CognitiveLoop, CognitiveLoopConfig
 from OriginAgent.agent.context import ContextBuilder
+from OriginAgent.agent.action_continuity import ActionProposal
+from OriginAgent.agent.action_safety import ActionDecision
 from OriginAgent.agent.curator import CuratorService
 from OriginAgent.agent.domain_packs import DomainPackManager
 from OriginAgent.agent.hook import AgentHook, CompositeHook
@@ -144,6 +146,7 @@ class TurnState(Enum):
     BUILD = auto()
     RUN = auto()
     SAVE = auto()
+    AUTOMATION = auto()
     RESPOND = auto()
     DONE = auto()
 
@@ -189,6 +192,7 @@ class TurnContext:
 
     outbound: OutboundMessage | None = None
     generated_media: list[str] = field(default_factory=list)
+    automation_appendix: list[str] = field(default_factory=list)
 
     on_progress: Callable[..., Awaitable[None]] | None = None
     on_stream: Callable[[str], Awaitable[None]] | None = None
@@ -228,7 +232,9 @@ class AgentLoop:
         (TurnState.COMMAND, "shortcut"): TurnState.DONE,
         (TurnState.BUILD, "ok"): TurnState.RUN,
         (TurnState.RUN, "ok"): TurnState.SAVE,
-        (TurnState.SAVE, "ok"): TurnState.RESPOND,
+        (TurnState.SAVE, "ok"): TurnState.AUTOMATION,
+        (TurnState.AUTOMATION, "ok"): TurnState.RESPOND,
+        (TurnState.AUTOMATION, "skip"): TurnState.RESPOND,
         (TurnState.RESPOND, "ok"): TurnState.DONE,
     }
 
@@ -431,6 +437,11 @@ class AgentLoop:
             self._domain_runtime_overrides.setdefault("device_action_executor", device_action_executor)
         if device_registry is not None:
             self._domain_runtime_overrides.setdefault("device_registry", device_registry)
+        self._domain_runtime_contributions = self.domain_packs.active_runtime_contributions(
+            workspace=workspace,
+            config=self.tools_config,
+            overrides=self._domain_runtime_overrides,
+        )
         self.actor_resolver = actor_resolver or ActorResolver()
         # One file-read/write tracker per logical session. The tool registry is
         # shared by this loop, so tools resolve the active state via contextvars.
@@ -512,6 +523,7 @@ class AgentLoop:
         )
         self.context.memory_governance = self.memory_governance
         self.context._roaming_prewarm = self.roaming_prewarm
+        self._bind_action_resume_precheck()
         self._active_intent_config = ActiveIntentConfig(
             enabled=(
                 defaults.allow_agent_initiated_messages
@@ -646,6 +658,7 @@ class AgentLoop:
         self._last_continuity_session_key: str | None = None
         self._last_context_assembly: dict[str, Any] = {}
         self._last_governance_audit: dict[str, Any] = {}
+        self._last_action_continuity_audit: dict[str, Any] = {}
         self._last_cognitive_scan: dict[str, Any] = {}
         self.commands = CommandRouter()
         register_builtin_commands(self.commands)
@@ -868,6 +881,7 @@ class AgentLoop:
             grant_store=self._grant_store,
             domain_runtime_overrides=self._domain_runtime_overrides,
             evolution_config=self.evolution_config,
+            domain_runtime_contributions=self._domain_runtime_contributions,
         )
 
     def _build_tool_context(self):
@@ -888,6 +902,7 @@ class AgentLoop:
                 workspace=self.workspace,
                 config=self.tools_config,
                 overrides=self._domain_runtime_overrides,
+                contributions=self._domain_runtime_contributions,
             ),
         )
 
@@ -2760,6 +2775,215 @@ class AgentLoop:
         self._schedule_curator_review(ctx)
         return "ok"
 
+    def _automation_enabled(self) -> bool:
+        cfg = getattr(self.tools_config, "device", None)
+        return bool(
+            cfg is not None
+            and getattr(cfg, "enabled", False)
+            and getattr(cfg, "lighting_enabled", False)
+            and getattr(cfg, "automation_enabled", False)
+        )
+
+    def _action_automation_components(self) -> tuple[Any | None, Any | None]:
+        for contribution in self._domain_runtime_contributions:
+            provider = getattr(contribution, "action_continuity_provider", None)
+            adapter = getattr(contribution, "action_continuity_writeback_adapter", None)
+            if provider is not None or adapter is not None:
+                return provider, adapter
+        return None, None
+
+    def _bind_action_resume_precheck(self) -> None:
+        executor = self._device_action_executor_for_automation()
+        safe_executor = getattr(executor, "safe_executor", None) if executor is not None else None
+        if safe_executor is not None and hasattr(safe_executor, "set_resume_precheck"):
+            safe_executor.set_resume_precheck(self._resume_action_confirmation_precheck)
+
+    def _resume_action_confirmation_precheck(
+        self,
+        intent: Any,
+        confirmation: Any,
+        now: datetime,
+    ) -> ActionDecision | None:
+        if str(getattr(intent, "continuity_origin", "") or "").strip() != "loop_owned_rule_based":
+            return None
+        session_key = str(getattr(intent, "continuity_session_ref", "") or "").strip()
+        if not session_key:
+            return ActionDecision(
+                decision="deny",
+                reason="automation continuity session reference is missing",
+            )
+        session = self.sessions.get_or_create(session_key)
+        identity = session.metadata.get(CONTINUITY_RUNTIME_IDENTITY_KEY)
+        if not isinstance(identity, dict):
+            return ActionDecision(
+                decision="deny",
+                reason="automation continuity runtime identity is unavailable",
+            )
+        user_id = str(identity.get("user_id") or "").strip()
+        if not user_id:
+            return ActionDecision(
+                decision="deny",
+                reason="automation continuity user identity is unavailable",
+            )
+        runtime_context = RuntimeContext(
+            actor_id=user_id,
+            user_id=user_id,
+            session_id=str(identity.get("session_id") or session_key).strip() or session_key,
+            device_id=str(identity.get("device_id") or "").strip() or None,
+            trigger="automation",
+            channel=str(session_key.split(":", 1)[0] or "system"),
+            chat_id=str(session_key.split(":", 1)[1] if ":" in session_key else session_key),
+            session_key=session_key,
+            source="automation",
+            default_scope=str(identity.get("scope") or "session").strip() or "session",
+        )
+        continuity_inputs = self.context.build_action_continuity_inputs(session_key, runtime_context)
+        executor = self._device_action_executor_for_automation()
+        if executor is None or not hasattr(executor, "automation_preconditions"):
+            return ActionDecision(
+                decision="deny",
+                reason="automation executor is unavailable during confirmation resume",
+            )
+        payload = getattr(intent, "payload", {}) if isinstance(getattr(intent, "payload", {}), dict) else {}
+        from OriginAgent.domain_packs.smart_home.runtime.device_actions import TypedDeviceAction
+
+        room = None
+        scope_parts = [part for part in str(getattr(intent, "scope", "") or "").split(".") if part]
+        if len(scope_parts) >= 4 and scope_parts[0] == "home":
+            room = scope_parts[1]
+        typed_action = TypedDeviceAction(
+            action_type=str(getattr(intent, "action", "") or "").strip(),
+            device_id=str(payload.get("device_id") or "").strip(),
+            domain=str(payload.get("domain") or "").strip(),
+            room=room,
+            parameters={
+                key: value
+                for key, value in payload.items()
+                if key not in {"device_id", "domain", "action_type"}
+            },
+            requested_by=getattr(intent, "requested_by", None),
+            trigger="automation",
+            idempotency_key=getattr(intent, "idempotency_key", None),
+        )
+        precondition = executor.automation_preconditions(
+            typed_action,
+            continuity_inputs=continuity_inputs,
+        )
+        if precondition.outcome == "allow":
+            return None
+        decision_map = {
+            "pending_confirmation": "ask_confirmation",
+            "recommended_only": "deny",
+            "denied": "deny",
+        }
+        return ActionDecision(
+            decision=decision_map.get(precondition.outcome, "deny"),
+            reason=precondition.reason,
+        )
+
+    def _device_action_executor_for_automation(self) -> Any | None:
+        executor = self._domain_runtime_overrides.get("device_action_executor")
+        if executor is not None:
+            return executor
+        for contribution in self._domain_runtime_contributions:
+            tool_context = getattr(contribution, "tool_context", {}) or {}
+            executor = tool_context.get("device_action_executor")
+            if executor is not None:
+                return executor
+        return None
+
+    async def _state_automation(self, ctx: TurnContext) -> str:
+        if ctx.session is None or ctx.runtime_context is None:
+            self._last_action_continuity_audit = {"status": "skipped", "reason": "missing_context"}
+            return "skip"
+        if not self._automation_enabled():
+            self._last_action_continuity_audit = {"status": "skipped", "reason": "automation_disabled"}
+            return "skip"
+        executor = self._device_action_executor_for_automation()
+        if executor is None:
+            self._last_action_continuity_audit = {"status": "skipped", "reason": "device_executor_missing"}
+            return "skip"
+        provider, adapter = self._action_automation_components()
+        if provider is None or adapter is None:
+            self._last_action_continuity_audit = {"status": "skipped", "reason": "automation_components_missing"}
+            return "skip"
+        automation_runtime_context = dataclasses.replace(
+            ctx.runtime_context,
+            trigger="automation",
+            source="automation",
+        )
+        automation_snapshot = self._snapshot_for_trigger("automation")
+        continuity_inputs = self.context.build_action_continuity_inputs(
+            ctx.session_key,
+            automation_runtime_context,
+        )
+        max_actions = int(
+            getattr(getattr(self.tools_config, "device", None), "automation_max_actions_per_pass", 1) or 1
+        )
+        proposal: ActionProposal | None = provider.run_once(
+            session_key=ctx.session_key,
+            continuity_inputs=continuity_inputs,
+            max_actions_per_pass=max_actions,
+        )
+        if proposal is None:
+            self._last_action_continuity_audit = {
+                "status": "skipped",
+                "reason": "no_proposal",
+                "planning_inputs": continuity_inputs.to_dict(),
+            }
+            return "skip"
+        typed_action = proposal.typed_action
+        if getattr(getattr(self.tools_config, "device", None), "automation_dry_run_only", True):
+            typed_action = dataclasses.replace(
+                typed_action,
+                trigger="automation",
+                idempotency_key=proposal.proposal_digest,
+            )
+        self._set_tool_context(
+            ctx.msg.channel,
+            ctx.msg.chat_id,
+            ctx.msg.metadata.get("message_id"),
+            ctx.msg.metadata,
+            session_key=ctx.session_key,
+            capability_snapshot=automation_snapshot,
+            runtime_context=automation_runtime_context,
+        )
+        result, precondition = executor.submit_automation(
+            typed_action,
+            continuity_inputs=continuity_inputs,
+            proposal=proposal,
+        )
+        writeback = adapter.writeback(
+            session=ctx.session,
+            continuity_inputs=continuity_inputs,
+            proposal=proposal,
+            result=result,
+            working_memory=self.working_memory,
+        )
+        ctx.automation_appendix.extend(list(writeback.get("appendix") or []))
+        self.sessions.save(ctx.session)
+        self._last_action_continuity_audit = {
+            "status": "ok",
+            "planning_inputs": continuity_inputs.to_dict(),
+            "planning_evidence": proposal.to_dict(),
+            "automation_origin": proposal.automation_origin,
+            "preconditions": {
+                "outcome": precondition.outcome,
+                "reason": precondition.reason,
+                "audit": dict(precondition.audit),
+            },
+            "execution_result": {
+                "status": result.status,
+                "action_id": result.action_id,
+                "reason": result.reason,
+                "confirmation_id": result.confirmation_id,
+                "backend_called": result.backend_called,
+                "permission_status": result.permission_status,
+            },
+            "continuity_writeback": dict(writeback),
+        }
+        return "ok"
+
     def _schedule_session_search_refresh(
         self,
         *,
@@ -2874,6 +3098,10 @@ class AgentLoop:
         return bool((ctx.final_content or "").strip())
 
     async def _state_respond(self, ctx: TurnContext) -> str:
+        if ctx.automation_appendix:
+            appendix = "\n\n".join(str(item).strip() for item in ctx.automation_appendix if str(item).strip())
+            if appendix:
+                ctx.final_content = f"{ctx.final_content or ''}\n\n{appendix}".strip()
         ctx.outbound = self._assemble_outbound(
             ctx.msg,
             ctx.final_content,

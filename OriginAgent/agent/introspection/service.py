@@ -337,6 +337,27 @@ class RuntimeIntrospectionService:
                 },
                 "retrieval": retrieval_view,
                 "world": world_view,
+                "action": {
+                    "source": "AgentLoop._last_action_continuity_audit",
+                    "planning_inputs": dict(getattr(loop, "_last_action_continuity_audit", {}).get("planning_inputs", {}))
+                    if loop is not None
+                    else {},
+                    "planning_evidence": dict(getattr(loop, "_last_action_continuity_audit", {}).get("planning_evidence", {}))
+                    if loop is not None
+                    else {},
+                    "automation_origin": getattr(loop, "_last_action_continuity_audit", {}).get("automation_origin")
+                    if loop is not None
+                    else None,
+                    "preconditions": dict(getattr(loop, "_last_action_continuity_audit", {}).get("preconditions", {}))
+                    if loop is not None
+                    else {},
+                    "execution_result": dict(getattr(loop, "_last_action_continuity_audit", {}).get("execution_result", {}))
+                    if loop is not None
+                    else {},
+                    "continuity_writeback": dict(getattr(loop, "_last_action_continuity_audit", {}).get("continuity_writeback", {}))
+                    if loop is not None
+                    else {},
+                },
             },
             "governance": {
                 "promotions": list(continuity.get("governance", {}).get("promotion_candidates", []))

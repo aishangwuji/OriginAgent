@@ -83,16 +83,19 @@ def build_domain_tool_context_extras(
     workspace: Path,
     config: Any,
     overrides: dict[str, Any] | None = None,
+    contributions: list[Any] | None = None,
 ) -> dict[str, Any]:
     """Collect ToolContext attributes contributed by active domain packs."""
     extras: dict[str, Any] = {}
-    if not hasattr(domain_pack_manager, "active_runtime_contributions"):
-        return extras
-    for contribution in domain_pack_manager.active_runtime_contributions(
-        workspace=workspace,
-        config=config,
-        overrides=overrides or {},
-    ):
+    if contributions is None:
+        if not hasattr(domain_pack_manager, "active_runtime_contributions"):
+            return extras
+        contributions = domain_pack_manager.active_runtime_contributions(
+            workspace=workspace,
+            config=config,
+            overrides=overrides or {},
+        )
+    for contribution in contributions:
         extras.update(getattr(contribution, "tool_context", {}) or {})
     return extras
 
@@ -150,6 +153,7 @@ def register_default_tools(
     domain_runtime_overrides: dict[str, Any] | None = None,
     evolution_config: Any | None = None,
     allowed_tool_names: set[str] | frozenset[str] | None = None,
+    domain_runtime_contributions: list[Any] | None = None,
 ) -> None:
     """Register all default tools with the registry."""
     allowed_dir = workspace if (restrict_to_workspace or exec_config.sandbox) else None
@@ -374,6 +378,7 @@ def register_default_tools(
         workspace=workspace,
         config=config,
         overrides=domain_runtime_overrides or {},
+        contributions=domain_runtime_contributions,
     )
     context = build_tool_context(
         config=config,
