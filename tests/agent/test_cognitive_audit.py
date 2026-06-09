@@ -6,6 +6,7 @@ import pytest
 
 from OriginAgent.agent.cognitive_audit import JsonlCognitiveAuditLedger
 from OriginAgent.agent.cognitive_events import CognitiveDecision, CognitiveEvent
+from OriginAgent.agent.cognitive_scheduler import JsonlCognitiveSchedulerLedger, CognitiveSchedulerRun
 from OriginAgent.agent.introspection.service import RuntimeIntrospectionService
 
 
@@ -123,10 +124,12 @@ class _Sessions:
 
 class _Loop:
     _cognitive_loop_enabled = True
+    cognitive_scheduler = None
 
 
 def test_runtime_introspection_includes_cognition_summary(tmp_path) -> None:
     ledger = JsonlCognitiveAuditLedger(tmp_path)
+    scheduler_ledger = JsonlCognitiveSchedulerLedger(tmp_path)
     ledger.append_event(
         CognitiveEvent(
             event_id="evt-1",
@@ -147,6 +150,16 @@ def test_runtime_introspection_includes_cognition_summary(tmp_path) -> None:
             suppression_reason="intent_cooldown",
         )
     )
+    scheduler_ledger.append(
+        CognitiveSchedulerRun(
+            run_id="run-1",
+            trigger="cron",
+            scheduled_job_id="cognitive_scheduler",
+            scanned_session_count=1,
+            decision_count=1,
+            suppressed_count=1,
+        )
+    )
     service = RuntimeIntrospectionService(
         loop=_Loop(),
         workspace=tmp_path,
@@ -161,8 +174,10 @@ def test_runtime_introspection_includes_cognition_summary(tmp_path) -> None:
     assert summary["enabled"] is True
     assert summary["event_count"] == 1
     assert summary["decision_count"] == 1
+    assert summary["scheduler_run_count"] == 1
     assert summary["outcome_counts"]["suppressed"] == 1
     assert summary["suppression_reason_counts"]["intent_cooldown"] == 1
+    assert summary["latest_scheduler_run"]["trigger"] == "cron"
     assert loop_summary["cognition"]["latest_event"]["event_type"] == "foresight_nudge"
 
 

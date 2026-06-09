@@ -1456,6 +1456,95 @@ def test_gateway_cron_job_uses_grant_snapshot_and_fails_invalid_grant_before_age
     assert "agent_called" not in seen
 
 
+def test_gateway_cron_system_job_runs_cognitive_scheduler(
+    monkeypatch, tmp_path: Path
+) -> None:
+    config_file = tmp_path / "instance" / "config.json"
+    config_file.parent.mkdir(parents=True)
+    config_file.write_text("{}")
+
+    config = Config()
+    config.agents.defaults.workspace = str(tmp_path / "config-workspace")
+    seen: dict[str, object] = {}
+
+    monkeypatch.setattr("OriginAgent.config.loader.set_config_path", lambda _path: None)
+    monkeypatch.setattr("OriginAgent.config.loader.load_config", lambda _path=None: config)
+    monkeypatch.setattr("OriginAgent.cli.commands.sync_workspace_templates", lambda _path: None)
+    monkeypatch.setattr("OriginAgent.providers.factory.make_provider", lambda _config: _fake_provider())
+    monkeypatch.setattr(
+        "OriginAgent.providers.factory.build_provider_snapshot",
+        lambda _config: _test_provider_snapshot(object(), _config),
+    )
+    monkeypatch.setattr(
+        "OriginAgent.providers.factory.load_provider_snapshot",
+        lambda _config_path=None: _test_provider_snapshot(object(), config),
+    )
+    monkeypatch.setattr("OriginAgent.session.manager.SessionManager", lambda _workspace: object())
+
+    class _FakeCron:
+        def __init__(self, _store_path: Path) -> None:
+            self.on_job = None
+            seen["cron"] = self
+
+    class _FakeScheduler:
+        async def run_once(self, *, trigger: str, scheduled_job_id: str | None = None):
+            seen["scheduler_trigger"] = trigger
+            seen["scheduled_job_id"] = scheduled_job_id
+            return None
+
+    class _FakeAgentLoop:
+        @classmethod
+        def from_config(cls, config, bus=None, **extra):
+            return cls(**extra)
+
+        def __init__(self, *args, **kwargs) -> None:
+            self.model = "test-model"
+            self.provider = object()
+            self.tools = {}
+            self.dream = MagicMock()
+            self.cognitive_scheduler = _FakeScheduler()
+
+        async def _process_message(self, _msg, **kwargs):
+            seen["agent_called"] = True
+            return OutboundMessage(channel="cli", chat_id="direct", content="Done.")
+
+        async def close_mcp(self) -> None:
+            return None
+
+        async def run(self) -> None:
+            return None
+
+        def stop(self) -> None:
+            return None
+
+    class _StopAfterCronSetup:
+        def __init__(self, *_args, **_kwargs) -> None:
+            raise _StopGatewayError("stop")
+
+    monkeypatch.setattr("OriginAgent.cron.service.CronService", _FakeCron)
+    monkeypatch.setattr("OriginAgent.cli.commands.AgentLoop", _FakeAgentLoop)
+    monkeypatch.setattr("OriginAgent.channels.manager.ChannelManager", _StopAfterCronSetup)
+
+    result = runner.invoke(app, ["gateway", "--config", str(config_file)])
+    assert isinstance(result.exception, _StopGatewayError)
+
+    cron = seen["cron"]
+    response = asyncio.run(
+        cron.on_job(
+            CronJob(
+                id="cognitive_scheduler",
+                name="cognitive_scheduler",
+                payload=CronPayload(kind="system_event"),
+            )
+        )
+    )
+
+    assert response is None
+    assert seen["scheduler_trigger"] == "cron"
+    assert seen["scheduled_job_id"] == "cognitive_scheduler"
+    assert "agent_called" not in seen
+
+
 def test_gateway_workspace_override_does_not_migrate_legacy_cron(
     monkeypatch, tmp_path: Path
 ) -> None:

@@ -362,6 +362,7 @@ async def test_agent_loop_does_not_start_active_intent_loop_when_disabled(tmp_pa
     loop._start_active_intent_loop()
 
     assert loop._active_intent_task is None
+    assert loop.introspection.cognition_summary()["scheduler"]["mode"] == "disabled"
 
 
 @pytest.mark.asyncio
@@ -389,9 +390,37 @@ async def test_agent_loop_starts_active_intent_loop_when_enabled(tmp_path: Path)
     await asyncio.sleep(0)
 
     assert loop._active_intent_task is not None
+    assert loop.introspection.cognition_summary()["scheduler"]["mode"] == "fallback"
     loop._active_intent_task.cancel()
     with pytest.raises(asyncio.CancelledError):
         await loop._active_intent_task
+
+
+@pytest.mark.asyncio
+async def test_agent_loop_prefers_cron_backed_cognitive_scheduler(tmp_path: Path) -> None:
+    from OriginAgent.agent.loop import AgentLoop
+    from OriginAgent.cron.service import CronService
+
+    cron = CronService(tmp_path / "cron" / "jobs.json")
+    cron.on_job = AsyncMock()
+    loop = AgentLoop(
+        bus=MessageBus(),
+        provider=FakeProvider(LLMResponse(content="ok", finish_reason="stop")),
+        workspace=tmp_path,
+        model="fake-model",
+        allow_agent_initiated_messages=True,
+        cron_service=cron,
+    )
+
+    loop._start_active_intent_loop()
+
+    assert loop._active_intent_task is None
+    job = cron.get_job("cognitive_scheduler")
+    assert job is not None
+    assert job.payload.kind == "system_event"
+    cognition = loop.introspection.cognition_summary()
+    assert cognition["scheduler"]["mode"] == "cron"
+    assert cognition["scheduler"]["registered"] is True
 
 
 def test_agent_defaults_active_intents_disabled_by_default() -> None:

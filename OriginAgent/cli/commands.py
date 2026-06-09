@@ -749,6 +749,14 @@ def _run_gateway(
             except Exception:
                 logger.exception("Dream cron job failed")
             return None
+        if job.name == "cognitive_scheduler":
+            if not hasattr(agent, "cognitive_scheduler"):
+                return None
+            await agent.cognitive_scheduler.run_once(
+                trigger="cron",
+                scheduled_job_id=job.id,
+            )
+            return None
 
         from OriginAgent.utils.evaluator import evaluate_response
 

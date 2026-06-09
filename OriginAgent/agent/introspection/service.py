@@ -8,6 +8,7 @@ from typing import Any
 
 from OriginAgent.agent.confirmation import PendingConfirmationStore
 from OriginAgent.agent.cognitive_audit import JsonlCognitiveAuditLedger
+from OriginAgent.agent.cognitive_scheduler import JsonlCognitiveSchedulerLedger
 from OriginAgent.agent.domain_pack_governance import summarize_domain_pack_governance
 from OriginAgent.agent.facts import FactStore, summarize_facts
 from OriginAgent.agent.memory import MemoryStore
@@ -254,8 +255,11 @@ class RuntimeIntrospectionService:
         loop = self._loop
         enabled = bool(getattr(loop, "_cognitive_loop_enabled", False)) if loop is not None else False
         sidecar = getattr(loop, "cognitive_loop", None) if loop is not None else None
+        scheduler = getattr(loop, "cognitive_scheduler", None) if loop is not None else None
         ledger = JsonlCognitiveAuditLedger(self._workspace)
+        scheduler_ledger = JsonlCognitiveSchedulerLedger(self._workspace)
         summary = ledger.summary(limit=20)
+        summary.update(scheduler_ledger.summary(limit=20))
         summary["enabled"] = enabled
         if loop is not None:
             summary["latest_scan"] = getattr(loop, "_last_cognitive_scan", {})
@@ -264,6 +268,8 @@ class RuntimeIntrospectionService:
                 "enabled": bool(getattr(sidecar.config, "enabled", False)),
                 "interval_seconds": int(getattr(sidecar.config, "interval_seconds", 0) or 0),
             }
+        if scheduler is not None:
+            summary["scheduler"] = scheduler.runtime_status()
         return summary
 
     def background_task_summary(

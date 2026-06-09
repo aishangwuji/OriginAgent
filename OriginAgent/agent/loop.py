@@ -39,6 +39,7 @@ from OriginAgent.agent.auxiliary_llm import AuxiliaryLLMRouter
 from OriginAgent.agent.background_review import BackgroundReviewService
 from OriginAgent.agent.cognitive_audit import JsonlCognitiveAuditLedger
 from OriginAgent.agent.cognitive_events import CognitiveDecision, CognitiveEvent
+from OriginAgent.agent.cognitive_scheduler import CognitiveScheduler, CognitiveSchedulerConfig
 from OriginAgent.agent.cognitive_loop import CognitiveLoop, CognitiveLoopConfig
 from OriginAgent.agent.context import ContextBuilder
 from OriginAgent.agent.curator import CuratorService
@@ -519,6 +520,18 @@ class AgentLoop:
         )
         self._cognitive_audit = JsonlCognitiveAuditLedger(workspace)
         self._cognitive_loop_enabled = bool(self._active_intent_config.enabled)
+        self.cognitive_scheduler = CognitiveScheduler(
+            workspace=workspace,
+            config=CognitiveSchedulerConfig(
+                enabled=self._active_intent_config.enabled,
+                interval_seconds=self._active_intent_config.interval_seconds,
+            ),
+            cron_service=self.cron_service,
+            session_keys_provider=self.active_intents.session_keys,
+            active_task_count_provider=self._active_task_count,
+            running_subagents_provider=self.subagents.get_running_count_by_session,
+            session_processor=self._run_cognitive_pass_for_session,
+        )
         self.cognitive_loop = CognitiveLoop(
             config=CognitiveLoopConfig(
                 enabled=self._active_intent_config.enabled,
@@ -1789,6 +1802,9 @@ class AgentLoop:
 
     def _start_active_intent_loop(self) -> None:
         if not self.cognitive_loop.config.enabled or self._active_intent_task is not None:
+            return
+        scheduler_mode = self.cognitive_scheduler.start()
+        if scheduler_mode == "cron":
             return
         self._active_intent_task = asyncio.create_task(self._active_intent_loop())
 
