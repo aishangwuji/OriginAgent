@@ -58,6 +58,7 @@ class ContextBuilder:
     CONTINUITY_CONTEXT_KIND = "continuity_context"
     WORKING_MEMORY_CONTEXT_KIND = "working_memory_context"
     WORLD_STATE_CONTEXT_KIND = "world_state_context"
+    RECOVERED_CONTINUITY_CONTEXT_KIND = "recovered_continuity_context"
 
     def __init__(
         self,
@@ -416,6 +417,22 @@ class ContextBuilder:
             },
         }
 
+    @staticmethod
+    def build_recovered_continuity_context(snapshot: Mapping[str, Any]) -> dict[str, Any]:
+        return {
+            "type": "text",
+            "text": (
+                "<recovered_continuity trust='internal'>\n"
+                "Recovered continuity checkpoint from the previous session state.\n"
+                f"{json.dumps(dict(snapshot), ensure_ascii=False, indent=2)}\n"
+                "</recovered_continuity>"
+            ),
+            "_meta": {
+                "kind": ContextBuilder.RECOVERED_CONTINUITY_CONTEXT_KIND,
+                "trust": "internal",
+            },
+        }
+
     def build_phase1_continuity_blocks(
         self,
         *,
@@ -622,6 +639,9 @@ class ContextBuilder:
         self_model_payload: dict[str, Any] | None = None,
         runtime_context: Any | None = None,
         session_key: str | None = None,
+        recovered_continuity_block: dict[str, Any] | None = None,
+        context_window_tokens: int | None = None,
+        max_completion_tokens: int | None = None,
     ) -> list[dict[str, Any]]:
         """Build the complete message list for an LLM call."""
         messages = [
@@ -650,6 +670,7 @@ class ContextBuilder:
                     internal_event=internal_event,
                     runtime_context=runtime_context,
                     session_key=session_key,
+                    recovered_continuity_block=recovered_continuity_block,
                     include_current_message=True,
                 )
                 self._last_context_assembly_audit = dict(assembled.audit)
@@ -663,6 +684,7 @@ class ContextBuilder:
                         sender_id=sender_id,
                         session_metadata=session_metadata,
                     ),
+                    *([recovered_continuity_block] if recovered_continuity_block is not None else []),
                     *self.build_reference_context_blocks(
                         session_summary=session_summary,
                         session_key=session_key,

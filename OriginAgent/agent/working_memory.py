@@ -46,6 +46,8 @@ class WorkingMemorySnapshot:
     owner_id: str | None = None
     current_goal: str = ""
     current_plan: list[str] = field(default_factory=list)
+    open_loops: list[str] = field(default_factory=list)
+    active_constraints: list[str] = field(default_factory=list)
     pending_questions: list[str] = field(default_factory=list)
     priority_facts: list[str] = field(default_factory=list)
     attention_items: list[str] = field(default_factory=list)
@@ -66,6 +68,8 @@ class WorkingMemorySnapshot:
             owner_id=str(raw.get("owner_id")).strip() if raw.get("owner_id") else None,
             current_goal=str(raw.get("current_goal") or "").strip()[:1000],
             current_plan=_normalize_items(raw.get("current_plan")),
+            open_loops=_normalize_items(raw.get("open_loops")),
+            active_constraints=_normalize_items(raw.get("active_constraints")),
             pending_questions=_normalize_items(raw.get("pending_questions")),
             priority_facts=_normalize_items(raw.get("priority_facts")),
             attention_items=_normalize_items(raw.get("attention_items")),
@@ -110,6 +114,8 @@ class WorkingMemoryManager:
         identity: IdentityDescriptor | None = None,
         current_goal: str | None = None,
         current_plan: list[str] | None = None,
+        open_loops: list[str] | None = None,
+        active_constraints: list[str] | None = None,
         pending_questions: list[str] | None = None,
         priority_facts: list[str] | None = None,
         attention_items: list[str] | None = None,
@@ -123,6 +129,10 @@ class WorkingMemoryManager:
             snapshot.current_goal = str(current_goal).strip()[:1000]
         if current_plan is not None:
             snapshot.current_plan = _normalize_items(current_plan)
+        if open_loops is not None:
+            snapshot.open_loops = _normalize_items(open_loops)
+        if active_constraints is not None:
+            snapshot.active_constraints = _normalize_items(active_constraints)
         if pending_questions is not None:
             snapshot.pending_questions = _normalize_items(pending_questions)
         if priority_facts is not None:

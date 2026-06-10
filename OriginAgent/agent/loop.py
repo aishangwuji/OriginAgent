@@ -50,7 +50,9 @@ from OriginAgent.agent.hook import AgentHook, CompositeHook
 from OriginAgent.agent.identity import ActorResolver, RuntimeContext
 from OriginAgent.agent.introspection.service import RuntimeIntrospectionService
 from OriginAgent.agent.memory import Consolidator, Dream, dream_feature_flags
+from OriginAgent.agent.memory import session_summary_text
 from OriginAgent.agent.memory_governance import MemoryGovernance
+from OriginAgent.memory.rolling import RollingEpisodeCompaction
 from OriginAgent.agent.roaming_prewarm import RoamingPrewarmService
 from OriginAgent.agent.progress_hook import AgentProgressHook
 from OriginAgent.agent.runner import _MAX_INJECTIONS_PER_TURN, AgentRunner, AgentRunSpec
@@ -137,6 +139,7 @@ def _trim_text(value: Any, *, max_chars: int = 240) -> str:
 
 
 CONTINUITY_RUNTIME_IDENTITY_KEY = "continuity_runtime_identity_v1"
+CONTINUITY_CHECKPOINT_KEY = "continuity_checkpoint_v1"
 
 
 class TurnState(Enum):
@@ -204,6 +207,7 @@ class TurnContext:
     internal_event: tuple[str, str] | None = None
     runtime_context: RuntimeContext | None = None
     capability_snapshot: CapabilitySnapshot | None = None
+    recovered_continuity_checkpoint: dict[str, Any] | None = None
 
     trace: list[StateTraceEntry] = field(default_factory=list)
 
@@ -588,6 +592,15 @@ class AgentLoop:
             workspace=workspace,
             config=self._nearline_memory_config,
         )
+        self.rolling_episode_compaction = RollingEpisodeCompaction(
+            workspace,
+            store=self.nearline_memory.store,
+            interval_turns=getattr(
+                self._nearline_memory_config,
+                "episode_compaction_interval_turns",
+                20,
+            ),
+        )
         self.introspection = RuntimeIntrospectionService(
             loop=self,
             workspace=workspace,
@@ -657,6 +670,7 @@ class AgentLoop:
         self._last_runtime_context: RuntimeContext | None = None
         self._last_continuity_session_key: str | None = None
         self._last_context_assembly: dict[str, Any] = {}
+        self._last_recovered_continuity_checkpoint: dict[str, Any] = {}
         self._last_governance_audit: dict[str, Any] = {}
         self._last_action_continuity_audit: dict[str, Any] = {}
         self._last_cognitive_scan: dict[str, Any] = {}
@@ -1153,6 +1167,7 @@ class AgentLoop:
         pending_ask_id: str | None,
         pending_summary: str | None,
         internal_event: tuple[str, str] | None = None,
+        recovered_continuity_block: dict[str, Any] | None = None,
     ) -> list[dict[str, Any]]:
         """Build the initial message list for the LLM turn."""
         self_model_payload = self._build_prompt_self_model()
@@ -1180,6 +1195,7 @@ class AgentLoop:
                     internal_event=None,
                     runtime_context=self._last_runtime_context,
                     session_key=session.key,
+                    recovered_continuity_block=recovered_continuity_block,
                     include_current_message=False,
                 )
                 self._last_context_assembly = dict(assembled.audit)
@@ -1198,6 +1214,7 @@ class AgentLoop:
                         sender_id=msg.sender_id,
                         session_metadata=session.metadata,
                     ),
+                    *([recovered_continuity_block] if recovered_continuity_block is not None else []),
                     *self.context.build_reference_context_blocks(
                         session_summary=pending_summary,
                         session_key=session.key,
@@ -1237,6 +1254,9 @@ class AgentLoop:
             self_model_payload=self_model_payload,
             runtime_context=self._last_runtime_context,
             session_key=session.key,
+            recovered_continuity_block=recovered_continuity_block,
+            context_window_tokens=self.context_window_tokens,
+            max_completion_tokens=getattr(self.provider.generation, "max_tokens", 4096),
         )
         self._last_context_assembly = dict(getattr(self.context, "_last_context_assembly_audit", {}) or {})
         if not self._last_context_assembly:
@@ -2261,6 +2281,8 @@ class AgentLoop:
             ),
             runtime_context=runtime_context,
             session_key=key,
+            context_window_tokens=self.context_window_tokens,
+            max_completion_tokens=getattr(self.provider.generation, "max_tokens", 4096),
         )
         self._last_context_assembly = self._snapshot_context_assembly_from_messages(
             messages,
@@ -2379,6 +2401,115 @@ class AgentLoop:
             pending_questions=pending_questions,
             attention_items=attention_items,
         )
+
+    @staticmethod
+    def _pending_confirmation_ref(confirmation: Any) -> dict[str, Any]:
+        return {
+            "confirmation_id": str(getattr(confirmation, "confirmation_id", "") or "").strip(),
+            "scope": str(getattr(confirmation, "scope", "") or "").strip(),
+            "status": str(getattr(confirmation, "status", "") or "").strip(),
+            "risk": str(getattr(confirmation, "risk", "") or "").strip(),
+            "updated_at": str(
+                getattr(confirmation, "consumed_at", None)
+                or getattr(confirmation, "created_at", None)
+                or ""
+            ).strip(),
+        }
+
+    def _collect_pending_confirmation_refs(self, session: Session) -> list[dict[str, Any]]:
+        refs: list[dict[str, Any]] = []
+        try:
+            confirmations = self._confirmation_store.read_all()
+        except Exception:
+            return refs
+        for confirmation in confirmations:
+            scope = str(getattr(confirmation, "scope", "") or "").strip()
+            metadata = getattr(confirmation, "metadata", {}) or {}
+            session_ref = str(metadata.get("arc_session") or "").strip() if isinstance(metadata, dict) else ""
+            if scope and session.key not in scope and session_ref != session.key:
+                continue
+            ref = self._pending_confirmation_ref(confirmation)
+            if ref["confirmation_id"]:
+                refs.append(ref)
+        return refs[:8]
+
+    def _save_continuity_checkpoint(
+        self,
+        session: Session,
+        *,
+        runtime_context: RuntimeContext | None,
+    ) -> dict[str, Any]:
+        working = self.working_memory.load(
+            session,
+            identity=runtime_context.identity if runtime_context is not None else None,
+        )
+        profile_ref = None
+        try:
+            profiles = self.nearline_memory.store.read_profiles(limit=1)
+            if profiles:
+                profile = profiles[-1]
+                profile_ref = {
+                    "profile_id": profile.profile_id,
+                    "updated_at": profile.updated_at,
+                }
+        except Exception:
+            profile_ref = None
+        episode_refs: list[dict[str, Any]] = []
+        try:
+            for episode in self.nearline_memory.store.read_episodes(limit=3):
+                if episode.session_key != session.key:
+                    continue
+                episode_refs.append(
+                    {
+                        "episode_id": episode.episode_id,
+                        "timestamp": episode.timestamp,
+                    }
+                )
+        except Exception:
+            episode_refs = []
+        fact_refs: list[str] = []
+        for item in list(working.priority_facts or [])[:5]:
+            text = str(item or "").strip()
+            if text:
+                fact_refs.append(text)
+        checkpoint = {
+            "session_key": session.key,
+            "current_goal": working.current_goal,
+            "current_plan": list(working.current_plan or []),
+            "open_loops": list(working.open_loops or []),
+            "active_constraints": list(working.active_constraints or []),
+            "pending_confirmation_refs": self._collect_pending_confirmation_refs(session),
+            "recent_summary_text": session_summary_text(session),
+            "episode_refs": episode_refs,
+            "profile_ref": profile_ref,
+            "fact_refs": fact_refs,
+            "updated_at": _utcnow_iso(),
+        }
+        session.metadata[CONTINUITY_CHECKPOINT_KEY] = checkpoint
+        return checkpoint
+
+    @staticmethod
+    def _load_continuity_checkpoint(session: Session) -> dict[str, Any] | None:
+        raw = session.metadata.get(CONTINUITY_CHECKPOINT_KEY)
+        if not isinstance(raw, dict):
+            return None
+        return {
+            "session_key": str(raw.get("session_key") or session.key),
+            "current_goal": _trim_text(raw.get("current_goal"), max_chars=1000),
+            "current_plan": [str(item).strip() for item in raw.get("current_plan", []) if str(item).strip()][:8],
+            "open_loops": [str(item).strip() for item in raw.get("open_loops", []) if str(item).strip()][:8],
+            "active_constraints": [
+                str(item).strip() for item in raw.get("active_constraints", []) if str(item).strip()
+            ][:8],
+            "pending_confirmation_refs": [
+                dict(item) for item in raw.get("pending_confirmation_refs", []) if isinstance(item, dict)
+            ][:8],
+            "recent_summary_text": _trim_text(raw.get("recent_summary_text"), max_chars=4000),
+            "episode_refs": [dict(item) for item in raw.get("episode_refs", []) if isinstance(item, dict)][:8],
+            "profile_ref": dict(raw.get("profile_ref") or {}) if isinstance(raw.get("profile_ref"), dict) else None,
+            "fact_refs": [str(item).strip() for item in raw.get("fact_refs", []) if str(item).strip()][:8],
+            "updated_at": str(raw.get("updated_at") or "").strip(),
+        }
 
     def _snapshot_context_assembly_from_messages(
         self,
@@ -2585,6 +2716,8 @@ class AgentLoop:
             self.sessions.save(ctx.session)
         if self._restore_pending_user_turn(ctx.session):
             self.sessions.save(ctx.session)
+        ctx.recovered_continuity_checkpoint = self._load_continuity_checkpoint(ctx.session)
+        self._last_recovered_continuity_checkpoint = dict(ctx.recovered_continuity_checkpoint or {})
 
         return "ok"
 
@@ -2660,6 +2793,11 @@ class AgentLoop:
             )
             if consumed:
                 ctx.internal_event = tool_approval_event
+        recovered_block = None
+        if ctx.recovered_continuity_checkpoint:
+            recovered_block = self.context.build_recovered_continuity_context(
+                ctx.recovered_continuity_checkpoint
+            )
         ctx.initial_messages = self._build_initial_messages(
             ctx.msg,
             ctx.session,
@@ -2667,6 +2805,7 @@ class AgentLoop:
             pending_ask_id,
             ctx.pending_summary,
             ctx.internal_event,
+            recovered_block,
         )
         ctx.user_persisted_early = self._persist_user_message_early(
             ctx.msg, ctx.session, pending_ask_id
@@ -2762,6 +2901,22 @@ class AgentLoop:
             governance_audit = self.memory_governance.apply_turn(ctx.session, decision)
         self._last_governance_audit = dict(governance_audit)
         self.context._last_governance_audit = dict(governance_audit)
+        self._save_continuity_checkpoint(
+            ctx.session,
+            runtime_context=ctx.runtime_context,
+        )
+        try:
+            working_snapshot = self.working_memory.load(
+                ctx.session,
+                identity=ctx.runtime_context.identity if ctx.runtime_context is not None else None,
+            )
+            self.rolling_episode_compaction.maybe_compact(
+                ctx.session,
+                working_snapshot=working_snapshot,
+                reason="turn_save",
+            )
+        except Exception:
+            logger.exception("Rolling episode compaction failed during save")
         self.sessions.save(ctx.session)
         self._schedule_session_search_refresh(sources=["sessions", "history"])
         self._schedule_background(

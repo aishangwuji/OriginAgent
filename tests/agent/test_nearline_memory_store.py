@@ -99,6 +99,13 @@ def test_nearline_store_reads_layered_objects(tmp_path) -> None:
             content="Need a release checklist for Friday deploy.",
             timestamp="2026-06-05T10:00:00+08:00",
             source_message_ids=["msg_1"],
+            goal_summary="Ship the release checklist",
+            decisions=["Prepare validation"],
+            constraints=["Do not skip smoke tests"],
+            open_loops=["Confirm rollback plan"],
+            key_events=["user: Need a release checklist for Friday deploy."],
+            source_refs=["msg_1"],
+            time_range={"start": "2026-06-05T10:00:00+08:00", "end": "2026-06-05T10:00:00+08:00"},
         )
     ])
     store.append_foresights([
@@ -141,7 +148,29 @@ def test_nearline_store_reads_layered_objects(tmp_path) -> None:
         )
     ])
 
-    assert store.read_episodes()[0].episode_id == "ep_1"
+    episode = store.read_episodes()[0]
+    assert episode.episode_id == "ep_1"
+    assert episode.decisions == ["Prepare validation"]
+    assert episode.constraints == ["Do not skip smoke tests"]
+    assert episode.open_loops == ["Confirm rollback plan"]
     assert store.read_foresights()[0].foresight_id == "fo_1"
     assert store.read_agent_cases()[0].case_id == "case_1"
     assert store.read_profiles()[0].profile_id == "profile_1"
+
+
+def test_nearline_store_reads_legacy_episode_without_structured_fields(tmp_path) -> None:
+    path = tmp_path / "memory" / "nearline" / "episodes.jsonl"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        '{"episode_id":"ep_legacy","memcell_id":"mem_legacy","session_key":"cli:direct","owner_id":"user","summary":"legacy","content":"legacy body","timestamp":"2026-06-05T10:00:00+08:00"}\n',
+        encoding="utf-8",
+    )
+    store = NearlineMemoryStore(tmp_path)
+
+    episode = store.read_episodes()[0]
+
+    assert episode.episode_id == "ep_legacy"
+    assert episode.decisions == []
+    assert episode.constraints == []
+    assert episode.open_loops == []
+    assert episode.time_range == {}

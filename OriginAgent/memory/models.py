@@ -64,6 +64,13 @@ class EpisodeRecord:
     content: str
     timestamp: str
     source_message_ids: list[str] = field(default_factory=list)
+    goal_summary: str = ""
+    decisions: list[str] = field(default_factory=list)
+    constraints: list[str] = field(default_factory=list)
+    open_loops: list[str] = field(default_factory=list)
+    key_events: list[str] = field(default_factory=list)
+    source_refs: list[str] = field(default_factory=list)
+    time_range: dict[str, str] = field(default_factory=dict)
     metadata: dict[str, Any] = field(default_factory=dict)
 
     def to_json(self) -> dict[str, Any]:

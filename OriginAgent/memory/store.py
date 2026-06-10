@@ -398,6 +398,17 @@ class NearlineMemoryStore:
             source_message_ids=[
                 str(item) for item in payload.get("source_message_ids", []) if isinstance(item, str)
             ],
+            goal_summary=str(payload.get("goal_summary") or ""),
+            decisions=[str(item) for item in payload.get("decisions", []) if isinstance(item, str)],
+            constraints=[str(item) for item in payload.get("constraints", []) if isinstance(item, str)],
+            open_loops=[str(item) for item in payload.get("open_loops", []) if isinstance(item, str)],
+            key_events=[str(item) for item in payload.get("key_events", []) if isinstance(item, str)],
+            source_refs=[str(item) for item in payload.get("source_refs", []) if isinstance(item, str)],
+            time_range={
+                str(key): str(value)
+                for key, value in dict(payload.get("time_range") or {}).items()
+                if str(key).strip() and isinstance(value, str) and value.strip()
+            },
             metadata=dict(payload.get("metadata") or {}),
         )
 

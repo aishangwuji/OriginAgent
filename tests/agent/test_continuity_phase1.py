@@ -1,19 +1,30 @@
 from __future__ import annotations
 
 from pathlib import Path
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 import json
 import pytest
 
 from OriginAgent.config.schema import ContextConfig
 from OriginAgent.agent.context import ContextBuilder
 from OriginAgent.agent.identity import ActorResolver
-from OriginAgent.agent.loop import AgentLoop, CONTINUITY_RUNTIME_IDENTITY_KEY, TurnContext, TurnState
+from OriginAgent.agent.loop import (
+    AgentLoop,
+    CONTINUITY_CHECKPOINT_KEY,
+    CONTINUITY_RUNTIME_IDENTITY_KEY,
+    TurnContext,
+    TurnState,
+)
 from OriginAgent.agent.memory_governance import MemoryGovernance
+from OriginAgent.memory.candidates import GovernedMemoryWriter
 from OriginAgent.agent.roaming_prewarm import RoamingPrewarmService
 from OriginAgent.agent.reminders import ReminderRecord, ReminderStore
 from OriginAgent.agent.scope import ScopeResolver
-from OriginAgent.agent.working_memory import WORKING_MEMORY_METADATA_KEY, WorkingMemoryManager
+from OriginAgent.agent.working_memory import (
+    WORKING_MEMORY_METADATA_KEY,
+    WorkingMemoryManager,
+    WorkingMemorySnapshot,
+)
 from OriginAgent.agent.world_state import WorldStateManager
 from OriginAgent.bus.events import InboundMessage
 from OriginAgent.bus.queue import MessageBus
@@ -74,6 +85,39 @@ def test_working_memory_hydrates_goal_and_persists(tmp_path: Path):
     manager.upsert(session, current_plan=["Step 1", "Step 2"])
     assert WORKING_MEMORY_METADATA_KEY in session.metadata
     assert session.metadata[WORKING_MEMORY_METADATA_KEY]["current_plan"] == ["Step 1", "Step 2"]
+
+
+def test_working_memory_supports_open_loops_and_active_constraints(tmp_path: Path):
+    sessions = SessionManager(tmp_path)
+    session = sessions.get_or_create("cli:test")
+    manager = WorkingMemoryManager(sessions)
+
+    snapshot = manager.upsert(
+        session,
+        current_goal="Ship continuity recovery",
+        open_loops=["finish restart recovery", "add search blocks"],
+        active_constraints=["do not rewrite MEMORY.md directly"],
+    )
+
+    assert snapshot.open_loops == ["finish restart recovery", "add search blocks"]
+    assert snapshot.active_constraints == ["do not rewrite MEMORY.md directly"]
+    reloaded = manager.load(session)
+    assert reloaded.open_loops == ["finish restart recovery", "add search blocks"]
+    assert reloaded.active_constraints == ["do not rewrite MEMORY.md directly"]
+
+
+def test_working_memory_from_json_is_backward_compatible_without_new_fields():
+    parsed = WorkingMemorySnapshot.from_json(
+        "cli:test",
+        {
+            "session_key": "cli:test",
+            "current_goal": "legacy",
+            "current_plan": ["one"],
+        },
+    )
+
+    assert parsed.open_loops == []
+    assert parsed.active_constraints == []
 
 
 def test_scope_resolver_enforces_basic_visibility_rules():
@@ -423,6 +467,158 @@ async def test_loop_state_build_writes_continuity_runtime_identity_metadata(tmp_
     assert identity["session_id"] == "cli:direct"
     assert identity["scope"] == "session"
     assert identity["updated_at"]
+
+
+@pytest.mark.asyncio
+async def test_loop_state_save_persists_continuity_checkpoint(tmp_path: Path):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    loop = AgentLoop(
+        bus=MessageBus(),
+        provider=_provider(),
+        workspace=workspace,
+        model="test-model",
+    )
+    session = loop.sessions.get_or_create("cli:direct")
+    runtime_context = ActorResolver().resolve_runtime_context(
+        channel="cli",
+        chat_id="direct",
+        sender_id="user-1",
+        metadata={},
+        session_key="cli:direct",
+    )
+    loop.working_memory.upsert(
+        session,
+        identity=runtime_context.identity,
+        current_goal="Keep the migration on track",
+        current_plan=["checkpoint", "budget"],
+        open_loops=["finish restart recovery"],
+        active_constraints=["do not write MEMORY.md directly"],
+        priority_facts=["preference: concise answers"],
+    )
+    confirmation = ConfirmationRequest(
+        confirmation_id="confirm_1",
+        kind="action_confirmation",
+        status="pending",
+        prompt="Continue?",
+        action="test_action",
+        scope="cli:direct",
+        trigger="user",
+        risk="low",
+        requested_by="user-1",
+        decision_reason="testing checkpoint refs",
+        presence_status="unknown",
+        related_fact_ids=[],
+        created_at="2026-06-09T00:00:00+00:00",
+        expires_at="2026-06-09T00:05:00+00:00",
+    )
+    loop._confirmation_store.upsert(confirmation)
+    ctx = TurnContext(
+        msg=InboundMessage(
+            channel="cli",
+            chat_id="direct",
+            sender_id="user-1",
+            content="Continue the work",
+            metadata={},
+        ),
+        session=session,
+        session_key="cli:direct",
+        state=TurnState.SAVE,
+        turn_id="turn-save-test",
+        runtime_context=runtime_context,
+        history=[],
+        all_messages=[{"role": "assistant", "content": "Done."}],
+        final_content="Done.",
+    )
+    loop._schedule_background = lambda coro: coro.close()  # type: ignore[method-assign]
+    loop._schedule_session_search_refresh = lambda *args, **kwargs: None  # type: ignore[method-assign]
+    loop._schedule_nearline_memory = lambda *_args, **_kwargs: None  # type: ignore[method-assign]
+    loop._schedule_background_review = lambda *_args, **_kwargs: None  # type: ignore[method-assign]
+    loop._schedule_curator_review = lambda *_args, **_kwargs: None  # type: ignore[method-assign]
+
+    result = await loop._state_save(ctx)
+
+    assert result == "ok"
+    checkpoint = session.metadata[CONTINUITY_CHECKPOINT_KEY]
+    assert checkpoint["current_goal"] == "Keep the migration on track"
+    assert checkpoint["current_plan"] == ["checkpoint", "budget"]
+    assert checkpoint["open_loops"] == ["finish restart recovery"]
+    assert checkpoint["active_constraints"] == ["do not write MEMORY.md directly"]
+    assert checkpoint["fact_refs"] == ["preference: concise answers"]
+    assert checkpoint["pending_confirmation_refs"][0]["confirmation_id"] == "confirm_1"
+    assert "prompt" not in checkpoint["pending_confirmation_refs"][0]
+
+
+@pytest.mark.asyncio
+async def test_loop_restore_and_build_inject_recovered_continuity_block(tmp_path: Path):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    loop = AgentLoop(
+        bus=MessageBus(),
+        provider=_provider(),
+        workspace=workspace,
+        model="test-model",
+    )
+    session = loop.sessions.get_or_create("cli:direct")
+    session.metadata[CONTINUITY_CHECKPOINT_KEY] = {
+        "session_key": "cli:direct",
+        "current_goal": "Recover the interrupted migration",
+        "current_plan": ["restore continuity"],
+        "open_loops": ["resume after restart"],
+        "active_constraints": ["keep answers concise"],
+        "pending_confirmation_refs": [
+            {"confirmation_id": "confirm_2", "scope": "cli:direct", "status": "pending", "risk": "low"}
+        ],
+        "recent_summary_text": "Earlier we were implementing restart recovery.",
+        "episode_refs": [{"episode_id": "ep_1", "timestamp": "2026-06-09T00:00:00+00:00"}],
+        "profile_ref": {"profile_id": "profile_1", "updated_at": "2026-06-09T00:00:00+00:00"},
+        "fact_refs": ["preference: concise answers"],
+        "updated_at": "2026-06-09T00:00:00+00:00",
+    }
+    loop.sessions.save(session)
+    msg = InboundMessage(
+        channel="cli",
+        chat_id="direct",
+        sender_id="user-1",
+        content="Continue",
+        metadata={},
+    )
+    restore_ctx = TurnContext(
+        msg=msg,
+        session=session,
+        session_key="cli:direct",
+        state=TurnState.RESTORE,
+        turn_id="turn-restore-test",
+    )
+
+    restore_result = await loop._state_restore(restore_ctx)
+
+    assert restore_result == "ok"
+    assert restore_ctx.recovered_continuity_checkpoint is not None
+    assert restore_ctx.recovered_continuity_checkpoint["open_loops"] == ["resume after restart"]
+
+    loop.consolidator.maybe_consolidate_by_tokens = AsyncMock(return_value=None)  # type: ignore[method-assign]
+    build_ctx = TurnContext(
+        msg=msg,
+        session=session,
+        session_key="cli:direct",
+        state=TurnState.BUILD,
+        turn_id="turn-build-test",
+        recovered_continuity_checkpoint=restore_ctx.recovered_continuity_checkpoint,
+    )
+    build_result = await loop._state_build(build_ctx)
+
+    assert build_result == "ok"
+    user_content = build_ctx.initial_messages[-1]["content"]
+    kinds = [block.get("_meta", {}).get("kind") for block in user_content if isinstance(block, dict)]
+    assert ContextBuilder.RECOVERED_CONTINUITY_CONTEXT_KIND in kinds
+    recovered_block = next(
+        block for block in user_content
+        if isinstance(block, dict)
+        and block.get("_meta", {}).get("kind") == ContextBuilder.RECOVERED_CONTINUITY_CONTEXT_KIND
+    )
+    assert "Recover the interrupted migration" in recovered_block["text"]
+    assert "resume after restart" in recovered_block["text"]
 
 
 def test_context_builder_can_disable_phase1_continuity_blocks(tmp_path: Path):

@@ -31,6 +31,7 @@ class ContextAssemblerV2:
         internal_event: tuple[str, str] | None,
         runtime_context: Any | None,
         session_key: str | None,
+        recovered_continuity_block: dict[str, Any] | None = None,
         include_current_message: bool = True,
     ) -> ContextAssemblyResult:
         user_content = (
@@ -77,6 +78,7 @@ class ContextAssemblerV2:
 
         merged: list[dict[str, Any]] = [
             runtime_block,
+            *([recovered_continuity_block] if recovered_continuity_block is not None else []),
             *continuity_blocks,
             *reference_blocks,
         ]
@@ -85,7 +87,6 @@ class ContextAssemblerV2:
             if content:
                 merged.append(self._builder.build_internal_event_block(source, content))
         merged.extend(user_content)
-
         audit = {
             "enabled": True,
             "session_key": session_key,

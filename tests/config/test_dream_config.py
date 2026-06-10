@@ -96,6 +96,7 @@ def test_nearline_memory_config_defaults_disabled() -> None:
     assert cfg.pipeline_enabled is False
     assert cfg.profile_shadow_write_enabled is False
     assert cfg.retrieval_top_k == 8
+    assert cfg.episode_compaction_interval_turns == 20
 
 
 def test_agent_defaults_accept_nearline_memory_camel_case() -> None:
@@ -121,3 +122,4 @@ def test_agent_defaults_accept_nearline_memory_camel_case() -> None:
     assert nearline["pipelineEnabled"] is True
     assert nearline["profileShadowWriteEnabled"] is True
     assert nearline["retrievalTopK"] == 12
+    assert nearline["episodeCompactionIntervalTurns"] == 20

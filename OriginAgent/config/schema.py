@@ -195,6 +195,16 @@ class NearlineMemoryConfig(Base):
         ),
         serialization_alias="eventBatchSize",
     )
+    episode_compaction_interval_turns: int = Field(
+        default=20,
+        ge=1,
+        le=500,
+        validation_alias=AliasChoices(
+            "episodeCompactionIntervalTurns",
+            "episode_compaction_interval_turns",
+        ),
+        serialization_alias="episodeCompactionIntervalTurns",
+    )
 
 
 class InlineFallbackConfig(Base):

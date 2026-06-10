@@ -230,6 +230,9 @@ class RuntimeIntrospectionService:
             "enabled": bool(working_memory is not None),
             "current_session_key": session_key,
             "last_context_assembly": getattr(loop, "_last_context_assembly", {}),
+            "recovered_continuity_checkpoint": dict(
+                getattr(loop, "_last_recovered_continuity_checkpoint", {}) or {}
+            ),
         }
         if runtime_context is not None:
             out["runtime_context"] = {
