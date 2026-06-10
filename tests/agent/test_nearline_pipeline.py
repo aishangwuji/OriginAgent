@@ -57,6 +57,12 @@ async def test_nearline_pipeline_generates_episode_for_regular_user_turn(tmp_pat
     episodes = _load_jsonl(tmp_path / "memory" / "nearline" / "episodes.jsonl")
     assert len(episodes) == 1
     assert "prefer concise replies" in episodes[0]["summary"]
+    assert episodes[0]["goal_summary"]
+    assert isinstance(episodes[0]["decisions"], list)
+    assert isinstance(episodes[0]["constraints"], list)
+    assert isinstance(episodes[0]["open_loops"], list)
+    assert isinstance(episodes[0]["key_events"], list)
+    assert isinstance(episodes[0]["time_range"], dict)
 
 
 @pytest.mark.asyncio

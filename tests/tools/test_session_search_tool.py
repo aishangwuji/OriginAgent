@@ -96,6 +96,39 @@ async def test_session_search_tool_clamps_large_limit(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_session_search_tool_supports_memory_blocks(tmp_path: Path) -> None:
+    path = tmp_path / "memory" / "nearline" / "episodes.jsonl"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(
+            {
+                "episode_id": "ep_1",
+                "memcell_id": "mem_1",
+                "session_key": "cli:direct",
+                "owner_id": "user",
+                "summary": "Release checklist",
+                "content": "Need a deployment checklist.",
+                "timestamp": "2026-05-19T10:00:00",
+                "decisions": ["Prepare smoke test"],
+            },
+            ensure_ascii=False,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    tool = SessionSearchTool(tmp_path, nearline_memory_config=MagicMock(enabled=True, pipeline_enabled=True))
+
+    result = await tool.execute(
+        query="smoke test",
+        sources=["episodes"],
+        result_shape="memory_blocks",
+    )
+
+    assert result["total_matches"] == 1
+    assert result["results"][0]["block_type"] == "decision"
+
+
+@pytest.mark.asyncio
 async def test_session_search_denied_when_read_files_capability_disabled(tmp_path: Path) -> None:
     registry = ToolRegistry(capability_snapshot=CapabilitySnapshot.scheduled_default())
     registry.register(SessionSearchTool(tmp_path))

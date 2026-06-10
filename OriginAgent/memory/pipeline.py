@@ -276,14 +276,6 @@ class NearlineMemoryPipeline:
                     metadata={"turn_id": turn_id},
                 )
                 events.append(refresh_event)
-                profile = self.profile_service.synthesize_snapshot(
-                    owner_id=actor_id or "user",
-                    memcells=memcells,
-                    episodes=episodes,
-                    foresights=foresights,
-                )
-                if profile is not None:
-                    profiles.append(profile)
 
             await asyncio.to_thread(self.store.append_memcells, memcells)
             if episodes:
@@ -292,13 +284,17 @@ class NearlineMemoryPipeline:
                 await asyncio.to_thread(self.store.append_foresights, foresights)
             if agent_cases:
                 await asyncio.to_thread(self.store.append_agent_cases, agent_cases)
-            if profiles:
-                await asyncio.to_thread(self.store.append_profiles, profiles)
-                if self.config.profile_shadow_write_enabled:
-                    latest_profile = profiles[-1]
-                    await asyncio.to_thread(self.profile_service.write_profile_shadow, latest_profile)
             if events:
                 await asyncio.to_thread(self.store.append_events, events)
+            if len(memcells) >= max(1, int(self.config.profile_refresh_min_memcells or 1)):
+                profile = await asyncio.to_thread(
+                    self.profile_service.refresh_profile,
+                    owner_id=actor_id or "user",
+                    limit=max(80, len(memcells) * 8),
+                    write_user_shadow=bool(self.config.profile_shadow_write_enabled),
+                )
+                if profile is not None:
+                    profiles.append(profile)
 
             cursor_after = cursor_before + len(messages)
             await asyncio.to_thread(self.store.advance_session_cursor, session_key, cursor_after)
@@ -398,6 +394,26 @@ class NearlineMemoryPipeline:
         if not lead:
             return None
         summary = _truncate_line(lead, 160)
+        decisions = [
+            _truncate_line(message.content, 180)
+            for message in user_messages
+            if _looks_like_decision_signal(message.content)
+        ]
+        constraints = [
+            _truncate_line(message.content, 180)
+            for message in user_messages
+            if _looks_like_constraint_signal(message.content)
+        ]
+        open_loops = [
+            _truncate_line(message.content, 180)
+            for message in user_messages
+            if _looks_like_open_loop_signal(message.content)
+        ]
+        key_events = [
+            _truncate_line(f"{message.role}: {message.content}", 180)
+            for message in memcell.messages
+            if str(message.content or "").strip()
+        ]
         digest = hashlib.sha1(
             f"{memcell.memcell_id}|episode|{user_messages[0].sender_id or 'user'}".encode("utf-8")
         ).hexdigest()[:12]
@@ -410,6 +426,16 @@ class NearlineMemoryPipeline:
             content=memcell.content,
             timestamp=memcell.ended_at,
             source_message_ids=list(memcell.message_ids),
+            goal_summary=summary,
+            decisions=decisions[:4],
+            constraints=constraints[:4],
+            open_loops=open_loops[:4],
+            key_events=key_events[:6],
+            source_refs=list(memcell.message_ids)[:8],
+            time_range={
+                "start": str(memcell.started_at or memcell.ended_at or ""),
+                "end": str(memcell.ended_at or memcell.started_at or ""),
+            },
             metadata={
                 "kind": memcell.kind,
                 "roles": list(memcell.roles),
@@ -521,6 +547,21 @@ def _looks_like_future_intent(text: str) -> bool:
     has_intent = any(pattern in lowered for pattern in _INTENT_PATTERNS)
     has_time = bool(_TIME_PATTERN.search(text))
     return has_intent and has_time
+
+
+def _looks_like_decision_signal(text: str) -> bool:
+    lowered = str(text or "").casefold()
+    return any(token in lowered for token in ("decide", "will ", "going to", "plan to", "决定", "计划", "准备"))
+
+
+def _looks_like_constraint_signal(text: str) -> bool:
+    lowered = str(text or "").casefold()
+    return any(token in lowered for token in ("must", "should not", "do not", "不要", "必须", "不能"))
+
+
+def _looks_like_open_loop_signal(text: str) -> bool:
+    lowered = str(text or "").casefold()
+    return any(token in lowered for token in ("need to", "follow up", "todo", "待办", "还要", "继续"))
 
 
 def _extract_future_timestamp(text: str, *, reference: str) -> str | None:

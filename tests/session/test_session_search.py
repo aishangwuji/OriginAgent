@@ -393,6 +393,113 @@ def test_nearline_sources_stay_dark_when_pipeline_is_disabled(tmp_path: Path) ->
     assert result["total_matches"] == 0
 
 
+def test_session_search_memory_blocks_from_structured_episodes_and_profiles(tmp_path: Path) -> None:
+    _write_jsonl(
+        tmp_path / "memory" / "nearline" / "episodes.jsonl",
+        [
+            {
+                "episode_id": "ep_1",
+                "memcell_id": "mem_1",
+                "session_key": "cli:direct",
+                "owner_id": "user",
+                "summary": "Release checklist for Friday deployment",
+                "content": "Need a deployment checklist before Friday release.",
+                "timestamp": "2026-05-19T10:00:00",
+                "decisions": ["Prepare smoke test"],
+                "constraints": ["Do not skip validation"],
+                "open_loops": ["Confirm rollback owner"],
+            }
+        ],
+    )
+    _write_jsonl(
+        tmp_path / "memory" / "nearline" / "profiles.jsonl",
+        [
+            {
+                "profile_id": "profile_1",
+                "owner_id": "user",
+                "summary": "Prefers concise deployment updates",
+                "explicit_traits": ["Prefers concise updates"],
+                "implicit_traits": ["Usually asks for deployment checklists"],
+                "updated_at": "2026-05-19T10:03:00",
+            }
+        ],
+    )
+
+    service = SessionSearchService(tmp_path)
+    result = service.search(
+        query="deployment",
+        sources=["episodes", "profiles"],
+        result_shape="memory_blocks",
+    )
+
+    assert result["total_matches"] >= 2
+    block_types = {row["block_type"] for row in result["results"]}
+    assert "episode" in block_types
+    assert "preference" in block_types
+
+
+def test_session_search_memory_blocks_returns_decision_constraint_open_loop(tmp_path: Path) -> None:
+    _write_jsonl(
+        tmp_path / "memory" / "nearline" / "episodes.jsonl",
+        [
+            {
+                "episode_id": "ep_1",
+                "memcell_id": "mem_1",
+                "session_key": "cli:direct",
+                "owner_id": "user",
+                "summary": "Release checklist for Friday deployment",
+                "content": "Need a deployment checklist before Friday release.",
+                "timestamp": "2026-05-19T10:00:00",
+                "decisions": ["Prepare smoke test"],
+                "constraints": ["Do not skip validation"],
+                "open_loops": ["Confirm rollback owner"],
+            }
+        ],
+    )
+
+    service = SessionSearchService(tmp_path)
+    decision = service.search(query="smoke test", sources=["episodes"], result_shape="memory_blocks")
+    constraint = service.search(query="skip validation", sources=["episodes"], result_shape="memory_blocks")
+    open_loop = service.search(query="rollback owner", sources=["episodes"], result_shape="memory_blocks")
+
+    assert decision["results"][0]["block_type"] == "decision"
+    assert constraint["results"][0]["block_type"] == "constraint"
+    assert open_loop["results"][0]["block_type"] == "open_loop"
+
+
+def test_session_search_memory_blocks_reads_memory_candidates(tmp_path: Path) -> None:
+    _write_jsonl(
+        tmp_path / "memory" / "memory_candidates.jsonl",
+        [
+            {
+                "candidate_id": "memcand_pref_1",
+                "kind": "preference",
+                "summary": "Prefers concise weekly updates",
+                "source_session_key": "cli:direct",
+                "source_refs": ["turn-1"],
+                "source_excerpt": "remember that I prefer concise weekly updates",
+                "confidence": 0.91,
+                "sensitivity": "low",
+                "scope": "user",
+                "owner_id": "user",
+                "created_at": "2026-06-09T00:00:00+00:00",
+            }
+        ],
+    )
+
+    service = SessionSearchService(tmp_path)
+    result = service.search(
+        query="concise weekly updates",
+        sources=["memory_candidates"],
+        result_shape="memory_blocks",
+    )
+
+    assert result["total_matches"] == 1
+    assert result["results"][0]["block_type"] == "preference"
+    assert result["results"][0]["source_kind"] == "memory_candidates"
+    assert result["results"][0]["staleness"] == "queued"
+
+
 def test_large_range_returns_performance_note(tmp_path: Path) -> None:
     old = (datetime.now(timezone.utc) - timedelta(days=45)).date().isoformat()
     _write_jsonl(

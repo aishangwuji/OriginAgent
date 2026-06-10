@@ -76,14 +76,18 @@ class SessionSearchTool(Tool):
             sources=ArraySchema(
                 StringSchema(
                     "History source.",
-                    enum=["sessions", "history", "webui", "facts", "cold"],
+                    enum=["sessions", "history", "webui", "facts", "memory_candidates", "cold", "episodes", "foresights", "agent_cases", "profiles"],
                 ),
                 description="Optional sources to search. Defaults to sessions/history/webui.",
-                max_items=5,
+                max_items=10,
             ),
             mode=StringSchema(
                 "Search mode. literal preserves exact legacy behavior; hybrid combines literal and indexed multilingual recall; semantic uses indexed multilingual recall.",
                 enum=["literal", "hybrid", "semantic"],
+            ),
+            result_shape=StringSchema(
+                "Return raw search records or structured memory blocks.",
+                enum=["records", "memory_blocks"],
             ),
             session_key=StringSchema(
                 "Optional exact session key such as 'websocket:chat1'.",
@@ -124,6 +128,7 @@ class SessionSearchTool(Tool):
         until: str | None = None,
         limit: int | None = None,
         mode: str = "literal",
+        result_shape: str = "records",
     ) -> dict[str, Any]:
         return self._service.search(
             query=query,
@@ -136,4 +141,5 @@ class SessionSearchTool(Tool):
             until=until,
             limit=limit,
             mode=mode,
+            result_shape=result_shape,
         )

@@ -25,6 +25,7 @@ SUPPORTED_SOURCES: tuple[str, ...] = (
     "history",
     "webui",
     "facts",
+    "memory_candidates",
     "cold",
     "episodes",
     "foresights",
@@ -36,13 +37,15 @@ SOURCE_PRIORITY: dict[str, int] = {
     "history": 1,
     "webui": 2,
     "facts": 3,
-    "cold": 4,
-    "episodes": 5,
-    "foresights": 6,
-    "agent_cases": 7,
-    "profiles": 8,
+    "memory_candidates": 4,
+    "cold": 5,
+    "episodes": 6,
+    "foresights": 7,
+    "agent_cases": 8,
+    "profiles": 9,
 }
 SUPPORTED_MODES: tuple[str, ...] = ("literal", "hybrid", "semantic")
+SUPPORTED_RESULT_SHAPES: tuple[str, ...] = ("records", "memory_blocks")
 DEFAULT_LIMIT = 10
 MAX_LIMIT = 50
 DEFAULT_CACHE_TTL_S = 300.0
@@ -154,9 +157,11 @@ class SessionSearchService:
         until: str | datetime | None = None,
         limit: int | None = DEFAULT_LIMIT,
         mode: str = "literal",
+        result_shape: str = "records",
     ) -> dict[str, Any]:
         query = str(query or "").strip()
         mode = _normalize_mode(mode)
+        result_shape = _normalize_result_shape(result_shape)
         if not query:
             return SearchResponse(
                 query=query,
@@ -172,6 +177,18 @@ class SessionSearchService:
         requested_sources = _normalize_sources(sources)
         requested_roles = _normalize_str_set(roles)
         limit_value = _clamp_limit(limit)
+        if result_shape == "memory_blocks":
+            return self._memory_blocks_search(
+                query=query,
+                requested_sources=requested_sources,
+                session_key=session_key,
+                channel=channel,
+                chat_id=chat_id,
+                since=since,
+                until=until,
+                limit_value=limit_value,
+                mode=mode,
+            )
         if mode != "literal":
             return self._indexed_search(
                 query=query,
@@ -244,6 +261,115 @@ class SessionSearchService:
             truncated=truncated,
             performance_note=performance_note,
         ).to_dict()
+
+    def _memory_blocks_search(
+        self,
+        *,
+        query: str,
+        requested_sources: tuple[str, ...],
+        session_key: str | None,
+        channel: str | None,
+        chat_id: str | None,
+        since: str | datetime | None,
+        until: str | datetime | None,
+        limit_value: int,
+        mode: str,
+    ) -> dict[str, Any]:
+        since_dt = _parse_datetime_filter(since, is_until=False)
+        until_dt = _parse_datetime_filter(until, is_until=True)
+        target_session_key = session_key or _session_key_from_channel_chat(channel, chat_id)
+        blocks = self._build_memory_blocks(
+            query=query,
+            sources=requested_sources,
+            target_session_key=target_session_key,
+            since_dt=since_dt,
+            until_dt=until_dt,
+            limit_value=limit_value,
+        )
+        return SearchResponse(
+            query=query,
+            mode=mode,
+            results=blocks[:limit_value],
+            total_matches=len(blocks),
+            searched_sources=list(requested_sources),
+            skipped_records=0,
+            truncated=len(blocks) > limit_value,
+            performance_note=None if blocks else "No structured memory blocks matched the query.",
+        ).to_dict()
+
+    def _build_memory_blocks(
+        self,
+        *,
+        query: str,
+        sources: tuple[str, ...],
+        target_session_key: str | None,
+        since_dt: datetime | None,
+        until_dt: datetime | None,
+        limit_value: int,
+    ) -> list[dict[str, Any]]:
+        query_lc = query.casefold()
+        blocks: list[dict[str, Any]] = []
+        for source in sources:
+            for path in self._source_paths(source):
+                for block in self._memory_blocks_from_source(source, path):
+                    session_value = str(block.get("session_key") or "").strip()
+                    if target_session_key and session_value != target_session_key:
+                        continue
+                    timestamp = _parse_record_timestamp(block.get("updated_at"))
+                    if not _in_time_range(timestamp, since_dt, until_dt):
+                        continue
+                    summary = str(block.get("summary") or "")
+                    title = str(block.get("title") or "")
+                    haystack = f"{title}\n{summary}".casefold()
+                    if query_lc not in haystack:
+                        continue
+                    blocks.append(block)
+        blocks.sort(
+            key=lambda item: (
+                -int(item.get("confidence", 0.0) * 1000),
+                str(item.get("updated_at") or ""),
+                str(item.get("title") or ""),
+            ),
+            reverse=True,
+        )
+        return blocks[: max(limit_value * 3, limit_value)]
+
+    def _memory_blocks_from_source(self, source: str, path: Path) -> list[dict[str, Any]]:
+        rows = self._read_json_dicts(path)
+        blocks: list[dict[str, Any]] = []
+        for row in rows:
+            if source == "episodes":
+                blocks.extend(_episode_memory_blocks(row))
+            elif source == "profiles":
+                blocks.extend(_profile_memory_blocks(row))
+            elif source == "facts":
+                blocks.extend(_fact_memory_blocks(row))
+            elif source == "memory_candidates":
+                blocks.extend(_memory_candidate_blocks(row))
+            elif source in {"sessions", "history", "webui", "cold"}:
+                ref = _supporting_ref(source, path, row)
+                if ref:
+                    blocks.append(ref)
+        return blocks
+
+    @staticmethod
+    def _read_json_dicts(path: Path) -> list[dict[str, Any]]:
+        rows: list[dict[str, Any]] = []
+        try:
+            with path.open("r", encoding="utf-8") as handle:
+                for raw in handle:
+                    line = raw.strip()
+                    if not line:
+                        continue
+                    try:
+                        payload = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    if isinstance(payload, dict):
+                        rows.append(payload)
+        except OSError:
+            return []
+        return rows
 
     def _indexed_search(
         self,
@@ -397,6 +523,9 @@ class SessionSearchService:
         if source == "facts":
             facts_file = self.workspace / "memory" / "facts.jsonl"
             return [facts_file] if facts_file.is_file() else []
+        if source == "memory_candidates":
+            path = self.workspace / "memory" / "memory_candidates.jsonl"
+            return [path] if path.is_file() else []
         if source == "cold":
             if not self.cold_archive_dir.is_dir():
                 return []
@@ -513,6 +642,11 @@ def _normalize_sources(sources: Iterable[str] | None) -> tuple[str, ...]:
 def _normalize_mode(mode: str | None) -> str:
     value = str(mode or "literal").strip().lower()
     return value if value in SUPPORTED_MODES else "literal"
+
+
+def _normalize_result_shape(result_shape: str | None) -> str:
+    value = str(result_shape or "records").strip().lower()
+    return value if value in SUPPORTED_RESULT_SHAPES else "records"
 
 
 def _normalize_str_set(values: Iterable[str] | None) -> set[str]:
@@ -852,6 +986,200 @@ def _agent_case_record_from_json(
             "has_full_content": False,
         },
     )
+
+
+def _episode_memory_blocks(data: dict[str, Any]) -> list[dict[str, Any]]:
+    session_key = str(data.get("session_key") or "memory:episodes")
+    updated_at = str(data.get("timestamp") or "")
+    summary = str(data.get("summary") or "").strip()
+    episode_id = str(data.get("episode_id") or "").strip()
+    supporting_refs = [episode_id] if episode_id else []
+    blocks: list[dict[str, Any]] = []
+    if summary:
+        blocks.append(_memory_block(
+            block_type="episode",
+            title=summary[:80],
+            summary=summary,
+            supporting_refs=supporting_refs,
+            source_kind="episodes",
+            session_key=session_key,
+            updated_at=updated_at,
+            confidence=0.82,
+        ))
+    for item in data.get("decisions", []) or []:
+        text = str(item or "").strip()
+        if text:
+            blocks.append(_memory_block(
+                block_type="decision",
+                title=text[:80],
+                summary=text,
+                supporting_refs=supporting_refs,
+                source_kind="episodes",
+                session_key=session_key,
+                updated_at=updated_at,
+                confidence=0.8,
+            ))
+    for item in data.get("constraints", []) or []:
+        text = str(item or "").strip()
+        if text:
+            blocks.append(_memory_block(
+                block_type="constraint",
+                title=text[:80],
+                summary=text,
+                supporting_refs=supporting_refs,
+                source_kind="episodes",
+                session_key=session_key,
+                updated_at=updated_at,
+                confidence=0.79,
+            ))
+    for item in data.get("open_loops", []) or []:
+        text = str(item or "").strip()
+        if text:
+            blocks.append(_memory_block(
+                block_type="open_loop",
+                title=text[:80],
+                summary=text,
+                supporting_refs=supporting_refs,
+                source_kind="episodes",
+                session_key=session_key,
+                updated_at=updated_at,
+                confidence=0.78,
+            ))
+    return blocks
+
+
+def _profile_memory_blocks(data: dict[str, Any]) -> list[dict[str, Any]]:
+    updated_at = str(data.get("updated_at") or "")
+    session_key = str(data.get("owner_id") or "user")
+    summary = str(data.get("summary") or "").strip()
+    profile_id = str(data.get("profile_id") or "").strip()
+    traits = [
+        str(item or "").strip()
+        for item in [*(data.get("explicit_traits") or []), *(data.get("implicit_traits") or [])]
+        if str(item or "").strip()
+    ]
+    blocks: list[dict[str, Any]] = []
+    if summary:
+        blocks.append(_memory_block(
+            block_type="preference",
+            title=summary[:80],
+            summary=summary,
+            supporting_refs=[profile_id] if profile_id else [],
+            source_kind="profiles",
+            session_key=session_key,
+            updated_at=updated_at,
+            confidence=0.84,
+        ))
+    for item in traits:
+        blocks.append(_memory_block(
+            block_type="preference",
+            title=item[:80],
+            summary=item,
+            supporting_refs=[profile_id] if profile_id else [],
+            source_kind="profiles",
+            session_key=session_key,
+            updated_at=updated_at,
+            confidence=0.8,
+        ))
+    return blocks
+
+
+def _fact_memory_blocks(data: dict[str, Any]) -> list[dict[str, Any]]:
+    status = str(data.get("status") or "").strip().lower()
+    if status not in {"active", "pending_confirmation"}:
+        return []
+    fact_id = str(data.get("fact_id") or "").strip()
+    scope = str(data.get("scope") or "").strip()
+    summary = str(data.get("content") or "").strip()
+    updated_at = str(data.get("updated_at") or data.get("created_at") or "")
+    block_type = "constraint" if str(data.get("category") or "").strip().lower() in {"constraint", "policy"} else "fact"
+    return [
+        _memory_block(
+            block_type=block_type,
+            title=summary[:80],
+            summary=summary,
+            supporting_refs=[fact_id] if fact_id else [],
+            source_kind="facts",
+            session_key=scope or "memory:facts",
+            updated_at=updated_at,
+            confidence=float(data.get("confidence", 0.8) or 0.8),
+            staleness=status,
+        )
+    ] if summary else []
+
+
+def _memory_candidate_blocks(data: dict[str, Any]) -> list[dict[str, Any]]:
+    summary = str(data.get("summary") or "").strip()
+    if not summary:
+        return []
+    kind = str(data.get("kind") or "").strip().lower()
+    if kind == "preference":
+        block_type = "preference"
+    elif kind == "task_pattern":
+        block_type = "decision"
+    elif kind == "constraint":
+        block_type = "constraint"
+    else:
+        block_type = "fact"
+    candidate_id = str(data.get("candidate_id") or "").strip()
+    source_session_key = str(data.get("source_session_key") or "memory:candidates").strip()
+    updated_at = str(data.get("created_at") or "")
+    confidence = float(data.get("confidence", 0.75) or 0.75)
+    return [
+        _memory_block(
+            block_type=block_type,
+            title=summary[:80],
+            summary=summary,
+            supporting_refs=[candidate_id] if candidate_id else [],
+            source_kind="memory_candidates",
+            session_key=source_session_key,
+            updated_at=updated_at,
+            confidence=confidence,
+            staleness="queued",
+        )
+    ]
+
+
+def _supporting_ref(source: str, path: Path, data: dict[str, Any]) -> dict[str, Any] | None:
+    text = _text_from_content(data.get("content") or data.get("text"))
+    if not text.strip():
+        return None
+    return _memory_block(
+        block_type="fact",
+        title=f"{source} reference",
+        summary=truncate_text(text, 160),
+        supporting_refs=[str(path)],
+        source_kind=source,
+        session_key=str(data.get("session_key") or _session_key_from_stem(path.stem, source=source)),
+        updated_at=str(data.get("timestamp") or data.get("updated_at") or ""),
+        confidence=0.3,
+        staleness="supporting_ref",
+    )
+
+
+def _memory_block(
+    *,
+    block_type: str,
+    title: str,
+    summary: str,
+    supporting_refs: list[str],
+    source_kind: str,
+    session_key: str,
+    updated_at: str,
+    confidence: float,
+    staleness: str = "fresh",
+) -> dict[str, Any]:
+    return {
+        "block_type": block_type,
+        "title": title,
+        "summary": summary,
+        "supporting_refs": list(supporting_refs),
+        "source_kind": source_kind,
+        "session_key": session_key,
+        "updated_at": updated_at,
+        "staleness": staleness,
+        "confidence": max(0.0, min(float(confidence), 1.0)),
+    }
 
 
 def _profile_record_from_json(
