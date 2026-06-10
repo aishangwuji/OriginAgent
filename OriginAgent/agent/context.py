@@ -12,6 +12,7 @@ from typing import Any, Mapping
 from loguru import logger
 
 from OriginAgent.agent.context_assembler import ContextAssemblerV2
+from OriginAgent.agent.context_budget import ContextBudgetManager
 from OriginAgent.agent.action_continuity import ActionContinuityInputs, ActionWorldView
 from OriginAgent.agent.domain_packs import DomainPackManager
 from OriginAgent.agent.memory import MemoryStore
@@ -134,6 +135,7 @@ class ContextBuilder:
             nearline_memory_config=nearline_memory_config,
         )
         self.assembler_v2 = ContextAssemblerV2(self)
+        self.budget_manager = ContextBudgetManager()
 
     def build_system_prompt(
         self,
@@ -698,7 +700,11 @@ class ContextBuilder:
                 merged.extend(user_content)
             if merged:
                 messages.append({"role": "user", "content": merged})
-            return messages
+            return self._apply_prompt_budget(
+                messages,
+                context_window_tokens=context_window_tokens,
+                max_completion_tokens=max_completion_tokens,
+            )
 
         # Non-user current roles are only appended when they carry real content.
         if internal_event is not None:
@@ -707,7 +713,31 @@ class ContextBuilder:
                 user_content.append(self.build_internal_event_block(source, content))
         if user_content:
             messages.append({"role": current_role, "content": user_content})
-        return messages
+        return self._apply_prompt_budget(
+            messages,
+            context_window_tokens=context_window_tokens,
+            max_completion_tokens=max_completion_tokens,
+        )
+
+    def _apply_prompt_budget(
+        self,
+        messages: list[dict[str, Any]],
+        *,
+        context_window_tokens: int | None,
+        max_completion_tokens: int | None,
+    ) -> list[dict[str, Any]]:
+        if not context_window_tokens or context_window_tokens <= 0:
+            return messages
+        result = self.budget_manager.apply(
+            messages,
+            context_window_tokens=context_window_tokens,
+            max_completion_tokens=max_completion_tokens,
+        )
+        self._last_context_assembly_audit = {
+            **dict(self._last_context_assembly_audit or {}),
+            "budget": result.audit,
+        }
+        return result.messages
 
     def _build_user_content(self, text: str | None, media: list[str] | None) -> list[dict[str, Any]]:
         """Build provider-neutral user content with images and attachment refs."""

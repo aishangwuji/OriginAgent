@@ -1203,7 +1203,11 @@ class AgentLoop:
                     "role": "user",
                     "content": assembled.blocks,
                 })
-                return messages
+                return self.context._apply_prompt_budget(
+                    messages,
+                    context_window_tokens=self.context_window_tokens,
+                    max_completion_tokens=getattr(self.provider.generation, "max_tokens", 4096),
+                )
             messages.append({
                 "role": "user",
                 "content": [
@@ -1240,7 +1244,11 @@ class AgentLoop:
                     ],
                 ],
             }
-            return messages
+            return self.context._apply_prompt_budget(
+                messages,
+                context_window_tokens=self.context_window_tokens,
+                max_completion_tokens=getattr(self.provider.generation, "max_tokens", 4096),
+            )
         built = self.context.build_messages(
             history=history,
             current_message=image_generation_prompt(msg.content, msg.metadata),

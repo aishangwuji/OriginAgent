@@ -1251,6 +1251,8 @@ class Consolidator:
             chat_id=chat_id,
             sender_id=None,
             session_summary=summary,
+            context_window_tokens=self.context_window_tokens,
+            max_completion_tokens=self.max_completion_tokens,
         )
         return estimate_prompt_tokens_chain(
             self.provider,

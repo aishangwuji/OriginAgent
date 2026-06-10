@@ -322,6 +322,32 @@ def test_recent_history_truncated_at_max_chars(tmp_path) -> None:
     assert len(text) < builder._MAX_HISTORY_CHARS + 400
 
 
+def test_context_budget_trims_recent_history_before_continuity_core(tmp_path) -> None:
+    workspace = _make_workspace(tmp_path)
+    builder = ContextBuilder(workspace)
+
+    for index in range(40):
+        builder.memory.append_history(f"recent-history-{index} " + ("x" * 200))
+
+    messages = builder.build_messages(
+        history=[{"role": "user", "content": "older history " + ("y" * 400)} for _ in range(10)],
+        current_message="continue with continuity context",
+        channel="cli",
+        chat_id="direct",
+        session_summary="important archived continuity summary",
+        recovered_continuity_block=builder.build_recovered_continuity_context(
+            {"current_goal": "Ship the continuity work", "open_loops": ["finish the budget manager"]}
+        ),
+        context_window_tokens=3000,
+        max_completion_tokens=800,
+    )
+
+    user_text = _joined_text_blocks(messages[-1]["content"])
+    assert "Ship the continuity work" in user_text
+    assert "finish the budget manager" in user_text
+    assert "recent-history-0" not in user_text
+
+
 def test_no_recent_history_when_dream_has_processed_all(tmp_path) -> None:
     """If Dream has consumed everything, no Recent History section should appear."""
     workspace = _make_workspace(tmp_path)
