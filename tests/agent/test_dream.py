@@ -9,6 +9,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from OriginAgent.agent.evolution import OpportunitySignalStore
 from OriginAgent.agent.memory import Dream, MemoryStore
 from OriginAgent.agent.runner import AgentRunResult
+from OriginAgent.memory.candidates import GovernedMemoryWriter, MemoryCandidate
 from OriginAgent.utils.gitstore import LineAge
 
 
@@ -84,6 +85,32 @@ class TestDreamRun:
         spec = mock_runner.run.call_args[0][0]
         assert spec.max_iterations == 10
         assert spec.fail_on_tool_error is False
+
+    async def test_consumes_governed_memory_candidates_without_history(self, dream, mock_provider, mock_runner, store):
+        writer = GovernedMemoryWriter(store.workspace)
+        writer.append(MemoryCandidate(
+            candidate_id="memcand_fact_1",
+            kind="fact",
+            summary="User works on weekly release updates",
+            source_session_key="cli:direct",
+            source_refs=["turn-1"],
+            source_excerpt="remember that I work on weekly release updates",
+            confidence=0.92,
+            sensitivity="low",
+            scope="user",
+            owner_id="user",
+            created_at="2026-06-09T00:00:00+00:00",
+            metadata={"category": "note"},
+        ))
+
+        result = await dream.run()
+
+        assert result is True
+        mock_provider.chat_with_retry.assert_not_called()
+        mock_runner.run.assert_not_called()
+        facts = store.fact_store.read_all()
+        assert any("weekly release updates" in fact.content for fact in facts)
+        assert "weekly release updates" in store.read_memory()
 
     async def test_advances_dream_cursor(self, dream, mock_provider, mock_runner, store):
         """Dream should advance the cursor after processing."""

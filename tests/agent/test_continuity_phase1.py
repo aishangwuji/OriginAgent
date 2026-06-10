@@ -970,7 +970,9 @@ def test_memory_governance_promotes_after_two_independent_turns(tmp_path: Path):
 
     assert applied_one["promotion_applied_count"] == 0
     assert applied_two["promotion_applied_count"] >= 1
-    assert any("concise answers" in fact.content for fact in builder.memory.fact_store.read_all())
+    queued = GovernedMemoryWriter(workspace).read_all(kinds=("preference",))
+    assert any("concise answers" in item.summary for item in queued)
+    assert not any("concise answers" in fact.content for fact in builder.memory.fact_store.read_all())
 
 
 def test_roaming_prewarm_returns_none_when_no_candidates(tmp_path: Path):

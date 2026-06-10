@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
 from OriginAgent.agent.facts import HIGH_RISK_KEYWORDS, TEMPORARY_LANGUAGE, canonical_key_for_fact
+from OriginAgent.memory.candidates import GovernedMemoryWriter, MemoryCandidate
 from OriginAgent.utils.helpers import ensure_dir
 
 
@@ -184,6 +186,7 @@ class MemoryGovernance:
         self._working_memory = working_memory
         self._world_state = world_state
         self._candidate_store = PromotionCandidateStore(self._workspace)
+        self._writer = GovernedMemoryWriter(self._workspace)
         self._last_status: dict[str, Any] = {
             "governance_enabled": bool(getattr(context_config, "governance_enabled", False)),
             "promotion_candidates": [],
@@ -191,6 +194,8 @@ class MemoryGovernance:
             "promotion_conflict_count": 0,
             "forgetting_actions": [],
             "candidate_store_path": str(self._candidate_store._path),
+            "memory_candidate_queue_path": str(self._writer.queue_path),
+            "memory_candidates_appended": 0,
         }
 
     def runtime_status(self) -> dict[str, Any]:
@@ -223,6 +228,20 @@ class MemoryGovernance:
                     confidence=0.86,
                     source="working_memory",
                     reason="explicit_long_term_goal",
+                    turn_id=turn_id,
+                )
+            )
+        explicit_memory = self._extract_explicit_memory_candidate(current_message)
+        if explicit_memory:
+            candidates.append(
+                self._candidate_from_text(
+                    content=explicit_memory,
+                    category=self._category_for_text(explicit_memory),
+                    scope=scope,
+                    owner=owner,
+                    confidence=0.9,
+                    source="current_message",
+                    reason="explicit_memory_request",
                     turn_id=turn_id,
                 )
             )
@@ -283,6 +302,7 @@ class MemoryGovernance:
         promotions: list[dict[str, Any]] = []
         promotion_applied_count = 0
         promotion_conflict_count = 0
+        appended_candidates = 0
         threshold = max(1, int(getattr(self._context_config, "promotion_min_confirmations", 2) or 2))
         confidence_threshold = float(
             getattr(self._context_config, "promotion_confidence_threshold", 0.8) or 0.8
@@ -300,29 +320,16 @@ class MemoryGovernance:
                 and not candidate.requires_user_confirmation
             ):
                 applied = True
-                before = len(self._memory.fact_store.read_all())
-                self._memory.upsert_fact_and_rebuild_memory(
-                    candidate.content,
-                    category=candidate.category,
-                    scope=candidate.scope,
-                    owner=candidate.owner,
-                    confidence=candidate.confidence,
-                    source_excerpt=candidate.source_excerpt or candidate.reason,
-                    batch_id="continuity_governance",
-                    actor="system",
-                    origin="continuity_governance",
-                )
-                after = self._memory.fact_store.read_all()
-                latest = after[-1] if after else None
-                conflict = bool(latest is not None and getattr(latest, "consistency_state", "") == "contested")
+                memory_candidate = self._to_memory_candidate(session, candidate)
+                self._writer.append(memory_candidate)
+                appended_candidates += 1
                 promotion_applied_count += 1
-                if conflict:
-                    promotion_conflict_count += 1
             promotions.append({
                 **candidate.to_json(),
                 "confirmation_count": int(record.get("confirmation_count", 0) or 0),
                 "applied": applied,
                 "conflict": conflict,
+                "queued": applied,
             })
         stale_candidates = self._candidate_store.prune_stale()
         self._last_status = {
@@ -333,8 +340,52 @@ class MemoryGovernance:
             "forgetting_actions": list(decision.forgetting_actions),
             "stale_candidate_pruned_count": stale_candidates,
             "candidate_store_path": str(self._candidate_store._path),
+            "memory_candidate_queue_path": str(self._writer.queue_path),
+            "memory_candidates_appended": appended_candidates,
         }
         return dict(self._last_status)
+
+    def _to_memory_candidate(self, session: Any, candidate: PromotionCandidate) -> MemoryCandidate:
+        kind = self._candidate_kind(candidate.category)
+        source_refs = [
+            str(candidate.turn_id or "").strip(),
+            str(getattr(session, "key", "") or "").strip(),
+            str(candidate.candidate_key or "").strip(),
+        ]
+        source_refs = [item for item in source_refs if item]
+        return MemoryCandidate(
+            candidate_id=f"gov_{candidate.candidate_key}",
+            kind=kind,
+            summary=candidate.content,
+            source_session_key=str(getattr(session, "key", "") or "unknown"),
+            source_refs=source_refs,
+            source_excerpt=candidate.source_excerpt or candidate.reason,
+            confidence=max(0.0, min(float(candidate.confidence or 0.0), 1.0)),
+            sensitivity="high" if candidate.sensitive else "low",
+            scope=candidate.scope,
+            owner_id=candidate.owner,
+            created_at=_utcnow_iso(),
+            metadata={
+                "source": candidate.source,
+                "reason": candidate.reason,
+                "category": candidate.category,
+                "governance_candidate_key": candidate.candidate_key,
+                "turn_id": candidate.turn_id,
+                "requires_user_confirmation": candidate.requires_user_confirmation,
+                **dict(candidate.metadata or {}),
+            },
+        )
+
+    @staticmethod
+    def _candidate_kind(category: str) -> str:
+        normalized = str(category or "").strip().lower()
+        if normalized in {"constraint", "policy", "safety"}:
+            return "constraint"
+        if normalized in {"preference", "goal", "habit"}:
+            return "preference"
+        if normalized in {"pattern", "workflow", "task_pattern"}:
+            return "task_pattern"
+        return "fact"
 
     def _collect_forgetting_actions(self, session: Any, *, current_message: str | None) -> list[dict[str, Any]]:
         actions: list[dict[str, Any]] = []
@@ -378,6 +429,39 @@ class MemoryGovernance:
             turn_id=turn_id,
             metadata={},
         )
+
+    @staticmethod
+    def _extract_explicit_memory_candidate(current_message: str | None) -> str:
+        text = " ".join(str(current_message or "").split()).strip()
+        if not text:
+            return ""
+        lowered = text.casefold()
+        triggers = (
+            "remember ",
+            "remember that",
+            "please remember",
+            "记住",
+            "请记住",
+            "帮我记住",
+        )
+        if not any(trigger in lowered or trigger in text for trigger in triggers):
+            return ""
+        patterns = (
+            r"(?i)^\s*(please\s+)?remember(?:\s+that)?\s*[:,-]?\s*",
+            r"^\s*(请)?帮?我?记住\s*[:：,-]?\s*",
+        )
+        cleaned = text
+        for pattern in patterns:
+            cleaned = re.sub(pattern, "", cleaned, count=1)
+        return _trim_text(cleaned or text, max_chars=240)
+
+    def _category_for_text(self, text: str) -> str:
+        lowered = str(text or "").casefold()
+        if self._is_long_term_preference(text):
+            return "preference"
+        if any(token in lowered for token in ("must", "should not", "不要", "必须", "不能")):
+            return "constraint"
+        return "note"
 
     @staticmethod
     def _is_long_term_preference(text: str) -> bool:

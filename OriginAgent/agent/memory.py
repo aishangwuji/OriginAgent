@@ -45,6 +45,7 @@ from OriginAgent.agent.runner import AgentRunner, AgentRunSpec
 from OriginAgent.agent.runtime_models import TaskRunReport, now_iso
 from OriginAgent.agent.task_runtime import build_task_report, remember_report, report_to_status_payload
 from OriginAgent.agent.tools.registry import ToolRegistry
+from OriginAgent.memory.candidates import GovernedMemoryWriter
 from OriginAgent.session.manager import Session
 from OriginAgent.utils.gitstore import GitStore
 from OriginAgent.utils.helpers import (
@@ -1714,6 +1715,7 @@ class Dream:
         self._tools = self._build_tools()
         self._last_report: TaskRunReport | None = None
         self._consecutive_failures = 0
+        self._governed_memory = GovernedMemoryWriter(self.store.workspace)
 
     @property
     def feature_flags(self) -> dict[str, bool]:
@@ -1914,9 +1916,10 @@ class Dream:
         from OriginAgent.agent.skills import BUILTIN_SKILLS_DIR
 
         started_at = now_iso()
+        queue_result = self._consume_governed_fact_candidates()
         last_cursor = self.store.get_last_dream_cursor()
         entries = self.store.read_unprocessed_history(since_cursor=last_cursor)
-        if not entries:
+        if not entries and int(queue_result.get("consumed_count", 0) or 0) <= 0:
             self._remember_report(build_task_report(
                 task_name="dream",
                 status="skipped",
@@ -1925,8 +1928,21 @@ class Dream:
                 reason="no_unprocessed_history",
                 started_at=started_at,
                 finished_at=now_iso(),
+                details=queue_result,
             ))
             return False
+        if not entries and int(queue_result.get("consumed_count", 0) or 0) > 0:
+            self._remember_report(build_task_report(
+                task_name="dream",
+                status="ok",
+                phase="queue_consume",
+                fault_class="unknown",
+                reason="governed_memory_queue_only",
+                started_at=started_at,
+                finished_at=now_iso(),
+                details=queue_result,
+            ))
+            return bool(int(queue_result.get("applied_count", 0) or 0) > 0)
 
         batch = entries[: self.max_batch_size]
         logger.info(
@@ -2265,3 +2281,61 @@ class Dream:
             report=report,
             current_failures=self._consecutive_failures,
         )
+
+    def _consume_governed_fact_candidates(self) -> dict[str, Any]:
+        candidates, end_cursor = self._governed_memory.read_pending_for_consumer(
+            "dream",
+            kinds=("fact", "constraint"),
+        )
+        if not candidates:
+            return {
+                "consumed_count": 0,
+                "applied_count": 0,
+                "cursor_advanced_to": self._governed_memory.read_consumer_cursor("dream"),
+            }
+        applied = 0
+        with self.store._locked():
+            records = self.store.fact_store.read_all_unlocked()
+            known_keys = {
+                canonical_key_for_fact(record.content, record.owner, record.category, record.scope)
+                for record in records
+                if str(record.status or "").strip().lower() in {"active", "pending_confirmation"}
+            }
+            for candidate in candidates:
+                category = str(candidate.metadata.get("category") or candidate.kind or "note").strip().lower()
+                if category not in {"constraint", "policy", "safety", "preference", "note", "fact"}:
+                    category = "constraint" if candidate.kind == "constraint" else "note"
+                canonical_key = canonical_key_for_fact(
+                    candidate.summary,
+                    candidate.owner_id,
+                    category,
+                    candidate.scope,
+                )
+                if canonical_key in known_keys:
+                    continue
+                self.store.fact_store.upsert_fact_in_records_unlocked(
+                    records,
+                    candidate.summary,
+                    category=category,
+                    scope=candidate.scope,
+                    owner=candidate.owner_id,
+                    source_cursors=[],
+                    source_excerpt=candidate.source_excerpt or candidate.summary,
+                    confidence=max(0.0, min(float(candidate.confidence or 0.0), 1.0)),
+                    status="pending_confirmation" if candidate.sensitivity == "high" else "active",
+                    batch_id="governed_memory_queue",
+                    actor="dream",
+                    origin="governed_memory",
+                )
+                known_keys.add(canonical_key)
+                applied += 1
+            if applied:
+                self.store.fact_store._write_records_unlocked(records)
+                memory_md = self.store.fact_store.render_memory_md_unlocked()
+                self.store._write_text_atomic(self.store.memory_file, memory_md)
+        self._governed_memory.advance_consumer_cursor("dream", end_cursor)
+        return {
+            "consumed_count": len(candidates),
+            "applied_count": applied,
+            "cursor_advanced_to": end_cursor,
+        }
