@@ -3,14 +3,18 @@
 from __future__ import annotations
 
 import hashlib
+import json
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from OriginAgent.agent.memory import MemoryStore
+from OriginAgent.memory.candidates import GovernedMemoryWriter, MemoryCandidate
 from OriginAgent.memory.models import EpisodeRecord, ForesightRecord, MemCell, ProfileSnapshot
 from OriginAgent.memory.store import NearlineMemoryStore
 from OriginAgent.utils.helpers import truncate_text
+
+if TYPE_CHECKING:
+    from OriginAgent.agent.memory import MemoryStore
 
 _MANAGED_START = "<!-- ORIGINAGENT_MANAGED_PROFILE_START -->"
 _MANAGED_END = "<!-- ORIGINAGENT_MANAGED_PROFILE_END -->"
@@ -25,11 +29,14 @@ class NearlineProfileService:
         workspace: Path,
         *,
         store: NearlineMemoryStore | None = None,
-        memory_store: MemoryStore | None = None,
+        memory_store: "MemoryStore | None" = None,
     ) -> None:
+        from OriginAgent.agent.memory import MemoryStore
+
         self.workspace = Path(workspace)
         self.store = store or NearlineMemoryStore(self.workspace)
         self.memory_store = memory_store or MemoryStore(self.workspace)
+        self._candidate_writer = GovernedMemoryWriter(self.workspace)
 
     def synthesize_snapshot(
         self,
@@ -38,9 +45,10 @@ class NearlineProfileService:
         memcells: list[MemCell],
         episodes: list[EpisodeRecord],
         foresights: list[ForesightRecord],
+        candidates: list[MemoryCandidate] | None = None,
     ) -> ProfileSnapshot | None:
         if not memcells:
-            return None
+            memcells = []
         recent_explicit = _dedupe_preserve_order(
             _compact_line(episode.summary, 160)
             for episode in reversed(episodes[-8:])
@@ -53,8 +61,13 @@ class NearlineProfileService:
         )
 
         text_traits = self._infer_traits_from_memcells(memcells)
-        explicit_traits = _dedupe_preserve_order([*recent_explicit, *text_traits["explicit"]])[:6]
-        implicit_traits = _dedupe_preserve_order([*recent_implicit, *text_traits["implicit"]])[:6]
+        candidate_traits = self._infer_traits_from_candidates(candidates or [])
+        explicit_traits = _dedupe_preserve_order(
+            [*candidate_traits["explicit"], *recent_explicit, *text_traits["explicit"]]
+        )[:6]
+        implicit_traits = _dedupe_preserve_order(
+            [*candidate_traits["implicit"], *recent_implicit, *text_traits["implicit"]]
+        )[:6]
         if not explicit_traits and not implicit_traits:
             return None
 
@@ -66,11 +79,20 @@ class NearlineProfileService:
         summary = " | ".join(summary_lines)[:320].strip()
         if not summary:
             summary = " | ".join([*(explicit_traits[:1]), *(implicit_traits[:1])]).strip()
+        content_hash = hashlib.sha1(
+            self._normalized_managed_payload(
+                summary=summary,
+                explicit_traits=explicit_traits,
+                implicit_traits=implicit_traits,
+                source_memcell_ids=[memcell.memcell_id for memcell in memcells],
+            ).encode("utf-8")
+        ).hexdigest()
         identity_payload = "|".join(
             [
                 owner_id or "user",
-                memcells[-1].ended_at,
+                (memcells[-1].ended_at if memcells else datetime.utcnow().isoformat()),
                 ",".join(memcell.memcell_id for memcell in memcells),
+                ",".join(candidate.candidate_id for candidate in (candidates or [])[:8]),
             ]
         )
         digest = hashlib.sha1(identity_payload.encode("utf-8")).hexdigest()[:12]
@@ -81,11 +103,13 @@ class NearlineProfileService:
             explicit_traits=explicit_traits,
             implicit_traits=implicit_traits,
             source_memcell_ids=[memcell.memcell_id for memcell in memcells],
-            updated_at=memcells[-1].ended_at,
+            updated_at=memcells[-1].ended_at if memcells else datetime.utcnow().isoformat(),
             metadata={
                 "source": "nearline_profile_service",
                 "episode_count": len(episodes),
                 "foresight_count": len(foresights),
+                "content_hash": content_hash,
+                "governed_candidate_ids": [candidate.candidate_id for candidate in (candidates or [])[:8]],
             },
         )
 
@@ -105,6 +129,12 @@ class NearlineProfileService:
             item for item in self.store.read_foresights(limit=limit)
             if not owner_id or item.owner_id == owner_id
         ]
+        candidates, end_cursor = self._candidate_writer.read_pending_for_consumer(
+            "nearline_profile",
+            kinds=("preference", "task_pattern"),
+            owner_id=owner_id or None,
+            limit=limit,
+        )
         if owner_id:
             memcell_ids = {
                 *[item.memcell_id for item in episodes],
@@ -116,10 +146,13 @@ class NearlineProfileService:
             memcells=memcells,
             episodes=episodes,
             foresights=foresights,
+            candidates=candidates,
         )
         if snapshot is None:
             return None
         self.store.append_profiles([snapshot])
+        if candidates:
+            self._candidate_writer.advance_consumer_cursor("nearline_profile", end_cursor)
         if write_user_shadow:
             self.write_profile_shadow(snapshot)
         return snapshot
@@ -127,6 +160,8 @@ class NearlineProfileService:
     def write_profile_shadow(self, snapshot: ProfileSnapshot) -> str:
         current = self.memory_store.read_user()
         updated = self.render_user_with_managed_profile(current, snapshot)
+        if self._managed_content_unchanged(current, snapshot):
+            return current
         self.memory_store.write_user(updated)
         return updated
 
@@ -150,6 +185,7 @@ class NearlineProfileService:
             "## Managed Profile Snapshot",
             "",
             f"Updated: {snapshot.updated_at}",
+            f"Content hash: {snapshot.metadata.get('content_hash', '')}",
             "",
             "Summary:",
             snapshot.summary or "No synthesized summary yet.",
@@ -173,6 +209,38 @@ class NearlineProfileService:
         ])
         return "\n".join(lines)
 
+    def _managed_content_unchanged(self, current_text: str, snapshot: ProfileSnapshot) -> bool:
+        current_hash = self._extract_managed_content_hash(current_text)
+        next_hash = str(snapshot.metadata.get("content_hash") or "").strip()
+        return bool(current_hash and next_hash and current_hash == next_hash)
+
+    @staticmethod
+    def _extract_managed_content_hash(current_text: str) -> str | None:
+        if _MANAGED_START not in current_text or _MANAGED_END not in current_text:
+            return None
+        marker = "Content hash:"
+        for line in current_text.splitlines():
+            if line.startswith(marker):
+                value = line.split(marker, 1)[1].strip()
+                return value or None
+        return None
+
+    @staticmethod
+    def _normalized_managed_payload(
+        *,
+        summary: str,
+        explicit_traits: list[str],
+        implicit_traits: list[str],
+        source_memcell_ids: list[str],
+    ) -> str:
+        payload = {
+            "summary": summary,
+            "explicit_traits": list(explicit_traits[:6]),
+            "implicit_traits": list(implicit_traits[:6]),
+            "source_memcell_ids": list(source_memcell_ids[:8]),
+        }
+        return str(payload)
+
     @staticmethod
     def managed_markers() -> tuple[str, str]:
         return _MANAGED_START, _MANAGED_END
@@ -193,6 +261,33 @@ class NearlineProfileService:
                     explicit.append(text)
                 if any(needle in lowered for needle in ("will ", "plan", "going to", "明天", "下周", "会在", "准备")):
                     implicit.append(text)
+        return {
+            "explicit": _dedupe_preserve_order(explicit)[:6],
+            "implicit": _dedupe_preserve_order(implicit)[:6],
+        }
+
+    @staticmethod
+    def _infer_traits_from_candidates(candidates: list[MemoryCandidate]) -> dict[str, list[str]]:
+        explicit: list[str] = []
+        implicit: list[str] = []
+        for candidate in candidates:
+            text = _compact_line(candidate.summary, 180)
+            if not text:
+                continue
+            if candidate.kind == "preference":
+                explicit.append(text)
+                continue
+            if candidate.kind == "task_pattern":
+                implicit.append(text)
+                continue
+            metadata = dict(candidate.metadata or {})
+            for value in metadata.get("traits", []) if isinstance(metadata.get("traits"), list) else []:
+                compact = _compact_line(value, 180)
+                if compact:
+                    explicit.append(compact)
+            source_excerpt = _compact_line(candidate.source_excerpt, 180)
+            if source_excerpt and source_excerpt != text:
+                implicit.append(source_excerpt)
         return {
             "explicit": _dedupe_preserve_order(explicit)[:6],
             "implicit": _dedupe_preserve_order(implicit)[:6],

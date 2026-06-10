@@ -60,6 +60,30 @@ class TestMemoryStoreBasicIO:
         assert end in updated
         assert "Managed Profile Snapshot" in updated
 
+    def test_profile_shadow_skips_rewrite_when_content_hash_unchanged(self, store):
+        store.write_user("# User Profile\n\nManual notes:\n- Keep me\n")
+        service = NearlineProfileService(store.workspace, memory_store=store)
+        snapshot = ProfileSnapshot(
+            profile_id="profile_1",
+            owner_id="user",
+            summary="Prefers concise updates.",
+            explicit_traits=["Prefers concise updates"],
+            implicit_traits=["Will send draft tomorrow"],
+            source_memcell_ids=["mem_1"],
+            updated_at="2026-06-05T10:03:00+00:00",
+            metadata={"content_hash": "same-hash"},
+        )
+        first = service.render_user_with_managed_profile(store.read_user(), snapshot).replace(
+            "Content hash: same-hash",
+            "Content hash: same-hash",
+        )
+        store.write_user(first)
+
+        result = service.write_profile_shadow(snapshot)
+
+        assert result == first
+        assert store.read_user() == first
+
     def test_get_memory_context_returns_empty_when_missing(self, store):
         assert store.get_memory_context() == ""
 

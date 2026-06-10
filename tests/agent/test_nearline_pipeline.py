@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 from OriginAgent.config.schema import NearlineMemoryConfig
+from OriginAgent.memory.candidates import GovernedMemoryWriter, MemoryCandidate
 from OriginAgent.memory.pipeline import NearlineMemoryPipeline
 from OriginAgent.session.manager import Session
 
@@ -320,6 +321,79 @@ async def test_nearline_pipeline_updates_profile_sidecar_and_managed_user_region
     assert start in user_text
     assert end in user_text
     assert "Managed Profile Snapshot" in user_text
+
+
+@pytest.mark.asyncio
+async def test_nearline_pipeline_consumes_governed_profile_candidates(tmp_path) -> None:
+    writer = GovernedMemoryWriter(tmp_path)
+    writer.append(MemoryCandidate(
+        candidate_id="memcand_pref_1",
+        kind="preference",
+        summary="Prefers bullet-point release updates",
+        source_session_key="cli:profile-governed",
+        source_refs=["turn-1"],
+        source_excerpt="remember that I prefer bullet-point release updates",
+        confidence=0.95,
+        sensitivity="low",
+        scope="user",
+        owner_id="user-5",
+        created_at="2026-06-09T00:00:00+00:00",
+        metadata={"category": "preference"},
+    ))
+    writer.append(MemoryCandidate(
+        candidate_id="memcand_pattern_1",
+        kind="task_pattern",
+        summary="Often asks for release checklists before deployment",
+        source_session_key="cli:profile-governed",
+        source_refs=["turn-1"],
+        source_excerpt="please remember I usually want a release checklist",
+        confidence=0.88,
+        sensitivity="low",
+        scope="user",
+        owner_id="user-5",
+        created_at="2026-06-09T00:00:01+00:00",
+        metadata={"category": "task_pattern"},
+    ))
+
+    pipeline = NearlineMemoryPipeline(
+        tmp_path,
+        config=NearlineMemoryConfig(
+            enabled=True,
+            pipeline_enabled=True,
+            profile_shadow_write_enabled=True,
+        ),
+    )
+    session = Session(key="cli:profile-governed")
+    session.messages = [
+        {
+            "role": "user",
+            "content": "I will send the release draft tomorrow morning.",
+            "timestamp": "2026-06-05T12:00:00+08:00",
+            "sender_id": "user-5",
+        },
+        {
+            "role": "assistant",
+            "content": "Noted.",
+            "timestamp": "2026-06-05T12:00:01+08:00",
+        },
+    ]
+
+    result = await pipeline.process_turn(
+        session=session,
+        channel="cli",
+        chat_id="profile-governed",
+        actor_id="user-5",
+        turn_id="turn-profile-governed",
+    )
+
+    assert result.status == "ok"
+    profiles = _load_jsonl(tmp_path / "memory" / "nearline" / "profiles.jsonl")
+    assert len(profiles) == 1
+    serialized = json.dumps(profiles[0], ensure_ascii=False)
+    assert "bullet-point release updates" in serialized
+    assert "release checklists" in serialized
+    user_text = (tmp_path / "USER.md").read_text(encoding="utf-8")
+    assert "bullet-point release updates" in user_text
 
 
 @pytest.mark.asyncio
