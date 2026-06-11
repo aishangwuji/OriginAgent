@@ -116,15 +116,18 @@ class RetrievalFusion:
         "fact_store": 0,
         "prewarm_seed": 1,
         "nearline_retrieval": 2,
-        "session_search": 3,
+        "memory_candidates": 3,
+        "session_search": 4,
     }
     _BLOCK_SOURCE_NAME = {
         "fact_store": "memory_retrieval",
         "prewarm_seed": "retrieval_prewarm_seed",
         "nearline_retrieval": "layered_memory",
+        "memory_candidates": "memory_candidates",
         "session_search": "retrieval_session_search",
     }
     _SESSION_SEARCH_SOURCES = ("sessions", "history", "webui")
+    _MEMORY_BLOCK_SOURCES = ("memory_candidates",)
 
     def __init__(
         self,
@@ -191,11 +194,24 @@ class RetrievalFusion:
             if message
             else {"results": [], "searched_sources": [], "mode": "hybrid"}
         )
+        memory_block_result = (
+            self.session_search.search(
+                query=message,
+                sources=self._MEMORY_BLOCK_SOURCES,
+                session_key=session_key,
+                limit=max(1, int(getattr(self.context_config, "max_retrieval_hits_per_source", 4) or 4)),
+                mode="hybrid",
+                result_shape="memory_blocks",
+            )
+            if message
+            else {"results": [], "searched_sources": [], "mode": "hybrid"}
+        )
 
         source_hits: dict[str, list[RetrievalHit]] = {
             "fact_store": self._fact_hits(fact_bundle, fallback_bundle=fallback_bundle),
             "prewarm_seed": self._prewarm_hits(prewarm_seed),
             "nearline_retrieval": self._nearline_hits(nearline_result),
+            "memory_candidates": self._memory_block_hits(memory_block_result),
             "session_search": self._session_search_hits(search_result),
         }
         raw_source_counts = {source: len(hits) for source, hits in source_hits.items()}
@@ -247,6 +263,11 @@ class RetrievalFusion:
                 "performance_note": search_result.get("performance_note"),
                 "index_stale": bool(search_result.get("index_stale")),
                 "index_refresh_running": bool(search_result.get("index_refresh_running")),
+            },
+            "memory_candidate_search": {
+                "mode": memory_block_result.get("mode"),
+                "searched_sources": list(memory_block_result.get("searched_sources") or []),
+                "performance_note": memory_block_result.get("performance_note"),
             },
         }
         return RetrievalFusionResult(
@@ -433,6 +454,40 @@ class RetrievalFusion:
             )
         return hits
 
+    def _memory_block_hits(self, result: dict[str, Any]) -> list[RetrievalHit]:
+        hits: list[RetrievalHit] = []
+        for row in result.get("results", []) or []:
+            if not isinstance(row, dict):
+                continue
+            summary = str(row.get("summary") or "").strip()
+            if not summary:
+                continue
+            title = str(row.get("title") or row.get("block_type") or "memory_candidate").strip()
+            confidence = float(row.get("confidence") or 0.75)
+            hits.append(
+                RetrievalHit(
+                    source="memory_candidates",
+                    title=title,
+                    text=summary,
+                    scope="session",
+                    owner_id=None,
+                    timestamp=str(row.get("updated_at") or "").strip() or None,
+                    confidence=confidence,
+                    score=confidence,
+                    dedupe_key=_normalize_text(summary),
+                    locator={
+                        "source_kind": row.get("source_kind"),
+                        "supporting_refs": list(row.get("supporting_refs") or []),
+                    },
+                    details={
+                        "block_type": row.get("block_type"),
+                        "session_key": row.get("session_key"),
+                        "staleness": row.get("staleness"),
+                    },
+                )
+            )
+        return hits
+
     def _prewarm_hits(self, rows: list[dict[str, Any]] | None) -> list[RetrievalHit]:
         hits: list[RetrievalHit] = []
         for row in rows or []:
@@ -573,4 +628,6 @@ class RetrievalFusion:
             return "## Relevant Context (from your recent sessions)"
         if source == "nearline_retrieval":
             return "## Relevant Nearline Memory"
+        if source == "memory_candidates":
+            return "## Queued Memory Candidates"
         return "## Relevant Session Recall"

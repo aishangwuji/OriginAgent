@@ -7,6 +7,7 @@ import pytest
 
 from OriginAgent.config.schema import ContextConfig
 from OriginAgent.agent.context import ContextBuilder
+from OriginAgent.agent.context_budget import ContextBudgetManager
 from OriginAgent.agent.identity import ActorResolver
 from OriginAgent.agent.loop import (
     AgentLoop,
@@ -923,6 +924,234 @@ def test_context_builder_retrieval_fusion_records_trimming(tmp_path: Path):
 
     assert len(retrieval_blocks) == 1
     assert builder._last_retrieval_fusion["trimmed_count"] >= 1
+
+
+def test_context_budget_keeps_current_turn_and_continuity_core_when_profile_memory_blocks_expand_prompt(tmp_path: Path):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    sessions = SessionManager(workspace)
+    session = sessions.get_or_create("cli:direct")
+    session.metadata["goal_state"] = {
+        "status": "active",
+        "objective": "WORKING MEMORY MARKER keep continuity core visible",
+        "ui_summary": "continuity",
+    }
+    builder = ContextBuilder(
+        workspace=workspace,
+        timezone="UTC",
+        sessions=sessions,
+        confirmation_store=PendingConfirmationStore(workspace),
+        context_config=ContextConfig(
+            max_retrieval_blocks=4,
+            max_retrieval_chars=12_000,
+            max_retrieval_hits_per_source=4,
+        ),
+        memory_feature_flags={"semantic_retrieval_enabled": True},
+    )
+    builder.build_system_prompt = lambda *args, **kwargs: "system"
+    builder.budget_manager = ContextBudgetManager(safety_buffer_tokens=0)
+    runtime_context = ActorResolver().resolve_runtime_context(
+        channel="cli",
+        chat_id="direct",
+        sender_id="user-1",
+        metadata={},
+        session_key="cli:direct",
+    )
+    builder.working_memory.upsert(
+        session,
+        identity=runtime_context.identity,
+        current_goal="WORKING MEMORY MARKER keep continuity core visible",
+        open_loops=["Protect continuity core from retrieval trimming"],
+        active_constraints=["Trim profile and memory references before continuity core"],
+    )
+
+    world_view_marker = "WORLD VIEW MARKER budget test world view survives trimming"
+    builder.world_state = MagicMock()
+    builder.world_state.snapshot_prompt_payload.return_value = {
+        "status": "active",
+        "version": "phase2",
+        "world_summary": {"focus": [world_view_marker]},
+        "updated_at": "2026-06-09T00:00:00+00:00",
+    }
+    builder.world_state.filtered_candidates.return_value = {
+        "included_summary": {"focus": [world_view_marker]},
+        "filtered_candidates": [],
+        "freshness": {},
+        "contested_summary": {},
+        "selection_reasons": ["selected_for_budget_test"],
+    }
+
+    user_profile_marker = "USER PROFILE MARKER concise Friday release updates"
+    (workspace / "USER.md").write_text(
+        f"{user_profile_marker}\n" + ("User profile filler for prompt budget pressure. " * 120),
+        encoding="utf-8",
+    )
+
+    query_phrase = "need concise Friday release checklist updates"
+
+    sessions_dir = workspace / "sessions"
+    sessions_dir.mkdir(parents=True, exist_ok=True)
+    (sessions_dir / "cli_direct.jsonl").write_text(
+        "\n".join([
+            json.dumps({"_type": "metadata", "key": "cli:direct"}, ensure_ascii=False),
+            json.dumps(
+                {
+                    "role": "user",
+                    "content": f"SESSION SEARCH MARKER {query_phrase}",
+                    "timestamp": "2026-06-09T09:00:00+00:00",
+                },
+                ensure_ascii=False,
+            ),
+        ]) + "\n",
+        encoding="utf-8",
+    )
+
+    nearline = workspace / "memory" / "nearline"
+    nearline.mkdir(parents=True, exist_ok=True)
+    nearline_profile_marker = "NEARLINE PROFILE MARKER concise Friday release checklist"
+    (nearline / "profiles.jsonl").write_text(
+        json.dumps(
+            {
+                "profile_id": "profile_1",
+                "owner_id": "user-1",
+                "summary": nearline_profile_marker + " " + ("Nearline profile filler. " * 80),
+                "explicit_traits": [
+                    "Prefers concise release updates",
+                    "Often asks for Friday deployment checklists",
+                ],
+                "implicit_traits": [
+                    "Values rollback ownership clarity",
+                    "Uses continuity prompts heavily",
+                ],
+                "source_memcell_ids": ["mem_1"],
+                "updated_at": "2026-06-09T12:00:00+00:00",
+                "metadata": {},
+            },
+            ensure_ascii=False,
+        ) + "\n",
+        encoding="utf-8",
+    )
+
+    fact_marker = "FACT RETRIEVAL MARKER release checklist smoke tests and rollback owner"
+    builder.memory.upsert_fact_and_rebuild_memory(
+        fact_marker + " " + ("Fact retrieval filler. " * 80),
+        category="note",
+        scope="project.release",
+        owner="user",
+        source_cursors=[1],
+        source_excerpt="release checklist memory fact",
+    )
+
+    current_turn_marker = f"CURRENT TURN MARKER {query_phrase}"
+    memory_candidate_marker = f"MEMORY CANDIDATE MARKER {current_turn_marker}"
+    (workspace / "memory" / "memory_candidates.jsonl").write_text(
+        json.dumps(
+            {
+                "candidate_id": "memcand_pref_1",
+                "kind": "preference",
+                "summary": memory_candidate_marker + " " + ("Queued candidate filler. " * 80),
+                "source_session_key": "cli:direct",
+                "source_refs": ["turn-1"],
+                "source_excerpt": f"remember to {current_turn_marker}",
+                "confidence": 0.92,
+                "sensitivity": "low",
+                "scope": "user",
+                "owner_id": "user-1",
+                "created_at": "2026-06-09T00:00:00+00:00",
+            },
+            ensure_ascii=False,
+        ) + "\n",
+        encoding="utf-8",
+    )
+
+    history_marker = "RECENT HISTORY MARKER unrelated migration notes"
+    for index in range(6):
+        builder.memory.append_history(f"{history_marker} {index} " + ("History filler. " * 80))
+
+    build_kwargs = dict(
+        history=[],
+        current_message=current_turn_marker,
+        channel="cli",
+        chat_id="direct",
+        sender_id="user-1",
+        session_metadata=session.metadata,
+        runtime_context=runtime_context,
+        session_key="cli:direct",
+    )
+
+    full_messages = builder.build_messages(
+        **build_kwargs,
+        context_window_tokens=12_000,
+        max_completion_tokens=200,
+    )
+    full_user_content = full_messages[-1]["content"]
+    full_sources = [
+        block.get("_meta", {}).get("source")
+        for block in full_user_content
+        if isinstance(block, dict) and block.get("_meta", {}).get("kind") == ContextBuilder.REFERENCE_CONTEXT_KIND
+    ]
+    full_text = "\n".join(
+        block.get("text", "")
+        for block in full_user_content
+        if isinstance(block, dict) and block.get("type") == "text"
+    )
+
+    assert "user_profile" in full_sources
+    assert "memory_retrieval" in full_sources
+    assert "layered_memory" in full_sources
+    assert "memory_candidates" in full_sources
+    assert "retrieval_session_search" in full_sources
+    assert "recent_history" in full_sources
+    assert user_profile_marker in full_text
+    assert nearline_profile_marker in full_text
+    assert fact_marker in full_text
+    assert memory_candidate_marker in full_text
+    assert "SESSION SEARCH MARKER" in full_text
+    assert builder._last_retrieval_fusion["source_counts"]["memory_candidates"] >= 1
+
+    trimmed_messages = builder.build_messages(
+        **build_kwargs,
+        context_window_tokens=900,
+        max_completion_tokens=300,
+    )
+    trimmed_user_content = trimmed_messages[-1]["content"]
+    trimmed_kinds = [
+        block.get("_meta", {}).get("kind")
+        for block in trimmed_user_content
+        if isinstance(block, dict)
+    ]
+    trimmed_sources = [
+        block.get("_meta", {}).get("source")
+        for block in trimmed_user_content
+        if isinstance(block, dict) and block.get("_meta", {}).get("kind") == ContextBuilder.REFERENCE_CONTEXT_KIND
+    ]
+    trimmed_text = "\n".join(
+        block.get("text", "")
+        for block in trimmed_user_content
+        if isinstance(block, dict) and block.get("type") == "text"
+    )
+    budget_audit = builder._last_context_assembly_audit["budget"]
+
+    assert ContextBuilder.WORKING_MEMORY_CONTEXT_KIND in trimmed_kinds
+    assert ContextBuilder.WORLD_STATE_CONTEXT_KIND in trimmed_kinds
+    assert trimmed_user_content[-1]["text"] == current_turn_marker
+    assert "WORKING MEMORY MARKER keep continuity core visible" in trimmed_text
+    assert world_view_marker in trimmed_text
+    assert budget_audit["removed_recent_history_blocks"] >= 1
+    assert (
+        budget_audit["removed_retrieval_blocks"] >= 1
+        or budget_audit["removed_continuity_reference_blocks"] >= 1
+    )
+    assert "recent_history" not in trimmed_sources
+    assert any(
+        marker not in trimmed_text
+        for marker in (
+            user_profile_marker,
+            nearline_profile_marker,
+            fact_marker,
+            memory_candidate_marker,
+        )
+    )
 
 
 def test_memory_governance_promotes_after_two_independent_turns(tmp_path: Path):
