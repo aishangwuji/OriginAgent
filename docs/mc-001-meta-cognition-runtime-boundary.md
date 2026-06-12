@@ -4,6 +4,27 @@ Date: 2026-06-12
 Status: Proposed
 Scope: MetaCognitionRuntime 主线的边界、对象模型与治理约束冻结
 
+## implementation_status
+
+`MC-001` 的最小实现边界已落地到代码：
+
+1. `MetaCognitionRuntime` 以 sidecar 形式接入，未成为第二个 `AgentLoop`。
+2. 已新增最小对象模型骨架：
+   - `MetaTrigger`
+   - `RecordTriggerResult`
+   - `ThoughtJournalEntry`
+   - `ReflectionRecord`
+   - `ConfidenceTrace`
+   - `ErrorPattern`
+   - `EvolutionSeed`
+3. 当前真正进入运行链的对象只有：
+   - `MetaTrigger`
+   - `RecordTriggerResult`
+4. 已明确并保持：
+   - 不直接自修改
+   - 不直接写主配置
+   - 不直接激活 evolution 产物
+
 ## title
 
 `MC-001` MetaCognitionRuntime 边界、触发面与对象模型冻结

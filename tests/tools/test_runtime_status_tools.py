@@ -302,6 +302,20 @@ async def test_inspect_context_reports_phase1_views_and_scope_filter(tmp_path) -
     loop = SimpleNamespace(
         _last_runtime_context=runtime_context,
         _last_continuity_session_key="cli:direct",
+        _meta_cognition_runtime=SimpleNamespace(
+            summary=lambda: {
+                "contract_version": "meta_cognition.v1.freeze",
+                "enabled": True,
+                "trigger_collection_enabled": True,
+                "runtime_status": {"accepted_total": 1},
+                "recent_triggers": [{"trigger_type": "tool_failure"}],
+                "recent_decisions": [{"decision": "accepted"}],
+                "decision_counts": {"accepted": 1},
+                "suppression_reason_counts": {},
+            }
+        ),
+        _last_meta_cognition_summary={},
+        _last_meta_trigger_scan=[],
         _last_context_assembly={
             "enabled": True,
             "contract_version": "continuity.v1.freeze",
@@ -408,6 +422,8 @@ async def test_inspect_context_reports_phase1_views_and_scope_filter(tmp_path) -
     assert result["views"]["world"]["filtered_candidates"][0]["reasons"] == ["scope_hidden"]
     assert result["views"]["world"]["freshness"]["is_fresh"] is True
     assert result["views"]["world"]["contested"]["contested"] is True
+    assert result["views"]["meta_cognition"]["contract_version"] == "meta_cognition.v1.freeze"
+    assert result["views"]["meta_cognition"]["recent_triggers"][0]["trigger_type"] == "tool_failure"
     assert result["last_context_assembly"]["assembly_order"] == [
         "system_prompt",
         "runtime_state",

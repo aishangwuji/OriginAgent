@@ -242,6 +242,27 @@ async def test_execute_notifies_execution_observer() -> None:
 
 
 @pytest.mark.asyncio
+async def test_execute_observer_sees_runtime_context_available_on_registry() -> None:
+    class Observer:
+        def __init__(self, registry: ToolRegistry) -> None:
+            self.registry = registry
+            self.session_keys: list[str | None] = []
+
+        def on_tool_result(self, **kwargs: Any) -> None:
+            self.session_keys.append(self.registry.runtime_context.session_key)
+
+    registry = ToolRegistry()
+    observer = Observer(registry)
+    registry._execution_observer = observer
+    registry.set_runtime_context(session_key="cli:direct", actor_id="user-1")
+    registry.register(_FakeTool("example", result={"ok": True}))
+
+    await registry.execute("example", {"token": "secret"})
+
+    assert observer.session_keys == ["cli:direct"]
+
+
+@pytest.mark.asyncio
 async def test_execute_audits_validation_error() -> None:
     sink = InMemoryToolAuditSink()
     registry = ToolRegistry(audit_sink=sink)

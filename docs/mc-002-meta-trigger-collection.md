@@ -4,6 +4,26 @@ Date: 2026-06-12
 Status: Proposed
 Scope: tool failure / user correction / task completion 三类元认知触发的最小采集链路冻结
 
+## implementation_status
+
+`MC-002` 的最小采集链路已按保守边界落地：
+
+1. `tool_failure`
+   - 通过 `ToolRegistry.execution_observer` 采集
+   - 仅接受 `error` / `policy_denied`
+   - `validation_error` 只保留 tool 审计，不升级为元认知触发
+2. `user_correction`
+   - 通过 `AgentLoop._process_message()` turn 结束后的轻量扫描采集
+   - 首版仅识别显式纠错模式
+3. `task_completion`
+   - 通过 `complete_goal` 成功执行 + `goal_state.status == completed` 采集
+   - 不依赖返回文本自由推断
+4. 已实现：
+   - source-based duplicate suppression
+   - session / trigger-type cooldown
+   - per-turn accepted trigger limit
+   - JSONL 审计与 introspection summary
+
 ## title
 
 `MC-002` 元认知触发采集与标准化

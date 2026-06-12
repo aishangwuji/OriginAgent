@@ -933,6 +933,73 @@ class SubagentDefaultsConfig(Base):
     mode: Literal["normal", "restricted"] = "normal"
 
 
+class MetaCognitionConfig(Base):
+    """Sidecar meta-cognition trigger collection configuration."""
+
+    enabled: bool = False
+    trigger_collection_enabled: bool = Field(
+        default=False,
+        validation_alias=AliasChoices(
+            "triggerCollectionEnabled",
+            "trigger_collection_enabled",
+        ),
+        serialization_alias="triggerCollectionEnabled",
+    )
+    max_accepted_triggers_per_turn: int = Field(
+        default=2,
+        ge=1,
+        le=20,
+        validation_alias=AliasChoices(
+            "maxAcceptedTriggersPerTurn",
+            "max_accepted_triggers_per_turn",
+        ),
+        serialization_alias="maxAcceptedTriggersPerTurn",
+    )
+    session_cooldown_seconds: int = Field(
+        default=300,
+        ge=0,
+        le=86_400,
+        validation_alias=AliasChoices(
+            "sessionCooldownSeconds",
+            "session_cooldown_seconds",
+        ),
+        serialization_alias="sessionCooldownSeconds",
+    )
+    trigger_type_cooldown_seconds: int = Field(
+        default=300,
+        ge=0,
+        le=86_400,
+        validation_alias=AliasChoices(
+            "triggerTypeCooldownSeconds",
+            "trigger_type_cooldown_seconds",
+        ),
+        serialization_alias="triggerTypeCooldownSeconds",
+    )
+    queue_max_items: int = Field(
+        default=200,
+        ge=1,
+        le=10_000,
+        validation_alias=AliasChoices("queueMaxItems", "queue_max_items"),
+        serialization_alias="queueMaxItems",
+    )
+    capture_user_correction_explicit_only: bool = Field(
+        default=True,
+        validation_alias=AliasChoices(
+            "captureUserCorrectionExplicitOnly",
+            "capture_user_correction_explicit_only",
+        ),
+        serialization_alias="captureUserCorrectionExplicitOnly",
+    )
+    capture_task_completion_from_complete_goal_only: bool = Field(
+        default=True,
+        validation_alias=AliasChoices(
+            "captureTaskCompletionFromCompleteGoalOnly",
+            "capture_task_completion_from_complete_goal_only",
+        ),
+        serialization_alias="captureTaskCompletionFromCompleteGoalOnly",
+    )
+
+
 class LearningConfig(Base):
     """Agent self-improvement and review configuration."""
 
@@ -950,6 +1017,11 @@ class LearningConfig(Base):
         default_factory=EvolutionConfig,
         validation_alias=AliasChoices("evolution"),
         serialization_alias="evolution",
+    )
+    meta_cognition: MetaCognitionConfig = Field(
+        default_factory=MetaCognitionConfig,
+        validation_alias=AliasChoices("metaCognition", "meta_cognition"),
+        serialization_alias="metaCognition",
     )
 
 

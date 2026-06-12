@@ -59,6 +59,13 @@ from OriginAgent.agent.introspection.service import RuntimeIntrospectionService
 from OriginAgent.agent.memory import Consolidator, Dream, dream_feature_flags
 from OriginAgent.agent.memory import session_summary_text
 from OriginAgent.agent.memory_governance import MemoryGovernance
+from OriginAgent.agent.meta_cognition_models import MetaTrigger
+from OriginAgent.agent.meta_cognition_triggers import (
+    build_task_completion_trigger,
+    build_tool_failure_trigger,
+    build_user_correction_trigger,
+    latest_assistant_message,
+)
 from OriginAgent.memory.rolling import RollingEpisodeCompaction
 from OriginAgent.agent.roaming_prewarm import RoamingPrewarmService
 from OriginAgent.agent.progress_hook import AgentProgressHook
@@ -91,7 +98,7 @@ from OriginAgent.providers.factory import ProviderSnapshot
 from OriginAgent.security.capabilities import CapabilitySnapshot
 from OriginAgent.security.grants import CapabilityGrantStore, issue_tool_approval_grant
 from OriginAgent.session.cold_archive import SessionColdArchiveStore
-from OriginAgent.session.goal_state import goal_state_ws_blob, runner_wall_llm_timeout_s
+from OriginAgent.session.goal_state import goal_state_raw, goal_state_ws_blob, parse_goal_state, runner_wall_llm_timeout_s
 from OriginAgent.session.manager import Session, SessionManager
 from OriginAgent.session.search_index import SessionSearchIndexService
 from OriginAgent.utils.document import extract_documents
@@ -225,6 +232,7 @@ class AgentLoop:
         domain_pack_manager: DomainPackManager | None = None,
         learning_config: "BackgroundReviewConfig | None" = None,
         learning_config_loader: Callable[[], "BackgroundReviewConfig"] | None = None,
+        meta_cognition_config: Any | None = None,
         curator_config: "CuratorConfig | None" = None,
         curator_config_loader: Callable[[], "CuratorConfig"] | None = None,
         evolution_config: "EvolutionConfig | None" = None,
@@ -296,8 +304,9 @@ class AgentLoop:
             primary_provider_name=primary_provider_name,
             domain_packs_config=domain_packs_config,
             domain_pack_manager=domain_pack_manager,
-            learning_config=learning_config,
+            learning_config=learning_config or defaults.learning.background_review,
             learning_config_loader=learning_config_loader,
+            meta_cognition_config=meta_cognition_config,
             curator_config=curator_config,
             curator_config_loader=curator_config_loader,
             evolution_config=evolution_config,
@@ -334,10 +343,14 @@ class AgentLoop:
         self._last_governance_audit: dict[str, Any] = {}
         self._last_action_continuity_audit: dict[str, Any] = {}
         self._last_cognitive_scan: dict[str, Any] = {}
+        self._last_meta_cognition_summary: dict[str, Any] = {}
+        self._last_meta_trigger_scan: list[dict[str, Any]] = []
+        self._current_meta_turn_id: str | None = None
         self.commands = CommandRouter()
         register_builtin_commands(self.commands)
         self._turn_pipeline = AgentTurnPipeline(self._build_turn_pipeline_deps())
         self._cognitive_runtime = AgentCognitiveRuntime(self._build_cognitive_runtime_deps())
+        self._install_meta_cognition_observer()
 
     @classmethod
     def from_config(
@@ -440,6 +453,7 @@ class AgentLoop:
             domain_packs_config=defaults.domain_packs,
             learning_config=defaults.learning.background_review,
             learning_config_loader=_background_review_config_loader,
+            meta_cognition_config=defaults.learning.meta_cognition,
             curator_config=defaults.learning.curator,
             curator_config_loader=_curator_config_loader,
             evolution_config=defaults.learning.evolution,
@@ -2266,60 +2280,188 @@ class AgentLoop:
             pending_queue=pending_queue,
             capability_snapshot=capability_snapshot,
         )
+        self._current_meta_turn_id = ctx.turn_id
+        try:
+            while ctx.state is not TurnState.DONE:
+                handler_name = f"_state_{ctx.state.name.lower()}"
+                handler = getattr(self, handler_name, None)
+                if handler is None:
+                    raise RuntimeError(f"Missing state handler for {ctx.state}")
 
-        while ctx.state is not TurnState.DONE:
-            handler_name = f"_state_{ctx.state.name.lower()}"
-            handler = getattr(self, handler_name, None)
-            if handler is None:
-                raise RuntimeError(f"Missing state handler for {ctx.state}")
+                t0 = time.perf_counter()
+                try:
+                    event = await handler(ctx)
+                except Exception:
+                    duration = (time.perf_counter() - t0) * 1000
+                    ctx.trace.append(
+                        StateTraceEntry(
+                            state=ctx.state,
+                            started_at=t0,
+                            duration_ms=duration,
+                            event="",
+                            error="exception",
+                        )
+                    )
+                    raise
 
-            t0 = time.perf_counter()
-            try:
-                event = await handler(ctx)
-            except Exception:
                 duration = (time.perf_counter() - t0) * 1000
                 ctx.trace.append(
                     StateTraceEntry(
                         state=ctx.state,
                         started_at=t0,
                         duration_ms=duration,
-                        event="",
-                        error="exception",
+                        event=event,
                     )
                 )
-                raise
-
-            duration = (time.perf_counter() - t0) * 1000
-            ctx.trace.append(
-                StateTraceEntry(
-                    state=ctx.state,
-                    started_at=t0,
-                    duration_ms=duration,
-                    event=event,
+                logger.debug(
+                    "[turn {}] State {} took {:.1f}ms -> event {}",
+                    ctx.turn_id,
+                    ctx.state.name,
+                    duration,
+                    event,
                 )
-            )
+
+                next_state = self._TRANSITIONS.get((ctx.state, event))
+                if next_state is None:
+                    raise RuntimeError(
+                        f"[turn {ctx.turn_id}] No transition from {ctx.state} "
+                        f"on event {event!r}"
+                    )
+                ctx.state = next_state
+
             logger.debug(
-                "[turn {}] State {} took {:.1f}ms -> event {}",
+                "[turn {}] Turn completed after {} states",
                 ctx.turn_id,
-                ctx.state.name,
-                duration,
-                event,
+                len(ctx.trace),
             )
+            self._scan_meta_triggers_for_turn(ctx)
+            return ctx.outbound
+        finally:
+            self._current_meta_turn_id = None
 
-            next_state = self._TRANSITIONS.get((ctx.state, event))
-            if next_state is None:
-                raise RuntimeError(
-                    f"[turn {ctx.turn_id}] No transition from {ctx.state} "
-                    f"on event {event!r}"
-                )
-            ctx.state = next_state
+    def _install_meta_cognition_observer(self) -> None:
+        runtime = getattr(self, "_meta_cognition_runtime", None)
+        if runtime is None:
+            return
 
-        logger.debug(
-            "[turn {}] Turn completed after {} states",
-            ctx.turn_id,
-            len(ctx.trace),
-        )
-        return ctx.outbound
+        registry = self.tools
+        existing = getattr(registry, "_execution_observer", None)
+        loop = self
+
+        class _MetaCognitionObserver:
+            def on_tool_result(
+                self,
+                *,
+                name: str,
+                params: dict[str, Any],
+                status: str,
+                start: float,
+                error_kind: str | None = None,
+                policy_rule: str | None = None,
+                result: Any = None,
+            ) -> None:
+                tool_runtime_context = registry.runtime_context
+                session_key = str(tool_runtime_context.session_key or "").strip()
+                if not session_key:
+                    return
+
+                if status in {"error", "policy_denied"}:
+                    trigger = build_tool_failure_trigger(
+                        session_key=session_key,
+                        tool_name=name,
+                        params=params,
+                        status=status,
+                        error_kind=error_kind,
+                        policy_rule=policy_rule,
+                    )
+                    if trigger is not None:
+                        loop._record_meta_trigger(
+                            trigger,
+                            turn_id=getattr(loop, "_current_meta_turn_id", None),
+                        )
+
+                if name == "complete_goal" and status == "success":
+                    session = loop.sessions.get_or_create(session_key)
+                    before_status = None
+                    raw = goal_state_raw(session.metadata)
+                    parsed = parse_goal_state(raw)
+                    if isinstance(parsed, dict):
+                        before_status = parsed.get("status")
+                    trigger = build_task_completion_trigger(
+                        session_key=session_key,
+                        session_metadata=dict(session.metadata or {}),
+                        params=params,
+                    )
+                    if trigger is not None:
+                        payload = dict(trigger.payload)
+                        payload["goal_status_before_completion"] = before_status or "active"
+                        trigger = MetaTrigger(
+                            trigger_id=trigger.trigger_id,
+                            session_key=trigger.session_key,
+                            trigger_type=trigger.trigger_type,
+                            source_type=trigger.source_type,
+                            source_reference=trigger.source_reference,
+                            severity=trigger.severity,
+                            created_at=trigger.created_at,
+                            cooldown_key=trigger.cooldown_key,
+                            evidence_refs=trigger.evidence_refs,
+                            payload=payload,
+                        )
+                        loop._record_meta_trigger(
+                            trigger,
+                            turn_id=getattr(loop, "_current_meta_turn_id", None),
+                        )
+                        
+
+                if existing is not None:
+                    existing.on_tool_result(
+                        name=name,
+                        params=params,
+                        status=status,
+                        start=start,
+                        error_kind=error_kind,
+                        policy_rule=policy_rule,
+                        result=result,
+                    )
+
+        registry._execution_observer = _MetaCognitionObserver()
+
+    def _record_meta_trigger(self, trigger: MetaTrigger, *, turn_id: str | None = None) -> None:
+        runtime = getattr(self, "_meta_cognition_runtime", None)
+        if runtime is None:
+            return
+        result = runtime.record_trigger(trigger, turn_id=turn_id)
+        self._last_meta_cognition_summary = runtime.summary()
+        self._last_meta_trigger_scan = [
+            *list(self._last_meta_trigger_scan or []),
+            {
+                "trigger_id": trigger.trigger_id,
+                "trigger_type": trigger.trigger_type,
+                "decision": result.decision,
+                "accepted": result.accepted,
+                "suppression_reason": result.suppression_reason,
+            },
+        ][-50:]
+
+    def _scan_meta_triggers_for_turn(self, ctx: TurnContext) -> None:
+        runtime = getattr(self, "_meta_cognition_runtime", None)
+        if runtime is None:
+            return
+        try:
+            self._current_meta_turn_id = ctx.turn_id
+            trigger = build_user_correction_trigger(
+                session_key=ctx.session_key,
+                user_message=ctx.msg.content,
+                last_assistant_message=latest_assistant_message(ctx.all_messages),
+            )
+            if trigger is not None:
+                self._record_meta_trigger(trigger, turn_id=ctx.turn_id)
+            runtime.reset_turn(ctx.turn_id)
+            self._last_meta_cognition_summary = runtime.summary()
+        except Exception:
+            logger.debug("Meta-cognition turn-end scan failed", exc_info=True)
+        finally:
+            self._current_meta_turn_id = None
 
     def _assemble_outbound(
         self,

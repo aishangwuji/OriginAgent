@@ -175,6 +175,10 @@ class ToolRegistry:
             chat_id=chat_id,
         )
 
+    @property
+    def runtime_context(self) -> ToolRuntimeContext:
+        return self._runtime_context
+
     def set_audit_context(
         self,
         *,

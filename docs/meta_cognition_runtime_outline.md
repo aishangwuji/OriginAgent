@@ -4,6 +4,26 @@ Date: 2026-06-12
 Status: Proposed
 Scope: OriginAgent 显式元认知、结构化反思、置信度跟踪与受治理自演进桥接的独立架构提纲
 
+## 0. 当前实现状态（2026-06-12）
+
+`MC-001 + MC-002` 的最小实现边界已经落地，当前代码状态为：
+
+1. 已新增 `MetaCognitionRuntime` sidecar。
+2. 已冻结并实现 `MetaTrigger` / `RecordTriggerResult` 的最小运行时契约。
+3. 已接入三类首版触发中的最小稳定子集：
+   - `tool_failure`
+   - `user_correction`
+   - `task_completion`
+4. 已实现去重、cooldown、per-turn accepted limit、JSONL 审计和 introspection 读模型。
+5. 当前实现仍然**不包含**：
+   - 深反思执行
+   - working memory 回写
+   - `memory_candidates` 桥接
+   - governed evolution seed 桥接
+   - 自动自修改
+
+因此，这份总纲后续涉及的结构化 reflection、桥接和演进内容，当前仍属于后续 `MC-003` 到 `MC-005` 的施工范围，而不是已完成能力。
+
 ## 1. 文档目标
 
 本草案用于定义 OriginAgent 的 `MetaCognitionRuntime` 主线，为后续显式反思、错误归因、置信度治理和未来受治理自改造能力提供统一边界。

@@ -90,6 +90,7 @@ class RuntimeIntrospectionService:
             "scratchpad": getattr(loop, "_runtime_vars", {}),
             "continuity": self.continuity_summary(),
             "cognition": self.cognition_summary(),
+            "meta_cognition": self.meta_cognition_summary(),
         }
 
     def system_status(self) -> dict[str, Any]:
@@ -172,6 +173,7 @@ class RuntimeIntrospectionService:
             "background_tasks": background_tasks,
             "evolution": evolution_status,
             "self_model": self_model,
+            "meta_cognition": self.meta_cognition_summary(),
         }
 
     def runtime_context_snapshot(
@@ -305,6 +307,37 @@ class RuntimeIntrospectionService:
             summary["scheduler"] = scheduler.runtime_status()
         return summary
 
+    def meta_cognition_summary(self) -> dict[str, Any]:
+        loop = self._loop
+        if loop is None:
+            return {
+                "contract_version": "meta_cognition.v1.freeze",
+                "enabled": False,
+                "trigger_collection_enabled": False,
+                "runtime_status": {},
+                "recent_triggers": [],
+                "recent_decisions": [],
+                "decision_counts": {},
+                "suppression_reason_counts": {},
+            }
+        runtime = getattr(loop, "_meta_cognition_runtime", None)
+        if runtime is None:
+            return {
+                "contract_version": "meta_cognition.v1.freeze",
+                "enabled": False,
+                "trigger_collection_enabled": False,
+                "runtime_status": {},
+                "recent_triggers": [],
+                "recent_decisions": [],
+                "decision_counts": {},
+                "suppression_reason_counts": {},
+            }
+        summary = runtime.summary()
+        last_summary = dict(getattr(loop, "_last_meta_cognition_summary", {}) or {})
+        if last_summary:
+            summary.setdefault("runtime_status", last_summary.get("runtime_status", {}))
+        return summary
+
     def inspect_context(self) -> dict[str, Any]:
         """Return a minimal Phase 1 debug view of the assembled context."""
 
@@ -380,6 +413,7 @@ class RuntimeIntrospectionService:
                     if loop is not None
                     else {},
                 },
+                "meta_cognition": self.meta_cognition_summary(),
             },
             "governance": {
                 "promotions": list(continuity.get("governance", {}).get("promotion_candidates", []))

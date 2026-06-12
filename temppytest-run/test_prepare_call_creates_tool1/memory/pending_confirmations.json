@@ -1,0 +1,34 @@
+{
+  "confirmations": [
+    {
+      "action": "tool:message",
+      "action_payload": {
+        "grant_flags": "{\"can_send_cross_target\": true}",
+        "params_summary": "{\"channel\": \"slack\", \"chat_id\": \"C999\", \"content\": \"hi\"}",
+        "tool_name": "message"
+      },
+      "confirmation_id": "confirmation_cd7e4bb19f7b",
+      "consumed_at": null,
+      "created_at": "2026-06-12T16:33:07.637425+00:00",
+      "decision_reason": "tool 'message' requires explicit approval before use",
+      "expires_at": "2026-06-12T16:35:07.637425+00:00",
+      "idempotency_key": "tool_approval:message:7ec716f5f10c6df3",
+      "kind": "tool_approval",
+      "metadata": {
+        "policy_rule": "message_cross_target_grant_required",
+        "session_key": "slack:C123",
+        "tool_name": "message"
+      },
+      "presence_status": "unknown",
+      "prompt": "The agent wants to use high-risk tool 'message'. Approve this operation for the current session? Parameters: {\"channel\": \"slack\", \"chat_id\": \"C999\", \"content\": \"hi\"}",
+      "related_fact_ids": [],
+      "requested_by": "alice",
+      "requires_presence_empty": false,
+      "risk": "high",
+      "scope": null,
+      "status": "pending",
+      "trigger": "user_initiated",
+      "uses_facts": []
+    }
+  ]
+}

@@ -24,6 +24,8 @@ from OriginAgent.agent.domain_packs import DomainPackManager
 from OriginAgent.agent.introspection.service import RuntimeIntrospectionService
 from OriginAgent.agent.memory import Consolidator, Dream, dream_feature_flags
 from OriginAgent.agent.memory_governance import MemoryGovernance
+from OriginAgent.agent.meta_cognition_audit import JsonlMetaCognitionAuditLedger
+from OriginAgent.agent.meta_cognition_runtime import MetaCognitionRuntime
 from OriginAgent.agent.reminders import ReminderStore
 from OriginAgent.agent.roaming_prewarm import RoamingPrewarmService
 from OriginAgent.agent.runner import AgentRunner
@@ -104,6 +106,7 @@ def build_loop_components(
     domain_pack_manager: DomainPackManager | None,
     learning_config: Any,
     learning_config_loader: Callable[[], Any] | None,
+    meta_cognition_config: Any | None,
     curator_config: Any,
     curator_config_loader: Callable[[], Any] | None,
     evolution_config: Any,
@@ -161,6 +164,11 @@ def build_loop_components(
     values["exec_config"] = exec_config
     values["tools_config"] = tools_config
     values["evolution_config"] = evolution_config or defaults.learning.evolution
+    values["_meta_cognition_config"] = (
+        meta_cognition_config
+        if meta_cognition_config is not None
+        else getattr(defaults.learning, "meta_cognition", None)
+    )
     values["_dream_config"] = dream_config or defaults.dream
     values["_nearline_memory_config"] = (
         nearline_memory_config if nearline_memory_config is not None else defaults.nearline_memory
@@ -377,6 +385,11 @@ def build_loop_components(
         nearline_memory_config=values["_nearline_memory_config"],
     )
     values["_cognitive_audit"] = JsonlCognitiveAuditLedger(workspace)
+    values["_meta_cognition_audit"] = JsonlMetaCognitionAuditLedger(workspace)
+    values["_meta_cognition_runtime"] = MetaCognitionRuntime(
+        config=values["_meta_cognition_config"],
+        audit=values["_meta_cognition_audit"],
+    )
     values["_cognitive_loop_enabled"] = bool(values["_active_intent_config"].enabled)
     values["cognitive_scheduler"] = CognitiveScheduler(
         workspace=workspace,
@@ -478,6 +491,8 @@ def build_loop_components(
     values["_last_governance_audit"] = {}
     values["_last_action_continuity_audit"] = {}
     values["_last_cognitive_scan"] = {}
+    values["_last_meta_cognition_summary"] = {}
+    values["_last_meta_trigger_scan"] = []
 
     return LoopComponents(values=values)
 
