@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from importlib.resources import files as pkg_files
 from datetime import datetime, timedelta, timezone
 
 from OriginAgent.agent.background_review import ReviewProposal, ReviewProposalStore
@@ -8,6 +9,10 @@ from OriginAgent.agent.confirmation import ConfirmationRequest, PendingConfirmat
 from OriginAgent.agent.facts import FactStore
 from OriginAgent.agent.self_model import SelfModelService
 from OriginAgent.config.schema import NearlineMemoryConfig
+from OriginAgent.memory.candidates import GovernedMemoryWriter, MemoryCandidate
+from OriginAgent.memory.models import ProfileSnapshot
+from OriginAgent.memory.profile import NearlineProfileService
+from OriginAgent.memory.store import NearlineMemoryStore
 
 RAW_SECRET = "sk-proj-secretsecretsecretsecret"
 
@@ -23,10 +28,136 @@ def test_self_model_builds_empty_workspace_snapshot(tmp_path) -> None:
     assert self_model["facts"]["active_count"] == 0
     assert self_model["memory"]["nearline"]["status"] == "disabled"
     assert self_model["memory"]["nearline"]["memcell_count"] == 0
+    assert self_model["memory"]["user_profile_file"]["status"] == "missing"
+    assert self_model["memory"]["memory_candidate_queue"]["status"] == "lazy_not_created"
     assert self_model["reviews"]["pending_count"] == 0
     assert self_model["confirmations"]["pending_count"] == 0
     limitation_codes = {item["code"] for item in self_model["limitations"]}
     assert limitation_codes <= {"domain_invalid"}
+
+
+def test_self_model_reports_workspace_initialization_states(tmp_path) -> None:
+    user_file = tmp_path / "USER.md"
+    template_text = (pkg_files("OriginAgent") / "templates" / "USER.md").read_text(encoding="utf-8")
+
+    self_model = SelfModelService(tmp_path).build()
+    assert self_model["memory"]["user_profile_file"]["status"] == "missing"
+    assert self_model["memory"]["user_profile_file"]["exists"] is False
+    assert self_model["memory"]["user_profile_file"]["managed_profile_shadow_present"] is False
+    assert self_model["memory"]["user_profile_file"]["managed_profile_shadow_last_synced_at"] is None
+
+    user_file.write_text(template_text, encoding="utf-8")
+
+    self_model = SelfModelService(tmp_path).build()
+    assert self_model["memory"]["user_profile_file"]["status"] == "template_only"
+    assert self_model["memory"]["user_profile_file"]["exists"] is True
+    assert self_model["memory"]["user_profile_file"]["managed_profile_shadow_present"] is False
+
+    user_file.write_text("# User Profile\n\n- Name or preferred address: Ada\n", encoding="utf-8")
+    self_model = SelfModelService(tmp_path).build()
+    assert self_model["memory"]["user_profile_file"]["status"] == "initialized"
+    assert self_model["memory"]["user_profile_file"]["exists"] is True
+    assert self_model["memory"]["user_profile_file"]["managed_profile_shadow_present"] is False
+
+
+def test_self_model_reports_managed_profile_shadow_presence(tmp_path) -> None:
+    snapshot = ProfileSnapshot(
+        profile_id="profile_1",
+        owner_id="user",
+        summary="Prefers concise updates.",
+        explicit_traits=["Prefers concise updates"],
+        implicit_traits=["Will send draft tomorrow"],
+        source_memcell_ids=["mem_1"],
+        updated_at="2026-06-05T10:03:00+00:00",
+    )
+    NearlineMemoryStore(tmp_path).append_profiles([snapshot])
+    NearlineProfileService(tmp_path).write_profile_shadow(snapshot)
+
+    self_model = SelfModelService(tmp_path).build()
+    user_profile = self_model["memory"]["user_profile_file"]
+
+    assert user_profile["status"] == "initialized"
+    assert user_profile["managed_profile_shadow_present"] is True
+    assert user_profile["managed_profile_shadow_last_synced_at"] == snapshot.updated_at
+
+
+def test_self_model_reports_memory_candidate_queue_states(tmp_path) -> None:
+    self_model = SelfModelService(tmp_path).build()
+    queue = self_model["memory"]["memory_candidate_queue"]
+
+    assert queue["status"] == "lazy_not_created"
+    assert queue["exists"] is False
+    assert queue["pending_count"] == 0
+    assert queue["last_candidate_at"] is None
+
+    queue_file = tmp_path / "memory" / "memory_candidates.jsonl"
+    queue_file.parent.mkdir(parents=True, exist_ok=True)
+    queue_file.write_text("", encoding="utf-8")
+
+    self_model = SelfModelService(tmp_path).build()
+    queue = self_model["memory"]["memory_candidate_queue"]
+    assert queue["status"] == "empty"
+    assert queue["exists"] is True
+    assert queue["pending_count"] == 0
+    assert queue["last_candidate_at"] is None
+
+    writer = GovernedMemoryWriter(tmp_path)
+    writer.append(
+        MemoryCandidate(
+            candidate_id="memcand_1",
+            kind="preference",
+            summary="Prefers concise release updates",
+            source_session_key="cli:test",
+            source_refs=["turn-1"],
+            source_excerpt="I prefer concise release updates",
+            confidence=0.95,
+            sensitivity="low",
+            scope="user",
+            owner_id="user",
+            created_at="2026-06-05T10:00:00+00:00",
+        )
+    )
+    writer.append(
+        MemoryCandidate(
+            candidate_id="memcand_2",
+            kind="task_pattern",
+            summary="Often asks for release checklists",
+            source_session_key="cli:test",
+            source_refs=["turn-2"],
+            source_excerpt="I usually want a release checklist",
+            confidence=0.9,
+            sensitivity="low",
+            scope="user",
+            owner_id="user",
+            created_at="2026-06-05T10:01:00+00:00",
+        )
+    )
+
+    self_model = SelfModelService(tmp_path).build()
+    queue = self_model["memory"]["memory_candidate_queue"]
+
+    assert queue["status"] == "active"
+    assert queue["exists"] is True
+    assert queue["pending_count"] == 2
+    assert queue["last_candidate_at"] == "2026-06-05T10:01:00+00:00"
+
+
+def test_self_model_keeps_workspace_state_when_runtime_snapshot_memory_exists(tmp_path) -> None:
+    self_model = SelfModelService(
+        tmp_path,
+        runtime_snapshot={
+            "memory_summary": {
+                "has_memory_context": True,
+                "recent_history_pending_count": 3,
+                "nearline": {"status": "enabled"},
+            }
+        },
+    ).build()
+
+    assert self_model["memory"]["has_memory_context"] is True
+    assert self_model["memory"]["recent_history_pending_count"] == 3
+    assert self_model["memory"]["user_profile_file"]["status"] == "missing"
+    assert self_model["memory"]["memory_candidate_queue"]["status"] == "lazy_not_created"
 
 
 def test_self_model_derives_limitations_and_redacts_sensitive_content(tmp_path) -> None:

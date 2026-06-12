@@ -8,9 +8,7 @@ import json
 import os
 import time
 from contextlib import AsyncExitStack, nullcontext, suppress
-from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from enum import Enum, auto
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Awaitable, Callable
 
@@ -33,6 +31,16 @@ from OriginAgent.agent.agent_tool_setup import (
     should_register_exec,
 )
 from OriginAgent.agent.active_intents import ActiveIntentConfig, ActiveIntentRecord, ActiveIntentService
+from OriginAgent.agent.agent_cognitive_runtime import AgentCognitiveRuntime, CognitiveRuntimeDeps
+from OriginAgent.agent.agent_loop_components import build_loop_components
+from OriginAgent.agent.agent_turn_pipeline import (
+    AgentTurnPipeline,
+    StateTraceEntry,
+    TURN_PIPELINE_TRANSITIONS,
+    TurnContext,
+    TurnPipelineDeps,
+    TurnState,
+)
 from OriginAgent.agent.agent_turn_persist import TurnPersistManager
 from OriginAgent.agent.autocompact import AutoCompact
 from OriginAgent.agent.auxiliary_llm import AuxiliaryLLMRouter
@@ -42,7 +50,6 @@ from OriginAgent.agent.cognitive_events import CognitiveDecision, CognitiveEvent
 from OriginAgent.agent.cognitive_scheduler import CognitiveScheduler, CognitiveSchedulerConfig
 from OriginAgent.agent.cognitive_loop import CognitiveLoop, CognitiveLoopConfig
 from OriginAgent.agent.context import ContextBuilder
-from OriginAgent.agent.action_continuity import ActionProposal
 from OriginAgent.agent.action_safety import ActionDecision
 from OriginAgent.agent.curator import CuratorService
 from OriginAgent.agent.domain_packs import DomainPackManager
@@ -87,14 +94,10 @@ from OriginAgent.session.cold_archive import SessionColdArchiveStore
 from OriginAgent.session.goal_state import goal_state_ws_blob, runner_wall_llm_timeout_s
 from OriginAgent.session.manager import Session, SessionManager
 from OriginAgent.session.search_index import SessionSearchIndexService
-from OriginAgent.utils.artifacts import generated_image_paths_from_messages
 from OriginAgent.utils.document import extract_documents
 from OriginAgent.utils.image_generation_intent import image_generation_prompt
-from OriginAgent.utils.runtime import EMPTY_FINAL_RESPONSE_MESSAGE
-from OriginAgent.utils.session_attachments import merge_turn_media_into_last_assistant
 from OriginAgent.utils.webui_titles import mark_webui_session, maybe_generate_webui_title_after_turn
 from OriginAgent.utils.webui_transcript import append_transcript_object, delete_webui_transcript
-from OriginAgent.utils.webui_turn_helpers import publish_turn_run_status, websocket_turn_latency_ms
 
 if TYPE_CHECKING:
     from OriginAgent.config.schema import (
@@ -142,18 +145,6 @@ CONTINUITY_RUNTIME_IDENTITY_KEY = "continuity_runtime_identity_v1"
 CONTINUITY_CHECKPOINT_KEY = "continuity_checkpoint_v1"
 
 
-class TurnState(Enum):
-    RESTORE = auto()
-    COMPACT = auto()
-    COMMAND = auto()
-    BUILD = auto()
-    RUN = auto()
-    SAVE = auto()
-    AUTOMATION = auto()
-    RESPOND = auto()
-    DONE = auto()
-
-
 def _is_sensitive_tool_log(name: str) -> bool:
     return name in _SENSITIVE_TOOL_LOG_NAMES or any(
         name.startswith(prefix) for prefix in _SENSITIVE_TOOL_LOG_PREFIXES
@@ -162,54 +153,6 @@ def _is_sensitive_tool_log(name: str) -> bool:
 
 def _should_register_exec(config: Any) -> bool:
     return should_register_exec(config)
-
-
-@dataclass
-class StateTraceEntry:
-    state: TurnState
-    started_at: float
-    duration_ms: float
-    event: str
-    error: str | None = None
-
-
-@dataclass
-class TurnContext:
-    msg: InboundMessage
-    session_key: str
-    state: TurnState
-    turn_id: str
-    session: Session | None = None
-
-    history: list[dict[str, Any]] = field(default_factory=list)
-    initial_messages: list[dict[str, Any]] = field(default_factory=list)
-
-    final_content: str | None = None
-    tools_used: list[str] = field(default_factory=list)
-    all_messages: list[dict[str, Any]] = field(default_factory=list)
-    stop_reason: str = ""
-    had_injections: bool = False
-
-    user_persisted_early: bool = False
-    save_skip: int = 0
-
-    outbound: OutboundMessage | None = None
-    generated_media: list[str] = field(default_factory=list)
-    automation_appendix: list[str] = field(default_factory=list)
-
-    on_progress: Callable[..., Awaitable[None]] | None = None
-    on_stream: Callable[[str], Awaitable[None]] | None = None
-    on_stream_end: Callable[..., Awaitable[None]] | None = None
-    on_retry_wait: Callable[[str], Awaitable[None]] | None = None
-
-    pending_queue: asyncio.Queue | None = None
-    pending_summary: str | None = None
-    internal_event: tuple[str, str] | None = None
-    runtime_context: RuntimeContext | None = None
-    capability_snapshot: CapabilitySnapshot | None = None
-    recovered_continuity_checkpoint: dict[str, Any] | None = None
-
-    trace: list[StateTraceEntry] = field(default_factory=list)
 
 
 class AgentLoop:
@@ -229,18 +172,7 @@ class AgentLoop:
 
     # Event-driven state transition table.
     # Handlers return an event string; the driver looks up the next state here.
-    _TRANSITIONS: dict[tuple[TurnState, str], TurnState] = {
-        (TurnState.RESTORE, "ok"): TurnState.COMPACT,
-        (TurnState.COMPACT, "ok"): TurnState.COMMAND,
-        (TurnState.COMMAND, "dispatch"): TurnState.BUILD,
-        (TurnState.COMMAND, "shortcut"): TurnState.DONE,
-        (TurnState.BUILD, "ok"): TurnState.RUN,
-        (TurnState.RUN, "ok"): TurnState.SAVE,
-        (TurnState.SAVE, "ok"): TurnState.AUTOMATION,
-        (TurnState.AUTOMATION, "ok"): TurnState.RESPOND,
-        (TurnState.AUTOMATION, "skip"): TurnState.RESPOND,
-        (TurnState.RESPOND, "ok"): TurnState.DONE,
-    }
+    _TRANSITIONS: dict[tuple[TurnState, str], TurnState] = TURN_PIPELINE_TRANSITIONS
 
     def __init__(
         self,
@@ -311,350 +243,78 @@ class AgentLoop:
 
         _tc = tools_config or ToolsConfig()
         defaults = AgentDefaults()
-        self.bus = bus
-        self.channels_config = channels_config
-        self.provider = provider
-        self._provider_snapshot_loader = provider_snapshot_loader
-        self._preset_snapshot_loader = preset_snapshot_loader
-        self._runtime_model_publisher = runtime_model_publisher
-        self._provider_signature = provider_signature
-        self._default_selection_signature = preset_helpers.default_selection_signature(
-            provider_signature
-        )
-        self.workspace = workspace
-        self.model = model or provider.get_default_model()
-        self.auxiliary_router = AuxiliaryLLMRouter(
-            primary_provider=provider,
-            primary_model=self.model,
-            auxiliary_config=auxiliary_config or defaults.auxiliary,
-            config=auxiliary_source_config,
-            provider_factory=auxiliary_provider_factory,
-            primary_provider_name=primary_provider_name,
-        )
-        self.model_presets: dict[str, ModelPresetConfig] = model_presets or {}
-        self.model_preset = model_preset or ("default" if self.model_presets else None)
-        self.max_iterations = (
-            max_iterations if max_iterations is not None else defaults.max_tool_iterations
-        )
-        self.context_window_tokens = (
-            context_window_tokens
-            if context_window_tokens is not None
-            else defaults.context_window_tokens
-        )
-        self.context_block_limit = context_block_limit
-        self.max_tool_result_chars = (
-            max_tool_result_chars
-            if max_tool_result_chars is not None
-            else defaults.max_tool_result_chars
-        )
-        self.provider_retry_mode = provider_retry_mode
-        self.tool_hint_max_length = (
-            tool_hint_max_length if tool_hint_max_length is not None
-            else defaults.tool_hint_max_length
-        )
-        self.web_config = web_config or WebToolsConfig()
-        self.exec_config = exec_config or ExecToolConfig()
-        self.tools_config = _tc
-        self.evolution_config = evolution_config or defaults.learning.evolution
-        self._dream_config = dream_config or defaults.dream
-        self._nearline_memory_config = (
-            nearline_memory_config if nearline_memory_config is not None else defaults.nearline_memory
-        )
-        self._memory_feature_flags = dream_feature_flags(self._dream_config)
-        self.session_search_index = SessionSearchIndexService(
-            workspace,
-            backend=_tc.session_search.backend,
-            semantic_enabled=bool(_tc.session_search.semantic_enabled and _tc.session_search.enabled),
-            rebuild_on_start=_tc.session_search.rebuild_on_start,
-            nearline_memory_config=self._nearline_memory_config,
-        )
-        self.pairing_config = pairing_config
-        self._image_generation_provider_configs = dict(image_generation_provider_configs or {})
-        if (
-            image_generation_provider_config is not None
-            and "openrouter" not in self._image_generation_provider_configs
-        ):
-            self._image_generation_provider_configs["openrouter"] = image_generation_provider_config
-        self.cron_service = cron_service
-        self.restrict_to_workspace = restrict_to_workspace
-        self._runtime_profile = runtime_profile
-        self._start_time = time.time()
-        self._last_usage: dict[str, int] = {}
-        self._extra_hooks: list[AgentHook] = hooks or []
-
-        self.domain_packs = domain_pack_manager or DomainPackManager(
-            workspace,
-            config=domain_packs_config or defaults.domain_packs,
-        )
-        self.background_review = BackgroundReviewService(
-            workspace=workspace,
-            provider=provider,
-            model=self.model,
-            router=self.auxiliary_router,
-            config=learning_config or defaults.learning.background_review,
-            config_loader=learning_config_loader,
-            domain_pack_manager=self.domain_packs,
-            memory_feature_flags=self._memory_feature_flags,
-            task_runtime_config=defaults.task_runtime,
-        )
-        self.curator = CuratorService(
-            workspace=workspace,
-            config=curator_config or defaults.learning.curator,
-            config_loader=curator_config_loader,
-            evolution_config=self.evolution_config,
-            evolution_config_loader=evolution_config_loader,
-            domain_pack_manager=self.domain_packs,
-        )
-        self.sessions = session_manager or SessionManager(workspace)
-        self.session_cold_archive = (
-            SessionColdArchiveStore(workspace) if cold_archive_enabled else None
-        )
-        self._persist = TurnPersistManager(self.max_tool_result_chars, self.sessions)
-        self._tool_audit_config = ToolAuditConfig.from_config(tool_audit_config or _tc.audit)
-        self._grant_store = CapabilityGrantStore(workspace)
-        self._audit_logger = AuditLogger(workspace)
-        self._confirmation_store = PendingConfirmationStore(workspace)
-        self._confirmation_manager = ConfirmationManager(
-            workspace,
-            store=self._confirmation_store,
-            audit_logger=self._audit_logger,
-            config=defaults.confirmation,
-        )
-        self._reminder_store = ReminderStore(workspace)
-        self.working_memory = WorkingMemoryManager(
-            self.sessions,
-            reminder_store=self._reminder_store,
-        )
-        self.world_state = WorldStateManager(
-            workspace,
-            self.sessions,
-            context_config=defaults.context,
-        )
-        self.tools = ToolRegistry(
-            audit_sink=JsonlToolAuditSink(workspace),
-            audit_config=self._tool_audit_config,
-            confirmation_manager=self._confirmation_manager,
-            grant_store=self._grant_store,
-        )
-        self._domain_runtime_overrides = dict(domain_runtime_overrides or {})
-        if device_action_executor is not None:
-            self._domain_runtime_overrides.setdefault("device_action_executor", device_action_executor)
-        if device_registry is not None:
-            self._domain_runtime_overrides.setdefault("device_registry", device_registry)
-        self._domain_runtime_contributions = self.domain_packs.active_runtime_contributions(
-            workspace=workspace,
-            config=self.tools_config,
-            overrides=self._domain_runtime_overrides,
-        )
-        self.actor_resolver = actor_resolver or ActorResolver()
-        # One file-read/write tracker per logical session. The tool registry is
-        # shared by this loop, so tools resolve the active state via contextvars.
-        self._file_state_store = FileStateStore()
-        self.runner = AgentRunner(provider)
-        self.subagents = SubagentManager(
-            provider=provider,
-            workspace=workspace,
-            bus=bus,
-            model=self.model,
-            web_config=self.web_config,
-            content_read_config=_tc.content_read,
-            max_tool_result_chars=self.max_tool_result_chars,
-            exec_config=self.exec_config,
-            restrict_to_workspace=restrict_to_workspace,
-            disabled_skills=disabled_skills,
-            max_iterations=self.max_iterations,
-            subagent_policy_mode=defaults.subagent_policy.mode,
-            grant_store=self._grant_store,
-            preset_snapshot_loader=self._preset_snapshot_loader,
-        )
-        self._unified_session = unified_session
-        self._max_messages = max_messages if max_messages > 0 else 120
-        self._running = False
-        self._mcp_servers = mcp_servers or {}
-        self._mcp_stacks: dict[str, AsyncExitStack] = {}
-        self._mcp_snapshot: dict[str, Any] = {}
-        self._mcp_state = "disconnected"
-        self._mcp_connected = False
-        self._mcp_connecting = False
-        self._mcp_lifecycle_lock = asyncio.Lock()
-        self._mcp_ready: asyncio.Future[bool] | None = None
-        self._mcp_shutdown_event: asyncio.Event | None = None
-        self._mcp_runtime_task: asyncio.Task[None] | None = None
-        self._active_intent_task: asyncio.Task[None] | None = None
-        self._mcp_startup_error: BaseException | None = None
-        self._active_tasks: dict[str, list[asyncio.Task]] = {}  # session_key -> tasks
-        self._background_tasks: set[asyncio.Task] = set()
-        self._session_locks: dict[str, asyncio.Lock] = {}
-        # Per-session pending queues for mid-turn message injection.
-        # When a session has an active task, new messages for that session
-        # are routed here instead of creating a new task.
-        self._pending_queues: dict[str, asyncio.Queue] = {}
-        self.context = ContextBuilder(
-            workspace,
-            timezone=timezone,
-            disabled_skills=disabled_skills,
-            memory_feature_flags=self._memory_feature_flags,
-            context_config=defaults.context,
-            domain_pack_manager=self.domain_packs,
-            audit_mode=self._tool_audit_config.mode,
-            runtime_profile=self._runtime_profile,
-            registry=self.tools,
-            sessions=self.sessions,
-            pending_queues=self._pending_queues,
-            nearline_memory_config=self._nearline_memory_config,
-            session_search_index_service=self.session_search_index,
-            cron_service=self.cron_service,
-            confirmation_store=self._confirmation_store,
-            background_review_service=self.background_review,
-            curator_service=self.curator,
-        )
-        self.context.working_memory = self.working_memory
-        self.context.world_state = self.world_state
-        self.memory_governance = MemoryGovernance(
-            workspace=workspace,
-            memory=self.context.memory,
-            context_config=defaults.context,
-            working_memory=self.working_memory,
-            world_state=self.world_state,
-        )
-        self.roaming_prewarm = RoamingPrewarmService(
-            workspace=workspace,
-            sessions=self.sessions,
-            memory=self.context.memory,
-            nearline_memory=self.context.nearline_memory,
-            context_config=defaults.context,
-            world_state=self.world_state,
-        )
-        self.context.memory_governance = self.memory_governance
-        self.context._roaming_prewarm = self.roaming_prewarm
-        self._bind_action_resume_precheck()
-        self._active_intent_config = ActiveIntentConfig(
-            enabled=(
-                defaults.allow_agent_initiated_messages
-                if allow_agent_initiated_messages is None
-                else allow_agent_initiated_messages
-            ),
-            interval_seconds=(
-                defaults.active_intent_interval_seconds
-                if active_intent_interval_seconds is None
-                else active_intent_interval_seconds
-            ),
-            session_cooldown_seconds=(
-                defaults.active_intent_session_cooldown_seconds
-                if active_intent_session_cooldown_seconds is None
-                else active_intent_session_cooldown_seconds
-            ),
-            intent_cooldown_seconds=(
-                defaults.active_intent_intent_cooldown_seconds
-                if active_intent_intent_cooldown_seconds is None
-                else active_intent_intent_cooldown_seconds
-            ),
-            max_messages_per_session_per_pass=(
-                defaults.active_intent_max_messages_per_session_per_pass
-                if active_intent_max_messages_per_session_per_pass is None
-                else active_intent_max_messages_per_session_per_pass
-            ),
-        )
-        self.active_intents = ActiveIntentService(
-            workspace=workspace,
-            bus=bus,
-            sessions=self.sessions,
-            confirmation_store=self._confirmation_store,
-            fact_store=self.context.memory.fact_store,
-            config=self._active_intent_config,
-            nearline_memory_config=self._nearline_memory_config,
-        )
-        self._cognitive_audit = JsonlCognitiveAuditLedger(workspace)
-        self._cognitive_loop_enabled = bool(self._active_intent_config.enabled)
-        self.cognitive_scheduler = CognitiveScheduler(
-            workspace=workspace,
-            config=CognitiveSchedulerConfig(
-                enabled=self._active_intent_config.enabled,
-                interval_seconds=self._active_intent_config.interval_seconds,
-            ),
-            cron_service=self.cron_service,
-            session_keys_provider=self.active_intents.session_keys,
-            active_task_count_provider=self._active_task_count,
-            running_subagents_provider=self.subagents.get_running_count_by_session,
-            session_processor=self._run_cognitive_pass_for_session,
-        )
-        self.cognitive_loop = CognitiveLoop(
-            config=CognitiveLoopConfig(
-                enabled=self._active_intent_config.enabled,
-                interval_seconds=self._active_intent_config.interval_seconds,
-            ),
-            session_keys_provider=self.active_intents.session_keys,
-            active_task_count_provider=self._active_task_count,
-            running_subagents_provider=self.subagents.get_running_count_by_session,
-            session_processor=self._run_cognitive_pass_for_session,
-        )
-        self.nearline_memory = NearlineMemoryPipeline(
-            workspace=workspace,
-            config=self._nearline_memory_config,
-        )
-        self.rolling_episode_compaction = RollingEpisodeCompaction(
-            workspace,
-            store=self.nearline_memory.store,
-            interval_turns=getattr(
-                self._nearline_memory_config,
-                "episode_compaction_interval_turns",
-                20,
-            ),
-        )
-        self.introspection = RuntimeIntrospectionService(
+        built = build_loop_components(
             loop=self,
+            context_builder_cls=ContextBuilder,
+            session_manager_cls=SessionManager,
+            subagent_manager_cls=SubagentManager,
+            domain_pack_manager_cls=DomainPackManager,
+            bus=bus,
+            provider=provider,
             workspace=workspace,
-            registry=self.tools,
-            sessions=self.sessions,
-            pending_queues=self._pending_queues,
-            cron_service=self.cron_service,
-            confirmation_store=self._confirmation_store,
-            audit_mode=self._tool_audit_config.mode,
-            runtime_profile=self._runtime_profile,
-            domain_pack_manager=self.domain_packs,
-            background_review_service=self.background_review,
-            curator_service=self.curator,
-            nearline_memory_service=self.nearline_memory,
-            nearline_memory_config=self._nearline_memory_config,
-            session_search_index_service=self.session_search_index,
-            evolution_config=self.evolution_config,
-        )
-        # ORIGINAGENT_MAX_CONCURRENT_REQUESTS: <=0 means unlimited; default 3.
-        _max = int(os.environ.get("ORIGINAGENT_MAX_CONCURRENT_REQUESTS", "3"))
-        self._concurrency_gate: asyncio.Semaphore | None = (
-            asyncio.Semaphore(_max) if _max > 0 else None
-        )
-        self._tool_concurrency_limit = (
-            tool_concurrency_limit
-            if tool_concurrency_limit is not None
-            else max(1, int(os.environ.get("ORIGINAGENT_MAX_CONCURRENT_TOOLS", "4")))
-        )
-        self.consolidator = Consolidator(
-            store=self.context.memory,
-            provider=provider,
-            model=self.model,
-            auxiliary_router=self.auxiliary_router,
-            sessions=self.sessions,
-            context_window_tokens=self.context_window_tokens,
-            build_messages=self.context.build_messages,
-            get_tool_definitions=self.tools.get_definitions,
-            max_completion_tokens=provider.generation.max_tokens,
-            consolidation_ratio=consolidation_ratio,
-        )
-        self.auto_compact = AutoCompact(
-            sessions=self.sessions,
-            consolidator=self.consolidator,
+            defaults=defaults,
+            tools_config=_tc,
+            web_config=web_config or WebToolsConfig(),
+            exec_config=exec_config or ExecToolConfig(),
+            channels_config=channels_config,
+            model=model,
+            max_iterations=max_iterations,
+            context_window_tokens=context_window_tokens,
+            context_block_limit=context_block_limit,
+            max_tool_result_chars=max_tool_result_chars,
+            provider_retry_mode=provider_retry_mode,
+            tool_hint_max_length=tool_hint_max_length,
+            cron_service=cron_service,
+            restrict_to_workspace=restrict_to_workspace,
+            session_manager=session_manager,
+            mcp_servers=mcp_servers,
+            timezone=timezone,
+            runtime_profile=runtime_profile,
             session_ttl_minutes=session_ttl_minutes,
-            cold_archive=self.session_cold_archive,
+            consolidation_ratio=consolidation_ratio,
+            max_messages=max_messages,
+            hooks=hooks,
+            unified_session=unified_session,
+            disabled_skills=disabled_skills,
+            image_generation_provider_config=image_generation_provider_config,
+            image_generation_provider_configs=image_generation_provider_configs,
+            provider_snapshot_loader=provider_snapshot_loader,
+            provider_signature=provider_signature,
+            model_presets=model_presets,
+            model_preset=model_preset,
+            preset_snapshot_loader=preset_snapshot_loader,
+            runtime_model_publisher=runtime_model_publisher,
+            device_action_executor=device_action_executor,
+            device_registry=device_registry,
+            domain_runtime_overrides=domain_runtime_overrides,
+            actor_resolver=actor_resolver,
+            tool_audit_config=tool_audit_config,
+            pairing_config=pairing_config,
+            auxiliary_config=auxiliary_config,
+            auxiliary_source_config=auxiliary_source_config,
+            auxiliary_provider_factory=auxiliary_provider_factory,
+            primary_provider_name=primary_provider_name,
+            domain_packs_config=domain_packs_config,
+            domain_pack_manager=domain_pack_manager,
+            learning_config=learning_config,
+            learning_config_loader=learning_config_loader,
+            curator_config=curator_config,
+            curator_config_loader=curator_config_loader,
+            evolution_config=evolution_config,
+            evolution_config_loader=evolution_config_loader,
+            dream_config=dream_config,
+            nearline_memory_config=nearline_memory_config,
+            cold_archive_enabled=cold_archive_enabled,
+            tool_concurrency_limit=tool_concurrency_limit,
+            allow_agent_initiated_messages=allow_agent_initiated_messages,
+            active_intent_interval_seconds=active_intent_interval_seconds,
+            active_intent_session_cooldown_seconds=active_intent_session_cooldown_seconds,
+            active_intent_intent_cooldown_seconds=active_intent_intent_cooldown_seconds,
+            active_intent_max_messages_per_session_per_pass=active_intent_max_messages_per_session_per_pass,
         )
-        self.dream = Dream(
-            store=self.context.memory,
-            provider=provider,
-            model=self.model,
-            auxiliary_router=self.auxiliary_router,
-            evolution_config=self.evolution_config,
-            feature_flags=self._memory_feature_flags,
-        )
+        for name, value in built.values.items():
+            setattr(self, name, value)
+        self._bind_action_resume_precheck()
         self._register_default_tools()
         if _tc.my.enable:
             self.tools.register(
@@ -676,6 +336,8 @@ class AgentLoop:
         self._last_cognitive_scan: dict[str, Any] = {}
         self.commands = CommandRouter()
         register_builtin_commands(self.commands)
+        self._turn_pipeline = AgentTurnPipeline(self._build_turn_pipeline_deps())
+        self._cognitive_runtime = AgentCognitiveRuntime(self._build_cognitive_runtime_deps())
 
     @classmethod
     def from_config(
@@ -787,6 +449,121 @@ class AgentLoop:
             **extra,
         )
 
+    def _build_turn_pipeline_deps(self) -> TurnPipelineDeps:
+        return TurnPipelineDeps(
+            auto_compact=self.auto_compact,
+            commands=self.commands,
+            command_loop=self,
+            get_consolidator=lambda: self.consolidator,
+            get_tools=lambda: self.tools,
+            get_context=lambda: self.context,
+            sessions=self.sessions,
+            bus=self.bus,
+            get_working_memory=lambda: self.working_memory,
+            get_memory_governance=lambda: self.memory_governance,
+            get_rolling_episode_compaction=lambda: self.rolling_episode_compaction,
+            workspace=self.workspace,
+            tools_config=self.tools_config,
+            domain_runtime_contributions=self._domain_runtime_contributions,
+            domain_runtime_overrides=self._domain_runtime_overrides,
+            archive_session_file_cap=self._archive_session_file_cap,
+            restore_runtime_checkpoint=lambda session: self._restore_runtime_checkpoint(session),
+            restore_pending_user_turn=lambda session: self._restore_pending_user_turn(session),
+            load_continuity_checkpoint=lambda session: self._load_continuity_checkpoint(session),
+            record_recovered_continuity_checkpoint=(
+                lambda checkpoint: self._record_recovered_continuity_checkpoint(checkpoint)
+            ),
+            mark_webui_session=mark_webui_session,
+            persist_shortcut_command_turn=(
+                lambda msg, session_key, result: self._persist_shortcut_command_turn(msg, session_key, result)
+            ),
+            is_webui_message=lambda msg: self._is_webui_message(msg),
+            resolve_runtime_context=lambda *args, **kwargs: self._resolve_runtime_context(*args, **kwargs),
+            record_runtime_context=lambda session_key, runtime_context: self._record_runtime_context(
+                session_key,
+                runtime_context,
+            ),
+            write_continuity_runtime_identity=(
+                lambda session, runtime_context: self._write_continuity_runtime_identity(session, runtime_context)
+            ),
+            snapshot_for_trigger=lambda trigger: self._snapshot_for_trigger(trigger),
+            update_working_memory_from_turn=lambda *args, **kwargs: self._update_working_memory_from_turn(
+                *args,
+                **kwargs,
+            ),
+            set_tool_context=lambda *args, **kwargs: self._set_tool_context(*args, **kwargs),
+            replay_token_budget=lambda: self._replay_token_budget(),
+            build_initial_messages=lambda *args, **kwargs: self._build_initial_messages(*args, **kwargs),
+            persist_user_message_early=lambda *args, **kwargs: self._persist_user_message_early(*args, **kwargs),
+            schedule_session_search_refresh=lambda *args, **kwargs: self._schedule_session_search_refresh(
+                *args,
+                **kwargs,
+            ),
+            build_progress_callback=lambda msg: self._build_bus_progress_callback(msg),
+            build_retry_wait_callback=lambda msg: self._build_retry_wait_callback(msg),
+            pending_ask_user_id=pending_ask_user_id,
+            consume_tool_approval_reply=lambda *args, **kwargs: self._consume_tool_approval_reply(*args, **kwargs),
+            build_recovered_continuity_context=(
+                lambda checkpoint: self.context.build_recovered_continuity_context(checkpoint)
+            ),
+            run_agent_loop=lambda *args, **kwargs: self._run_agent_loop(*args, **kwargs),
+            clear_pending_user_turn=lambda session: self._clear_pending_user_turn(session),
+            clear_runtime_checkpoint=lambda session: self._clear_runtime_checkpoint(session),
+            save_turn=lambda session, messages, skip: self._save_turn(session, messages, skip),
+            record_governance_audit=lambda audit: self._record_governance_audit(audit),
+            save_continuity_checkpoint=lambda *args, **kwargs: self._save_continuity_checkpoint(*args, **kwargs),
+            schedule_background=lambda coro: self._schedule_background(coro),
+            schedule_nearline_memory=lambda ctx: self._schedule_nearline_memory(ctx),
+            schedule_background_review=lambda ctx: self._schedule_background_review(ctx),
+            schedule_curator_review=lambda ctx: self._schedule_curator_review(ctx),
+            automation_enabled=lambda: self._automation_enabled(),
+            device_action_executor_for_automation=lambda: self._device_action_executor_for_automation(),
+            action_automation_components=lambda: self._action_automation_components(),
+            record_action_continuity_audit=lambda audit: self._record_action_continuity_audit(audit),
+            assemble_outbound=lambda *args, **kwargs: self._assemble_outbound(*args, **kwargs),
+            get_max_messages=lambda: self._max_messages,
+        )
+
+    def _record_runtime_context(self, session_key: str, runtime_context: RuntimeContext) -> None:
+        self._last_runtime_context = runtime_context
+        self._last_continuity_session_key = session_key
+
+    def _record_recovered_continuity_checkpoint(
+        self,
+        checkpoint: dict[str, Any] | None,
+    ) -> None:
+        self._last_recovered_continuity_checkpoint = dict(checkpoint or {})
+
+    def _record_governance_audit(self, audit: dict[str, Any]) -> None:
+        self._last_governance_audit = dict(audit)
+        self.context._last_governance_audit = dict(audit)
+
+    def _record_action_continuity_audit(self, audit: dict[str, Any]) -> None:
+        self._last_action_continuity_audit = dict(audit)
+
+    def _build_cognitive_runtime_deps(self) -> CognitiveRuntimeDeps:
+        return CognitiveRuntimeDeps(
+            cognitive_loop=self.cognitive_loop,
+            cognitive_scheduler=self.cognitive_scheduler,
+            bus=self.bus,
+            sessions=self.sessions,
+            active_intents=self.active_intents,
+            reminder_store=self._reminder_store,
+            working_memory=self.working_memory,
+            cognitive_audit=self._cognitive_audit,
+            running_flag=lambda: self._running,
+            build_runtime_context=lambda session_key: self._build_cognitive_runtime_context(session_key),
+            collect_candidates=lambda session_key: self._collect_cognitive_candidates(session_key),
+            write_cognitive_event_to_working_memory=(
+                lambda session, **kwargs: self._write_cognitive_event_to_working_memory(session, **kwargs)
+            ),
+            record_last_scan=lambda payload: self._record_cognitive_scan(payload),
+            utcnow_iso=_utcnow_iso,
+        )
+
+    def _record_cognitive_scan(self, payload: dict[str, Any]) -> None:
+        self._last_cognitive_scan = dict(payload)
+
     def _sync_subagent_runtime_limits(self) -> None:
         """Keep subagent runtime limits aligned with mutable loop settings."""
         self.subagents.max_iterations = self.max_iterations
@@ -804,12 +581,13 @@ class AgentLoop:
 
     def _apply_provider_snapshot(self, snapshot: ProviderSnapshot) -> None:
         """Swap model/provider for future turns without disturbing an active one."""
+        if snapshot.signature == self._provider_signature:
+            return
         provider = snapshot.provider
         model = snapshot.model
         context_window_tokens = snapshot.context_window_tokens
-        if self.provider is provider and self.model == model:
-            return
         old_model = self.model
+        old_context_window_tokens = self.context_window_tokens
         self.provider = provider
         self.model = model
         self.context_window_tokens = context_window_tokens
@@ -823,7 +601,13 @@ class AgentLoop:
         self._default_selection_signature = preset_helpers.default_selection_signature(
             snapshot.signature
         )
-        logger.info("Runtime model switched for next turn: {} -> {}", old_model, model)
+        logger.info(
+            "Runtime model updated for next turn: {} -> {} (context window {} -> {})",
+            old_model,
+            model,
+            old_context_window_tokens,
+            context_window_tokens,
+        )
         if self._runtime_model_publisher:
             self._runtime_model_publisher(model, self.model_preset)
 
@@ -1894,18 +1678,12 @@ class AgentLoop:
         task.add_done_callback(self._background_tasks.discard)
 
     def _start_active_intent_loop(self) -> None:
-        if not self.cognitive_loop.config.enabled or self._active_intent_task is not None:
-            return
-        scheduler_mode = self.cognitive_scheduler.start()
-        if scheduler_mode == "cron":
-            return
-        self._active_intent_task = asyncio.create_task(self._active_intent_loop())
+        self._active_intent_task = self._cognitive_runtime.start_active_intent_loop(
+            self._active_intent_task
+        )
 
     async def _active_intent_loop(self) -> None:
-        try:
-            await self.cognitive_loop.run_forever(lambda: self._running)
-        except asyncio.CancelledError:
-            raise
+        await self._cognitive_runtime.active_intent_loop()
 
     async def _run_cognitive_pass_for_session(
         self,
@@ -1914,129 +1692,11 @@ class AgentLoop:
         active_task_count: int,
         running_subagents: int,
     ) -> list[CognitiveDecision]:
-        eligible, reason = self.active_intents.eligible_session(
+        return await self._cognitive_runtime.run_cognitive_pass_for_session(
             session_key,
             active_task_count=active_task_count,
             running_subagents=running_subagents,
         )
-        if not eligible:
-            event = CognitiveEvent(
-                event_id=f"skip:{session_key}:{reason or 'ineligible'}",
-                session_key=session_key,
-                event_type="goal_nudge",
-                source_type="runtime",
-                source_reference="eligibility",
-                summary=f"Skipped cognitive pass: {reason or 'ineligible'}",
-                priority="low",
-                payload={
-                    "active_task_count": active_task_count,
-                    "running_subagents": running_subagents,
-                },
-            )
-            decision = CognitiveDecision(
-                decision_id=f"decision:{event.event_id}",
-                event_id=event.event_id,
-                session_key=session_key,
-                action="skip",
-                outcome="skipped",
-                suppression_reason=reason or "ineligible",
-                payload=event.payload,
-            )
-            self._cognitive_audit.append_event(event)
-            self._cognitive_audit.append_decision(decision)
-            self._last_cognitive_scan = {
-                "session_key": session_key,
-                "eligible": False,
-                "reason": reason or "ineligible",
-                "candidate_count": 0,
-                "decision_count": 1,
-                "timestamp": _utcnow_iso(),
-            }
-            return [decision]
-
-        session = self.sessions.get_or_create(session_key)
-        runtime_context = self._build_cognitive_runtime_context(session_key)
-        candidates = self._collect_cognitive_candidates(session_key)
-        decisions: list[CognitiveDecision] = []
-        emitted_count = 0
-        for candidate in candidates:
-            event = candidate["event"]
-            self._cognitive_audit.append_event(event)
-            written_to_working_memory = self._write_cognitive_event_to_working_memory(
-                session,
-                runtime_context=runtime_context,
-                event=event,
-            )
-            allowed, suppression_reason = self.active_intents._passes_cooldown(
-                session_key,
-                candidate["cooldown_key"],
-            )
-            published_internal_event = False
-            action = "emit"
-            outcome = "emitted"
-            if emitted_count >= self._active_intent_config.max_messages_per_session_per_pass:
-                allowed = False
-                suppression_reason = "session_message_limit"
-            if not allowed:
-                action = "suppress"
-                outcome = "suppressed"
-                self.active_intents.ledger.append(ActiveIntentRecord(
-                    timestamp=_utcnow_iso(),
-                    session_key=session_key,
-                    intent_type=event.event_type,
-                    intent_id=candidate["cooldown_key"],
-                    source_type=event.source_type,
-                    source_reference=event.source_reference,
-                    outcome="suppressed",
-                    summary=event.summary,
-                    suppression_reason=suppression_reason,
-                ))
-            else:
-                await self.bus.publish_inbound(candidate["message"])
-                published_internal_event = True
-                emitted_count += 1
-                if event.event_type == "scheduled_reminder":
-                    self._reminder_store.mark_fired(event.source_reference)
-                self.active_intents.ledger.append(ActiveIntentRecord(
-                    timestamp=_utcnow_iso(),
-                    session_key=session_key,
-                    intent_type=event.event_type,
-                    intent_id=candidate["cooldown_key"],
-                    source_type=event.source_type,
-                    source_reference=event.source_reference,
-                    outcome="emitted",
-                    summary=event.summary,
-                ))
-            decision = CognitiveDecision(
-                decision_id=f"decision:{event.event_id}",
-                event_id=event.event_id,
-                session_key=session_key,
-                action=action,
-                outcome=outcome,
-                suppression_reason=suppression_reason,
-                cooldown_key=candidate["cooldown_key"],
-                written_to_working_memory=written_to_working_memory,
-                published_internal_event=published_internal_event,
-                payload={
-                    "event_type": event.event_type,
-                    "source_type": event.source_type,
-                    "source_reference": event.source_reference,
-                },
-            )
-            self._cognitive_audit.append_decision(decision)
-            decisions.append(decision)
-        self._last_cognitive_scan = {
-            "session_key": session_key,
-            "eligible": True,
-            "reason": None,
-            "candidate_count": len(candidates),
-            "decision_count": len(decisions),
-            "emitted_count": sum(1 for item in decisions if item.outcome == "emitted"),
-            "suppressed_count": sum(1 for item in decisions if item.outcome == "suppressed"),
-            "event_types": [item["event"].event_type for item in candidates],
-            "timestamp": _utcnow_iso(),
-        }
-        return decisions
 
     def _active_task_count(self, session_key: str) -> int:
         active_tasks = self._active_tasks.get(session_key, [])
@@ -2702,241 +2362,23 @@ class AgentLoop:
             buttons=buttons,
         )
 
-    async def _state_restore(self, ctx: TurnContext) -> TurnState:
-        """Restore checkpoint / pending user turn; extract documents."""
-        msg = ctx.msg
-
-        if msg.media:
-            new_content, image_only = extract_documents(msg.content, msg.media)
-            ctx.msg = dataclasses.replace(msg, content=new_content, media=image_only)
-            msg = ctx.msg
-
-        preview = msg.content[:80] + "..." if len(msg.content) > 80 else msg.content
-        logger.info("Processing message from {}:{}: {}", msg.channel, msg.sender_id, preview)
-
-        # Session is already fetched by the caller (_process_message) but
-        # ensure it exists in case this handler is invoked independently.
-        if ctx.session is None:
-            ctx.session = self.sessions.get_or_create(ctx.session_key)
-        mark_webui_session(ctx.session, msg.metadata)
-
-        if self._restore_runtime_checkpoint(ctx.session):
-            self.sessions.save(ctx.session)
-        if self._restore_pending_user_turn(ctx.session):
-            self.sessions.save(ctx.session)
-        ctx.recovered_continuity_checkpoint = self._load_continuity_checkpoint(ctx.session)
-        self._last_recovered_continuity_checkpoint = dict(ctx.recovered_continuity_checkpoint or {})
-
-        return "ok"
+    async def _state_restore(self, ctx: TurnContext) -> str:
+        return await self._turn_pipeline.state_restore(ctx)
 
     async def _state_compact(self, ctx: TurnContext) -> str:
-        ctx.session, pending = self.auto_compact.prepare_session(ctx.session, ctx.session_key)
-        ctx.pending_summary = pending
-        return "ok"
+        return await self._turn_pipeline.state_compact(ctx)
 
     async def _state_command(self, ctx: TurnContext) -> str:
-        raw = ctx.msg.content.strip()
-        lang = (ctx.msg.metadata or {}).get("lang", "") or os.environ.get("ORIGINAGENT_LANG", "")
-        cmd_ctx = CommandContext(
-            msg=ctx.msg, session=ctx.session, key=ctx.session_key, raw=raw, lang=lang, loop=self
-        )
-        result = await self.commands.dispatch(cmd_ctx)
-        if result is not None:
-            ctx.outbound = result
-            # Shortcut commands skip BUILD/RUN/SAVE, so persist both sides of
-            # the turn here.  Otherwise the live WebUI may briefly receive the
-            # command response, then lose it when history hydration follows
-            # turn_end/session updates.  Keep these rows out of future LLM
-            # context with the _command marker.
-            self._persist_shortcut_command_turn(ctx.msg, ctx.session_key, result)
-            if self._is_webui_message(ctx.msg):
-                result.metadata["_webui_transcript_recorded"] = True
-            return "shortcut"
-        return "dispatch"
+        return await self._turn_pipeline.state_command(ctx)
 
     async def _state_build(self, ctx: TurnContext) -> str:
-        await self.consolidator.maybe_consolidate_by_tokens(
-            ctx.session,
-            replay_max_messages=self._max_messages,
-        )
-        runtime_context = self._resolve_runtime_context(ctx.msg, session_key=ctx.session_key)
-        ctx.runtime_context = runtime_context
-        self._last_runtime_context = runtime_context
-        self._last_continuity_session_key = ctx.session_key
-        self._write_continuity_runtime_identity(ctx.session, runtime_context)
-        snapshot = ctx.capability_snapshot or self._snapshot_for_trigger(runtime_context.trigger)
-        self._update_working_memory_from_turn(
-            ctx.session,
-            runtime_context=runtime_context,
-            current_message=ctx.msg.content,
-            media_paths=ctx.msg.media if ctx.msg.media else None,
-        )
-        self._set_tool_context(
-            ctx.msg.channel,
-            ctx.msg.chat_id,
-            ctx.msg.metadata.get("message_id"),
-            ctx.msg.metadata,
-            session_key=ctx.session_key,
-            capability_snapshot=snapshot,
-            runtime_context=runtime_context,
-        )
-        if message_tool := self.tools.get("message"):
-            if isinstance(message_tool, MessageTool):
-                message_tool.start_turn()
-
-        _hist_kwargs: dict[str, Any] = {
-            "max_messages": self._max_messages,
-            "max_tokens": self._replay_token_budget(),
-            "include_timestamps": True,
-        }
-        ctx.history = ctx.session.get_history(**_hist_kwargs)
-
-        pending_ask_id = pending_ask_user_id(ctx.history)
-        tool_approval_event = None
-        if pending_ask_id is None:
-            tool_approval_event, consumed = self._consume_tool_approval_reply(
-                session_key=ctx.session_key,
-                actor_id=runtime_context.actor_id,
-                reply=ctx.msg.content,
-            )
-            if consumed:
-                ctx.internal_event = tool_approval_event
-        recovered_block = None
-        if ctx.recovered_continuity_checkpoint:
-            recovered_block = self.context.build_recovered_continuity_context(
-                ctx.recovered_continuity_checkpoint
-            )
-        ctx.initial_messages = self._build_initial_messages(
-            ctx.msg,
-            ctx.session,
-            ctx.history,
-            pending_ask_id,
-            ctx.pending_summary,
-            ctx.internal_event,
-            recovered_block,
-        )
-        ctx.user_persisted_early = self._persist_user_message_early(
-            ctx.msg, ctx.session, pending_ask_id
-        )
-        if ctx.user_persisted_early:
-            self._schedule_session_search_refresh(sources=["sessions"])
-
-        if ctx.on_progress is None:
-            ctx.on_progress = await self._build_bus_progress_callback(ctx.msg)
-        if ctx.on_retry_wait is None:
-            ctx.on_retry_wait = await self._build_retry_wait_callback(ctx.msg)
-
-        return "ok"
+        return await self._turn_pipeline.state_build(ctx)
 
     async def _state_run(self, ctx: TurnContext) -> str:
-        runtime_context = ctx.runtime_context or self._resolve_runtime_context(
-            ctx.msg,
-            session_key=ctx.session_key,
-        )
-        ctx.runtime_context = runtime_context
-        snapshot = ctx.capability_snapshot or self._snapshot_for_trigger(runtime_context.trigger)
-        await publish_turn_run_status(self.bus, ctx.msg, "running")
-        try:
-            result = await self._run_agent_loop(
-                ctx.initial_messages,
-                on_progress=ctx.on_progress,
-                on_stream=ctx.on_stream,
-                on_stream_end=ctx.on_stream_end,
-                on_retry_wait=ctx.on_retry_wait,
-                session=ctx.session,
-                channel=ctx.msg.channel,
-                chat_id=ctx.msg.chat_id,
-                message_id=ctx.msg.metadata.get("message_id"),
-                metadata=ctx.msg.metadata,
-                session_key=ctx.session_key,
-                pending_queue=ctx.pending_queue,
-                actor_id=runtime_context.actor_id,
-                trigger=runtime_context.trigger,
-                capability_snapshot=snapshot,
-            )
-        finally:
-            if ctx.msg.channel == "websocket":
-                latency = websocket_turn_latency_ms(str(ctx.msg.chat_id))
-                if latency is not None:
-                    ctx.msg.metadata["webui_turn_latency_ms"] = latency
-            await publish_turn_run_status(self.bus, ctx.msg, "idle")
-        final_content, tools_used, all_msgs, stop_reason, had_injections = result
-        ctx.final_content = final_content
-        ctx.tools_used = tools_used
-        ctx.all_messages = all_msgs
-        ctx.stop_reason = stop_reason
-        ctx.had_injections = had_injections
-        return "ok"
+        return await self._turn_pipeline.state_run(ctx)
 
     async def _state_save(self, ctx: TurnContext) -> str:
-        if ctx.final_content is None or not ctx.final_content.strip():
-            ctx.final_content = EMPTY_FINAL_RESPONSE_MESSAGE
-
-        ctx.save_skip = 1 + len(ctx.history) + (1 if ctx.user_persisted_early else 0)
-        skip_msgs = ctx.all_messages[ctx.save_skip:]
-        ctx.generated_media = generated_image_paths_from_messages(skip_msgs)
-        message_tool = self.tools.get("message")
-        extra_media = (
-            message_tool.turn_delivered_media_paths()
-            if hasattr(message_tool, "turn_delivered_media_paths")
-            else []
-        )
-        merge_turn_media_into_last_assistant(
-            ctx.all_messages,
-            ctx.generated_media,
-            extra_media,
-            workspace=self.workspace,
-        )
-
-        self._save_turn(ctx.session, ctx.all_messages, ctx.save_skip)
-        ctx.session.enforce_file_cap(on_archive=self._archive_session_file_cap)
-        self._clear_pending_user_turn(ctx.session)
-        self._clear_runtime_checkpoint(ctx.session)
-        governance_audit: dict[str, Any] = {
-            "governance_enabled": bool(getattr(self.context._context_config, "governance_enabled", False)),
-            "promotion_candidates": [],
-            "promotion_applied_count": 0,
-            "promotion_conflict_count": 0,
-            "forgetting_actions": [],
-        }
-        if governance_audit["governance_enabled"]:
-            decision = self.memory_governance.evaluate_turn(
-                ctx.session,
-                runtime_context=ctx.runtime_context,
-                turn_id=ctx.turn_id,
-                current_message=ctx.msg.content,
-            )
-            governance_audit = self.memory_governance.apply_turn(ctx.session, decision)
-        self._last_governance_audit = dict(governance_audit)
-        self.context._last_governance_audit = dict(governance_audit)
-        self._save_continuity_checkpoint(
-            ctx.session,
-            runtime_context=ctx.runtime_context,
-        )
-        try:
-            working_snapshot = self.working_memory.load(
-                ctx.session,
-                identity=ctx.runtime_context.identity if ctx.runtime_context is not None else None,
-            )
-            self.rolling_episode_compaction.maybe_compact(
-                ctx.session,
-                working_snapshot=working_snapshot,
-                reason="turn_save",
-            )
-        except Exception:
-            logger.exception("Rolling episode compaction failed during save")
-        self.sessions.save(ctx.session)
-        self._schedule_session_search_refresh(sources=["sessions", "history"])
-        self._schedule_background(
-            self.consolidator.maybe_consolidate_by_tokens(
-                ctx.session,
-                replay_max_messages=self._max_messages,
-            )
-        )
-        self._schedule_nearline_memory(ctx)
-        self._schedule_background_review(ctx)
-        self._schedule_curator_review(ctx)
-        return "ok"
+        return await self._turn_pipeline.state_save(ctx)
 
     def _automation_enabled(self) -> bool:
         cfg = getattr(self.tools_config, "device", None)
@@ -3056,96 +2498,7 @@ class AgentLoop:
         return None
 
     async def _state_automation(self, ctx: TurnContext) -> str:
-        if ctx.session is None or ctx.runtime_context is None:
-            self._last_action_continuity_audit = {"status": "skipped", "reason": "missing_context"}
-            return "skip"
-        if not self._automation_enabled():
-            self._last_action_continuity_audit = {"status": "skipped", "reason": "automation_disabled"}
-            return "skip"
-        executor = self._device_action_executor_for_automation()
-        if executor is None:
-            self._last_action_continuity_audit = {"status": "skipped", "reason": "device_executor_missing"}
-            return "skip"
-        provider, adapter = self._action_automation_components()
-        if provider is None or adapter is None:
-            self._last_action_continuity_audit = {"status": "skipped", "reason": "automation_components_missing"}
-            return "skip"
-        automation_runtime_context = dataclasses.replace(
-            ctx.runtime_context,
-            trigger="automation",
-            source="automation",
-        )
-        automation_snapshot = self._snapshot_for_trigger("automation")
-        continuity_inputs = self.context.build_action_continuity_inputs(
-            ctx.session_key,
-            automation_runtime_context,
-        )
-        max_actions = int(
-            getattr(getattr(self.tools_config, "device", None), "automation_max_actions_per_pass", 1) or 1
-        )
-        proposal: ActionProposal | None = provider.run_once(
-            session_key=ctx.session_key,
-            continuity_inputs=continuity_inputs,
-            max_actions_per_pass=max_actions,
-        )
-        if proposal is None:
-            self._last_action_continuity_audit = {
-                "status": "skipped",
-                "reason": "no_proposal",
-                "planning_inputs": continuity_inputs.to_dict(),
-            }
-            return "skip"
-        typed_action = proposal.typed_action
-        if getattr(getattr(self.tools_config, "device", None), "automation_dry_run_only", True):
-            typed_action = dataclasses.replace(
-                typed_action,
-                trigger="automation",
-                idempotency_key=proposal.proposal_digest,
-            )
-        self._set_tool_context(
-            ctx.msg.channel,
-            ctx.msg.chat_id,
-            ctx.msg.metadata.get("message_id"),
-            ctx.msg.metadata,
-            session_key=ctx.session_key,
-            capability_snapshot=automation_snapshot,
-            runtime_context=automation_runtime_context,
-        )
-        result, precondition = executor.submit_automation(
-            typed_action,
-            continuity_inputs=continuity_inputs,
-            proposal=proposal,
-        )
-        writeback = adapter.writeback(
-            session=ctx.session,
-            continuity_inputs=continuity_inputs,
-            proposal=proposal,
-            result=result,
-            working_memory=self.working_memory,
-        )
-        ctx.automation_appendix.extend(list(writeback.get("appendix") or []))
-        self.sessions.save(ctx.session)
-        self._last_action_continuity_audit = {
-            "status": "ok",
-            "planning_inputs": continuity_inputs.to_dict(),
-            "planning_evidence": proposal.to_dict(),
-            "automation_origin": proposal.automation_origin,
-            "preconditions": {
-                "outcome": precondition.outcome,
-                "reason": precondition.reason,
-                "audit": dict(precondition.audit),
-            },
-            "execution_result": {
-                "status": result.status,
-                "action_id": result.action_id,
-                "reason": result.reason,
-                "confirmation_id": result.confirmation_id,
-                "backend_called": result.backend_called,
-                "permission_status": result.permission_status,
-            },
-            "continuity_writeback": dict(writeback),
-        }
-        return "ok"
+        return await self._turn_pipeline.state_automation(ctx)
 
     def _schedule_session_search_refresh(
         self,
@@ -3261,20 +2614,7 @@ class AgentLoop:
         return bool((ctx.final_content or "").strip())
 
     async def _state_respond(self, ctx: TurnContext) -> str:
-        if ctx.automation_appendix:
-            appendix = "\n\n".join(str(item).strip() for item in ctx.automation_appendix if str(item).strip())
-            if appendix:
-                ctx.final_content = f"{ctx.final_content or ''}\n\n{appendix}".strip()
-        ctx.outbound = self._assemble_outbound(
-            ctx.msg,
-            ctx.final_content,
-            ctx.all_messages,
-            ctx.stop_reason,
-            ctx.had_injections,
-            ctx.generated_media,
-            ctx.on_stream,
-        )
-        return "ok"
+        return await self._turn_pipeline.state_respond(ctx)
 
     def _sanitize_persisted_blocks(
         self,

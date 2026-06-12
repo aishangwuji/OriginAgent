@@ -374,6 +374,40 @@ def test_prepare_call_creates_tool_approval_for_cross_target_message(tmp_path) -
     assert confirmation.metadata["tool_name"] == "message"
 
 
+def test_prepare_call_allows_cross_target_message_with_runtime_grant(tmp_path) -> None:
+    sent = []
+
+    async def _send(msg):
+        sent.append(msg)
+
+    registry = ToolRegistry(
+        capability_snapshot=CapabilitySnapshot.user_turn(),
+        confirmation_manager=ConfirmationManager(tmp_path),
+        grant_store=CapabilityGrantStore(tmp_path),
+    )
+    registry.set_runtime_context(
+        actor_id="alice",
+        session_key="slack:C123",
+        trigger="user_initiated",
+        channel="slack",
+        chat_id="C123",
+    )
+    tool = MessageTool(send_callback=_send, workspace=tmp_path)
+    tool.set_context("slack", "C123")
+    tool.set_cross_target_grant(True)
+    registry.register(tool)
+
+    prepared_tool, params, error = registry.prepare_call(
+        "message",
+        {"content": "hi", "channel": "slack", "chat_id": "C999"},
+    )
+
+    assert prepared_tool is tool
+    assert params == {"content": "hi", "channel": "slack", "chat_id": "C999"}
+    assert error is None
+    assert registry._confirmation_manager.latest_pending_tool_approval("slack:C123") is None
+
+
 @pytest.mark.asyncio
 async def test_execute_audits_policy_rule_for_structured_denial() -> None:
     sink = InMemoryToolAuditSink()

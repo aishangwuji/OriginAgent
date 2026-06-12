@@ -14,7 +14,7 @@ from OriginAgent.agent.facts import FactStore, summarize_facts
 from OriginAgent.agent.memory import MemoryStore
 from OriginAgent.agent.runtime_models import RuntimeContextSnapshot
 from OriginAgent.agent.scope import ScopeResolver
-from OriginAgent.agent.self_model import SelfModelService
+from OriginAgent.agent.self_model import SelfModelService, _workspace_memory_state
 from OriginAgent.agent.skills import SkillsLoader
 from OriginAgent.agent.workflow_artifacts import summarize_workflow_artifacts
 from OriginAgent.config.schema import AgentDefaults
@@ -485,9 +485,15 @@ class RuntimeIntrospectionService:
                 "has_memory_context": bool(content.strip()),
                 "recent_history_pending_count": len(pending_history),
                 "nearline": self._nearline_memory_summary(),
+                **_workspace_memory_state(self._workspace),
             }
         except Exception:
-            return {}
+            return {
+                "has_memory_context": False,
+                "recent_history_pending_count": 0,
+                "nearline": self._nearline_memory_summary(),
+                **_workspace_memory_state(self._workspace),
+            }
 
     def _nearline_memory_summary(self) -> dict[str, Any]:
         try:

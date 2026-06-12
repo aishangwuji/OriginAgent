@@ -390,6 +390,8 @@ class ToolRegistry:
             )
         if name == "message" and not snapshot.can_send_cross_target:
             if self._is_cross_target_message(params or {}):
+                if bool(getattr(tool, "has_cross_target_grant", lambda: False)()):
+                    return
                 self._raise_or_request_tool_approval(
                     tool=tool,
                     params=params or {},

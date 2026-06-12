@@ -128,16 +128,14 @@ Stable features are cherry-picked from `nightly` into `main` (~weekly), not merg
 <!-- gitnexus:start -->
 # GitNexus — Code Intelligence
 
-This project is indexed by GitNexus as **OriginAgent** (29508 symbols, 58927 relationships, 300 execution flows). Use the GitNexus MCP tools to understand code, assess impact, and navigate safely.
+This project is indexed by GitNexus as **OriginAgent** (30741 symbols, 61196 relationships, 300 execution flows). Use the GitNexus MCP tools to understand code, assess impact, and navigate safely.
 
 > If any GitNexus tool warns the index is stale, run `npx gitnexus analyze` in terminal first.
-
-> Operational note: GitNexus is usable in this repo, but duplicate indexed `OriginAgent` entries can make repo-agnostic commands fail with `Multiple repositories indexed`. In this workspace, prefer `npx gitnexus status` first, and use CLI commands with `--repo OriginAgent` such as `npx gitnexus impact --repo OriginAgent ...` and `npx gitnexus detect-changes --repo OriginAgent`. If the current Codex session does not expose GitNexus MCP tools, fall back to the CLI instead of treating GitNexus as unavailable.
 
 ## Always Do
 
 - **MUST run impact analysis before editing any symbol.** Before modifying a function, class, or method, run `gitnexus_impact({target: "symbolName", direction: "upstream"})` and report the blast radius (direct callers, affected processes, risk level) to the user.
-- **MUST run `gitnexus_detect_changes()` before committing** to verify your changes only affect expected symbols and execution flows. In this repo, if MCP is unavailable or repo resolution is ambiguous, run `npx gitnexus detect-changes --repo OriginAgent`.
+- **MUST run `gitnexus_detect_changes()` before committing** to verify your changes only affect expected symbols and execution flows.
 - **MUST warn the user** if impact analysis returns HIGH or CRITICAL risk before proceeding with edits.
 - When exploring unfamiliar code, use `gitnexus_query({query: "concept"})` to find execution flows instead of grepping. It returns process-grouped results ranked by relevance.
 - When you need full context on a specific symbol — callers, callees, which execution flows it participates in — use `gitnexus_context({name: "symbolName"})`.

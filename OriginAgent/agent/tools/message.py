@@ -179,6 +179,10 @@ class MessageTool(Tool):
     def reset_cross_target_grant(self, token) -> None:
         self._allow_cross_target_var.reset(token)
 
+    def has_cross_target_grant(self) -> bool:
+        """Return whether the current runtime context explicitly allows cross-target sends."""
+        return bool(self._allow_cross_target_var.get())
+
     def set_capability_snapshot(self, snapshot) -> None:
         self._capability_snapshot.set(snapshot)
 

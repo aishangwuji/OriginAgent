@@ -1,4 +1,5 @@
 import pytest
+from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 from OriginAgent.agent.loop import AgentLoop
@@ -91,6 +92,58 @@ def test_model_preset_allows_default_fallback_reference():
     )
 
     assert cfg.resolve_preset("fast").fallback_models == ["default"]
+
+
+def test_model_presets_allow_large_context_window_tokens(tmp_path):
+    cfg = Config(
+        agents={
+            "defaults": {
+                "workspace": str(tmp_path),
+                "model": "primary",
+                "provider": "custom",
+            }
+        },
+        providers={"custom": {"apiKey": "x"}},
+        modelPresets={
+            "large-128k": {
+                "model": "fallback-model",
+                "provider": "custom",
+                "contextWindowTokens": 131072,
+            },
+            "large-200k": {
+                "model": "fallback-model",
+                "provider": "custom",
+                "contextWindowTokens": 200000,
+            },
+        },
+    )
+    assert cfg.model_presets["large-128k"].context_window_tokens == 131072
+    assert cfg.model_presets["large-200k"].context_window_tokens == 200000
+    assert cfg.agents.defaults.context_window_tokens == 65_536
+
+    provider = _provider()
+    loop = AgentLoop.from_config(
+        cfg,
+        bus=MessageBus(),
+        provider=provider,
+        preset_snapshot_loader=lambda name: SimpleNamespace(
+            provider=provider,
+            model=cfg.model_presets[name].model,
+            context_window_tokens=(
+                cfg.model_presets[name].context_window_tokens
+                or cfg.agents.defaults.context_window_tokens
+            ),
+            signature=("test", name, cfg.model_presets[name].context_window_tokens),
+        ),
+    )
+    assert loop.context_window_tokens == 65_536
+    assert loop.model_preset == "default"
+
+    loop.set_model_preset("large-128k")
+    assert loop.context_window_tokens == 131072
+
+    loop.set_model_preset("large-200k")
+    assert loop.context_window_tokens == 200000
 
 
 def test_build_help_text_localizes_when_explicit_lang_passed():

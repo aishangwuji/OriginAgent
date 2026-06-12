@@ -160,6 +160,44 @@ def test_load_config_migrates_legacy_my_tool_keys(tmp_path) -> None:
     assert config.tools.my.allow_set is True
 
 
+def test_load_config_parses_large_model_presets_without_changing_defaults(tmp_path) -> None:
+    config_path = tmp_path / "config.json"
+    config_path.write_text(
+        json.dumps(
+            {
+                "agents": {
+                    "defaults": {
+                        "model": "primary",
+                        "provider": "custom",
+                    }
+                },
+                "providers": {
+                    "custom": {"apiKey": "x"},
+                },
+                "modelPresets": {
+                    "large-128k": {
+                        "model": "fallback-model",
+                        "provider": "custom",
+                        "contextWindowTokens": 131072,
+                    },
+                    "large-200k": {
+                        "model": "fallback-model",
+                        "provider": "custom",
+                        "contextWindowTokens": 200000,
+                    },
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    config = load_config(config_path)
+
+    assert config.agents.defaults.context_window_tokens == 65_536
+    assert config.model_presets["large-128k"].context_window_tokens == 131072
+    assert config.model_presets["large-200k"].context_window_tokens == 200000
+
+
 def test_save_config_rewrites_legacy_my_tool_keys(tmp_path) -> None:
     config_path = tmp_path / "config.json"
     config_path.write_text(

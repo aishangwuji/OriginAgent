@@ -643,6 +643,56 @@ async def test_runtime_status_uses_provided_nearline_runtime_config(tmp_path) ->
     assert result["self_model"]["memory"]["nearline"]["nearline_enabled"] is True
     assert result["self_model"]["memory"]["nearline"]["pipeline_enabled"] is False
     assert result["self_model"]["memory"]["nearline"]["profile_shadow_write_enabled"] is True
+    assert result["self_model"]["memory"]["user_profile_file"]["status"] == "missing"
+    assert result["self_model"]["memory"]["memory_candidate_queue"]["status"] == "lazy_not_created"
+
+
+@pytest.mark.asyncio
+async def test_runtime_status_exposes_workspace_memory_state(tmp_path) -> None:
+    class Registry:
+        tool_names = ["a"]
+
+    (tmp_path / "USER.md").write_text("# User Profile\n\n- Name: Ada\n", encoding="utf-8")
+    queue_file = tmp_path / "memory" / "memory_candidates.jsonl"
+    queue_file.parent.mkdir(parents=True, exist_ok=True)
+    queue_file.write_text(
+        "\n".join(
+            [
+                json.dumps(
+                    {
+                        "candidate_id": "memcand_1",
+                        "kind": "preference",
+                        "summary": "Prefers concise updates",
+                        "source_session_key": "cli:test",
+                        "source_refs": ["turn-1"],
+                        "source_excerpt": "I prefer concise updates",
+                        "confidence": 0.9,
+                        "sensitivity": "low",
+                        "scope": "user",
+                        "owner_id": "user",
+                        "created_at": "2026-06-05T10:00:00+00:00",
+                        "metadata": {},
+                    },
+                    ensure_ascii=False,
+                ),
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    result = await RuntimeStatusTool(
+        workspace=tmp_path,
+        registry=Registry(),
+        sessions=object(),
+        pending_queues={},
+    ).execute()
+
+    memory = result["self_model"]["memory"]
+    assert memory["user_profile_file"]["status"] == "initialized"
+    assert memory["user_profile_file"]["exists"] is True
+    assert memory["memory_candidate_queue"]["status"] == "active"
+    assert memory["memory_candidate_queue"]["pending_count"] == 1
+    assert memory["memory_candidate_queue"]["last_candidate_at"] == "2026-06-05T10:00:00+00:00"
 
 
 @pytest.mark.asyncio

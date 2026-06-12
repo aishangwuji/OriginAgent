@@ -224,7 +224,7 @@ class ModelPresetConfig(Base):
     model: str
     provider: str = "auto"
     max_tokens: int | None = None
-    context_window_tokens: int | None = None
+    context_window_tokens: int | None = Field(default=None, ge=4096, le=1_000_000)
     temperature: float | None = None
     reasoning_effort: str | None = None
     fallback_models: list[str | InlineFallbackConfig] = Field(default_factory=list)

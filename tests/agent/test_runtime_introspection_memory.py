@@ -49,3 +49,17 @@ def test_runtime_context_snapshot_uses_runtime_nearline_config(tmp_path) -> None
     assert snapshot.nearline_memory_summary["pipeline_enabled"] is False
     assert snapshot.nearline_memory_summary["profile_shadow_write_enabled"] is True
     assert snapshot.nearline_memory_summary["memcell_count"] == 0
+
+
+def test_runtime_context_snapshot_includes_workspace_memory_state(tmp_path) -> None:
+    service = RuntimeIntrospectionService(
+        workspace=tmp_path,
+        registry=_Registry(),
+        sessions=_Sessions(),
+        pending_queues={},
+    )
+
+    snapshot = service.runtime_context_snapshot()
+
+    assert snapshot.memory_summary["user_profile_file"]["status"] == "missing"
+    assert snapshot.memory_summary["memory_candidate_queue"]["status"] == "lazy_not_created"

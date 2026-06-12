@@ -19,6 +19,7 @@ from OriginAgent.agent.workflow_artifacts import (
     list_workflow_artifact_records,
     summarize_workflow_artifacts,
 )
+from OriginAgent.memory.candidates import GovernedMemoryWriter
 from OriginAgent.memory.policy import nearline_runtime_enabled
 from OriginAgent.memory.profile import NearlineProfileService
 from OriginAgent.memory.store import NearlineMemoryStore
@@ -26,6 +27,7 @@ from OriginAgent.utils.helpers import truncate_text
 
 _LIMITATION_MAX_CHARS = 220
 _RENDER_LIST_MAX_ITEMS = 8
+_MANAGED_PROFILE_MARKERS = NearlineProfileService.managed_markers()
 
 
 class SelfModelService:
@@ -247,7 +249,9 @@ class SelfModelService:
 
     def _build_memory(self) -> dict[str, Any]:
         if self._runtime_snapshot.memory_summary:
-            return dict(self._runtime_snapshot.memory_summary)
+            summary = dict(self._runtime_snapshot.memory_summary)
+            summary.update(_workspace_memory_state(self.workspace))
+            return summary
         try:
             store = self._memory()
             content = store.read_memory()
@@ -257,12 +261,14 @@ class SelfModelService:
                 "has_memory_context": has_memory_context,
                 "recent_history_pending_count": len(pending_history),
                 "nearline": self._build_nearline_memory_summary(),
+                **_workspace_memory_state(self.workspace),
             }
         except Exception:
             return {
                 "has_memory_context": False,
                 "recent_history_pending_count": 0,
                 "nearline": self._build_nearline_memory_summary(),
+                **_workspace_memory_state(self.workspace),
             }
 
     def _build_nearline_memory_summary(self) -> dict[str, Any]:
@@ -720,6 +726,71 @@ def _is_template_content(content: str, template_path: str) -> bool:
         if template.is_file():
             return content.strip() == template.read_text(encoding="utf-8").strip()
     return False
+
+
+def _workspace_memory_state(workspace: Path) -> dict[str, Any]:
+    return {
+        "user_profile_file": _user_profile_file_status(workspace),
+        "memory_candidate_queue": _memory_candidate_queue_status(workspace),
+    }
+
+
+def _user_profile_file_status(workspace: Path) -> dict[str, Any]:
+    path = Path(workspace) / "USER.md"
+    exists = path.exists()
+    text = ""
+    if exists:
+        with suppress(OSError):
+            text = path.read_text(encoding="utf-8")
+    managed_start, managed_end = _MANAGED_PROFILE_MARKERS
+    managed_profile_shadow_present = bool(
+        text and managed_start in text and managed_end in text
+    )
+    if not exists:
+        status = "missing"
+    elif _is_template_content(text, "USER.md"):
+        status = "template_only"
+    else:
+        status = "initialized"
+    return {
+        "path": str(path),
+        "exists": exists,
+        "status": status,
+        "managed_profile_shadow_present": managed_profile_shadow_present,
+        "managed_profile_shadow_last_synced_at": (
+            NearlineProfileService.last_sync_time(workspace)
+            if managed_profile_shadow_present
+            else None
+        ),
+    }
+
+
+def _memory_candidate_queue_status(workspace: Path) -> dict[str, Any]:
+    queue_path = Path(workspace) / "memory" / "memory_candidates.jsonl"
+    exists = queue_path.exists()
+    if not exists:
+        return {
+            "path": str(queue_path),
+            "exists": False,
+            "status": "lazy_not_created",
+            "pending_count": 0,
+            "last_candidate_at": None,
+        }
+    writer = GovernedMemoryWriter(workspace)
+    candidates = []
+    with suppress(Exception):
+        candidates = writer.read_all()
+    status = "active" if candidates else "empty"
+    last_candidate_at = None
+    if candidates:
+        last_candidate_at = str(candidates[-1].created_at or "").strip() or None
+    return {
+        "path": str(queue_path),
+        "exists": True,
+        "status": status,
+        "pending_count": len(candidates),
+        "last_candidate_at": last_candidate_at,
+    }
 
 
 def _safe_len(value: Any) -> int:
