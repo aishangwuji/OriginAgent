@@ -1,7 +1,8 @@
 # OriginAgent 连续性与记忆操作系统 Phase 2 计划书
 
 Date: 2026-06-09
-Status: Proposed
+Status: In Progress
+Last Reviewed: 2026-06-12
 Scope: OriginAgent 连续性主线的 Phase 2 感知快照与世界摘要接入方案
 
 ## 1. 目标
@@ -23,13 +24,26 @@ Phase 2 以前提为：
    - [OriginAgent/agent/scope.py](/D:/Demo/OpenHome/OriginAgentclient/OriginAgent/agent/scope.py)
    - [OriginAgent/agent/working_memory.py](/D:/Demo/OpenHome/OriginAgentclient/OriginAgent/agent/working_memory.py)
    - [OriginAgent/agent/context_assembler.py](/D:/Demo/OpenHome/OriginAgentclient/OriginAgent/agent/context_assembler.py)
-2. 当前 `ContextBuilder` 已具备四层视图的最小插槽，但 `world_state` 仍是 placeholder：
+2. 当前 `ContextBuilder` 已具备四层视图插槽，且最小 `world_state` 实现已经可以输出真实世界摘要：
    - [OriginAgent/agent/context.py](/D:/Demo/OpenHome/OriginAgentclient/OriginAgent/agent/context.py)
-3. `AgentLoop` 已具备 runtime context、working memory 写入点和 context assembly 审计输出：
+   - [OriginAgent/agent/world_state.py](/D:/Demo/OpenHome/OriginAgentclient/OriginAgent/agent/world_state.py)
+3. `AgentLoop` 已具备 runtime context、working memory 写入点、world attention 写入点和 context assembly 审计输出：
    - [OriginAgent/agent/loop.py](/D:/Demo/OpenHome/OriginAgentclient/OriginAgent/agent/loop.py)
 4. 当前仓库已为多来源附件预留 provider-neutral ingress 合同：
    - [`docs/attachments-ingress.md`](./attachments-ingress.md)
-5. Phase 2 仍处于“感知原型接入”阶段，不要求真实设备控制闭环，也不要求持久化 world model 达到最终形态。
+5. 当前仓库已具备最小 `inspect_snapshot` 原型、world summary 过滤与 introspection 展示路径：
+   - [OriginAgent/agent/snapshot_inspection.py](/D:/Demo/OpenHome/OriginAgentclient/OriginAgent/agent/snapshot_inspection.py)
+   - [OriginAgent/agent/introspection/service.py](/D:/Demo/OpenHome/OriginAgentclient/OriginAgent/agent/introspection/service.py)
+6. Phase 2 仍处于“感知原型接入”阶段，不要求真实设备控制闭环，也不要求持久化 world model 达到最终形态。
+
+## 2.1 当前推进位置
+
+截至 2026-06-12，当前仓库对本计划的推进应更准确地描述为：
+
+1. `Phase 2` 已经启动，但当前实际形态更接近 `P2A`，即“本地文件快照驱动的世界摘要原型”。
+2. `SceneSnapshot`、`InspectionResult`、`WorldSummary`、freshness / scope / relevance 过滤、`inspect_snapshot` 最小链路均已有实现痕迹。
+3. 当前实现仍不等于真实 camera / audio / sensor ingress，也不等于完整多模态感知阶段。
+4. `RQ-006` 至 `RQ-010` 在文档层仍未正式补档，这会导致代码原型与计划边界不完全对齐。
 
 ## 3. 边界与非目标
 
@@ -72,6 +86,8 @@ Phase 2 完成时，必须同时满足以下条件：
 5. 世界摘要进入上下文时受到 freshness、scope 和 relevance 三类约束。
 6. 当感知结果存在不确定性或冲突时，世界视图能显式标注 `uncertainties` 或 `contested` 状态。
 7. introspection 可解释某轮上下文使用了哪些快照、哪些摘要、哪些过滤规则。
+
+截至 2026-06-12，上述条件在“本地文件快照原型”范围内已经部分满足；但由于尚未完成真实 ingress、正式任务包补档和完整阶段收口，当前不应将本阶段标记为完成。
 
 ## 5. 核心设计判断
 
@@ -357,6 +373,11 @@ Phase 2 至少要补齐以下 inspect 能力：
 
 ## 12. 工作包拆分
 
+说明：
+
+1. 当前代码已经对 `RQ-006` 至 `RQ-010` 的目标做了不同程度的原型性提前实现。
+2. 本节后续的主要作用不再是“从零指挥实现”，而是为现有原型补齐正式边界、验收标准与缺口清单。
+
 ### 12.1 `RQ-006` 感知分层数据模型设计
 
 目标：
@@ -378,6 +399,10 @@ Phase 2 至少要补齐以下 inspect 能力：
 
 1. 实现阶段不再反复讨论“世界摘要算不算长期记忆”。
 2. 快照、深查、世界摘要的层级边界明确。
+
+当前状态：
+
+1. 代码原型已部分覆盖，正式任务包待补。
 
 ### 12.2 `RQ-007` 视觉快照采集与本地留存策略
 
@@ -401,6 +426,10 @@ Phase 2 至少要补齐以下 inspect 能力：
 1. 至少一种来源的文件可被稳定转换为 snapshot 记录。
 2. snapshot 可回溯原始路径和捕获时间。
 
+当前状态：
+
+1. path-first 原型已部分覆盖，正式任务包待补。
+
 ### 12.3 `RQ-008` `inspect_snapshot` 深查工具原型
 
 目标：
@@ -422,6 +451,10 @@ Phase 2 至少要补齐以下 inspect 能力：
 
 1. 能对关键 snapshot 进行回溯式深查。
 2. 深查结果可被世界摘要消费。
+
+当前状态：
+
+1. 最小原型已落地，正式任务包待补。
 
 ### 12.4 `RQ-009` 世界模型最小查询接口与过期机制
 
@@ -445,6 +478,10 @@ Phase 2 至少要补齐以下 inspect 能力：
 1. `world_state_context` 可以输出真实摘要。
 2. 过期快照不会无限期占用 prompt 预算。
 
+当前状态：
+
+1. 最小读模型已落地，正式任务包待补。
+
 ### 12.5 `RQ-010` 感知结果向 continuity 主线桥接规则
 
 目标：
@@ -467,15 +504,19 @@ Phase 2 至少要补齐以下 inspect 能力：
 1. 当前会话可显式消费真实世界摘要。
 2. inspect 输出能解释世界视图的注入与过滤。
 
+当前状态：
+
+1. continuity 主线接入已部分落地，正式任务包待补。
+
 ## 13. 实施顺序
 
-建议按以下顺序推进：
+建议按以下顺序继续推进：
 
-1. 先冻结 `RQ-006`，避免 snapshot / world summary 概念漂移。
-2. 再做 `RQ-007`，把原始输入变成结构化 snapshot。
-3. 再做 `RQ-008`，补齐按需深查能力。
-4. 然后做 `RQ-009`，形成最小可读 world summary。
-5. 最后做 `RQ-010`，把结果稳定接入 continuity 主线。
+1. 先补齐 `RQ-006` 至 `RQ-010` 的正式任务包，避免现有原型继续脱离文档边界演化。
+2. 再对当前 `P2A` 代码原型逐项做 gap audit，明确哪些已满足、哪些仍是占位或最小保守实现。
+3. 在此基础上补强 snapshot ingress、按需深查、world summary 读模型和 continuity 主线桥接中的剩余缺口。
+4. 只有在 `P2A` 边界稳定后，才考虑真实 camera / audio / sensor ingress 的前置设计。
+5. 继续暂缓完整晋升与遗忘策略，避免在世界摘要稳定前污染长期事实层。
 
 建议不要在 Phase 2 同时做完整晋升与遗忘策略，原因是：
 
@@ -570,12 +611,13 @@ Phase 2 新增或更新测试应覆盖：
 4. 当前任务可在工作记忆与世界视图之间形成最小协同。
 5. 调试者可以解释某轮上下文为何包含这些环境摘要、排除了哪些快照。
 
+截至 2026-06-12，当前仓库只应被视为达到上述目标的原型前半段，尚不足以正式标记连续性主线 `Phase 2` 完成。
+
 ## 19. 当前建议的下一步
 
-最合适的下一步不是直接铺开实现，而是继续拆正式任务包：
+最合适的下一步不是继续把本阶段写成纯规划，而是把“已存在的原型”收敛成“有文档边界的原型”：
 
-1. 先输出 `RQ-006` 任务包。
-2. 再输出 `RQ-007` 任务包。
-3. 然后输出 `RQ-008`、`RQ-009`、`RQ-010`。
-
-等这几份任务包冻结后，再进入实现，能最大限度降低 Phase 2 在“快照、世界摘要、长期事实”三层之间来回返工的风险。
+1. 先补齐 `RQ-006` 至 `RQ-010` 的正式任务包与状态标记。
+2. 再核对当前 `world_state` / `inspect_snapshot` / introspection 实现与本计划验收口径之间的差距。
+3. 将当前能力明确标记为 `P2A` 文件快照原型，避免误解为真实多模态感知已开始。
+4. 在完成补档和 gap audit 之后，再决定是否推进真实 ingress 或更广义的 `Phase 3` 前置设计。

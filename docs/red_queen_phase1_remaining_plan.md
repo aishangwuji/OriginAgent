@@ -1,7 +1,8 @@
 # OriginAgent 红后化 Phase 1 剩余部分落地计划书
 
 Date: 2026-06-09
-Status: Proposed
+Status: In Progress
+Last Reviewed: 2026-06-12
 Scope: 红后化总主线 `Phase 1` 剩余施工，即后台认知闭环与统一认知编排层落地
 
 ## 1. 文档目标
@@ -19,7 +20,7 @@ Scope: 红后化总主线 `Phase 1` 剩余施工，即后台认知闭环与统�
 
 ### 2.1 已完成部分
 
-截至当前仓库状态，连续性与记忆主线的 `Phase 1` 最小骨架已基本落地：
+截至 2026-06-12 当前仓库状态，连续性与记忆主线的 `Phase 1` 最小骨架已基本落地：
 
 1. 最小 identity / scope 骨架已接入：
    - [OriginAgent/agent/identity.py](/D:/Demo/OpenHome/OriginAgentclient/OriginAgent/agent/identity.py)
@@ -31,25 +32,30 @@ Scope: 红后化总主线 `Phase 1` 剩余施工，即后台认知闭环与统�
    - [OriginAgent/agent/context.py](/D:/Demo/OpenHome/OriginAgentclient/OriginAgent/agent/context.py)
 4. continuity introspection 已具备基础可观测性：
    - [OriginAgent/agent/introspection/service.py](/D:/Demo/OpenHome/OriginAgentclient/OriginAgent/agent/introspection/service.py)
+5. 后台认知编排最小骨架也已经进入代码与测试：
+   - [OriginAgent/agent/cognitive_loop.py](/D:/Demo/OpenHome/OriginAgentclient/OriginAgent/agent/cognitive_loop.py)
+   - [OriginAgent/agent/cognitive_scheduler.py](/D:/Demo/OpenHome/OriginAgentclient/OriginAgent/agent/cognitive_scheduler.py)
+   - [OriginAgent/agent/cognitive_events.py](/D:/Demo/OpenHome/OriginAgentclient/OriginAgent/agent/cognitive_events.py)
+   - [OriginAgent/agent/cognitive_audit.py](/D:/Demo/OpenHome/OriginAgentclient/OriginAgent/agent/cognitive_audit.py)
 
 ### 2.2 尚未完成部分
 
-从红后化总主线看，`Phase 1` 仍未闭环，主要缺口在后台认知编排层：
+从红后化总主线看，`Phase 1` 已不再是“缺少骨架”，而是“骨架已落地但尚未正式收口验收”，主要缺口变为：
 
-1. 缺少统一的 `CognitiveLoop / CognitiveScheduler`。
-2. 缺少统一的后台认知事件模型。
-3. 缺少统一的后台认知审计模型。
-4. 缺少将 `goal / pending confirmation / reminder / foresight / background review` 汇总到同一编排层的机制。
-5. 缺少 P1 级别“触发、抑制、写回、解释”的完整闭环。
+1. 需要确认 `goal / pending confirmation / reminder / foresight / background review` 等候选信号是否已按统一口径收敛到同一认知编排层。
+2. 需要确认 idle / busy session 判定、cooldown、dedupe、投递上限和关闭开关在真实运行中是否达到预期。
+3. 需要确认认知结果写回 working memory、内部事件主路径和 introspection 之间的解释链是否完整。
+4. 需要同步更新任务包状态，避免文档仍显示 `Proposed` 而代码已经明显前进。
+5. 需要把 `Phase 2` 世界视图原型与 `Phase 1` 收口边界重新划清，避免阶段定义继续漂移。
 
 ### 2.3 关键结论
 
 因此当前阶段的正确判断是：
 
 1. 连续性子主线 `Phase 1` 已基本完成。
-2. 红后化总主线 `Phase 1` 尚未完成。
-3. 在总主线层面，不应直接全面进入 `Phase 2`。
-4. 最稳妥的顺序是：先完成后台认知闭环，再进入世界视图和视觉快照原型。
+2. 红后化总主线 `Phase 1` 的实现已大面积落地，但尚未完成正式验收收口。
+3. 在总主线层面，可以允许 `P2A` 世界视图原型并行推进，但不应把这等同于“`Phase 1` 已完全关闭”或“完整 `Phase 2` 已开始”。
+4. 最稳妥的顺序是：先完成 `Phase 1` 收口审计，再继续扩展世界视图原型和真实感知 ingress。
 
 ## 3. 本阶段目标
 
@@ -82,15 +88,15 @@ Scope: 红后化总主线 `Phase 1` 剩余施工，即后台认知闭环与统�
 
 ### 5.1 本阶段必须完成
 
-1. `CognitiveLoop / CognitiveScheduler` 最小职责定义与实现。
-2. 后台认知事件与决策审计模型。
-3. 至少四类高价值后台机会的统一编排：
+1. 对已落地的 `CognitiveLoop / CognitiveScheduler` 做正式验收与边界确认。
+2. 对后台认知事件与决策审计模型做正式验收与落盘口径确认。
+3. 至少四类高价值后台机会的统一编排需要被验证或补齐：
    - sustained goal
    - pending confirmation
    - scheduled reminder
    - nearline foresight
-4. 与 working memory 的最小联动。
-5. 最小 introspection / runtime status 输出。
+4. 与 working memory 的最小联动需要被验证或补齐。
+5. 最小 introspection / runtime status 输出需要被验证或补齐。
 
 ### 5.2 本阶段明确不做
 
@@ -203,57 +209,61 @@ Introspection / audit logs
 
 ### 9.1 Step A：冻结文档边界
 
-先完成：
+当前状态：
 
 1. 本计划书。
 2. `RQ-001`。
 3. `RQ-005`。
 4. `P1 integration` 任务包。
 
-这一步的目标是把“剩余 P1 到底是什么”冻结下来。
+这一步已基本完成，但任务包状态和主计划状态尚需同步更新。
 
 ### 9.2 Step B：认知事件与审计骨架
 
-优先新增：
+当前状态：
 
 1. `cognitive_events.py`
 2. `cognitive_audit.py`
 3. config / feature flag / runtime status 最小接口
 
-先支持：
+这一步已进入代码与测试，下一步重点是核对口径而不是从零新增。
+
+已支持：
 
 1. 事件对象建模。
 2. 决策对象建模。
 3. append-only 审计落盘。
 
-暂不投递真实消息。
-
 ### 9.3 Step C：空跑式 CognitiveLoop
 
-新增最小 `CognitiveLoop`：
+当前状态：
 
 1. 周期扫描 session。
 2. 收集候选信号。
 3. 进行 eligibility / cooldown / dedupe 判定。
 4. 记录“将触发什么”和“为什么没触发”。
 
-这一步只验证噪音、预算和解释性。
+最小 `CognitiveLoop` 已落地，当前重点是继续验证噪音、预算和解释性，而不是继续把它当作待设计能力。
 
 ### 9.4 Step D：真实内部事件投递
 
-在空跑稳定后，再放开：
+当前状态：
 
 1. 通过 `MessageBus` 投递内部 inbound event。
 2. 继续走现有 `_process_message()` 主路径。
 3. 保留现有 active-intent 语义模型，避免旁路执行。
 
+这一步已有最小实现痕迹，但仍需在阶段收口时重点复核真实 producer 路径、递归保护和回退行为。
+
 ### 9.5 Step E：写回与 introspection
 
-最后补齐：
+当前状态：
 
 1. 后台认知结果写回 `WorkingMemoryManager`。
 2. introspection 汇总最近一次认知扫描结果。
 3. runtime status 暴露开关、预算、最近命中与抑制原因。
+
+这一步已有基础能力，但仍需按 `Phase 1` 验收标准做一次系统核对。
 
 ## 10. 交付清单
 
@@ -268,6 +278,8 @@ Introspection / audit logs
 4. 后台认知事件与审计模型。
 5. 内部事件投递与 working memory 写回闭环。
 6. introspection / runtime status 最小可观测性。
+
+截至 2026-06-12，以上 3 至 6 已基本进入代码形态；当前更需要的是状态回填、差距核对和正式验收，而不是继续把这些项写成“尚未开始”。
 
 ## 11. 测试策略
 
@@ -335,11 +347,13 @@ Introspection / audit logs
 3. continuity 主线与后台认知层已形成最小闭环。
 4. 后续接入世界视图和感知事件时，不需要再重构后台调度主链。
 
+截至 2026-06-12，当前仓库已接近满足以上条件，但仍需要对 producer 覆盖、冷却策略、关闭开关和真实运行噪音做一次收口审计，之后再正式将红后化总主线 `Phase 1` 标记为完成。
+
 ## 15. 当前建议的下一步
 
-最合适的下一步不是直接实现 `Phase 2` 感知能力，而是：
+最合适的下一步不是继续把 `Phase 1` 当作待实现大项，而是把它当作“待收口验收的大项”处理：
 
-1. 先冻结本计划书。
-2. 先完成 `RQ-001`、`RQ-005`、`P1 integration` 三份任务包。
-3. 再进入后台认知闭环的实现。
-4. 在其稳定后，再推进 `P2a` 世界视图接入。
+1. 先把本计划书、总计划书和相关任务包状态同步到当前仓库现实。
+2. 对 `RQ-001`、`RQ-005`、`P1 integration` 做一次代码到验收标准的差距核对。
+3. 补齐仍缺的 producer 收敛、冷却与限流、回退与关闭开关验证。
+4. 在 `Phase 1` 正式收口前，将 `Phase 2` 能力明确限定为 `P2A` 世界视图原型。
