@@ -25,6 +25,7 @@ from OriginAgent.agent.introspection.service import RuntimeIntrospectionService
 from OriginAgent.agent.memory import Consolidator, Dream, dream_feature_flags
 from OriginAgent.agent.memory_governance import MemoryGovernance
 from OriginAgent.agent.meta_cognition_audit import JsonlMetaCognitionAuditLedger
+from OriginAgent.agent.meta_cognition_reflector import MetaCognitionReflector
 from OriginAgent.agent.meta_cognition_runtime import MetaCognitionRuntime
 from OriginAgent.agent.reminders import ReminderStore
 from OriginAgent.agent.roaming_prewarm import RoamingPrewarmService
@@ -390,6 +391,17 @@ def build_loop_components(
         config=values["_meta_cognition_config"],
         audit=values["_meta_cognition_audit"],
     )
+    values["_meta_cognition_reflector"] = MetaCognitionReflector(
+        workspace=workspace,
+        config=values["_meta_cognition_config"],
+        audit=values["_meta_cognition_audit"],
+        auxiliary_router=values["auxiliary_router"],
+        provider=provider,
+        model=values["model"],
+        sessions=values["sessions"],
+        working_memory=values["working_memory"],
+        context_config=defaults.context,
+    )
     values["_cognitive_loop_enabled"] = bool(values["_active_intent_config"].enabled)
     values["cognitive_scheduler"] = CognitiveScheduler(
         workspace=workspace,
@@ -493,6 +505,7 @@ def build_loop_components(
     values["_last_cognitive_scan"] = {}
     values["_last_meta_cognition_summary"] = {}
     values["_last_meta_trigger_scan"] = []
+    values["_last_meta_artifacts"] = {}
 
     return LoopComponents(values=values)
 

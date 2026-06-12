@@ -998,6 +998,116 @@ class MetaCognitionConfig(Base):
         ),
         serialization_alias="captureTaskCompletionFromCompleteGoalOnly",
     )
+    structured_reflection_enabled: bool = Field(
+        default=False,
+        validation_alias=AliasChoices(
+            "structuredReflectionEnabled",
+            "structured_reflection_enabled",
+        ),
+        serialization_alias="structuredReflectionEnabled",
+    )
+    working_memory_bridge_enabled: bool = Field(
+        default=False,
+        validation_alias=AliasChoices(
+            "workingMemoryBridgeEnabled",
+            "working_memory_bridge_enabled",
+        ),
+        serialization_alias="workingMemoryBridgeEnabled",
+    )
+    memory_candidate_bridge_enabled: bool = Field(
+        default=False,
+        validation_alias=AliasChoices(
+            "memoryCandidateBridgeEnabled",
+            "memory_candidate_bridge_enabled",
+        ),
+        serialization_alias="memoryCandidateBridgeEnabled",
+    )
+    memory_candidate_min_confidence: float = Field(
+        default=0.85,
+        ge=0.0,
+        le=1.0,
+        validation_alias=AliasChoices(
+            "memoryCandidateMinConfidence",
+            "memory_candidate_min_confidence",
+        ),
+        serialization_alias="memoryCandidateMinConfidence",
+    )
+    pattern_consolidation_enabled: bool = Field(
+        default=False,
+        validation_alias=AliasChoices(
+            "patternConsolidationEnabled",
+            "pattern_consolidation_enabled",
+        ),
+        serialization_alias="patternConsolidationEnabled",
+    )
+    evolution_bridge_enabled: bool = Field(
+        default=False,
+        validation_alias=AliasChoices(
+            "evolutionBridgeEnabled",
+            "evolution_bridge_enabled",
+        ),
+        serialization_alias="evolutionBridgeEnabled",
+    )
+    pattern_window_days: int = Field(
+        default=14,
+        ge=1,
+        le=365,
+        validation_alias=AliasChoices("patternWindowDays", "pattern_window_days"),
+        serialization_alias="patternWindowDays",
+    )
+    pattern_window_max_reflections: int = Field(
+        default=200,
+        ge=1,
+        le=5000,
+        validation_alias=AliasChoices(
+            "patternWindowMaxReflections",
+            "pattern_window_max_reflections",
+        ),
+        serialization_alias="patternWindowMaxReflections",
+    )
+    pattern_min_frequency: int = Field(
+        default=3,
+        ge=1,
+        le=100,
+        validation_alias=AliasChoices("patternMinFrequency", "pattern_min_frequency"),
+        serialization_alias="patternMinFrequency",
+    )
+    pattern_min_distinct_turns: int = Field(
+        default=2,
+        ge=1,
+        le=100,
+        validation_alias=AliasChoices("patternMinDistinctTurns", "pattern_min_distinct_turns"),
+        serialization_alias="patternMinDistinctTurns",
+    )
+    pattern_max_example_refs: int = Field(
+        default=5,
+        ge=1,
+        le=20,
+        validation_alias=AliasChoices("patternMaxExampleRefs", "pattern_max_example_refs"),
+        serialization_alias="patternMaxExampleRefs",
+    )
+    signal_max_evidence_refs: int = Field(
+        default=6,
+        ge=1,
+        le=20,
+        validation_alias=AliasChoices("signalMaxEvidenceRefs", "signal_max_evidence_refs"),
+        serialization_alias="signalMaxEvidenceRefs",
+    )
+    max_signal_upserts_per_turn: int = Field(
+        default=1,
+        ge=1,
+        le=10,
+        validation_alias=AliasChoices("maxSignalUpsertsPerTurn", "max_signal_upserts_per_turn"),
+        serialization_alias="maxSignalUpsertsPerTurn",
+    )
+    allowed_evolution_target_types: tuple[str, ...] = Field(
+        default=("workflow_candidate", "skill_candidate"),
+        validation_alias=AliasChoices(
+            "allowedEvolutionTargetTypes",
+            "allowed_evolution_target_types",
+        ),
+        serialization_alias="allowedEvolutionTargetTypes",
+    )
 
 
 class LearningConfig(Base):

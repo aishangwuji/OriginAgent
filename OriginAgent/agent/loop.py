@@ -345,6 +345,7 @@ class AgentLoop:
         self._last_cognitive_scan: dict[str, Any] = {}
         self._last_meta_cognition_summary: dict[str, Any] = {}
         self._last_meta_trigger_scan: list[dict[str, Any]] = []
+        self._last_meta_artifacts: dict[str, Any] = {}
         self._current_meta_turn_id: str | None = None
         self.commands = CommandRouter()
         register_builtin_commands(self.commands)
@@ -2335,6 +2336,7 @@ class AgentLoop:
                 len(ctx.trace),
             )
             self._scan_meta_triggers_for_turn(ctx)
+            self._schedule_meta_cognition_reflection(ctx)
             return ctx.outbound
         finally:
             self._current_meta_turn_id = None
@@ -2462,6 +2464,109 @@ class AgentLoop:
             logger.debug("Meta-cognition turn-end scan failed", exc_info=True)
         finally:
             self._current_meta_turn_id = None
+
+    def _schedule_meta_cognition_reflection(self, ctx: TurnContext) -> None:
+        reflector = getattr(self, "_meta_cognition_reflector", None)
+        runtime = getattr(self, "_meta_cognition_runtime", None)
+        if reflector is None or runtime is None:
+            return
+        if ctx.session is None:
+            return
+        if ctx.stop_reason in {"ask_user", "error", "tool_error", "system", "subagent"}:
+            return
+        if ctx.msg.channel == "system" or ctx.msg.sender_id == "subagent":
+            return
+        if not (ctx.final_content or "").strip():
+            return
+        accepted = runtime.take_accepted_triggers_for_turn(ctx.turn_id)
+        if not accepted:
+            return
+        snapshot = {
+            "user_message": ctx.msg.content,
+            "assistant_final_content": ctx.final_content or "",
+            "previous_assistant_message": latest_assistant_message(ctx.session.messages[:-1]),
+            "world_summary_preview": self._meta_world_summary_preview(ctx),
+            "runtime_context": self._meta_runtime_context_summary(ctx.runtime_context),
+        }
+        self._schedule_background(
+            self._reflect_meta_cognition_turn(
+                session_key=ctx.session_key,
+                turn_id=ctx.turn_id,
+                turn_snapshot=snapshot,
+                accepted_triggers=accepted,
+                runtime_context=ctx.runtime_context,
+            )
+        )
+
+    async def _reflect_meta_cognition_turn(
+        self,
+        *,
+        session_key: str,
+        turn_id: str,
+        turn_snapshot: dict[str, Any],
+        accepted_triggers: list[MetaTrigger],
+        runtime_context: RuntimeContext | None,
+    ) -> None:
+        reflector = getattr(self, "_meta_cognition_reflector", None)
+        if reflector is None:
+            return
+        result = await reflector.reflect_turn(
+            session_key=session_key,
+            turn_id=turn_id,
+            turn_snapshot=turn_snapshot,
+            accepted_triggers=accepted_triggers,
+            runtime_context=runtime_context,
+        )
+        self._last_meta_artifacts = reflector.recent_artifacts(limit=10)
+        self._last_meta_cognition_summary = {
+            **getattr(self, "_last_meta_cognition_summary", {}),
+            **getattr(reflector, "runtime_status")(),
+        }
+        logger.debug(
+            "Meta cognition reflection finished for turn {} with status {} ({})",
+            turn_id,
+            result.status,
+            result.reason,
+        )
+
+    def _meta_world_summary_preview(self, ctx: TurnContext) -> str:
+        session = ctx.session
+        if session is None:
+            return ""
+        world_state = getattr(self, "world_state", None)
+        if world_state is None:
+            return ""
+        try:
+            snapshot = world_state.load(
+                session,
+                identity=ctx.runtime_context if ctx.runtime_context is not None else None,
+            )
+        except Exception:
+            return ""
+        world_summary = getattr(snapshot, "world_summary", None)
+        if world_summary is None:
+            return ""
+        try:
+            data = world_summary.to_json()
+        except Exception:
+            return ""
+        focus = data.get("focus") if isinstance(data, dict) else []
+        if isinstance(focus, list):
+            return _trim_text(" | ".join(str(item or "").strip() for item in focus if str(item or "").strip()), max_chars=400)
+        return ""
+
+    def _meta_runtime_context_summary(self, runtime_context: RuntimeContext | None) -> dict[str, Any]:
+        if runtime_context is None:
+            return {}
+        return {
+            "actor_id": getattr(runtime_context, "actor_id", None),
+            "user_id": getattr(runtime_context, "user_id", None),
+            "session_id": getattr(runtime_context, "session_id", None),
+            "device_id": getattr(runtime_context, "device_id", None),
+            "trigger": getattr(runtime_context, "trigger", None),
+            "source": getattr(runtime_context, "source", None),
+            "default_scope": getattr(runtime_context, "default_scope", None),
+        }
 
     def _assemble_outbound(
         self,

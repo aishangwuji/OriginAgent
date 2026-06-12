@@ -309,33 +309,104 @@ class RuntimeIntrospectionService:
 
     def meta_cognition_summary(self) -> dict[str, Any]:
         loop = self._loop
+        disabled_payload = {
+            "contract_version": "meta_cognition.v1.freeze",
+            "enabled": False,
+            "trigger_collection_enabled": False,
+            "structured_reflection_enabled": False,
+            "pattern_consolidation_enabled": False,
+            "evolution_bridge_enabled": False,
+            "runtime_status": {},
+            "recent_triggers": [],
+            "recent_decisions": [],
+            "recent_journals": [],
+            "recent_reflections": [],
+            "recent_confidence_traces": [],
+            "recent_patterns": [],
+            "recent_evolution_seeds": [],
+            "decision_counts": {},
+            "suppression_reason_counts": {},
+            "artifact_status": {},
+            "working_memory_bridge": {"enabled": False, "last_status": "disabled", "decision_counts": {}},
+            "memory_candidate_bridge": {"enabled": False, "last_status": "disabled", "decision_counts": {}},
+            "bridge_decision_counts": {},
+            "pattern_counts": {},
+            "seed_counts": {},
+            "last_signal_upserts": [],
+        }
         if loop is None:
-            return {
-                "contract_version": "meta_cognition.v1.freeze",
-                "enabled": False,
-                "trigger_collection_enabled": False,
-                "runtime_status": {},
-                "recent_triggers": [],
-                "recent_decisions": [],
-                "decision_counts": {},
-                "suppression_reason_counts": {},
-            }
+            return disabled_payload
         runtime = getattr(loop, "_meta_cognition_runtime", None)
         if runtime is None:
-            return {
-                "contract_version": "meta_cognition.v1.freeze",
-                "enabled": False,
-                "trigger_collection_enabled": False,
-                "runtime_status": {},
-                "recent_triggers": [],
-                "recent_decisions": [],
-                "decision_counts": {},
-                "suppression_reason_counts": {},
+            return disabled_payload
+        summary = dict(runtime.summary() or {})
+        reflector = getattr(loop, "_meta_cognition_reflector", None)
+        if reflector is not None:
+            artifact_summary = reflector.runtime_status()
+            summary["structured_reflection_enabled"] = bool(
+                artifact_summary.get("structured_reflection_enabled", False)
+            )
+            summary["pattern_consolidation_enabled"] = bool(
+                getattr(reflector, "pattern_consolidation_enabled", False)
+            )
+            summary["evolution_bridge_enabled"] = bool(
+                getattr(reflector, "evolution_bridge_enabled", False)
+            )
+            summary["artifact_status"] = dict(artifact_summary.get("artifact_status") or {})
+            summary["bridge_decision_counts"] = dict(artifact_summary.get("bridge_decision_counts") or {})
+            recent_artifacts = reflector.recent_artifacts(limit=10)
+            summary["recent_journals"] = list(recent_artifacts.get("recent_journals") or [])
+            summary["recent_reflections"] = list(recent_artifacts.get("recent_reflections") or [])
+            summary["recent_confidence_traces"] = list(recent_artifacts.get("recent_confidence_traces") or [])
+            summary["recent_patterns"] = list(recent_artifacts.get("recent_patterns") or [])
+            summary["recent_evolution_seeds"] = list(recent_artifacts.get("recent_evolution_seeds") or [])
+            summary["working_memory_bridge"] = dict(
+                artifact_summary.get("artifact_status", {}).get("working_memory_bridge") or {}
+            )
+            summary["memory_candidate_bridge"] = dict(
+                artifact_summary.get("artifact_status", {}).get("memory_candidate_bridge") or {}
+            )
+            summary["pattern_counts"] = {
+                "written": int(summary.get("artifact_status", {}).get("patterns_written", 0) or 0),
             }
-        summary = runtime.summary()
+            summary["seed_counts"] = {
+                "written": int(summary.get("artifact_status", {}).get("evolution_seeds_written", 0) or 0),
+            }
+            summary["last_signal_upserts"] = list(artifact_summary.get("last_signal_upserts") or [])[:10]
+        else:
+            summary.setdefault("structured_reflection_enabled", False)
+            summary.setdefault("pattern_consolidation_enabled", False)
+            summary.setdefault("evolution_bridge_enabled", False)
+            summary.setdefault("artifact_status", {})
+            summary.setdefault("bridge_decision_counts", {})
+            summary.setdefault("recent_journals", [])
+            summary.setdefault("recent_reflections", [])
+            summary.setdefault("recent_confidence_traces", [])
+            summary.setdefault("recent_patterns", [])
+            summary.setdefault("recent_evolution_seeds", [])
+            summary.setdefault(
+                "working_memory_bridge",
+                {"enabled": False, "last_status": "disabled", "decision_counts": {}},
+            )
+            summary.setdefault(
+                "memory_candidate_bridge",
+                {"enabled": False, "last_status": "disabled", "decision_counts": {}},
+            )
+            summary.setdefault("pattern_counts", {})
+            summary.setdefault("seed_counts", {})
+            summary.setdefault("last_signal_upserts", [])
         last_summary = dict(getattr(loop, "_last_meta_cognition_summary", {}) or {})
         if last_summary:
             summary.setdefault("runtime_status", last_summary.get("runtime_status", {}))
+            summary.setdefault("artifact_status", last_summary.get("artifact_status", {}))
+            summary.setdefault("bridge_decision_counts", last_summary.get("bridge_decision_counts", {}))
+        last_artifacts = dict(getattr(loop, "_last_meta_artifacts", {}) or {})
+        if last_artifacts:
+            summary.setdefault("recent_journals", list(last_artifacts.get("recent_journals") or []))
+            summary.setdefault("recent_reflections", list(last_artifacts.get("recent_reflections") or []))
+            summary.setdefault("recent_confidence_traces", list(last_artifacts.get("recent_confidence_traces") or []))
+            summary.setdefault("recent_patterns", list(last_artifacts.get("recent_patterns") or []))
+            summary.setdefault("recent_evolution_seeds", list(last_artifacts.get("recent_evolution_seeds") or []))
         return summary
 
     def inspect_context(self) -> dict[str, Any]:

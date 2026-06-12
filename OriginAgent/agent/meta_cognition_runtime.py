@@ -47,6 +47,7 @@ class MetaCognitionRuntime:
         self._status = MetaCognitionRuntimeStatus()
         self._recent_results: list[dict[str, Any]] = []
         self._queue: list[dict[str, Any]] = []
+        self._accepted_by_turn: dict[str, list[dict[str, Any]]] = {}
 
     @property
     def enabled(self) -> bool:
@@ -143,6 +144,11 @@ class MetaCognitionRuntime:
         self._status.accepted_total += 1
         self._status.last_recorded_at = trigger.created_at
         self._queue.append(trigger.to_json())
+        if turn_id:
+            turn_key = str(turn_id)
+            accepted = list(self._accepted_by_turn.get(turn_key) or [])
+            accepted.append(trigger.to_json())
+            self._accepted_by_turn[turn_key] = accepted[-50:]
         queue_max_items = int(getattr(self._config, "queue_max_items", 200) or 200)
         if queue_max_items > 0:
             self._queue = self._queue[-queue_max_items:]
@@ -152,6 +158,18 @@ class MetaCognitionRuntime:
     def reset_turn(self, turn_id: str | None) -> None:
         if turn_id:
             self._status.turn_counters.pop(str(turn_id), None)
+
+    def take_accepted_triggers_for_turn(self, turn_id: str | None) -> list[MetaTrigger]:
+        if not turn_id:
+            return []
+        rows = list(self._accepted_by_turn.pop(str(turn_id), []) or [])
+        out: list[MetaTrigger] = []
+        for row in rows:
+            try:
+                out.append(MetaTrigger.from_json(row))
+            except ValueError:
+                continue
+        return out
 
     def recent_triggers(self, limit: int = 20) -> list[dict[str, Any]]:
         return self._audit.recent_triggers(limit=limit)

@@ -257,8 +257,42 @@ def test_date_only_until_includes_entire_day(tmp_path: Path) -> None:
         sources=["sessions"],
         until="2026-05-19",
     )
+    assert result["total_matches"] == 1
+
+
+def test_memory_candidate_blocks_include_meta_cognition_candidates(tmp_path: Path) -> None:
+    _write_jsonl(
+        tmp_path / "memory" / "memory_candidates.jsonl",
+        [
+            {
+                "candidate_id": "meta_memcand_1",
+                "kind": "preference",
+                "summary": "User prefers concise updates",
+                "source_session_key": "cli:direct",
+                "source_refs": ["reflection_1"],
+                "source_excerpt": "meta rationale",
+                "confidence": 0.93,
+                "sensitivity": "low",
+                "scope": "user",
+                "owner_id": "user-1",
+                "created_at": "2026-06-13T00:00:00+00:00",
+                "metadata": {
+                    "origin": "meta_cognition",
+                    "reflection_id": "reflection_1",
+                },
+            }
+        ],
+    )
+
+    result = SessionSearchService(tmp_path).search(
+        query="concise updates",
+        sources=["memory_candidates"],
+        result_shape="memory_blocks",
+    )
 
     assert result["total_matches"] == 1
+    assert result["results"][0]["source_kind"] == "memory_candidates"
+    assert result["results"][0]["summary"] == "User prefers concise updates"
 
 
 def test_cache_reuse_and_invalidation_on_file_fingerprint(tmp_path: Path) -> None:

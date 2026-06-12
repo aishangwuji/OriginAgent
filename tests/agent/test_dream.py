@@ -112,6 +112,29 @@ class TestDreamRun:
         assert any("weekly release updates" in fact.content for fact in facts)
         assert "weekly release updates" in store.read_memory()
 
+    async def test_consumes_meta_cognition_fact_candidates_without_history(self, dream, mock_provider, mock_runner, store):
+        writer = GovernedMemoryWriter(store.workspace)
+        writer.append(MemoryCandidate(
+            candidate_id="meta_memcand_fact_1",
+            kind="fact",
+            summary="User needs audit-safe summaries only",
+            source_session_key="cli:direct",
+            source_refs=["reflection_meta_1"],
+            source_excerpt="meta rationale: avoid raw evidence",
+            confidence=0.9,
+            sensitivity="low",
+            scope="user",
+            owner_id="user",
+            created_at="2026-06-13T00:00:00+00:00",
+            metadata={"origin": "meta_cognition", "category": "note"},
+        ))
+
+        result = await dream.run()
+
+        assert result is True
+        facts = store.fact_store.read_all()
+        assert any("audit-safe summaries only" in fact.content for fact in facts)
+
     async def test_advances_dream_cursor(self, dream, mock_provider, mock_runner, store):
         """Dream should advance the cursor after processing."""
         store.append_history("event 1")

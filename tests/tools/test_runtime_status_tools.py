@@ -307,14 +307,87 @@ async def test_inspect_context_reports_phase1_views_and_scope_filter(tmp_path) -
                 "contract_version": "meta_cognition.v1.freeze",
                 "enabled": True,
                 "trigger_collection_enabled": True,
+                "structured_reflection_enabled": True,
+                "pattern_consolidation_enabled": True,
+                "evolution_bridge_enabled": True,
                 "runtime_status": {"accepted_total": 1},
                 "recent_triggers": [{"trigger_type": "tool_failure"}],
                 "recent_decisions": [{"decision": "accepted"}],
+                "recent_journals": [{"entry_id": "journal_1", "summary": "tool failure observed"}],
+                "recent_reflections": [{"reflection_id": "reflection_1", "summary": "retry pattern learned"}],
+                "recent_confidence_traces": [{"trace_id": "trace_1", "summary": "confidence recorded"}],
+                "recent_patterns": [{"pattern_id": "pattern_1", "summary": "repeated retry issue"}],
+                "recent_evolution_seeds": [{"seed_id": "seed_1", "summary": "meta skill candidate"}],
                 "decision_counts": {"accepted": 1},
                 "suppression_reason_counts": {},
+                "artifact_status": {
+                    "journals_written": 1,
+                    "reflections_written": 1,
+                    "confidence_traces_written": 1,
+                    "patterns_written": 1,
+                    "evolution_seeds_written": 1,
+                    "working_memory_bridge": {
+                        "enabled": True,
+                        "last_status": "ok",
+                        "decision_counts": {"attention_appended": 1},
+                    },
+                    "memory_candidate_bridge": {
+                        "enabled": True,
+                        "last_status": "ok",
+                        "decision_counts": {"queued": 1},
+                    },
+                },
+                "working_memory_bridge": {
+                    "enabled": True,
+                    "last_status": "ok",
+                    "decision_counts": {"attention_appended": 1},
+                },
+                "memory_candidate_bridge": {
+                    "enabled": True,
+                    "last_status": "ok",
+                    "decision_counts": {"queued": 1},
+                },
+                "bridge_decision_counts": {"attention_appended": 1, "queued": 1},
             }
         ),
+        _meta_cognition_reflector=SimpleNamespace(
+            recent_artifacts=lambda limit=10: {
+                "recent_journals": [{"entry_id": "journal_1", "summary": "tool failure observed"}],
+                "recent_reflections": [{"reflection_id": "reflection_1", "summary": "retry pattern learned"}],
+                "recent_confidence_traces": [{"trace_id": "trace_1", "summary": "confidence recorded"}],
+                "recent_patterns": [{"pattern_id": "pattern_1", "summary": "repeated retry issue"}],
+                "recent_evolution_seeds": [{"seed_id": "seed_1", "summary": "meta skill candidate"}],
+            },
+            runtime_status=lambda: {
+                "structured_reflection_enabled": True,
+                "artifact_status": {
+                    "journals_written": 1,
+                    "reflections_written": 1,
+                    "confidence_traces_written": 1,
+                    "patterns_written": 1,
+                    "evolution_seeds_written": 1,
+                    "working_memory_bridge": {
+                        "enabled": True,
+                        "last_status": "ok",
+                        "decision_counts": {"attention_appended": 1},
+                    },
+                    "memory_candidate_bridge": {
+                        "enabled": True,
+                        "last_status": "ok",
+                        "decision_counts": {"queued": 1},
+                    },
+                },
+                "bridge_decision_counts": {"attention_appended": 1, "queued": 1},
+            },
+        ),
         _last_meta_cognition_summary={},
+        _last_meta_artifacts={
+            "recent_journals": [{"entry_id": "journal_1", "summary": "tool failure observed"}],
+            "recent_reflections": [{"reflection_id": "reflection_1", "summary": "retry pattern learned"}],
+            "recent_confidence_traces": [{"trace_id": "trace_1", "summary": "confidence recorded"}],
+            "recent_patterns": [{"pattern_id": "pattern_1", "summary": "repeated retry issue"}],
+            "recent_evolution_seeds": [{"seed_id": "seed_1", "summary": "meta skill candidate"}],
+        },
         _last_meta_trigger_scan=[],
         _last_context_assembly={
             "enabled": True,
@@ -424,6 +497,14 @@ async def test_inspect_context_reports_phase1_views_and_scope_filter(tmp_path) -
     assert result["views"]["world"]["contested"]["contested"] is True
     assert result["views"]["meta_cognition"]["contract_version"] == "meta_cognition.v1.freeze"
     assert result["views"]["meta_cognition"]["recent_triggers"][0]["trigger_type"] == "tool_failure"
+    assert result["views"]["meta_cognition"]["structured_reflection_enabled"] is True
+    assert result["views"]["meta_cognition"]["recent_journals"][0]["entry_id"] == "journal_1"
+    assert result["views"]["meta_cognition"]["recent_reflections"][0]["reflection_id"] == "reflection_1"
+    assert result["views"]["meta_cognition"]["recent_confidence_traces"][0]["trace_id"] == "trace_1"
+    assert result["views"]["meta_cognition"]["recent_patterns"][0]["pattern_id"] == "pattern_1"
+    assert result["views"]["meta_cognition"]["recent_evolution_seeds"][0]["seed_id"] == "seed_1"
+    assert result["views"]["meta_cognition"]["working_memory_bridge"]["decision_counts"]["attention_appended"] == 1
+    assert result["views"]["meta_cognition"]["memory_candidate_bridge"]["decision_counts"]["queued"] == 1
     assert result["last_context_assembly"]["assembly_order"] == [
         "system_prompt",
         "runtime_state",

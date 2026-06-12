@@ -1,4 +1,4 @@
-"""Append-only audit helpers for sidecar meta-cognition triggers and decisions."""
+"""Append-only audit helpers for sidecar meta-cognition triggers, artifacts, and decisions."""
 
 from __future__ import annotations
 
@@ -8,19 +8,32 @@ import threading
 from pathlib import Path
 from typing import Any
 
-from OriginAgent.agent.meta_cognition_models import MetaTrigger, RecordTriggerResult
+from OriginAgent.agent.meta_cognition_models import (
+    ConfidenceTrace,
+    ErrorPattern,
+    EvolutionSeed,
+    MetaTrigger,
+    RecordTriggerResult,
+    ReflectionRecord,
+    ThoughtJournalEntry,
+)
 from OriginAgent.utils.helpers import ensure_dir
 
 _RECENT_SCAN_LIMIT = 200
 
 
 class JsonlMetaCognitionAuditLedger:
-    """Append-only ledger for meta-cognition triggers and runtime decisions."""
+    """Append-only ledger for meta-cognition triggers, artifacts, and runtime decisions."""
 
     def __init__(self, workspace: Path):
         root = Path(workspace) / "memory" / "meta_cognition"
         self._triggers_path = root / "triggers.jsonl"
         self._decisions_path = root / "decisions.jsonl"
+        self._journals_path = root / "journals.jsonl"
+        self._reflections_path = root / "reflections.jsonl"
+        self._confidence_traces_path = root / "confidence_traces.jsonl"
+        self._patterns_path = root / "patterns.jsonl"
+        self._evolution_seeds_path = root / "evolution_seeds.jsonl"
         self._lock = threading.Lock()
 
     def append_trigger(self, trigger: MetaTrigger) -> None:
@@ -45,15 +58,50 @@ class JsonlMetaCognitionAuditLedger:
         }
         self._append(self._decisions_path, payload)
 
+    def append_journal(self, journal: ThoughtJournalEntry) -> None:
+        self._append(self._journals_path, journal.to_json())
+
+    def append_reflection(self, reflection: ReflectionRecord) -> None:
+        self._append(self._reflections_path, reflection.to_json())
+
+    def append_confidence_trace(self, trace: ConfidenceTrace) -> None:
+        self._append(self._confidence_traces_path, trace.to_json())
+
+    def append_pattern(self, pattern: ErrorPattern) -> None:
+        self._append(self._patterns_path, pattern.to_json())
+
+    def append_evolution_seed(self, seed: EvolutionSeed) -> None:
+        self._append(self._evolution_seeds_path, seed.to_json())
+
     def recent_triggers(self, limit: int = _RECENT_SCAN_LIMIT) -> list[dict[str, Any]]:
         return self._recent(self._triggers_path, limit=limit)
 
     def recent_decisions(self, limit: int = _RECENT_SCAN_LIMIT) -> list[dict[str, Any]]:
         return self._recent(self._decisions_path, limit=limit)
 
+    def recent_journals(self, limit: int = _RECENT_SCAN_LIMIT) -> list[dict[str, Any]]:
+        return self._recent(self._journals_path, limit=limit)
+
+    def recent_reflections(self, limit: int = _RECENT_SCAN_LIMIT) -> list[dict[str, Any]]:
+        return self._recent(self._reflections_path, limit=limit)
+
+    def recent_confidence_traces(self, limit: int = _RECENT_SCAN_LIMIT) -> list[dict[str, Any]]:
+        return self._recent(self._confidence_traces_path, limit=limit)
+
+    def recent_patterns(self, limit: int = _RECENT_SCAN_LIMIT) -> list[dict[str, Any]]:
+        return self._recent(self._patterns_path, limit=limit)
+
+    def recent_evolution_seeds(self, limit: int = _RECENT_SCAN_LIMIT) -> list[dict[str, Any]]:
+        return self._recent(self._evolution_seeds_path, limit=limit)
+
     def summary(self, *, limit: int = 20) -> dict[str, Any]:
         triggers = self.recent_triggers(limit=limit)
         decisions = self.recent_decisions(limit=limit)
+        journals = self.recent_journals(limit=limit)
+        reflections = self.recent_reflections(limit=limit)
+        traces = self.recent_confidence_traces(limit=limit)
+        patterns = self.recent_patterns(limit=limit)
+        seeds = self.recent_evolution_seeds(limit=limit)
         decision_counts: dict[str, int] = {}
         suppression_reason_counts: dict[str, int] = {}
         for record in decisions:
@@ -65,8 +113,18 @@ class JsonlMetaCognitionAuditLedger:
         return {
             "trigger_count": len(triggers),
             "decision_count": len(decisions),
+            "journal_count": len(journals),
+            "reflection_count": len(reflections),
+            "confidence_trace_count": len(traces),
+            "pattern_count": len(patterns),
+            "evolution_seed_count": len(seeds),
             "latest_trigger": triggers[-1] if triggers else None,
             "latest_decision": decisions[-1] if decisions else None,
+            "latest_journal": journals[-1] if journals else None,
+            "latest_reflection": reflections[-1] if reflections else None,
+            "latest_confidence_trace": traces[-1] if traces else None,
+            "latest_pattern": patterns[-1] if patterns else None,
+            "latest_evolution_seed": seeds[-1] if seeds else None,
             "recent_trigger_types": [record.get("trigger_type") for record in triggers],
             "decision_counts": decision_counts,
             "suppression_reason_counts": suppression_reason_counts,
@@ -103,4 +161,3 @@ class JsonlMetaCognitionAuditLedger:
         if limit <= 0:
             return items
         return items[-limit:]
-
