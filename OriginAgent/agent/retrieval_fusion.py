@@ -523,16 +523,7 @@ class RetrievalFusion:
     ) -> str | None:
         resolver = ScopeResolver()
         normalized_scope = resolver.normalize_scope(hit.scope)
-        normalized_current_scope = resolver.normalize_scope(current_scope)
         hit_device_id = str(hit.details.get("device_id") or "").strip() or None
-        if normalized_scope == "user":
-            if hit.owner_id and current_owner_id and hit.owner_id != current_owner_id:
-                return "owner_hidden"
-        if normalized_scope == "device":
-            if hit_device_id and current_device_id and hit_device_id != current_device_id:
-                return "device_hidden"
-        if normalized_scope == "task" and normalized_current_scope != "task":
-            return "scope_hidden"
         if not resolver.is_visible(
             scope=hit.scope,
             current_scope=current_scope,

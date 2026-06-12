@@ -25,8 +25,9 @@ Scope: Phase 2 `P2A` world summary 注入 prompt、working memory 与 introspect
 
 1. 冻结 `WorldSummary` 注入 continuity 主线的最小位置：
    - runtime state block 之后
-   - retrieved context block 之后
-   - recent dialogue 之前
+   - continuity blocks 内，与 `continuity_context`、`working_memory` 同组
+   - reference blocks 之前
+   - current user message 之前
 2. 定义 world summary 进入 prompt 的最小条件：
    - freshness
    - scope visibility

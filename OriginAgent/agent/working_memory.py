@@ -80,7 +80,12 @@ class WorkingMemorySnapshot:
 
 
 class WorkingMemoryManager:
-    """Session-backed structured working set."""
+    """Session-backed structured working set.
+
+    Working memory is a session-bound runtime surface in continuity v1. Reads
+    and writes are keyed by the current session and do not perform any
+    cross-session visibility propagation on their own.
+    """
 
     def __init__(
         self,

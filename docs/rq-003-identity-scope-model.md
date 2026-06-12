@@ -25,6 +25,7 @@ Scope: Phase 1 identity 与 scope 最小模型
    - `device_id`
    - 可选保留 `actor_id`
 2. 定义 Phase 1 最小 scope 集合：
+   - `device`
    - `user`
    - `session`
    - `task`
@@ -113,5 +114,6 @@ Scope: Phase 1 identity 与 scope 最小模型
 
 1. `device_id` 在没有真实设备接入的通道里，Phase 1 应如何生成或留空。
 2. `session_id` 是否直接复用 `session_key`，还是单独引入内部标识。
+   - continuity `v1 Freeze` 先按兼容约定冻结为 `session_id = session_key`
 3. `FactStore` 现有 `scope` 字段是否足以承载 Phase 1 scope 语义，还是需要并行字段。
 4. 缺少 identity 的系统事件默认归属于 `system` 还是挂到当前 session。

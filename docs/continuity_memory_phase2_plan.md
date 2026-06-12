@@ -178,10 +178,11 @@ Identity / scope attribution
          ↓
 ContextAssembler v2
   ├─ runtime state block
-  ├─ working memory block
-  ├─ retrieved context block
-  ├─ world state block
-  └─ recent dialogue
+  ├─ recovered continuity checkpoint（可选）
+  ├─ continuity blocks
+  ├─ reference blocks
+  ├─ internal event（可选）
+  └─ current user message
          ↓
 LLM-facing message bundle
          ↓
@@ -193,7 +194,7 @@ Introspection / audit / future promotion hooks
 | 现有组件 | Phase 2 角色 | 需要增强 |
 |---|---|---|
 | `ContextBuilder` | 世界视图注入入口 | 用真实 `WorldSummary` 替换 placeholder world block |
-| `ContextAssemblerV2` | 四层视图总装配器 | 在 audit 中增加 world summary 来源、freshness、过滤摘要 |
+| `ContextAssemblerV2` | continuity 薄编排与审计层 | 在 audit 中增加 world summary 来源、freshness、过滤摘要 |
 | `WorkingMemoryManager` | 环境关注点写入点 | 增加 world-derived `attention_items` 写入约定 |
 | `ActorResolver` / `ScopeResolver` | 快照归属与可见性治理 | 增加 snapshot / world summary 的 owner 和 scope 语义 |
 | `RuntimeIntrospectionService` | inspect / debug 入口 | 展示 snapshot 来源、world view 选入结果与过滤原因 |
@@ -320,14 +321,14 @@ Introspection / audit / future promotion hooks
 
 ### 10.1 世界视图插入规则
 
-建议 Phase 2 中 `ContextAssembler` 的顺序保持不变：
+建议 Phase 2 中 `ContextAssembler` 的顺序保持与当前 continuity freeze 一致：
 
 1. system prompt
 2. runtime state block
-3. working memory block
-4. retrieved context block
-5. world state block
-6. recent dialogue messages
+3. recovered continuity checkpoint（可选）
+4. continuity blocks：`continuity_context`、`working_memory`、`world_state`
+5. reference blocks：`user_profile`、retrieval blocks、`recent_history`、`archived_session_summary`
+6. internal event（可选）
 7. current user message
 
 但世界视图需要从占位升级为真实摘要对象。
@@ -336,9 +337,9 @@ Introspection / audit / future promotion hooks
 
 建议最小预算策略：
 
-1. 对话视图仍保底。
-2. working memory 保持稳定小预算。
-3. world view 的预算略高于 Phase 1 placeholder，但必须硬限制。
+1. 继承 continuity freeze 的裁剪顺序：先裁历史消息，再裁 `recent_history`，再裁一般 retrieval blocks，最后裁 `user_profile` / `archived_session_summary`。
+2. working memory 与 world view 继续作为 continuity core 保底。
+3. world view 的预算可以高于 placeholder，但必须在保底块内部硬限制。
 4. 当 world view 与 retrieval view 内容重复时，优先保留 world view 中更近、更有时间戳的版本。
 
 ### 10.3 选入策略

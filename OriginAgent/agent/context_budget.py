@@ -17,6 +17,14 @@ class ContextBudgetResult:
 class ContextBudgetManager:
     """Trim prompt inputs without mutating persisted session state."""
 
+    CONTRACT_VERSION = "continuity.v1.freeze"
+    TRIM_ORDER = [
+        "history_messages",
+        "recent_history_blocks",
+        "retrieval_blocks",
+        "profile_and_archived_summary_blocks",
+    ]
+
     def __init__(self, *, safety_buffer_tokens: int = 1024) -> None:
         self._safety_buffer_tokens = max(0, int(safety_buffer_tokens))
 
@@ -43,12 +51,19 @@ class ContextBudgetManager:
         initial_tokens = self._estimate_messages(trimmed)
         audit: dict[str, Any] = {
             "applied": True,
+            "contract_version": self.CONTRACT_VERSION,
+            "trim_order": list(self.TRIM_ORDER),
             "budget_tokens": budget,
             "initial_tokens": initial_tokens,
             "trimmed_history_messages": 0,
             "removed_recent_history_blocks": 0,
             "removed_retrieval_blocks": 0,
-            "removed_continuity_reference_blocks": 0,
+            "removed_profile_and_archived_summary_blocks": 0,
+            "preserved_blocks": [
+                "current_user_message",
+                "working_memory",
+                "world_state",
+            ],
         }
         if initial_tokens <= budget:
             audit["final_tokens"] = initial_tokens
@@ -81,7 +96,7 @@ class ContextBudgetManager:
             if self._estimate_messages(trimmed) > budget:
                 content, continuity_removed = self._drop_continuity_reference_blocks(content, budget, trimmed)
                 trimmed[current_index]["content"] = content
-                audit["removed_continuity_reference_blocks"] = continuity_removed
+                audit["removed_profile_and_archived_summary_blocks"] = continuity_removed
 
         audit["final_tokens"] = self._estimate_messages(trimmed)
         audit["reason"] = "trimmed" if audit["final_tokens"] < initial_tokens else "unchanged"

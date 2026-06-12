@@ -30,6 +30,8 @@ class RuntimeIntrospectionService:
     consume these read-only projections.
     """
 
+    CONTINUITY_CONTRACT_VERSION = "continuity.v1.freeze"
+
     def __init__(
         self,
         *,
@@ -226,14 +228,30 @@ class RuntimeIntrospectionService:
         sessions = getattr(loop, "sessions", None)
         runtime_context = getattr(loop, "_last_runtime_context", None)
         session_key = getattr(loop, "_last_continuity_session_key", None)
+        last_context_assembly = dict(getattr(loop, "_last_context_assembly", {}) or {})
         out: dict[str, Any] = {
+            "contract_version": self.CONTINUITY_CONTRACT_VERSION,
             "enabled": bool(working_memory is not None),
             "current_session_key": session_key,
-            "last_context_assembly": getattr(loop, "_last_context_assembly", {}),
+            "last_context_assembly": last_context_assembly,
             "recovered_continuity_checkpoint": dict(
                 getattr(loop, "_last_recovered_continuity_checkpoint", {}) or {}
             ),
         }
+        if last_context_assembly:
+            out["assembly"] = {
+                "contract_version": str(
+                    last_context_assembly.get("contract_version") or self.CONTINUITY_CONTRACT_VERSION
+                ),
+                "assembler_role": str(last_context_assembly.get("assembler_role") or ""),
+                "assembly_order": list(last_context_assembly.get("assembly_order") or []),
+                "block_kinds": list(last_context_assembly.get("block_kinds") or []),
+                "continuity_block_kinds": list(last_context_assembly.get("continuity_block_kinds") or []),
+                "reference_sources": list(last_context_assembly.get("reference_sources") or []),
+                "retrieval_sources_used": list(last_context_assembly.get("retrieval_sources_used") or []),
+                "world_selection_reasons": list(last_context_assembly.get("world_selection_reasons") or []),
+            }
+            out["budget"] = dict(last_context_assembly.get("budget") or {})
         if runtime_context is not None:
             out["runtime_context"] = {
                 "actor_id": runtime_context.actor_id,
@@ -308,6 +326,7 @@ class RuntimeIntrospectionService:
             getattr(runtime_context, "default_scope", None),
         )
         return {
+            "contract_version": self.CONTINUITY_CONTRACT_VERSION,
             "enabled": bool(
                 getattr(getattr(loop, "context", None), "_context_config", None)
                 and getattr(loop.context._context_config, "enable_phase1_continuity", False)

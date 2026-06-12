@@ -23,6 +23,8 @@ Scope: Phase 1 工作记忆与上下文构造骨架
 2. 定义工作记忆最小数据模型：
    - `current_goal`
    - `current_plan`
+   - `open_loops`
+   - `active_constraints`
    - `pending_questions`
    - `priority_facts`
    - `attention_items`
@@ -36,16 +38,17 @@ Scope: Phase 1 工作记忆与上下文构造骨架
 4. 设计并落地 `ContextAssembler` v2 最小组装顺序：
    - system prompt
    - runtime state block
-   - working memory block
-   - retrieved context block
-   - world state block
-   - recent dialogue messages
+   - recovered continuity checkpoint（可选）
+   - continuity blocks：`continuity_context`、`working_memory`、`world_state`
+   - reference blocks：`user_profile`、retrieval blocks、`recent_history`、`archived_session_summary`
+   - internal event（可选）
    - current user message
 5. 定义最小预算与裁剪规则：
-   - 对话视图保底
-   - 工作视图稳定小预算
-   - 检索视图按来源裁剪
-   - 世界视图保留极小预算或空块
+   - 历史消息先按合法边界收缩
+   - `recent_history` 最先裁剪
+   - 一般 retrieval blocks 其次裁剪
+   - `user_profile` / `archived_session_summary` 最后裁剪
+   - current user message、working memory、world state 保底
 6. 提供最小调试/审计能力：
    - 查看当前工作记忆
    - 查看本轮 assembler 选入来源
@@ -137,3 +140,4 @@ Scope: Phase 1 工作记忆与上下文构造骨架
 2. `tool_residue` 应保存原始结果摘要，还是只保存下一步行动提示。
 3. `pending_questions` 与现有 ask-user 机制如何避免重复表达。
 4. `ContextAssembler` v2 是重构 `ContextBuilder` 内部实现，还是新建独立类后逐步切换调用方。
+   - continuity `v1 Freeze` 已冻结为“薄编排 / 审计层”，`ContextBuilder` 仍承载主要块构建逻辑。

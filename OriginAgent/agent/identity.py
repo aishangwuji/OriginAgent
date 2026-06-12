@@ -14,6 +14,13 @@ RuntimeSource = Literal["user_turn", "cron", "system", "subagent", "automation"]
 
 @dataclass(frozen=True)
 class RuntimeContext:
+    """Minimal continuity v1 runtime identity.
+
+    `session_id` intentionally mirrors the active `session_key` in v1 so the
+    continuity contract can freeze on the current runtime behavior without
+    forcing an early routing/identity split.
+    """
+
     actor_id: str
     user_id: str
     session_id: str | None

@@ -235,3 +235,33 @@ def test_retrieval_fusion_reports_device_hidden_for_device_scope_mismatch():
     assert result.audit["scope_filtered"] == [
         {"source": "prewarm_seed", "title": "recent_session:cli:other", "reason": "device_hidden"}
     ]
+
+
+def test_retrieval_fusion_reports_scope_hidden_for_task_scope_outside_task_context():
+    fusion = _fusion(
+        fact_bundle=FactRetrievalBundle(facts=[], rendered_text="", fallback_used=False, retrievals=[]),
+        nearline_result=NearlineRetrievalResult(),
+        search_rows=[],
+    )
+
+    result = fusion.retrieve(
+        query="task note",
+        session_key="cli:direct",
+        runtime_context=SimpleNamespace(default_scope="session", user_id="user-1", device_id="device-a"),
+        current_message="task note",
+        recent_history=[],
+        session_summary=None,
+        prewarm_seed=[
+            {
+                "title": "task:debug",
+                "text": "Task scoped scratch reasoning",
+                "scope": "task",
+                "owner_id": "user-1",
+                "timestamp": "2026-06-09T00:00:00+00:00",
+            }
+        ],
+    )
+
+    assert result.audit["scope_filtered"] == [
+        {"source": "prewarm_seed", "title": "task:debug", "reason": "scope_hidden"}
+    ]

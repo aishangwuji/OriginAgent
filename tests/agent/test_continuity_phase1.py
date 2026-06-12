@@ -107,6 +107,33 @@ def test_working_memory_supports_open_loops_and_active_constraints(tmp_path: Pat
     assert reloaded.active_constraints == ["do not rewrite MEMORY.md directly"]
 
 
+def test_working_memory_does_not_leak_across_sessions(tmp_path: Path):
+    sessions = SessionManager(tmp_path)
+    session_a = sessions.get_or_create("cli:a")
+    session_b = sessions.get_or_create("cli:b")
+    manager = WorkingMemoryManager(sessions)
+
+    manager.upsert(
+        session_a,
+        current_goal="Only session A should see this goal",
+        current_plan=["step-a"],
+        pending_questions=["question-a"],
+        attention_items=["attention-a"],
+    )
+
+    snapshot_a = manager.load(session_a)
+    snapshot_b = manager.load(session_b)
+
+    assert snapshot_a.current_goal == "Only session A should see this goal"
+    assert snapshot_a.current_plan == ["step-a"]
+    assert snapshot_a.pending_questions == ["question-a"]
+    assert snapshot_a.attention_items == ["attention-a"]
+    assert snapshot_b.current_goal == ""
+    assert snapshot_b.current_plan == []
+    assert snapshot_b.pending_questions == []
+    assert snapshot_b.attention_items == []
+
+
 def test_working_memory_from_json_is_backward_compatible_without_new_fields():
     parsed = WorkingMemorySnapshot.from_json(
         "cli:test",
@@ -217,6 +244,94 @@ def test_context_builder_injects_continuity_and_working_memory_blocks(tmp_path: 
     assert ContextBuilder.WORLD_STATE_CONTEXT_KIND in kinds
     assert '"user_id": "user-1"' in text
     assert "Keep current task state" in text
+
+
+def test_context_builder_freeze_order_matches_runtime_contract(tmp_path: Path):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    (workspace / "USER.md").write_text("User profile marker", encoding="utf-8")
+    sessions = SessionManager(workspace)
+    session = sessions.get_or_create("cli:direct")
+    session.metadata["goal_state"] = {
+        "status": "active",
+        "objective": "Preserve continuity order",
+        "ui_summary": "continuity-order",
+    }
+    builder = ContextBuilder(
+        workspace=workspace,
+        timezone="UTC",
+        sessions=sessions,
+        confirmation_store=PendingConfirmationStore(workspace),
+        memory_feature_flags={"semantic_retrieval_enabled": True},
+    )
+    builder.memory.append_history("Recent continuity marker")
+    builder.memory.upsert_fact_and_rebuild_memory(
+        "Retrieval fact marker",
+        category="note",
+        scope="project.continuity",
+        owner="user",
+        source_cursors=[1],
+        source_excerpt="continuity fact",
+    )
+    runtime_context = ActorResolver().resolve_runtime_context(
+        channel="cli",
+        chat_id="direct",
+        sender_id="user-1",
+        metadata={},
+        session_key="cli:direct",
+    )
+    recovered = builder.build_recovered_continuity_context(
+        {"current_goal": "Resume continuity", "open_loops": ["restore contract order"]}
+    )
+
+    messages = builder.build_messages(
+        history=[],
+        current_message="Continue the work",
+        channel="cli",
+        chat_id="direct",
+        sender_id="user-1",
+        session_summary="Archived summary marker",
+        session_metadata=session.metadata,
+        runtime_context=runtime_context,
+        session_key="cli:direct",
+        recovered_continuity_block=recovered,
+    )
+
+    user_content = messages[-1]["content"]
+    kinds = [block.get("_meta", {}).get("kind") for block in user_content if isinstance(block, dict)]
+    reference_sources = [
+        block.get("_meta", {}).get("source")
+        for block in user_content
+        if isinstance(block, dict) and block.get("_meta", {}).get("kind") == ContextBuilder.REFERENCE_CONTEXT_KIND
+    ]
+    audit = builder._last_context_assembly_audit
+
+    assert kinds[:5] == [
+        ContextBuilder.RUNTIME_CONTEXT_KIND,
+        ContextBuilder.RECOVERED_CONTINUITY_CONTEXT_KIND,
+        ContextBuilder.CONTINUITY_CONTEXT_KIND,
+        ContextBuilder.WORKING_MEMORY_CONTEXT_KIND,
+        ContextBuilder.WORLD_STATE_CONTEXT_KIND,
+    ]
+    assert reference_sources[0] == "user_profile"
+    assert "recent_history" in reference_sources
+    assert reference_sources[-1] == "archived_session_summary"
+    assert user_content[-1]["text"] == "Continue the work"
+    assert audit["contract_version"] == "continuity.v1.freeze"
+    assert audit["assembly_order"] == [
+        "system_prompt",
+        "runtime_state",
+        "recovered_continuity_checkpoint",
+        "continuity_blocks",
+        "reference_blocks",
+        "internal_event",
+        "current_user_message",
+    ]
+    assert audit["continuity_block_kinds"] == [
+        ContextBuilder.CONTINUITY_CONTEXT_KIND,
+        ContextBuilder.WORKING_MEMORY_CONTEXT_KIND,
+        ContextBuilder.WORLD_STATE_CONTEXT_KIND,
+    ]
 
 
 def test_context_builder_uses_real_world_state_snapshot(tmp_path: Path):
@@ -693,6 +808,7 @@ def test_loop_introspection_exposes_continuity_summary(tmp_path: Path):
     assert continuity["working_memory"]["pending_questions"] == ["How should we proceed next?"]
     assert continuity["world_state"]["status"] == "placeholder"
     assert continuity["last_context_assembly"] == {}
+    assert continuity["contract_version"] == "continuity.v1.freeze"
 
 
 def test_loop_introspection_exposes_world_state_after_media_ingest(tmp_path: Path):
@@ -1140,7 +1256,7 @@ def test_context_budget_keeps_current_turn_and_continuity_core_when_profile_memo
     assert budget_audit["removed_recent_history_blocks"] >= 1
     assert (
         budget_audit["removed_retrieval_blocks"] >= 1
-        or budget_audit["removed_continuity_reference_blocks"] >= 1
+        or budget_audit["removed_profile_and_archived_summary_blocks"] >= 1
     )
     assert "recent_history" not in trimmed_sources
     assert any(
@@ -1152,6 +1268,99 @@ def test_context_budget_keeps_current_turn_and_continuity_core_when_profile_memo
             memory_candidate_marker,
         )
     )
+    assert budget_audit["contract_version"] == "continuity.v1.freeze"
+    assert budget_audit["trim_order"] == [
+        "history_messages",
+        "recent_history_blocks",
+        "retrieval_blocks",
+        "profile_and_archived_summary_blocks",
+    ]
+    assert budget_audit["preserved_blocks"] == [
+        "current_user_message",
+        "working_memory",
+        "world_state",
+    ]
+
+
+def test_context_budget_freeze_prefers_recent_history_then_retrieval_then_continuity_references():
+    manager = ContextBudgetManager(safety_buffer_tokens=0)
+    large_text = "filler " * 250
+    messages = [
+        {"role": "system", "content": "system prompt"},
+        {"role": "user", "content": "older user " + large_text},
+        {"role": "assistant", "content": "older assistant " + large_text},
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "text",
+                    "text": "<runtime_context>runtime</runtime_context>",
+                    "_meta": {"kind": ContextBuilder.RUNTIME_CONTEXT_KIND},
+                },
+                {
+                    "type": "text",
+                    "text": "<continuity_context>continuity</continuity_context>",
+                    "_meta": {"kind": ContextBuilder.CONTINUITY_CONTEXT_KIND},
+                },
+                {
+                    "type": "text",
+                    "text": "<working_memory_context>working</working_memory_context>",
+                    "_meta": {"kind": ContextBuilder.WORKING_MEMORY_CONTEXT_KIND},
+                },
+                {
+                    "type": "text",
+                    "text": "<world_state_context>world</world_state_context>",
+                    "_meta": {"kind": ContextBuilder.WORLD_STATE_CONTEXT_KIND},
+                },
+                {
+                    "type": "text",
+                    "text": "<reference_context source='user_profile'>profile " + large_text + "</reference_context>",
+                    "_meta": {"kind": ContextBuilder.REFERENCE_CONTEXT_KIND, "source": "user_profile"},
+                },
+                {
+                    "type": "text",
+                    "text": "<reference_context source='memory_retrieval'>retrieval " + large_text + "</reference_context>",
+                    "_meta": {"kind": ContextBuilder.REFERENCE_CONTEXT_KIND, "source": "memory_retrieval"},
+                },
+                {
+                    "type": "text",
+                    "text": "<reference_context source='recent_history'>recent " + large_text + "</reference_context>",
+                    "_meta": {"kind": ContextBuilder.REFERENCE_CONTEXT_KIND, "source": "recent_history"},
+                },
+                {
+                    "type": "text",
+                    "text": "<reference_context source='archived_session_summary'>archived " + large_text + "</reference_context>",
+                    "_meta": {"kind": ContextBuilder.REFERENCE_CONTEXT_KIND, "source": "archived_session_summary"},
+                },
+                {"type": "text", "text": "current message " + ("current " * 40)},
+            ],
+        },
+    ]
+
+    result = manager.apply(
+        messages,
+        context_window_tokens=700,
+        max_completion_tokens=150,
+    )
+
+    user_content = result.messages[-1]["content"]
+    sources = [
+        block.get("_meta", {}).get("source")
+        for block in user_content
+        if isinstance(block, dict) and block.get("_meta", {}).get("kind") == ContextBuilder.REFERENCE_CONTEXT_KIND
+    ]
+    kinds = [block.get("_meta", {}).get("kind") for block in user_content if isinstance(block, dict)]
+    joined = "\n".join(block.get("text", "") for block in user_content if isinstance(block, dict))
+
+    assert result.audit["trimmed_history_messages"] >= 1
+    assert result.audit["removed_recent_history_blocks"] >= 1
+    assert result.audit["removed_retrieval_blocks"] >= 1
+    assert result.audit["removed_profile_and_archived_summary_blocks"] >= 1
+    assert "recent_history" not in sources
+    assert "memory_retrieval" not in sources
+    assert ContextBuilder.WORKING_MEMORY_CONTEXT_KIND in kinds
+    assert ContextBuilder.WORLD_STATE_CONTEXT_KIND in kinds
+    assert "current message" in joined
 
 
 def test_memory_governance_promotes_after_two_independent_turns(tmp_path: Path):

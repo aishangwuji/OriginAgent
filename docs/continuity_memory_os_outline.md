@@ -139,14 +139,14 @@ Promotion / Forgetting / Conflict Resolver
 
 定义记忆和状态的可见范围。
 
-建议作用域级别：
+continuity `v1 Freeze` 的实际作用域级别：
 
-1. `global`
-2. `household`
-3. `user`
-4. `device`
-5. `session`
-6. `task`
+1. `device`
+2. `user`
+3. `session`
+4. `task`
+
+更宽的 `global` / `household` 属于后续演进设想，不属于当前运行契约。
 
 默认规则：
 
@@ -210,14 +210,14 @@ Promotion / Forgetting / Conflict Resolver
 4. 冲突标注
 5. 上下文分段组织
 
-建议输出结构：
+按当前运行时代码冻结的输出结构：
 
 1. system prompt
 2. runtime state block
-3. working memory block
-4. retrieved context block
-5. world state block
-6. recent dialogue messages
+3. recovered continuity checkpoint（可选）
+4. continuity blocks：`continuity_context`、`working_memory`、`world_state`
+5. reference blocks：`user_profile`、retrieval blocks、`recent_history`、`archived_session_summary`
+6. internal event（可选）
 7. current user message
 
 ### 7.6 Promotion / Forgetting / Conflict Resolver

@@ -304,12 +304,28 @@ async def test_inspect_context_reports_phase1_views_and_scope_filter(tmp_path) -
         _last_continuity_session_key="cli:direct",
         _last_context_assembly={
             "enabled": True,
+            "contract_version": "continuity.v1.freeze",
+            "assembler_role": "thin_orchestration_audit",
+            "assembly_order": [
+                "system_prompt",
+                "runtime_state",
+                "recovered_continuity_checkpoint",
+                "continuity_blocks",
+                "reference_blocks",
+                "internal_event",
+                "current_user_message",
+            ],
             "block_kinds": [
                 "runtime_context",
                 "continuity_context",
                 "working_memory_context",
                 "world_state_context",
                 "reference_context",
+            ],
+            "continuity_block_kinds": [
+                "continuity_context",
+                "working_memory_context",
+                "world_state_context",
             ],
             "reference_sources": ["memory_retrieval", "recent_history"],
             "current_message_preview": "Please continue the task",
@@ -373,6 +389,7 @@ async def test_inspect_context_reports_phase1_views_and_scope_filter(tmp_path) -
     ).execute()
 
     assert result["enabled"] is True
+    assert result["contract_version"] == "continuity.v1.freeze"
     assert result["views"]["conversation"]["message_count"] == 2
     assert result["views"]["conversation"]["current_message_preview"] == "Please continue the task"
     assert result["views"]["working"]["working_memory"]["pending_questions"] == ["What should we do next?"]
@@ -391,6 +408,15 @@ async def test_inspect_context_reports_phase1_views_and_scope_filter(tmp_path) -
     assert result["views"]["world"]["filtered_candidates"][0]["reasons"] == ["scope_hidden"]
     assert result["views"]["world"]["freshness"]["is_fresh"] is True
     assert result["views"]["world"]["contested"]["contested"] is True
+    assert result["last_context_assembly"]["assembly_order"] == [
+        "system_prompt",
+        "runtime_state",
+        "recovered_continuity_checkpoint",
+        "continuity_blocks",
+        "reference_blocks",
+        "internal_event",
+        "current_user_message",
+    ]
     assert result["governance"]["promotions"][0]["candidate_key"] == "candidate_1"
     assert result["governance"]["conflicts"] == 1
     assert result["governance"]["forgetting"][0]["kind"] == "empty_turn"

@@ -13,7 +13,18 @@ class ContextAssemblyResult:
 
 
 class ContextAssemblerV2:
-    """Build the user-side context blocks for Phase 1 continuity."""
+    """Thin continuity orchestration and audit layer over ContextBuilder."""
+
+    CONTRACT_VERSION = "continuity.v1.freeze"
+    ASSEMBLY_ORDER = [
+        "system_prompt",
+        "runtime_state",
+        "recovered_continuity_checkpoint",
+        "continuity_blocks",
+        "reference_blocks",
+        "internal_event",
+        "current_user_message",
+    ]
 
     def __init__(self, builder: Any) -> None:
         self._builder = builder
@@ -89,6 +100,9 @@ class ContextAssemblerV2:
         merged.extend(user_content)
         audit = {
             "enabled": True,
+            "contract_version": self.CONTRACT_VERSION,
+            "assembler_role": "thin_orchestration_audit",
+            "assembly_order": list(self.ASSEMBLY_ORDER),
             "session_key": session_key,
             "current_message_included": include_current_message,
             "current_message_preview": str(current_message or "").strip()[:200],
@@ -102,6 +116,13 @@ class ContextAssemblerV2:
                 for block in reference_blocks
                 if isinstance(block, dict)
             ],
+            "continuity_block_kinds": [
+                block.get("_meta", {}).get("kind")
+                for block in continuity_blocks
+                if isinstance(block, dict)
+            ],
+            "recovered_continuity_included": recovered_continuity_block is not None,
+            "internal_event_included": internal_event is not None and bool(internal_event[1]),
             "retrieval_fusion_enabled": True,
             "retrieval_sources_used": list(self._builder._last_retrieval_fusion.get("sources_used", [])),
             "retrieval_source_counts": dict(self._builder._last_retrieval_fusion.get("source_counts", {})),

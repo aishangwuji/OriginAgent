@@ -28,7 +28,7 @@ Phase 1 以当前仓库现状为前提：
 ### 3.1 本阶段必须完成
 
 1. Identity Layer 最小模型：至少打通 `user_id`、`session_id`、`device_id` 的运行时归属。
-2. Scope Model 最小版：至少支持 `user`、`session`、`task` 三类作用域判定与过滤规则。
+2. Scope Model 最小版：至少支持 `device`、`user`、`session`、`task` 四类作用域判定与过滤规则。
 3. Working Memory 最小版：提供独立于原始对话历史的结构化工作集。
 4. `ContextAssembler` v2 最小版：按四层运行视图组装最终 LLM 输入。
 5. 最小可观测性：可以解释某一轮上下文为何被组装成当前样子。
@@ -68,6 +68,7 @@ Phase 1 需要把这两个概念明确切开：
 ```json
 {
   "session_key": "channel:chat",
+  "owner_id": "user_123",
   "scope": "session",
   "current_goal": "当前要完成什么",
   "current_plan": [
@@ -189,7 +190,7 @@ Working memory update + audit trail
 
 1. 定义 `IdentityResolver` 或在 `ActorResolver` 之上增加 identity mapping。
 2. 形成 `user_id`、`session_id`、`device_id` 的最小运行时表示。
-3. 定义 `user`、`session`、`task` 三层作用域。
+3. 定义 `device`、`user`、`session`、`task` 四层作用域。
 4. 定义默认传播规则和高敏感信息的禁止向上传播规则。
 
 建议默认规则：
@@ -222,22 +223,23 @@ Working memory update + audit trail
 3. 设计 `ContextAssembler` v2 的四层拼装顺序。
 4. 设计最小审计输出。
 
-建议拼装顺序：
+按当前运行时代码冻结的拼装顺序：
 
 1. system prompt
 2. runtime state block
-3. working memory block
-4. retrieved context block
-5. world state block
-6. recent dialogue messages
+3. recovered continuity checkpoint（可选）
+4. continuity blocks：`continuity_context`、`working_memory`、`world_state`
+5. reference blocks：`user_profile`、retrieval blocks、`recent_history`、`archived_session_summary`
+6. internal event（可选）
 7. current user message
 
-建议最小预算策略：
+按当前运行时代码冻结的预算策略：
 
-1. 对话视图优先保底。
-2. 工作视图保留稳定小预算。
-3. 检索视图按来源限额裁剪。
-4. 世界视图先保留极小预算或空块。
+1. 历史消息先按合法边界收缩。
+2. 用户消息内容块内，`recent_history` 最先移除。
+3. 然后移除一般 retrieval blocks。
+4. 最后才移除 `user_profile` / `archived_session_summary`。
+5. current user message、working memory、world state 为保底块。
 
 交付：
 
