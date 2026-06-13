@@ -6,17 +6,18 @@
 
 ## 当前文档
 
-- [`red_queen_master_plan.md`](./red_queen_master_plan.md)：OriginAgent 向“红后式智能体”演进的总计划书，覆盖后台认知、分层感知、世界模型、动作安全、阶段路线与任务拆包规则。
-- [`red_queen_phase1_remaining_plan.md`](./red_queen_phase1_remaining_plan.md)：红后化总主线 `Phase 1` 剩余部分计划书，聚焦后台认知闭环、认知事件模型、统一编排与进入 `Phase 2` 前的止损条件。
+- [`red_queen_master_plan.md`](./red_queen_master_plan.md)：OriginAgent 向“红后式智能体”演进的总计划书与进度对齐文档，覆盖后台认知、分层感知、世界模型、动作安全，并明确与 continuity、元认知、受治理演进和未来元编程主线的边界关系。
+- [`red_queen_phase1_remaining_plan.md`](./red_queen_phase1_remaining_plan.md)：红后化总主线 `Phase 1` 剩余部分收口计划书，聚焦后台认知闭环、认知事件模型、统一编排与进入 `P2A` 世界视图原型后的验收边界。
 - [`continuity_memory_os_outline.md`](./continuity_memory_os_outline.md)：连续性与记忆操作系统独立架构提纲，覆盖身份层、作用域、工作记忆、检索融合、上下文构造、晋升与遗忘。
-- [`meta_cognition_runtime_outline.md`](./meta_cognition_runtime_outline.md)：显式元认知运行时架构草案，定义结构化反思、置信度跟踪、错误模式沉淀以及与 governed evolution / 未来元编程引擎的桥接边界。
+- [`meta_cognition_runtime_outline.md`](./meta_cognition_runtime_outline.md)：显式元认知运行时已落地主线总纲，定义结构化反思、置信度跟踪、错误模式沉淀以及与 governed evolution / 未来元编程引擎的桥接边界。
 - [`cognisphere_master_plan.md`](./cognisphere_master_plan.md)：CogniSphere 高阶总纲，定义 OriginAgent 在红后化、continuity、元认知之上的内在思维、世界模拟、元编程、技能自举、架构重构与不可变安全核心主线。
 - [`mc-001-meta-cognition-runtime-boundary.md`](./mc-001-meta-cognition-runtime-boundary.md)：`MC-001` 任务包，冻结 `MetaCognitionRuntime` 的职责边界、输入输出对象与治理约束。
 - [`mc-002-meta-trigger-collection.md`](./mc-002-meta-trigger-collection.md)：`MC-002` 任务包，冻结 `tool_failure`、`user_correction`、`task_completion` 三类元认知触发的采集与标准化边界。
 - [`mc-003-structured-reflection-redaction.md`](./mc-003-structured-reflection-redaction.md)：`MC-003` 任务包，冻结结构化 reflection 输出对象、redaction 规则与 retention 策略。
 - [`mc-004-meta-bridge-working-memory-introspection-memory-candidates.md`](./mc-004-meta-bridge-working-memory-introspection-memory-candidates.md)：`MC-004` 任务包，冻结元认知结果向 working memory、introspection 与 `memory_candidates` 的最小桥接边界。
 - [`mc-005-error-pattern-evolution-seed-bridge.md`](./mc-005-error-pattern-evolution-seed-bridge.md)：`MC-005` 任务包，冻结重复错误模式向 governed evolution signal / proposal seed 的最小桥接边界。
-- [`continuity_memory_phase1_plan.md`](./continuity_memory_phase1_plan.md)：连续性与记忆主线 `Phase 1` 计划书，收敛 identity、scope、working memory、context assembler 的最小落地骨架。
+- [`continuity_memory_phase1_plan.md`](./continuity_memory_phase1_plan.md)：连续性与记忆主线 `Phase 1` 已落地阶段说明，聚焦 identity、scope、working memory、context assembler 骨架的验收口径与收口方向。
+- [`continuity_memory_phase2_plan.md`](./continuity_memory_phase2_plan.md)：连续性与记忆主线 `Phase 2` 计划书，聚焦 `P2A` 文件快照 / 世界摘要原型、freshness / scope 过滤和 continuity bridge 的现状与 gap audit。
 - [`rq-001-cognitive-orchestration-boundary.md`](./rq-001-cognitive-orchestration-boundary.md)：`RQ-001` 任务包，定义后台认知编排层的职责边界与现有 runtime 的关系。
 - [`plan1.md`](./plan1.md)：历史 OriginAgent 第一阶段改造清单，保留作迁移参考。
 - [`originagent-v1-development-plan.md`](./originagent-v1-development-plan.md)：历史 OriginAgent v1 总体开发任务清单与技术落地方案。

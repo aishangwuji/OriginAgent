@@ -2,7 +2,7 @@
 
 Date: 2026-06-13
 Status: Implemented (functional mainline landed, release validation pending)
-Scope: OriginAgent 显式元认知、结构化反思、记忆桥接与受治理演进桥接的总主线现状与收官方向
+Scope: OriginAgent 显式元认知、结构化反思、记忆桥接与受治理演进桥接的已落地主线现状与收官方向；不等于元编程主线
 
 ## 0. 当前实现状态（2026-06-13）
 
@@ -160,4 +160,5 @@ Governed Sinks
 
 1. 功能主线已经做完，元认知总线已经从 trigger 一直打通到 governed evolution signal。
 2. 工程收官还没完全做完，差的是测试验收、阈值定稿和 operator 侧运行观测。
-3. 因此当前状态适合叫“主线功能收官，进入验收与硬化阶段”，不适合叫“所有后续工作都结束”。
+3. 这条已落地主线不应再被记作红后剩余待施工项，也不应与未来 `MetaProgrammingEngine` 混为一谈。
+4. 因此当前状态适合叫“主线功能收官，进入验收与硬化阶段”，不适合叫“所有后续工作都结束”。

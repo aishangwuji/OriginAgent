@@ -1,18 +1,21 @@
 # OriginAgent 连续性与记忆操作系统 Phase 1 计划书
 
 Date: 2026-06-08
-Status: Proposed
-Scope: OriginAgent 连续性与记忆操作系统 Phase 1 最小骨架
+Status: Implemented (mainline landed, closeout validation pending)
+Last Reviewed: 2026-06-13
+Scope: OriginAgent 连续性与记忆操作系统 Phase 1 最小骨架现状、验收口径与收口方向
 
 ## 1. 目标
 
-本计划书用于把 [`continuity_memory_os_outline.md`](./continuity_memory_os_outline.md) 收敛成可实施的 Phase 1 施工方案。
+本计划书用于记录 [`continuity_memory_os_outline.md`](./continuity_memory_os_outline.md) 在 Phase 1 的已落地骨架、验收口径与剩余收口事项。
 
 Phase 1 的目标不是完成完整记忆系统，而是先证明一件事：
 
 1. OriginAgent 的上下文构造已经不再只是“最近对话 + 静态记忆拼接”。
 2. 当前推理可以显式消费身份、作用域和工作记忆。
 3. 后续感知、世界模型和动作层有稳定的连续性接入骨架。
+
+截至 2026-06-13，上述目标在代码主线上已经基本满足；本文件当前更偏向“已落地阶段总结与收口标准”，而不再只是“实施前计划书”。
 
 ## 2. 预设条件
 
@@ -347,12 +350,13 @@ Phase 1 新增或更新测试应覆盖：
 3. 调试者可以解释某轮上下文为何包含这些块、为何遗漏那些块。
 4. 后续 Phase 2 接入感知快照和世界摘要时，不需要重新改造上下文主骨架。
 
+截至 2026-06-13，当前仓库应将本阶段视为“主线已落地、待验收收口”，而不应继续按 `Proposed` 或“尚未进入实现”口径描述。
+
 ## 15. 当前建议的下一步
 
-最合适的下一步是继续把本计划书拆成正式任务包，而不是直接铺开实现：
+最合适的下一步不再是“先出任务包、再进实现”，而是把本阶段按已落地主线做收口：
 
-1. 先输出 `RQ-002` 任务包。
-2. 再输出 `RQ-003` 任务包。
-3. 最后输出 `RQ-004` 任务包。
-
-等这三个任务包冻结后，再进入代码实现，能最大限度降低 Phase 1 返工风险。
+1. 同步本计划书、红后总计划与相关任务包的状态描述，停止将 continuity `Phase 1` 记作实施前状态。
+2. 逐项核对 identity、scope、working memory、`ContextAssembler` v2 与 introspection 是否满足本文件验收口径。
+3. 将本阶段遗留工作收敛到验收、调试可观测性和状态回填，而不是继续扩写新的 Phase 1 设计。
+4. 在 continuity `Phase 2` 仍保持 `P2A` 原型边界的前提下，把后续新增工作转移到世界摘要、过滤、freshness 与 bridge 的 gap audit。
