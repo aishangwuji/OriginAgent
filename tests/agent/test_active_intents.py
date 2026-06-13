@@ -366,6 +366,39 @@ async def test_agent_loop_does_not_start_active_intent_loop_when_disabled(tmp_pa
 
 
 @pytest.mark.asyncio
+async def test_disabled_agent_loop_does_not_auto_emit_due_reminder(tmp_path: Path) -> None:
+    from OriginAgent.agent.loop import AgentLoop
+    from OriginAgent.agent.reminders import ReminderRecord
+
+    loop = AgentLoop(
+        bus=MessageBus(),
+        provider=FakeProvider(LLMResponse(content="ok", finish_reason="stop")),
+        workspace=tmp_path,
+        model="fake-model",
+        allow_agent_initiated_messages=False,
+    )
+    session = loop.sessions.get_or_create("cli:test")
+    loop.sessions.save(session)
+    due_at = (datetime.now(timezone.utc) - timedelta(minutes=1)).isoformat()
+    loop._reminder_store.upsert(ReminderRecord.create(
+        session_key="cli:test",
+        channel="cli",
+        chat_id="test",
+        content="Do not auto deliver this reminder",
+        due_at=due_at,
+        reminder_id="disabled-r-1",
+    ))
+
+    loop._start_active_intent_loop()
+
+    assert loop._active_intent_task is None
+    assert loop.bus.inbound_size == 0
+    reminder = loop._reminder_store.get("disabled-r-1")
+    assert reminder is not None
+    assert reminder.status == "pending"
+
+
+@pytest.mark.asyncio
 async def test_agent_loop_starts_active_intent_loop_when_enabled(tmp_path: Path) -> None:
     from OriginAgent.agent.loop import AgentLoop
 
@@ -509,3 +542,36 @@ async def test_agent_loop_processes_cognitive_event_as_internal_event(tmp_path: 
     continuity = loop.introspection.continuity_summary()
     assert "Reminder: Follow up on the current plan" in continuity["working_memory"]["attention_items"]
     assert "internal_event" in continuity["last_context_assembly"]["block_kinds"]
+
+
+@pytest.mark.asyncio
+async def test_disabled_agent_loop_keeps_foreground_message_path_working(tmp_path: Path) -> None:
+    from OriginAgent.agent.loop import AgentLoop
+
+    provider = MagicMock(spec=FakeProvider(LLMResponse(content="ok", finish_reason="stop")))
+    provider.get_default_model.return_value = "fake-model"
+    provider.generation.max_tokens = 4096
+    provider.chat_with_retry = AsyncMock(return_value=LLMResponse(content="Handled foreground.", finish_reason="stop"))
+    provider.chat_stream_with_retry = AsyncMock(return_value=LLMResponse(content="Handled foreground.", finish_reason="stop"))
+
+    loop = AgentLoop(
+        bus=MessageBus(),
+        provider=provider,
+        workspace=tmp_path,
+        model="fake-model",
+        allow_agent_initiated_messages=False,
+    )
+
+    result = await loop._process_message(
+        InboundMessage(
+            channel="cli",
+            sender_id="user-1",
+            chat_id="test",
+            content="hello",
+            metadata={},
+            session_key_override="cli:test",
+        )
+    )
+
+    assert result is not None
+    assert "Handled foreground." in result.content

@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
+from OriginAgent.agent.active_intents import ActiveIntentRecord, JsonlActiveIntentLedger
 from OriginAgent.agent.cognitive_audit import JsonlCognitiveAuditLedger
 from OriginAgent.agent.cognitive_events import CognitiveDecision, CognitiveEvent
 from OriginAgent.agent.cognitive_scheduler import JsonlCognitiveSchedulerLedger, CognitiveSchedulerRun
@@ -198,3 +200,147 @@ def test_cognitive_audit_records_are_jsonl_on_disk(tmp_path) -> None:
 
     assert len(lines) == 1
     assert json.loads(lines[0])["event_type"] == "goal_nudge"
+
+
+def test_suppression_reason_matches_between_cognitive_decision_and_active_intent_record(tmp_path) -> None:
+    cognitive_ledger = JsonlCognitiveAuditLedger(tmp_path)
+    active_intent_ledger = JsonlActiveIntentLedger(tmp_path)
+    decision = CognitiveDecision(
+        decision_id="dec-1",
+        event_id="goal_nudge:cli:test:goal-1",
+        session_key="cli:test",
+        action="suppress",
+        outcome="suppressed",
+        suppression_reason="session_cooldown",
+        cooldown_key="goal_nudge:cli:test:goal-1",
+    )
+    record = ActiveIntentRecord(
+        timestamp="2026-06-13T00:00:00+00:00",
+        session_key="cli:test",
+        intent_type="goal_nudge",
+        intent_id="goal_nudge:cli:test:goal-1",
+        source_type="goal_state",
+        source_reference="goal-1",
+        outcome="suppressed",
+        summary="Resume the active goal",
+        suppression_reason="session_cooldown",
+    )
+
+    cognitive_ledger.append_decision(decision)
+    active_intent_ledger.append(record)
+
+    decision_rows = cognitive_ledger.recent_decisions()
+    active_rows = active_intent_ledger.recent()
+    matched = [
+        item for item in active_rows
+        if item.get("session_key") == decision_rows[0]["session_key"]
+        and item.get("intent_id") == decision_rows[0]["event_id"]
+    ]
+
+    assert len(matched) == 1
+    assert matched[0]["suppression_reason"] == decision_rows[0]["suppression_reason"]
+
+
+def test_fallback_path_has_event_and_decision_audit_without_scheduler_run(tmp_path) -> None:
+    cognitive_ledger = JsonlCognitiveAuditLedger(tmp_path)
+    scheduler_ledger = JsonlCognitiveSchedulerLedger(tmp_path)
+    before_runs = scheduler_ledger.summary(limit=20)["scheduler_run_count"]
+    event = CognitiveEvent(
+        event_id="goal_nudge:cli:test:goal-1",
+        session_key="cli:test",
+        event_type="goal_nudge",
+        source_type="goal_state",
+        source_reference="goal-1",
+        summary="Resume the active goal",
+    )
+    decision = CognitiveDecision(
+        decision_id="decision:goal_nudge:cli:test:goal-1",
+        event_id=event.event_id,
+        session_key="cli:test",
+        action="suppress",
+        outcome="suppressed",
+        suppression_reason="intent_cooldown",
+        cooldown_key=event.event_id,
+    )
+
+    cognitive_ledger.append_event(event)
+    cognitive_ledger.append_decision(decision)
+
+    assert cognitive_ledger.recent_events()[-1]["event_id"] == event.event_id
+    assert cognitive_ledger.recent_decisions()[-1]["decision_id"] == decision.decision_id
+    assert scheduler_ledger.summary(limit=20)["scheduler_run_count"] == before_runs
+
+
+def test_latest_scan_counts_can_be_reconciled_with_recent_audit_and_scheduler_rows(tmp_path) -> None:
+    cognitive_ledger = JsonlCognitiveAuditLedger(tmp_path)
+    scheduler_ledger = JsonlCognitiveSchedulerLedger(tmp_path)
+    created_at = datetime.now(timezone.utc).isoformat()
+    event_a = CognitiveEvent(
+        event_id="goal_nudge:cli:test:goal-1",
+        session_key="cli:test",
+        event_type="goal_nudge",
+        source_type="goal_state",
+        source_reference="goal-1",
+        created_at=created_at,
+    )
+    event_b = CognitiveEvent(
+        event_id="reminder:r-1",
+        session_key="cli:test",
+        event_type="scheduled_reminder",
+        source_type="reminder_store",
+        source_reference="r-1",
+        created_at=created_at,
+    )
+    decision_a = CognitiveDecision(
+        decision_id="decision:goal_nudge:cli:test:goal-1",
+        event_id=event_a.event_id,
+        session_key="cli:test",
+        action="emit",
+        outcome="emitted",
+        cooldown_key=event_a.event_id,
+        created_at=created_at,
+    )
+    decision_b = CognitiveDecision(
+        decision_id="decision:reminder:r-1",
+        event_id=event_b.event_id,
+        session_key="cli:test",
+        action="suppress",
+        outcome="suppressed",
+        suppression_reason="session_cooldown",
+        cooldown_key=event_b.event_id,
+        created_at=created_at,
+    )
+    run = CognitiveSchedulerRun(
+        run_id="manual:cognitive_scheduler:2026-06-13T00:00:00+00:00",
+        trigger="manual",
+        scanned_session_count=1,
+        decision_count=2,
+        emitted_count=1,
+        suppressed_count=1,
+        payload={"session_keys": ["cli:test"]},
+        created_at=(datetime.now(timezone.utc) + timedelta(seconds=1)).isoformat(),
+    )
+
+    for item in (event_a, event_b):
+        cognitive_ledger.append_event(item)
+    for item in (decision_a, decision_b):
+        cognitive_ledger.append_decision(item)
+    scheduler_ledger.append(run)
+
+    event_rows = cognitive_ledger.recent_events(limit=10)
+    decision_rows = cognitive_ledger.recent_decisions(limit=10)
+    summary = scheduler_ledger.summary(limit=10)
+    latest_scan_like = {
+        "decision_count": len(decision_rows),
+        "emitted_count": sum(1 for item in decision_rows if item["outcome"] == "emitted"),
+        "suppressed_count": sum(1 for item in decision_rows if item["outcome"] == "suppressed"),
+        "event_types": [item["event_type"] for item in event_rows],
+    }
+
+    assert latest_scan_like["decision_count"] == 2
+    assert latest_scan_like["emitted_count"] == 1
+    assert latest_scan_like["suppressed_count"] == 1
+    assert latest_scan_like["event_types"] == ["goal_nudge", "scheduled_reminder"]
+    assert summary["latest_scheduler_run"]["decision_count"] == 2
+    assert summary["latest_scheduler_run"]["emitted_count"] == 1
+    assert summary["latest_scheduler_run"]["suppressed_count"] == 1
