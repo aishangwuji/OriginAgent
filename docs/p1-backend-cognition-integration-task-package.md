@@ -1,7 +1,7 @@
 # P1 任务包：后台认知闭环集成收口
 
 Date: 2026-06-09
-Status: Implemented, Closeout Validation Pending
+Status: Completed
 Last Reviewed: 2026-06-13
 Scope: 红后化总主线 `Phase 1` 的后台认知闭环运行时、producer 集合与验收收口
 
@@ -217,7 +217,7 @@ AgentLoop._process_message()
 5. cognitive event 仍走 `_process_message()` 主路径。
 6. scheduler ledger 与 introspection 聚合可被读取。
 
-当前应优先补足或显式核对的证据缺口包括：
+本次 closeout 已补齐或显式核对的关键证据包括：
 
 1. `scheduler_runs.jsonl` 主路径与 fallback 路径差异的显式验证。
 2. suppression reason 在双轨审计中的一致性验证。

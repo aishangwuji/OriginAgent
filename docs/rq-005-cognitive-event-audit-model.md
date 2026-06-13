@@ -1,7 +1,7 @@
 # RQ-005 任务包：后台认知事件与审计合同冻结
 
 Date: 2026-06-09
-Status: Implemented, Closeout Validation Pending
+Status: Completed
 Last Reviewed: 2026-06-13
 Scope: 红后化总主线 `Phase 1` 的后台认知事件、决策、审计与 introspection 合同冻结
 
@@ -204,14 +204,14 @@ Scope: 红后化总主线 `Phase 1` 的后台认知事件、决策、审计与 i
 
 ## tests
 
-本任务包本轮不要求直接新增测试，但应引用以下已有证据：
+本任务包当前引用的 closeout 证据包括：
 
 1. 事件与决策序列化/反序列化测试。
 2. JSONL 落盘与读取测试。
 3. scheduler ledger 汇总测试。
 4. introspection 汇总字段测试。
 
-后续 closeout patch 的优先补证方向包括：
+本次 closeout 已补齐并核对以下关键证据：
 
 1. suppression reason 在双轨审计中的一致性验证。
 2. fallback 路径下 scheduler ledger 不新增记录的显式验证。
