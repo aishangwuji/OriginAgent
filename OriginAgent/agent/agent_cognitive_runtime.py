@@ -111,7 +111,7 @@ class AgentCognitiveRuntime:
                 runtime_context=runtime_context,
                 event=event,
             )
-            allowed, suppression_reason = self._deps.active_intents._passes_cooldown(
+            allowed, suppression_reason = self._deps.active_intents.passes_cooldown(
                 session_key,
                 candidate["cooldown_key"],
             )

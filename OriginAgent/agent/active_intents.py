@@ -356,6 +356,11 @@ class ActiveIntentService:
     def _nearline_memory_enabled(self) -> bool:
         return nearline_runtime_enabled(self._nearline_memory_config)
 
+    def passes_cooldown(self, session_key: str, intent_id: str) -> tuple[bool, str | None]:
+        """Public wrapper for cooldown checks reused by the cognitive runtime."""
+
+        return self._passes_cooldown(session_key, intent_id)
+
     def _passes_cooldown(self, session_key: str, intent_id: str) -> tuple[bool, str | None]:
         now = _utcnow()
         session_cutoff = self.config.session_cooldown_seconds
