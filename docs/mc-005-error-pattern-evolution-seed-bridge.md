@@ -1,8 +1,8 @@
 # MC-005 任务包：ErrorPattern consolidation 与 governed evolution seed 桥接
 
-Date: 2026-06-12
-Status: Proposed
-Scope: MetaCognitionRuntime 重复问题模式向 governed evolution signal / proposal seed 的最小桥接边界冻结
+Date: 2026-06-13
+Status: Implemented (verification pending)
+Scope: MetaCognitionRuntime 重复问题模式向 governed evolution signal / proposal seed 的最小桥接边界已落地
 
 ## title
 
@@ -12,137 +12,112 @@ Scope: MetaCognitionRuntime 重复问题模式向 governed evolution signal / pr
 
 冻结 `MetaCognitionRuntime` 的高阶产物如何接入受治理自演进链路，使 OriginAgent 能把“重复犯错”“重复低效”“反复缺 guardrail”的模式，转成可审查、可抑制、可回滚的演进候选，而不是直接触发自修改。
 
-本任务包完成后，系统应能稳定回答：
+## implemented_state
 
-1. 什么样的元认知产物有资格变成 evolution signal。
-2. evolution seed 与现有 `OpportunitySignal` 有什么关系。
-3. 如何复用现有 `OpportunitySignalStore -> Curator -> ReviewProposalStore` 链路。
-4. 为什么这一步仍然不是自动自改造，而只是受治理候选生成。
+当前代码已经按最小桥接链落地：
 
-## scope
+1. `ReflectionRecord` 已可被规则式汇总为 `ErrorPattern`，不新增额外 LLM 调用。
+2. `ErrorPattern` 与 `EvolutionSeed` 已升级为显式字段模型。
+3. 模式汇总固定按 `owner_id` 分区，避免不同用户上下文互相污染。
+4. 时间窗口语义已固定为“先按 `pattern_window_days` 过滤，再保留最新的 `pattern_window_max_reflections` 条”。
+5. `patterns.jsonl` 与 `evolution_seeds.jsonl` 已进入统一 meta audit ledger。
+6. eligible pattern 会被规范化为现有 `OpportunitySignalCandidate`，并写入既有 `OpportunitySignalStore`。
+7. bridge 已把 `evidence_refs` 转换为兼容 `_merge_evidence_sources` 的 `evidence_sources: list[dict]`。
+8. 若同一 `target_key` 的现有 signal 状态为 `suppressed`，当前 turn 不再 upsert。
+9. 每个 turn 最多 upsert 1 个 signal，优先级遵循 `severity -> frequency -> trigger type`。
 
-本任务包覆盖以下内容：
+## landed_contract
 
-1. 冻结最小高阶输入对象：
-   - `ErrorPattern`
-   - `ReflectionRecord`
-   - `EvolutionSeed`
-2. 冻结 `ErrorPattern` 的最小职责：
-   - 汇总跨多次执行重复出现的问题
-   - 对 pattern 做频次、严重度和能力域归类
-   - 为 signal 生成提供稳定目标键，而不是一次性失败日志
-3. 冻结 `EvolutionSeed` 的最小职责：
-   - 表达一个“值得被 review 的改进假设”
-   - 不直接等于 proposal
-   - 不直接等于代码改动
-4. 冻结桥接方式：
-   - `MetaCognitionRuntime` 产出 `EvolutionSeed`
-   - seed 被标准化为 evolution candidate
-   - evolution candidate 写入现有 `OpportunitySignalStore`
-   - `Curator` 再按现有规则把高分 signal 转成 review proposal
-5. 冻结目标类型边界：
-   - 首版只允许桥接到现有受支持的两类提案方向：
-     - `workflow_candidate`
-     - `skill_candidate`
-   - 不允许首版直接生成“改源码”“改主配置”“改权限”的演进候选
-6. 冻结证据与风控规则：
-   - signal evidence 必须来自多个 journal / reflection / pattern 片段
-   - evidence 必须 redacted
-   - risk level、priority score、feedback 状态继续交给现有 evolution 体系治理
-7. 冻结 operator loop 关系：
-   - 元认知生成的 signal 应进入现有 `inspect_signal`、`list_signals`、`operator_recommendations`
-   - 允许后续被 suppress / resume / retry-trial / review
+### pattern consolidation
 
-## non_goals
+1. consolidation 固定只读取最近窗口内的 redacted `ReflectionRecord`。
+2. 排除：
+   - `policy_denied` only turn
+   - 没有 `root_cause_hypotheses`、`what_failed`、`learned_rule_candidate` 的 reflection
+   - `learned_rule_candidate.kind == "preference"`
+3. 归一化文本优先级固定为：
+   - `learned_rule_candidate.summary`
+   - `root_cause_hypotheses[0]`
+   - `what_failed[0]`
+4. `candidate_target_type` 固定规则：
+   - `task_pattern -> workflow_candidate`
+   - `fact / constraint -> skill_candidate`
+   - 重复同类 `user_correction` 且无 learned rule -> `skill_candidate`
+5. 只有 `severity in {"medium", "high"}` 且满足频次、distinct turn 阈值的 pattern 才进入 seed 阶段。
 
-本任务包不覆盖以下内容：
+### evolution seed
 
-1. `MetaProgrammingEngine` 的实现。
-2. 自动生成代码补丁或配置补丁。
-3. 让元认知直接写入 `ReviewProposalStore` 绕过 signal 层。
-4. 新增新的 evolution target type。
-5. 自动激活任何 workflow、skill 或代码工件。
-6. 对当前 Curator / PromotionGate / TrialRunner 的大规模重构。
+1. `EvolutionSeed.change_target_type` 首版只允许：
+   - `workflow_candidate`
+   - `skill_candidate`
+2. `target_key` 已固定为语义可读、稳定去重的格式：
+   - `meta.workflow.<capability_domain>.<dominant_trigger_type>.<pattern_slug>.<pattern_key8>`
+   - `meta.skill.<capability_domain>.<dominant_trigger_type>.<pattern_slug>.<pattern_key8>`
+3. `pattern_slug` 为空时固定为 `unknown`，不回退成纯哈希。
+4. `title` / `summary` 均使用确定性模板，不新增 LLM。
+5. `summary` 首行固定保留 `Origin: meta_cognition`。
 
-## dependencies
+### signal bridge
 
-1. [`docs/meta_cognition_runtime_outline.md`](./meta_cognition_runtime_outline.md)
-2. [`docs/mc-001-meta-cognition-runtime-boundary.md`](./mc-001-meta-cognition-runtime-boundary.md)
-3. [`docs/mc-002-meta-trigger-collection.md`](./mc-002-meta-trigger-collection.md)
-4. [`docs/mc-003-structured-reflection-redaction.md`](./mc-003-structured-reflection-redaction.md)
-5. [`docs/mc-004-meta-bridge-working-memory-introspection-memory-candidates.md`](./mc-004-meta-bridge-working-memory-introspection-memory-candidates.md)
-6. [`docs/governed_evolution.md`](./governed_evolution.md)
-7. 当前 evolution 锚点：
-   - [OriginAgent/agent/evolution.py](/D:/Demo/OpenHome/OriginAgentclient/OriginAgent/agent/evolution.py)
-   - [OriginAgent/agent/curator.py](/D:/Demo/OpenHome/OriginAgentclient/OriginAgent/agent/curator.py)
-   - [OriginAgent/agent/evolution_operator.py](/D:/Demo/OpenHome/OriginAgentclient/OriginAgent/agent/evolution_operator.py)
-   - [OriginAgent/agent/evolution_control_plane.py](/D:/Demo/OpenHome/OriginAgentclient/OriginAgent/agent/evolution_control_plane.py)
+1. bridge 只复用现有：
+   - `OpportunitySignalStore`
+   - `Curator`
+   - `ReviewProposalStore`
+   - `EvolutionControlPlane`
+2. `OpportunitySignal` schema 没有新增字段。
+3. 每条 evidence source 固定包含：
+   - `cursor`
+   - `session_key`
+   - `timestamp`
+   - `preview`
+4. evidence 只来自 redacted meta 片段，不包含 raw prompt / history / tool payload / source excerpt。
+5. operator 仍通过现有 `inspect_signal / list_signals / suppress / resume / recommendations` 控制，没有 auto-apply。
 
-## files_or_modules
+## affected_modules
 
-本任务包预期主要触达文档层：
+本任务包当前主要落在：
 
-1. [`docs/mc-005-error-pattern-evolution-seed-bridge.md`](./mc-005-error-pattern-evolution-seed-bridge.md)
-2. [`docs/meta_cognition_runtime_outline.md`](./meta_cognition_runtime_outline.md)
+1. [OriginAgent/agent/meta_cognition_patterns.py](/D:/Demo/OpenHome/OriginAgentclient/OriginAgent/agent/meta_cognition_patterns.py)
+2. [OriginAgent/agent/meta_cognition_evolution_bridge.py](/D:/Demo/OpenHome/OriginAgentclient/OriginAgent/agent/meta_cognition_evolution_bridge.py)
+3. [OriginAgent/agent/meta_cognition_reflector.py](/D:/Demo/OpenHome/OriginAgentclient/OriginAgent/agent/meta_cognition_reflector.py)
+4. [OriginAgent/agent/meta_cognition_models.py](/D:/Demo/OpenHome/OriginAgentclient/OriginAgent/agent/meta_cognition_models.py)
+5. [OriginAgent/agent/meta_cognition_audit.py](/D:/Demo/OpenHome/OriginAgentclient/OriginAgent/agent/meta_cognition_audit.py)
+6. [OriginAgent/agent/introspection/service.py](/D:/Demo/OpenHome/OriginAgentclient/OriginAgent/agent/introspection/service.py)
+7. [OriginAgent/agent/evolution.py](/D:/Demo/OpenHome/OriginAgentclient/OriginAgent/agent/evolution.py)
 
-后续实现预计主要影响：
+## acceptance_status
 
-1. [OriginAgent/agent/evolution.py](/D:/Demo/OpenHome/OriginAgentclient/OriginAgent/agent/evolution.py)
-2. [OriginAgent/agent/curator.py](/D:/Demo/OpenHome/OriginAgentclient/OriginAgent/agent/curator.py)
-3. [OriginAgent/agent/evolution_operator.py](/D:/Demo/OpenHome/OriginAgentclient/OriginAgent/agent/evolution_operator.py)
-4. [OriginAgent/agent/introspection/service.py](/D:/Demo/OpenHome/OriginAgentclient/OriginAgent/agent/introspection/service.py)
-5. 候选新模块：
-   - `OriginAgent/agent/meta_cognition_runtime.py`
-   - `OriginAgent/agent/meta_cognition_patterns.py`
-   - `OriginAgent/agent/meta_cognition_evolution_bridge.py`
+本任务包的设计性验收标准已经在代码层满足：
 
-## acceptance_criteria
+1. `ErrorPattern`、`EvolutionSeed` 与现有 `OpportunitySignal` 的角色关系已固定并落地。
+2. 元认知桥接只写 signal / seed，不直接写 proposal、代码或主配置。
+3. 首版只桥接到现有 `workflow_candidate` / `skill_candidate` 两类演进方向。
+4. signal evidence 来自多条 redacted 元认知片段，而不是单次失败日志。
+5. 生成的 signal 继续走现有 `Curator -> ReviewProposalStore -> PromotionGate / Trial / Review` 链路。
+6. operator 仍通过既有 evolution control plane 做 inspect、suppress、resume 和 report。
 
-本任务包完成时，必须同时满足以下条件：
+## validation
 
-1. 已明确 `ErrorPattern`、`EvolutionSeed` 与现有 `OpportunitySignal` 的角色关系。
-2. 已明确元认知桥接只写 signal / seed，不直接写 proposal、代码或主配置。
-3. 已明确首版只桥接到现有 `workflow_candidate` / `skill_candidate` 两类演进方向。
-4. 已明确 signal evidence 必须来自多条 redacted 元认知片段，而不是单次失败日志。
-5. 已明确生成的 signal 继续走现有 `Curator -> ReviewProposalStore -> PromotionGate / Trial / Review` 链路。
-6. 已明确 operator 可以通过现有 evolution control plane 对这类 signal 做 inspect、suppress、resume 和 report。
+当前仍待完成的主要是运行验收与噪音观察：
 
-## tests
-
-后续实现至少应覆盖以下测试：
-
-1. pattern consolidation 测试：
-   - 相同类型重复失败聚合为单个 `ErrorPattern`
-   - 不同能力域错误不会错误合并
-   - 频次、严重度、example refs 统计正确
-2. evolution seed 标准化测试：
-   - `workflow_candidate` seed 映射正确
-   - `skill_candidate` seed 映射正确
-   - 不支持的 target type 被拒绝
-3. signal store 桥接测试：
-   - seed 可写入 `OpportunitySignalStore`
-   - 重复 seed 走 upsert 而不是无限新增
-   - evidence 被 redacted 且数量受限
-4. curator 联动测试：
-   - 高分 signal 可被 Curator 读取
-   - 转换出的 proposal 带 evolution origin 与 operator insights
-   - 低分 signal 不会过早转 proposal
-5. control plane / operator 测试：
-   - `inspect_signal` 可看到元认知来源 signal
-   - suppress / resume 仍按现有策略工作
-   - recommendations 不会自动执行
+1. pattern consolidation、seed 生成、signal bridge 的测试需要在可运行 Python 环境下执行。
+2. `OpportunitySignalStore.upsert_candidates()` 后的 evidence merge 兼容性需要实际跑通。
+3. Curator / control plane / recommendations 的 meta-origin 联动需要做回归验证。
+4. 开关打开后的 signal 噪音、抑制率和重复 upsert 行为需要做一轮真实样本观察。
 
 ## rollback_plan
 
-若本任务包实现导致 signal 噪音过高、proposal 队列污染或演进方向失真，回滚方式应为：
+若后续验证发现 signal 噪音高、proposal 队列污染或方向失真，回滚边界仍保持：
 
 1. 先关闭 meta-to-evolution bridge 开关。
 2. 保留 `ErrorPattern` 与 `EvolutionSeed` 只读记录，停止写入 `OpportunitySignalStore`。
 3. 必要时仅保留 introspection 中的 pattern 汇总，不进入 governed evolution。
-4. 不允许在未修订 `MC-005` 前，扩大到自动 proposal 生成之外的新自动写路径。
+4. 不扩大到自动 proposal 之外的新自动写路径。
 
-## open_questions
+## next_closeout
 
-1. 首版 `EvolutionSeed.change_target_type` 是否只允许 `workflow` / `skill`，还是预留 `prompt_policy` 但默认禁用。
-2. `ErrorPattern.frequency` 的提案阈值是按绝对次数，还是按时间窗口内重复率。
-3. 对“用户多次纠正同一类回答”的 pattern，首版更适合生成 `skill_candidate` 还是 `workflow_candidate`。
+收官前还应完成：
+
+1. 跑完 pattern / seed / signal / curator 联动测试。
+2. 基于真实元认知样本评估 `pattern_min_frequency`、`pattern_min_distinct_turns` 和 `max_signal_upserts_per_turn`。
+3. 编写一份 operator 侧使用说明，覆盖 `inspect_signal`、`suppress`、`resume` 和 meta 来源判读。

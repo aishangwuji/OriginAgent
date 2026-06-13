@@ -54,8 +54,9 @@ def consolidate_error_patterns(
     config: Any,
     owner_id: str,
     current_turn_reflection_ids: set[str] | None = None,
+    now: datetime | None = None,
 ) -> PatternConsolidationResult:
-    recent = _recent_window(reflections, config=config)
+    recent = _recent_window(reflections, config=config, now=now)
     current_ids = set(current_turn_reflection_ids or set())
     owner_key = str(owner_id or "").strip()
     groups: dict[tuple[str, str, str, str, str], list[ReflectionRecord]] = {}
@@ -100,10 +101,15 @@ def consolidate_error_patterns(
     )
 
 
-def _recent_window(reflections: list[ReflectionRecord], *, config: Any) -> list[ReflectionRecord]:
+def _recent_window(
+    reflections: list[ReflectionRecord],
+    *,
+    config: Any,
+    now: datetime | None = None,
+) -> list[ReflectionRecord]:
     days = max(1, int(getattr(config, "pattern_window_days", 14) or 14))
     limit = max(1, int(getattr(config, "pattern_window_max_reflections", 200) or 200))
-    cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+    cutoff = (now or datetime.now(timezone.utc)) - timedelta(days=days)
     filtered = [
         item for item in reflections
         if (_parse_iso(item.created_at) or datetime.min.replace(tzinfo=timezone.utc)) >= cutoff

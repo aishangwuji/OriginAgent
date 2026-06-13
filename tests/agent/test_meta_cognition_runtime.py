@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
@@ -556,6 +557,7 @@ def test_consolidate_error_patterns_merges_repeated_reflections() -> None:
                 "supporting_refs": [f"tool:grep:{i}"],
             },
             payload={
+                "owner_id": "user-1",
                 "trigger_contexts": [{"trigger_type": "tool_failure", "status": "error"}],
                 "evidence_refs": [f"tool:grep:{i}"],
             },
@@ -571,6 +573,7 @@ def test_consolidate_error_patterns_merges_repeated_reflections() -> None:
         ),
         owner_id="user-1",
         current_turn_reflection_ids={"r3"},
+        now=datetime(2026, 6, 14, tzinfo=timezone.utc),
     )
     assert len(result.patterns) == 1
     pattern = result.patterns[0]

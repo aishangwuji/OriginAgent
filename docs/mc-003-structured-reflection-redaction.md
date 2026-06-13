@@ -1,8 +1,8 @@
 # MC-003 任务包：结构化反思输出与 redaction / retention 策略
 
-Date: 2026-06-12
-Status: Proposed
-Scope: MetaCognitionRuntime 的结构化 reflection 输出、脱敏规则与保留策略冻结
+Date: 2026-06-13
+Status: Implemented (verification pending)
+Scope: MetaCognitionRuntime 的结构化 reflection 输出、脱敏规则与保留边界已落地
 
 ## title
 
@@ -12,155 +12,121 @@ Scope: MetaCognitionRuntime 的结构化 reflection 输出、脱敏规则与保�
 
 冻结 `MetaCognitionRuntime` 的最小结构化输出契约，使系统能够在不暴露原始 chain-of-thought、不污染 prompt、不泄露敏感数据的前提下，产出可治理、可检索、可审计的元认知对象。
 
-本任务包完成后，系统应能稳定回答：
+## implemented_state
 
-1. 一次元认知输出最少应该长什么样。
-2. 哪些字段允许保留，哪些字段必须裁剪或脱敏。
-3. journal、reflection、confidence trace 之间如何分层。
-4. 哪些结果只做短期保留，哪些结果允许进入后续治理链。
+当前代码已经按 sidecar 方案落地了本任务包的核心边界：
 
-## scope
+1. `ThoughtJournalEntry`、`ReflectionRecord`、`ConfidenceTrace` 已升级为显式字段模型。
+2. 三个对象仍保留 `summary` 与 `payload` 兼容字段，用于旧 JSONL 读取和 redacted preview，但不再承载主语义。
+3. `from_json()` 已兼容旧骨架记录，新写入以显式字段为真值。
+4. 每个 accepted trigger 会先写入 deterministic minimal journal，不依赖 LLM。
+5. `structured_reflection_enabled=true` 时，`MetaCognitionReflector` 会通过 `AuxiliaryLLMRouter` 的 `task="meta_cognition"` 调用旁路反思。
+6. 反思 prompt 固定复用单模板 [`OriginAgent/templates/agent/meta_cognition_reflection.md`](/D:/Demo/OpenHome/OriginAgentclient/OriginAgent/templates/agent/meta_cognition_reflection.md)。
+7. 旁路输出使用 fenced-JSON tolerant 解析；JSON 解析失败、schema 校验失败或 LLM 失败时，只保留 minimal journal。
+8. `journals.jsonl`、`reflections.jsonl`、`confidence_traces.jsonl` 已进入统一的 meta audit ledger。
 
-本任务包覆盖以下内容：
+## landed_contract
 
-1. 冻结最小结构化输出对象：
-   - `ThoughtJournalEntry`
-   - `ReflectionRecord`
-   - `ConfidenceTrace`
-2. 冻结各对象的最小字段：
-   - `ThoughtJournalEntry`
-     - `entry_id`
-     - `session_key`
-     - `trigger_type`
-     - `task_reference`
-     - `strategy_summary`
-     - `assumptions`
-     - `evidence_refs`
-     - `confidence`
-     - `expected_outcome`
-     - `actual_outcome`
-     - `mismatch_summary`
-     - `suggested_next_action`
-     - `created_at`
-   - `ReflectionRecord`
-     - `reflection_id`
-     - `source_entry_ids`
-     - `reflection_kind`
-     - `outcome_class`
-     - `root_cause_hypotheses`
-     - `what_worked`
-     - `what_failed`
-     - `learned_rule_candidate`
-     - `confidence`
-     - `retention_hint`
-   - `ConfidenceTrace`
-     - `trace_id`
-     - `subject_type`
-     - `subject_reference`
-     - `initial_confidence`
-     - `final_confidence`
-     - `change_reason`
-     - `evidence_refs`
-3. 冻结输出风格约束：
-   - 只保留结构化摘要
-   - 不保留原始全文思维过程
-   - 不保留自由文本长篇独白
-4. 冻结 redaction 规则：
-   - 复用现有 `redact_memory_text`
-   - 复用 audit 侧 forbidden metadata 思路
-   - evidence 只保留 ref，不保留原始 payload / prompt / source excerpt
-   - 所有面向 introspection / audit 的文本都需裁剪
-5. 冻结 retention 策略：
-   - `ThoughtJournalEntry` 默认短期保留
-   - `ReflectionRecord` 允许中期保留
-   - `ConfidenceTrace` 默认只保留摘要或聚合结果
-   - learned rule candidate 不等于直接长期记忆
-6. 冻结 reflection prompt 输出约束：
-   - 输出必须是结构化 JSON 或等价结构
-   - 必须区分“假设”“证据”“偏差”“下一步”
-   - 必须允许显式输出“不确定”
+### 结构化对象
 
-## non_goals
+1. `ThoughtJournalEntry` 已落地最小显式字段：
+   - `entry_id`
+   - `session_key`
+   - `created_at`
+   - `trigger_type`
+   - `task_reference`
+   - `strategy_summary`
+   - `assumptions`
+   - `evidence_refs`
+   - `confidence`
+   - `expected_outcome`
+   - `actual_outcome`
+   - `mismatch_summary`
+   - `suggested_next_action`
+2. `ReflectionRecord` 已落地最小显式字段：
+   - `reflection_id`
+   - `session_key`
+   - `created_at`
+   - `source_entry_ids`
+   - `reflection_kind`
+   - `outcome_class`
+   - `root_cause_hypotheses`
+   - `what_worked`
+   - `what_failed`
+   - `learned_rule_candidate`
+   - `confidence`
+   - `retention_hint`
+3. `ConfidenceTrace` 已落地最小显式字段：
+   - `trace_id`
+   - `session_key`
+   - `created_at`
+   - `subject_type`
+   - `subject_reference`
+   - `initial_confidence`
+   - `final_confidence`
+   - `change_reason`
+   - `evidence_refs`
 
-本任务包不覆盖以下内容：
+### 输出风格与安全边界
 
-1. trigger collector 实现。
-2. working memory / introspection / memory_candidates 的具体回写。
-3. `ErrorPattern` 与 `EvolutionSeed` 的 consolidation 实现。
-4. 存储文件名或 JSONL schema 的最终实现定稿。
-5. 多模态反思模板。
-6. 模型供应商相关 reasoning block 的兼容层实现。
+1. 不保存原始 CoT。
+2. 不保存 raw prompt、raw history、raw tool payload、raw source excerpt。
+3. evidence 默认只保留 ref，不保留原始内容。
+4. introspection / audit / bridge 只暴露 redacted preview。
+5. `ConfidenceTrace.initial_confidence = null` 合法，表示首条快照而非差分。
 
-## dependencies
+### redaction / retention
 
-1. [`docs/meta_cognition_runtime_outline.md`](./meta_cognition_runtime_outline.md)
-2. [`docs/mc-001-meta-cognition-runtime-boundary.md`](./mc-001-meta-cognition-runtime-boundary.md)
-3. [`docs/mc-002-meta-trigger-collection.md`](./mc-002-meta-trigger-collection.md)
-4. [`docs/governed_evolution.md`](./governed_evolution.md)
-5. 当前 redaction / audit / memory 锚点：
-   - [OriginAgent/agent/memory.py](/D:/Demo/OpenHome/OriginAgentclient/OriginAgent/agent/memory.py)
-   - [OriginAgent/agent/audit.py](/D:/Demo/OpenHome/OriginAgentclient/OriginAgent/agent/audit.py)
-   - [OriginAgent/agent/background_review.py](/D:/Demo/OpenHome/OriginAgentclient/OriginAgent/agent/background_review.py)
-   - [OriginAgent/agent/introspection/service.py](/D:/Demo/OpenHome/OriginAgentclient/OriginAgent/agent/introspection/service.py)
+1. `meta_cognition_redact` 已统一复用 [`OriginAgent/agent/memory.py`](/D:/Demo/OpenHome/OriginAgentclient/OriginAgent/agent/memory.py) 中的 `redact_memory_text()`。
+2. forbidden metadata key 过滤复用了 memory / audit 的既有思路，而不是另造一套脱敏体系。
+3. `retention_hint` 已标准化为有限枚举：
+   - `discard`
+   - `short`
+   - `review`
+   - `candidate`
+4. `learned_rule_candidate` 首版固定为单条紧凑结论，不允许复合规则集。
 
-## files_or_modules
+## affected_modules
 
-本任务包预期主要触达文档层：
+本任务包当前主要落在：
 
-1. [`docs/mc-003-structured-reflection-redaction.md`](./mc-003-structured-reflection-redaction.md)
-2. [`docs/meta_cognition_runtime_outline.md`](./meta_cognition_runtime_outline.md)
+1. [OriginAgent/agent/meta_cognition_models.py](/D:/Demo/OpenHome/OriginAgentclient/OriginAgent/agent/meta_cognition_models.py)
+2. [OriginAgent/agent/meta_cognition_reflector.py](/D:/Demo/OpenHome/OriginAgentclient/OriginAgent/agent/meta_cognition_reflector.py)
+3. [OriginAgent/agent/meta_cognition_audit.py](/D:/Demo/OpenHome/OriginAgentclient/OriginAgent/agent/meta_cognition_audit.py)
+4. [OriginAgent/agent/meta_cognition_redact.py](/D:/Demo/OpenHome/OriginAgentclient/OriginAgent/agent/meta_cognition_redact.py)
+5. [OriginAgent/agent/introspection/service.py](/D:/Demo/OpenHome/OriginAgentclient/OriginAgent/agent/introspection/service.py)
 
-后续实现预计主要影响：
+## acceptance_status
 
-1. [OriginAgent/agent/memory.py](/D:/Demo/OpenHome/OriginAgentclient/OriginAgent/agent/memory.py)
-2. [OriginAgent/agent/audit.py](/D:/Demo/OpenHome/OriginAgentclient/OriginAgent/agent/audit.py)
-3. [OriginAgent/agent/introspection/service.py](/D:/Demo/OpenHome/OriginAgentclient/OriginAgent/agent/introspection/service.py)
-4. 候选新模块：
-   - `OriginAgent/agent/meta_cognition_models.py`
-   - `OriginAgent/agent/meta_cognition_runtime.py`
-   - `OriginAgent/agent/meta_cognition_audit.py`
+本任务包的设计性验收标准已经在代码层满足：
 
-## acceptance_criteria
+1. 三类结构化对象的最小字段集合已冻结并写入实现。
+2. 结构化反思输出不保存原始 CoT，只保存裁剪后的结构化摘要。
+3. evidence 默认保留 ref，不保留 payload / prompt / history / source excerpt。
+4. redaction 复用现有 memory / audit 规则。
+5. `retention_hint` 只表达保留建议，不直接等于长期记忆晋升。
+6. `MC-004` 与 `MC-005` 已直接复用这些结构化对象与 redaction 约束。
 
-本任务包完成时，必须同时满足以下条件：
+## validation
 
-1. `ThoughtJournalEntry`、`ReflectionRecord`、`ConfidenceTrace` 的最小字段集合已冻结。
-2. 已明确：结构化反思输出不能保存原始 CoT，只能保存裁剪后的结构化摘要。
-3. 已明确：evidence 默认保留 ref，不保留原始 payload、prompt、history 或 source excerpt。
-4. 已明确：redaction 复用现有 memory / audit 规则，而不是另造一套脱敏体系。
-5. 已明确：retention_hint 只表达保留建议，不直接等于长期记忆晋升。
-6. `MC-004` 与后续 `MC-005` 可直接复用本任务包定义的结构化对象与 redaction 约束。
+当前仍未完成的是运行验收，不是契约设计：
 
-## tests
-
-后续实现至少应覆盖以下测试：
-
-1. 对象序列化/反序列化测试：
-   - `ThoughtJournalEntry`
-   - `ReflectionRecord`
-   - `ConfidenceTrace`
-2. redaction 测试：
-   - 密钥、token、邮箱、长数字被脱敏
-   - forbidden metadata key 被过滤
-   - 原始 prompt / raw evidence 不进入输出对象
-3. 长度裁剪测试：
-   - 长摘要被截断
-   - evidence ref 数量受限
-   - 假设 / mismatch / next action 字段有上限
-4. retention 测试：
-   - `retention_hint=discard` 不进入持久候选
-   - `retention_hint=review` 不自动晋升长期记忆
+1. 针对 `ThoughtJournalEntry` / `ReflectionRecord` / `ConfidenceTrace` 的兼容性与 round-trip 测试已补充到测试面。
+2. redaction、长度裁剪、retention 路径的测试也已纳入目标测试范围。
+3. 但当前环境缺少可运行的 Python / pytest，尚未完成实际执行验收。
 
 ## rollback_plan
 
-若本任务包的结构化输出定义被证明不适用于后续实现，回滚方式应为：
+若后续验证表明这套结构化输出定义不适用，回滚边界仍保持：
 
 1. 保留现有对象兼容读取能力。
-2. 在新版本文档中显式记录字段变更、脱敏边界变更与保留策略变更。
-3. 不允许在未更新 `MC-003` 前，让实现回退成自由文本反思日志或保存原始 CoT。
+2. 在文档中显式记录字段或脱敏边界的版本变更。
+3. 不允许回退成自由文本反思日志或保存原始 CoT。
 
-## open_questions
+## next_closeout
 
-1. `ConfidenceTrace` 首版是否独立落盘，还是仅作为 `ReflectionRecord` 的派生视图。
-2. `retention_hint` 是否需要标准化为有限枚举，例如 `discard / short / review / candidate`。
-3. `learned_rule_candidate` 是否首版仅允许单条紧凑结论，而不允许复合规则集。
+收官前还应完成：
+
+1. 在可运行 Python 环境下执行元认知结构化产物相关测试。
+2. 用真实运行样本复核 redaction、preview 长度和 evidence ref 上限。
+3. 视验收结果再决定是否调整默认阈值，但不扩大对象边界。

@@ -1,8 +1,8 @@
 # MC-004 任务包：元认知到 working memory / introspection / memory_candidates 的最小桥接
 
-Date: 2026-06-12
-Status: Proposed
-Scope: MetaCognitionRuntime 结果向 continuity、可观测性与治理记忆链路的最小回写边界冻结
+Date: 2026-06-13
+Status: Implemented (verification pending)
+Scope: MetaCognitionRuntime 结果向 continuity、可观测性与治理记忆链路的最小回写边界已落地
 
 ## title
 
@@ -12,135 +12,102 @@ Scope: MetaCognitionRuntime 结果向 continuity、可观测性与治理记忆�
 
 冻结 `MetaCognitionRuntime` 输出结果的最小回写链路，使结构化反思不只是“写日志”，而能对下一轮上下文、运行时观测和受治理记忆产生实际影响。
 
-本任务包完成后，系统应能稳定回答：
+## implemented_state
 
-1. 哪些元认知结果可以进入 working memory。
-2. 哪些结果只应该进入 introspection / audit。
-3. 哪些结果有资格转成 `memory_candidates`。
-4. 如何复用现有 `memory_candidates` kind、`session_search` block 和 nearline consumer，而不是另起一套存储。
+当前代码已经按最小 sidecar 桥接方案落地：
 
-## scope
+1. working memory bridge 已固定复用 `append_attention_item()` 与 `append_pending_question()`。
+2. 每个 reflection 最多写入 1 条 caution 和 1 条 pending question。
+3. working memory 预算与 `context.world_attention_max_items` 同量级；超预算时丢弃并记录桥接决策。
+4. `inspect_context()` / `meta_cognition_summary()` 已暴露最近 journals、reflections、confidence traces、bridge 状态和计数。
+5. `memory_candidates` bridge 只从 `ReflectionRecord.learned_rule_candidate` 产出，不接 journal 或普通失败日志。
+6. `memory_candidates` 仍复用现有 `fact / preference / task_pattern / constraint` kinds。
+7. `session_search(result_shape="memory_blocks")`、`RetrievalFusion`、nearline profile、Dream 消费链保持不变，没有新增独立 meta retrieval 源。
 
-本任务包覆盖以下内容：
+## landed_contract
 
-1. 冻结 working memory 最小桥接规则：
-   - 只允许轻量 `meta_attention` / caution / pending_question 风格写回
-   - 不允许整段 journal / reflection 全量写回
-   - 默认上限小于或等于 world attention 的同量级预算
-2. 冻结 introspection 最小桥接规则：
-   - continuity / cognition summary 暴露最近元认知摘要
-   - 暴露最近触发、最近反思、最近 caution、重复模式计数
-   - 只提供 redacted preview，不暴露原始证据
-3. 冻结 `memory_candidates` 最小桥接规则：
-   - 只允许高置信 `learned_rule_candidate`
-   - 优先复用现有 kind：
-     - `preference`
-     - `task_pattern`
-     - `constraint`
-     - `fact`
-   - 禁止把普通失败日志直接写入 `memory_candidates`
-4. 冻结 retrieval / session_search 复用规则：
-   - 进入 `memory_candidates` 的元认知结论应自动复用现有 memory block 链
-   - 不新增独立“meta retrieval”源
-5. 冻结与 nearline / profile / dream consumer 的关系：
-   - `preference` / `task_pattern` 可被 nearline profile 消费
-   - `fact` / `constraint` 继续由 Dream 消费
-   - 元认知桥接只产出 candidate，不负责最终 apply
-6. 冻结桥接阈值建议：
-   - 普通 `ThoughtJournalEntry` 默认不进 `memory_candidates`
-   - `ReflectionRecord.learned_rule_candidate` 需达到最小 confidence 门槛
-   - 高敏感项默认 `requires review` 或降级为 introspection only
+### working memory
 
-## non_goals
+1. 不新增 `meta_attention` 字段。
+2. 不把整段 journal / reflection 文本写回 working memory。
+3. 首版只写轻量 caution / pending question 风格的短项。
+4. 若当前 `attention_items` 和 `pending_questions` 同时达到预算，桥接跳过并记录 `dropped_budget`。
 
-本任务包不覆盖以下内容：
+### introspection
 
-1. `MetaCognitionRuntime` 的完整实现。
-2. `ErrorPattern` 到 governed evolution signal 的桥接实现。
-3. retrieval fusion 排序算法调整。
-4. Dream / nearline consumer 的完整重构。
-5. world model 到 meta bridge 的扩展策略。
-6. 前端或 UI 展示实现。
+1. `meta_cognition_summary()` 已在现有字段上扩展：
+   - `structured_reflection_enabled`
+   - `artifact_status`
+   - `recent_journals`
+   - `recent_reflections`
+   - `recent_confidence_traces`
+   - `working_memory_bridge`
+   - `memory_candidate_bridge`
+   - `bridge_decision_counts`
+   - `recent_patterns`
+   - `recent_evolution_seeds`
+   - `last_signal_upserts`
+2. continuity disabled 时仍返回稳定空结构，而不是报错或缺字段。
+3. 对 introspection / audit 暴露的内容只包含 redacted preview，不包含原始 evidence、prompt 或 payload。
 
-## dependencies
+### memory_candidates
 
-1. [`docs/meta_cognition_runtime_outline.md`](./meta_cognition_runtime_outline.md)
-2. [`docs/mc-001-meta-cognition-runtime-boundary.md`](./mc-001-meta-cognition-runtime-boundary.md)
-3. [`docs/mc-002-meta-trigger-collection.md`](./mc-002-meta-trigger-collection.md)
-4. [`docs/mc-003-structured-reflection-redaction.md`](./mc-003-structured-reflection-redaction.md)
-5. 当前 continuity / governance / retrieval 锚点：
-   - [OriginAgent/agent/working_memory.py](/D:/Demo/OpenHome/OriginAgentclient/OriginAgent/agent/working_memory.py)
-   - [OriginAgent/agent/introspection/service.py](/D:/Demo/OpenHome/OriginAgentclient/OriginAgent/agent/introspection/service.py)
-   - [OriginAgent/agent/memory_governance.py](/D:/Demo/OpenHome/OriginAgentclient/OriginAgent/agent/memory_governance.py)
-   - [OriginAgent/memory/candidates.py](/D:/Demo/OpenHome/OriginAgentclient/OriginAgent/memory/candidates.py)
-   - [OriginAgent/memory/profile.py](/D:/Demo/OpenHome/OriginAgentclient/OriginAgent/memory/profile.py)
-   - [OriginAgent/agent/retrieval_fusion.py](/D:/Demo/OpenHome/OriginAgentclient/OriginAgent/agent/retrieval_fusion.py)
-   - [OriginAgent/session/search.py](/D:/Demo/OpenHome/OriginAgentclient/OriginAgent/session/search.py)
+1. 只有同时满足以下条件的 `learned_rule_candidate` 才能入队：
+   - `retention_hint == "candidate"`
+   - 置信度达到 `meta_cognition.memory_candidate_min_confidence`
+   - `kind` 属于 `preference | task_pattern | constraint | fact`
+   - `sensitivity` 不是 `review-only`
+2. `task_pattern` 固定写为：
+   - `scope="session"`
+   - `owner_id=runtime_context.user_id`
+   - `source_session_key=current session_key`
+3. `MemoryCandidate.source_excerpt` 固定写成 redacted、紧凑的 meta rationale。
+4. `metadata.origin="meta_cognition"`，并带 `reflection_id`、`trigger_types`、`retention_hint`。
 
-## files_or_modules
+## affected_modules
 
-本任务包预期主要触达文档层：
+本任务包当前主要落在：
 
-1. [`docs/mc-004-meta-bridge-working-memory-introspection-memory-candidates.md`](./mc-004-meta-bridge-working-memory-introspection-memory-candidates.md)
-2. [`docs/meta_cognition_runtime_outline.md`](./meta_cognition_runtime_outline.md)
-
-后续实现预计主要影响：
-
-1. [OriginAgent/agent/working_memory.py](/D:/Demo/OpenHome/OriginAgentclient/OriginAgent/agent/working_memory.py)
+1. [OriginAgent/agent/meta_cognition_reflector.py](/D:/Demo/OpenHome/OriginAgentclient/OriginAgent/agent/meta_cognition_reflector.py)
 2. [OriginAgent/agent/introspection/service.py](/D:/Demo/OpenHome/OriginAgentclient/OriginAgent/agent/introspection/service.py)
-3. [OriginAgent/agent/retrieval_fusion.py](/D:/Demo/OpenHome/OriginAgentclient/OriginAgent/agent/retrieval_fusion.py)
-4. [OriginAgent/session/search.py](/D:/Demo/OpenHome/OriginAgentclient/OriginAgent/session/search.py)
-5. 候选新模块：
-   - `OriginAgent/agent/meta_cognition_runtime.py`
-   - `OriginAgent/agent/meta_cognition_bridge.py`
-   - `OriginAgent/agent/meta_cognition_models.py`
+3. [OriginAgent/agent/working_memory.py](/D:/Demo/OpenHome/OriginAgentclient/OriginAgent/agent/working_memory.py)
+4. [OriginAgent/memory/candidates.py](/D:/Demo/OpenHome/OriginAgentclient/OriginAgent/memory/candidates.py)
+5. [OriginAgent/memory/profile.py](/D:/Demo/OpenHome/OriginAgentclient/OriginAgent/memory/profile.py)
+6. [OriginAgent/agent/retrieval_fusion.py](/D:/Demo/OpenHome/OriginAgentclient/OriginAgent/agent/retrieval_fusion.py)
+7. [OriginAgent/session/search.py](/D:/Demo/OpenHome/OriginAgentclient/OriginAgent/session/search.py)
 
-## acceptance_criteria
+## acceptance_status
 
-本任务包完成时，必须同时满足以下条件：
+本任务包的设计性验收标准已经在代码层满足：
 
-1. 已明确 working memory 只接轻量 caution / meta attention，不接整段 reflection 文本。
-2. 已明确 introspection 只暴露最近元认知摘要、计数和 redacted preview。
-3. 已明确 `memory_candidates` 只接高置信 learned rule candidate，且复用现有 `fact / preference / task_pattern / constraint` kinds。
-4. 已明确元认知 candidate 进入 `memory_candidates` 后应复用现有 `session_search` / retrieval / nearline consumer 机制。
-5. 已明确 Dream、nearline profile、memory governance 各自消费哪些 kind，不新增平行消费者。
-6. `MC-005` 可直接在本任务包基础上桥接 `ErrorPattern` 与 governed evolution seed。
+1. working memory 只接轻量 caution / pending question，不接整段 reflection。
+2. introspection 只暴露最近元认知摘要、计数和 redacted preview。
+3. `memory_candidates` 只接高置信 `learned_rule_candidate`，并复用现有 kind。
+4. 元认知 candidate 已复用既有 `session_search` / retrieval / nearline consumer 机制。
+5. Dream、nearline profile、memory governance 没有新增平行消费者。
+6. `MC-005` 已直接建立在本任务包的桥接边界之上。
 
-## tests
+## validation
 
-后续实现至少应覆盖以下测试：
+当前仍待完成的主要是运行验收：
 
-1. working memory 写回测试：
-   - caution 项进入 working memory
-   - journal / reflection 全文不会进入 working memory
-   - item 数量与去重受控
-2. introspection 测试：
-   - 最近触发摘要可见
-   - 最近 reflection preview 可见
-   - 原始 evidence / prompt 不可见
-3. `memory_candidates` 桥接测试：
-   - 高置信 preference 进入 `preference`
-   - 重复操作经验进入 `task_pattern`
-   - 稳定限制进入 `constraint`
-   - 普通失败日志不会进入 queue
-4. retrieval / search 测试：
-   - 元认知 candidate 可通过现有 memory block 被召回
-   - block type 与 kind 映射正确
-5. consumer 联动测试：
-   - nearline profile 可消费 `preference` / `task_pattern`
-   - Dream 可消费 `fact` / `constraint`
+1. working memory 写回测试需要在可运行 Python 环境下执行。
+2. introspection summary 与 continuity disabled 稳定字段测试需要执行。
+3. `memory_candidates` 与 nearline profile / Dream / retrieval 的联动测试需要补跑。
 
 ## rollback_plan
 
-若本任务包实现导致上下文污染、召回噪音或 candidate 队列膨胀，回滚方式应为：
+若后续验证发现上下文污染、召回噪音或 candidate 队列膨胀，回滚边界仍保持：
 
 1. 先关闭 meta bridge 写回开关。
-2. 保留 introspection 只读摘要，停止 working memory 和 `memory_candidates` 写回。
+2. 保留 introspection 只读摘要，停止 working memory 与 `memory_candidates` 写回。
 3. 优先回退到只保留 introspection preview 的最小模式。
-4. 不允许在未修订 `MC-004` 前继续扩大可写回对象集合。
+4. 不扩大可写回对象集合，直到文档与阈值重新审定。
 
-## open_questions
+## next_closeout
 
-1. working memory 是否需要新增显式 `meta_attention` 字段，还是先复用现有 `attention_items` / `pending_questions`。
-2. 元认知 candidate 的 `owner_id` 与 `scope` 是否默认沿用当前 runtime context，还是对 `task_pattern` 采用更保守的 `session` 范围。
-3. `task_pattern` 首版是否只允许总结“下一次应先做什么”，而不允许生成复杂流程建议。
+收官前还应完成：
+
+1. 运行 working memory / retrieval / consumer 联动测试。
+2. 用真实会话样本检查写回噪音与去重效果。
+3. 依据实际噪音再微调桥接阈值，而不是扩展新 sink。

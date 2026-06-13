@@ -1,0 +1,1 @@
+{"cooldown_key": "", "created_at": "2026-06-13T04:32:57.438411+00:00", "evidence_refs": [], "payload": {}, "session_key": "cli:direct", "severity": "medium", "source_reference": "grep:accepted", "source_type": "tool_execution_observer", "trigger_id": "accepted", "trigger_type": "tool_failure"}

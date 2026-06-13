@@ -1,0 +1,1 @@
+{"change_reason": "initial_record", "created_at": "2026-06-13T04:32:57.490152+00:00", "evidence_refs": ["user_message"], "final_confidence": 0.88, "initial_confidence": null, "payload": {}, "session_key": "cli:direct", "subject_reference": "preference", "subject_type": "rule", "summary": "confidence recorded", "trace_id": "meta_confidence_dbd543ba4e13476599409bda55148efb"}

@@ -154,6 +154,10 @@ Scope: MetaCognitionRuntime 主线的边界、对象模型与治理约束冻结
    - working memory 只接收轻量 caution / meta attention
    - memory candidates 只接收高置信 learned rule candidate
 
+## operational_guidance
+
+运行时巡检、signal 排障与回退操作说明见 [meta_cognition_runbook.md](./meta_cognition_runbook.md)。
+
 ## rollback_plan
 
 若本任务包定义被证明不适用于后续实现，回滚方式应为：
