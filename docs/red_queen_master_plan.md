@@ -63,6 +63,7 @@ Scope: OriginAgent 红后主线的持续后台思考、分层感知、世界模�
 3. 后台认知编排最小骨架已经落地：
    - `CognitiveLoop`
    - `CognitiveScheduler`
+   - `AgentCognitiveRuntime`
    - `CognitiveEvent`
    - `CognitiveDecision`
    - JSONL 审计与 introspection 汇总
@@ -354,6 +355,10 @@ Safe Action Layer
 5. `Continuity & Memory OS` 负责把“该轮真正应看到的上下文”构造给 `AgentLoop`。
 6. `AgentLoop` 继续作为统一语义执行入口。
 
+当前 `Phase 1` 的精确收口口径由以下文档统一维护：
+
+- [`red_queen_phase1_closeout_plan.md`](./red_queen_phase1_closeout_plan.md)
+
 ## 11. 分阶段实施路线
 
 ### Phase 0: 规划与治理基线
@@ -402,6 +407,11 @@ Safe Action Layer
 1. 实现已大面积落地，仍处于验收收口阶段。
 2. `CognitiveLoop` / `CognitiveScheduler`、认知事件模型、审计模型、working memory、`ContextAssembler` v2 均已进入代码与测试。
 3. 当前剩余重点不再是“从零实现”，而是验证 producer 覆盖、冷却与限流行为、可解释性与关闭开关是否达到正式验收标准。
+4. 本阶段的收口文档已统一收敛到：
+   - [`red_queen_phase1_closeout_plan.md`](./red_queen_phase1_closeout_plan.md)
+   - [`rq-001-cognitive-orchestration-boundary.md`](./rq-001-cognitive-orchestration-boundary.md)
+   - [`rq-005-cognitive-event-audit-model.md`](./rq-005-cognitive-event-audit-model.md)
+   - [`p1-backend-cognition-integration-task-package.md`](./p1-backend-cognition-integration-task-package.md)
 
 必须交付：
 
