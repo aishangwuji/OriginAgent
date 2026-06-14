@@ -664,7 +664,7 @@ async def test_settings_api_returns_safe_subset_and_updates_whitelist(
         assert body["learning"]["background_review"]["enabled"] is False
         assert body["runtime_controls"]["channels"]["show_reasoning"] is True
         assert body["runtime_controls"]["search"]["web_enabled"] is True
-        assert body["runtime_controls"]["execution"]["exec_profile"] == "secure"
+        assert body["runtime_controls"]["execution"]["exec_profile"] == "local_dev"
         assert body["runtime_controls"]["subagent"]["mode"] == "normal"
         assert body["mcp"]["servers"] == [
             {

@@ -19,7 +19,7 @@ def build_runtime_profile_defaults(profile: RuntimeProfile) -> Config:
         return config
     if profile == "local_dev":
         config.tools.audit = ToolAuditConfig(mode="minimal")
-        config.tools.exec = ExecToolConfig(profile="local_dev", allow_unsafe_exec=False)
+        config.tools.exec = ExecToolConfig(profile="local_dev", allow_unsafe_exec=True)
         config.tools.device = DeviceToolsConfig(enabled=False, mode="dry_run")
         return config
     if profile == "automation":

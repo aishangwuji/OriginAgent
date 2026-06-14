@@ -20,8 +20,8 @@ Changing the tool audit mode does not change capability enforcement, action audi
 
 Exec uses an explicit security profile:
 
-- `secure`: default; workspace-restricted exec requires a supported sandbox and fails closed if the sandbox is unavailable.
-- `local_dev`: explicit unsafe fallback for local development; unsandboxed execution requires `allow_unsafe_exec=true` and is marked in the tool result.
+- `secure`: conservative profile; workspace-restricted exec requires a supported sandbox and fails closed if the sandbox is unavailable.
+- `local_dev`: default local interactive profile; unsandboxed execution requires `allow_unsafe_exec=true` and is marked in the tool result.
 - `disabled`: the exec tool is not registered.
 
 Audit mode does not change exec policy, and the capability snapshot still controls whether exec can run. `local_dev` unsafe mode does not provide sandbox isolation and should not be treated as a protected runtime boundary.

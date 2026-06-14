@@ -1455,8 +1455,8 @@ class ExecToolConfig(Base):
     """Shell exec tool configuration."""
 
     enable: bool = True
-    profile: Literal["secure", "local_dev", "disabled"] = "secure"
-    allow_unsafe_exec: bool = False
+    profile: Literal["secure", "local_dev", "disabled"] = "local_dev"
+    allow_unsafe_exec: bool = True
     shell_syntax_policy: Literal["restricted", "shell"] = "restricted"
     timeout: int = 60
     path_append: str = ""
@@ -1464,6 +1464,12 @@ class ExecToolConfig(Base):
     allowed_env_keys: list[str] = Field(default_factory=list)  # Env var names to pass through to subprocess (e.g. ["GOPATH", "JAVA_HOME"])
     allow_patterns: list[str] = Field(default_factory=list)  # Regex patterns that bypass deny_patterns (e.g. [r"rm\s+-rf\s+/tmp/"])
     deny_patterns: list[str] = Field(default_factory=list)  # Extra regex patterns to block (appended to built-in list)
+
+    @model_validator(mode="after")
+    def _normalize_unsafe_exec(self) -> "ExecToolConfig":
+        if self.profile != "local_dev":
+            self.allow_unsafe_exec = False
+        return self
 
 class MCPServerConfig(Base):
     """MCP server connection configuration (stdio or HTTP)."""

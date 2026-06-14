@@ -18,12 +18,20 @@ class _FakeProcess:
         return b"ok\n", b""
 
 
-def test_exec_tool_config_defaults_to_secure_profile() -> None:
+def test_exec_tool_config_defaults_to_local_dev_unsafe_profile() -> None:
     config = ExecToolConfig()
 
-    assert config.profile == "secure"
-    assert config.allow_unsafe_exec is False
+    assert config.profile == "local_dev"
+    assert config.allow_unsafe_exec is True
     assert config.shell_syntax_policy == "restricted"
+
+
+def test_exec_tool_config_forces_unsafe_exec_off_outside_local_dev() -> None:
+    secure = ExecToolConfig(profile="secure", allow_unsafe_exec=True)
+    disabled = ExecToolConfig(profile="disabled", allow_unsafe_exec=True)
+
+    assert secure.allow_unsafe_exec is False
+    assert disabled.allow_unsafe_exec is False
 
 
 def test_exec_tool_config_rejects_invalid_profile() -> None:
