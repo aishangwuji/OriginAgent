@@ -195,6 +195,7 @@ class WorldSummary:
     generated_at: str
     fresh_until: str
     focus: list[str] = field(default_factory=list)
+    relationships: list[str] = field(default_factory=list)
     constraints: list[str] = field(default_factory=list)
     uncertainties: list[str] = field(default_factory=list)
     source_snapshot_ids: list[str] = field(default_factory=list)
@@ -221,6 +222,7 @@ class WorldSummary:
             generated_at=str(raw.get("generated_at") or _utcnow_iso()).strip(),
             fresh_until=str(raw.get("fresh_until") or _utcnow_iso()).strip(),
             focus=_string_list(raw.get("focus")),
+            relationships=_string_list(raw.get("relationships")),
             constraints=_string_list(raw.get("constraints")),
             uncertainties=_string_list(raw.get("uncertainties")),
             source_snapshot_ids=_string_list(raw.get("source_snapshot_ids")),
@@ -405,6 +407,8 @@ class WorldStateManager:
             "scope": snapshot.scope,
             "owner_id": snapshot.owner_id,
             "world_summary": filtered.get("included_summary") or {},
+            "world_relationships": list((filtered.get("included_summary") or {}).get("relationships") or []),
+            "recent_events": list((self.recent_events(session, identity=identity, limit=5) or {}).get("recent_events", [])),
         }
 
     def ingest_media(
@@ -751,7 +755,7 @@ class WorldStateManager:
         added = False
         existing_paths = {item.media_path for item in snapshot.snapshots}
         for descriptor in descriptors:
-            if descriptor is None or descriptor.kind != "image":
+            if descriptor is None or descriptor.kind not in {"image", "audio", "video", "sensor"}:
                 continue
             if descriptor.path.suffix.lower().endswith(".part") or descriptor.name.endswith(".part"):
                 continue
@@ -1017,6 +1021,7 @@ class WorldStateManager:
         now: datetime,
     ) -> WorldSummary:
         focus: list[str] = []
+        relationships: list[str] = []
         constraints: list[str] = []
         uncertainties: list[str] = []
         inspection_ids: list[str] = []
@@ -1026,6 +1031,9 @@ class WorldStateManager:
         for item in snapshot.snapshots:
             if item.summary and item.summary not in focus:
                 focus.append(item.summary)
+            for relationship in item.relationships:
+                if relationship and relationship not in relationships:
+                    relationships.append(relationship)
             confidence_line = (
                 f"snapshot confidence is {'high' if item.confidence >= 0.8 else 'moderate' if item.confidence >= 0.6 else 'low'}"
             )
@@ -1037,8 +1045,13 @@ class WorldStateManager:
         for inspection in snapshot.inspections:
             if inspection.snapshot_id not in by_snapshot:
                 continue
+            if inspection.status != "completed":
+                continue
             inspection_ids.append(inspection.inspection_id)
             last_inspected_at = inspection.requested_at
+            for line in inspection.confirmed:
+                if line and line not in relationships:
+                    relationships.append(line)
             for line in inspection.corrected:
                 if line and line not in focus:
                     focus.append(line)
@@ -1065,6 +1078,7 @@ class WorldStateManager:
             generated_at=generated_at,
             fresh_until=fresh_until,
             focus=_string_list(focus, limit=6, max_chars=200),
+            relationships=_string_list(relationships, limit=6, max_chars=200),
             constraints=_string_list(constraints, limit=6, max_chars=200),
             uncertainties=_string_list(uncertainties, limit=6, max_chars=200),
             source_snapshot_ids=[item.snapshot_id for item in snapshot.snapshots],
@@ -1119,7 +1133,7 @@ class WorldStateManager:
                 continue
             if inspection.status != "completed":
                 continue
-            if inspection.corrected or inspection.new_details:
+            if inspection.corrected or inspection.new_details or inspection.confirmed:
                 return True
         return False
 
@@ -1149,10 +1163,15 @@ class WorldStateManager:
         inferred_provenance: dict[str, str] | None = None,
     ) -> SceneSnapshot:
         captured_at = _utcnow_iso()
-        summary = f"Uninspected image snapshot captured from {runtime_context.channel}."
+        kind = str(descriptor.kind or "image").strip() or "image"
+        summary = f"Uninspected {kind} recording from {runtime_context.channel}."
         objects: list[str] = []
         relationships: list[str] = []
-        uncertainties = [DEFAULT_IMAGE_UNCERTAINTY]
+        uncertainties = [
+            DEFAULT_IMAGE_UNCERTAINTY
+            if kind == "image"
+            else f"{kind} has not been deeply inspected yet"
+        ]
         confidence = 0.35
         inferred_provenance = dict(inferred_provenance or {})
         provenance = {
@@ -1187,7 +1206,7 @@ class WorldStateManager:
         device_id = str((sidecar or {}).get("device_id") or runtime_context.device_id or "").strip() or runtime_context.device_id
         return SceneSnapshot(
             snapshot_id=f"snap_{uuid.uuid4().hex[:12]}",
-            kind=descriptor.kind,
+            kind=kind,
             source=source,
             scope=scope,
             owner_id=owner_id,

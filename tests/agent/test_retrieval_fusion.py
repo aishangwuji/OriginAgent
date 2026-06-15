@@ -265,3 +265,60 @@ def test_retrieval_fusion_reports_scope_hidden_for_task_scope_outside_task_conte
     assert result.audit["scope_filtered"] == [
         {"source": "prewarm_seed", "title": "task:debug", "reason": "scope_hidden"}
     ]
+
+
+def test_retrieval_fusion_uses_world_summary_hints_for_session_search_query():
+    captured: dict[str, object] = {}
+
+    memory = SimpleNamespace(
+        fact_store=SimpleNamespace(
+            retrieve_context_bundle=lambda scope_prefix=None: FactRetrievalBundle(
+                facts=[],
+                rendered_text="",
+                fallback_used=False,
+                retrievals=[],
+            )
+        ),
+        get_memory_context_bundle=lambda scope_prefix=None: FactRetrievalBundle(
+            facts=[],
+            rendered_text="",
+            fallback_used=False,
+            retrievals=[],
+        ),
+    )
+    nearline = SimpleNamespace(retrieve=lambda query=None, recent_history=None: NearlineRetrievalResult())
+
+    def _search(**kwargs):
+        captured["query"] = kwargs.get("query")
+        return {
+            "results": [],
+            "searched_sources": ["sessions"],
+            "mode": "hybrid",
+            "performance_note": None,
+            "index_stale": False,
+            "index_refresh_running": False,
+        }
+
+    session_search = SimpleNamespace(search=_search)
+    fusion = RetrievalFusion(
+        workspace=Path("."),
+        memory=memory,
+        nearline_memory=nearline,
+        session_search=session_search,
+        context_config=ContextConfig(),
+        nearline_memory_config=SimpleNamespace(enabled=True, pipeline_enabled=True),
+    )
+
+    fusion.retrieve(
+        query="desk",
+        session_key="cli:direct",
+        runtime_context=SimpleNamespace(default_scope="session", user_id="user-1", device_id="device-a"),
+        current_message="What changed?",
+        recent_history=[],
+        session_summary=None,
+        world_summary_hints=["Desk has a printed checklist.", "checklist is on desk"],
+    )
+
+    assert isinstance(captured["query"], str)
+    assert "Desk has a printed checklist." in captured["query"]
+    assert "checklist is on desk" in captured["query"]

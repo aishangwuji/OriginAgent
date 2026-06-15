@@ -203,6 +203,22 @@ class ContextBuilder:
             blocks.append(self.build_reference_context_block("user_profile", user_file))
 
         entries = self.memory.read_unprocessed_history(since_cursor=self.memory.get_last_dream_cursor())
+        world_summary_hints: list[str] | None = None
+        if self.world_state is not None and self._sessions is not None and session_key and runtime_context is not None:
+            try:
+                session = self._sessions.get_or_create(session_key)
+                filtered_world = self.world_state.filtered_candidates(
+                    session,
+                    runtime_context=runtime_context,
+                    current_message=current_message,
+                )
+                included_summary = dict(filtered_world.get("included_summary") or {})
+                world_summary_hints = [
+                    *[str(item).strip() for item in list(included_summary.get("focus") or []) if str(item).strip()],
+                    *[str(item).strip() for item in list(included_summary.get("relationships") or []) if str(item).strip()],
+                ] or None
+            except Exception:
+                world_summary_hints = None
         fusion = self.retrieval_fusion.retrieve(
             query=current_message,
             session_key=session_key,
@@ -215,6 +231,7 @@ class ContextBuilder:
                 if prewarm_bundle is not None
                 else None
             ),
+            world_summary_hints=world_summary_hints,
         )
         self._last_retrieval_fusion = fusion.audit
         for block in fusion.retrieved_blocks:

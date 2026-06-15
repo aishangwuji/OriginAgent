@@ -268,22 +268,50 @@ class MemoryGovernance:
             identity=runtime_context if runtime_context is not None else None,
         )
         if world_snapshot.world_summary is not None:
-            for item in list(world_snapshot.world_summary.focus or []):
-                text = str(item or "").strip()
-                if not text or self._looks_transient(text) or self._is_sensitive(text):
-                    continue
-                candidates.append(
-                    self._candidate_from_text(
-                        content=text,
-                        category="note",
-                        scope=scope,
-                        owner=owner,
-                        confidence=0.84,
-                        source="world_state",
-                        reason="confirmed_world_conclusion",
-                        turn_id=turn_id,
-                    )
+            world_summary = world_snapshot.world_summary
+            world_scope = str(world_summary.scope or "session").strip() or "session"
+            world_owner = str(world_summary.owner_id or owner).strip() or owner
+            if not world_summary.contested and world_scope != "session" and world_summary.last_inspected_at:
+                world_source_snapshot_ids = [str(item).strip() for item in list(world_summary.source_snapshot_ids or []) if str(item).strip()]
+                world_inspection_ids = [str(item).strip() for item in list(world_summary.inspection_ids or []) if str(item).strip()]
+                world_snapshots = {
+                    item.snapshot_id: item
+                    for item in list(world_snapshot.snapshots or [])
+                    if getattr(item, "snapshot_id", None)
+                }
+                primary_snapshot = next(
+                    (
+                        world_snapshots[snapshot_id]
+                        for snapshot_id in world_source_snapshot_ids
+                        if snapshot_id in world_snapshots
+                    ),
+                    None,
                 )
+                for item in list(world_summary.focus or []):
+                    text = str(item or "").strip()
+                    if not text or self._looks_transient(text) or self._is_sensitive(text):
+                        continue
+                    candidates.append(
+                        self._candidate_from_text(
+                            content=text,
+                            category="note",
+                            scope=world_scope,
+                            owner=world_owner,
+                            confidence=0.84,
+                            source="world_state",
+                            reason="confirmed_world_conclusion",
+                            turn_id=turn_id,
+                            metadata={
+                                "snapshot_ids": world_source_snapshot_ids[:8],
+                                "inspection_ids": world_inspection_ids[:8],
+                                "world_scope": world_scope,
+                                "world_contested": False,
+                                "world_last_inspected_at": world_summary.last_inspected_at,
+                                "modality": getattr(primary_snapshot, "kind", None),
+                                "provenance": dict(getattr(primary_snapshot, "provenance", {}) or {}),
+                            },
+                        )
+                    )
         forgetting_actions = self._collect_forgetting_actions(session, current_message=current_message)
         # Deduplicate per turn by candidate key.
         by_key: dict[str, PromotionCandidate] = {}
@@ -408,6 +436,7 @@ class MemoryGovernance:
         source: str,
         reason: str,
         turn_id: str,
+        metadata: dict[str, Any] | None = None,
     ) -> PromotionCandidate:
         normalized = _trim_text(content, max_chars=240)
         sensitive = self._is_sensitive(normalized)
@@ -427,7 +456,7 @@ class MemoryGovernance:
             requires_user_confirmation=requires_confirmation,
             source_excerpt=reason,
             turn_id=turn_id,
-            metadata={},
+            metadata=dict(metadata or {}),
         )
 
     @staticmethod

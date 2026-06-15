@@ -231,6 +231,7 @@ async def test_inspect_context_reports_phase1_views_and_scope_filter(tmp_path) -
                     "generated_at": "2026-06-09T00:00:00+00:00",
                     "fresh_until": "2026-06-09T00:05:00+00:00",
                     "focus": ["Desk has a notebook."],
+                    "relationships": ["notebook is on desk"],
                     "constraints": ["snapshot confidence is high"],
                     "uncertainties": [],
                     "source_snapshot_ids": ["snap_1"],
@@ -525,6 +526,7 @@ async def test_inspect_context_reports_phase1_views_and_scope_filter(tmp_path) -
     assert result["views"]["retrieval"]["fusion_scope_filtered"][0]["reason"] == "scope_hidden"
     assert result["views"]["world"]["snapshot"]["status"] == "active"
     assert result["views"]["world"]["summary"]["focus"] == ["Desk has a notebook."]
+    assert result["views"]["world"]["summary"]["relationships"] == ["notebook is on desk"]
     assert result["views"]["world"]["source_snapshot_ids"] == ["snap_1"]
     assert result["views"]["world"]["filtered_candidates"][0]["reasons"] == ["scope_hidden"]
     assert result["views"]["world"]["freshness"]["is_fresh"] is True

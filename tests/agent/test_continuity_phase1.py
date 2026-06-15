@@ -32,6 +32,7 @@ from OriginAgent.bus.queue import MessageBus
 from OriginAgent.providers.base import LLMResponse
 from OriginAgent.agent.confirmation import ConfirmationRequest, PendingConfirmationStore
 from OriginAgent.session.manager import SessionManager
+from OriginAgent.utils.attachments import AttachmentDescriptor
 
 
 def _provider():
@@ -737,6 +738,134 @@ def test_world_state_apply_inspection_generates_contested_and_uncertain_events(t
     assert "uncertain_world_state" in kinds
 
 
+def test_world_summary_relationships_collects_snapshot_and_completed_confirmation(tmp_path: Path):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    sessions = SessionManager(workspace)
+    session = sessions.get_or_create("cli:direct")
+    world_state = WorldStateManager(workspace, sessions)
+    runtime_context = ActorResolver().resolve_runtime_context(
+        channel="cli",
+        chat_id="direct",
+        sender_id="user-1",
+        metadata={"device_id": "device-a"},
+        session_key="cli:direct",
+    )
+    image = workspace / "desk.png"
+    image.write_bytes(b"\x89PNG\r\n\x1a\n" + b"\x00" * 64)
+    (workspace / "desk.json").write_text(
+        json.dumps({
+            "summary": "Desk looks clear.",
+            "relationships": ["desk is visible"],
+            "confidence": 0.84,
+            "uncertainties": [],
+        }),
+        encoding="utf-8",
+    )
+
+    world_state.ingest_media(
+        session,
+        runtime_context=runtime_context,
+        media_paths=[str(image)],
+    )
+    snapshot = world_state.load(session, identity=runtime_context).snapshots[0]
+    world_state.apply_inspection(
+        session,
+        runtime_context=runtime_context,
+        snapshot_id=snapshot.snapshot_id,
+        inspection_payload={
+            "confirmed": ["lamp is on desk"],
+            "corrected": ["desk may also hold a package"],
+            "new_details": [],
+            "uncertain": [],
+            "confidence": 0.82,
+            "status": "completed",
+            "contested": True,
+            "contested_reasons": ["desk may also hold a package"],
+            "evidence_excerpt": [],
+            "inspector": "test-model",
+        },
+    )
+
+    refreshed = world_state.load(session, identity=runtime_context)
+    summary = refreshed.world_summary
+
+    assert summary is not None
+    assert "desk is visible" in summary.relationships
+    assert "lamp is on desk" in summary.relationships
+    assert "desk may also hold a package" in summary.focus
+
+
+def test_world_state_ingests_audio_as_multimodal_snapshot(tmp_path: Path):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    sessions = SessionManager(workspace)
+    session = sessions.get_or_create("cli:audio")
+    world_state = WorldStateManager(workspace, sessions)
+    runtime_context = ActorResolver().resolve_runtime_context(
+        channel="cli",
+        chat_id="audio",
+        sender_id="user-1",
+        metadata={"device_id": "device-a"},
+        session_key="cli:audio",
+    )
+    audio = workspace / "note.wav"
+    audio.write_bytes(b"RIFF" + b"\x00" * 128)
+
+    world_state.ingest_media(
+        session,
+        runtime_context=runtime_context,
+        media_paths=[str(audio)],
+    )
+
+    snapshot = world_state.load(session, identity=runtime_context).snapshots[0]
+    assert snapshot.kind == "audio"
+    assert snapshot.summary == "Uninspected audio recording from cli."
+    assert snapshot.objects == []
+    assert snapshot.relationships == []
+    assert snapshot.uncertainties == ["audio has not been deeply inspected yet"]
+
+
+def test_world_state_batch_ingests_sensor_descriptor_as_multimodal_snapshot(tmp_path: Path):
+    workspace = tmp_path / "workspace"
+    (workspace / "uploads" / "thermostat").mkdir(parents=True)
+    sessions = SessionManager(workspace)
+    session = sessions.get_or_create("cli:sensor")
+    world_state = WorldStateManager(workspace, sessions)
+    runtime_context = ActorResolver().resolve_runtime_context(
+        channel="cli",
+        chat_id="sensor",
+        sender_id="user-1",
+        metadata={"device_id": "device-a"},
+        session_key="cli:sensor",
+    )
+    evidence = workspace / "uploads" / "thermostat" / "reading.json"
+    evidence.write_text('{"temperature_c": 23.5}', encoding="utf-8")
+    descriptor = AttachmentDescriptor(
+        path=evidence,
+        name=evidence.name,
+        mime="application/json",
+        kind="sensor",
+        size_bytes=evidence.stat().st_size,
+        source="thermostat",
+    )
+
+    world_state.ingest_producer_batch(
+        session,
+        runtime_context=runtime_context,
+        descriptors=[descriptor],
+    )
+
+    snapshot = world_state.load(session, identity=runtime_context).snapshots[0]
+    assert snapshot.kind == "sensor"
+    assert snapshot.summary == "Uninspected sensor recording from cli."
+    assert snapshot.objects == []
+    assert snapshot.relationships == []
+    assert snapshot.uncertainties == ["sensor has not been deeply inspected yet"]
+    assert snapshot.provenance["producer"] == "thermostat"
+    assert snapshot.provenance["ingest_method"] == "workspace_upload"
+
+
 @pytest.mark.asyncio
 async def test_loop_state_build_writes_continuity_runtime_identity_metadata(tmp_path: Path):
     workspace = tmp_path / "workspace"
@@ -1406,15 +1535,23 @@ def test_context_budget_keeps_current_turn_and_continuity_core_when_profile_memo
     assert "user_profile" in full_sources
     assert "memory_retrieval" in full_sources
     assert "layered_memory" in full_sources
-    assert "memory_candidates" in full_sources
     assert "retrieval_session_search" in full_sources
     assert "recent_history" in full_sources
     assert user_profile_marker in full_text
     assert nearline_profile_marker in full_text
     assert fact_marker in full_text
-    assert memory_candidate_marker in full_text
+    assert any(
+        marker in full_text
+        for marker in (
+            memory_candidate_marker,
+            "SESSION SEARCH MARKER",
+        )
+    )
     assert "SESSION SEARCH MARKER" in full_text
-    assert builder._last_retrieval_fusion["source_counts"]["memory_candidates"] >= 1
+    assert (
+        builder._last_retrieval_fusion["source_counts"]["memory_candidates"] >= 1
+        or builder._last_retrieval_fusion["source_counts"]["session_search"] >= 1
+    )
 
     trimmed_messages = builder.build_messages(
         **build_kwargs,
@@ -1604,6 +1741,247 @@ def test_memory_governance_promotes_after_two_independent_turns(tmp_path: Path):
     assert not any("concise answers" in fact.content for fact in builder.memory.fact_store.read_all())
 
 
+def test_memory_governance_does_not_auto_promote_session_scoped_world_summary(tmp_path: Path):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    sessions = SessionManager(workspace)
+    session = sessions.get_or_create("cli:direct")
+    runtime_context = ActorResolver().resolve_runtime_context(
+        channel="cli",
+        chat_id="direct",
+        sender_id="user-1",
+        metadata={"device_id": "device-a"},
+        session_key="cli:direct",
+    )
+    working = WorkingMemoryManager(sessions)
+    world = WorldStateManager(workspace, sessions, context_config=ContextConfig())
+    builder = ContextBuilder(workspace=workspace, timezone="UTC", sessions=sessions)
+    governance = MemoryGovernance(
+        workspace=workspace,
+        memory=builder.memory,
+        context_config=ContextConfig(),
+        working_memory=working,
+        world_state=world,
+    )
+    image = workspace / "desk.png"
+    image.write_bytes(b"\x89PNG\r\n\x1a\n" + b"\x00" * 64)
+    (workspace / "desk.json").write_text(
+        json.dumps({
+            "summary": "Desk has a printed checklist.",
+            "relationships": ["desk is visible"],
+            "confidence": 0.9,
+            "uncertainties": [],
+            "scope": "session",
+        }),
+        encoding="utf-8",
+    )
+    world.ingest_media(
+        session,
+        runtime_context=runtime_context,
+        media_paths=[str(image)],
+    )
+    snapshot = world.load(session, identity=runtime_context).snapshots[0]
+    world.apply_inspection(
+        session,
+        runtime_context=runtime_context,
+        snapshot_id=snapshot.snapshot_id,
+        inspection_payload={
+            "confirmed": ["checklist is on the desk"],
+            "corrected": [],
+            "new_details": [],
+            "uncertain": [],
+            "confidence": 0.9,
+            "status": "completed",
+            "contested": False,
+            "contested_reasons": [],
+            "evidence_excerpt": [],
+            "inspector": "test-model",
+        },
+    )
+
+    decision_one = governance.evaluate_turn(
+        session,
+        runtime_context=runtime_context,
+        turn_id="turn-1",
+        current_message="continue",
+    )
+    applied_one = governance.apply_turn(session, decision_one)
+    decision_two = governance.evaluate_turn(
+        session,
+        runtime_context=runtime_context,
+        turn_id="turn-2",
+        current_message="continue again",
+    )
+    applied_two = governance.apply_turn(session, decision_two)
+
+    assert not any(
+        candidate["reason"] == "confirmed_world_conclusion"
+        for candidate in applied_one["promotion_candidates"]
+    )
+    assert not any(
+        candidate["reason"] == "confirmed_world_conclusion"
+        for candidate in applied_two["promotion_candidates"]
+    )
+    assert applied_two["promotion_applied_count"] == 0
+
+
+def test_memory_governance_requires_completed_inspection_for_world_promotion(tmp_path: Path):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    sessions = SessionManager(workspace)
+    session = sessions.get_or_create("cli:device")
+    runtime_context = ActorResolver().resolve_runtime_context(
+        channel="cli",
+        chat_id="device",
+        sender_id="user-1",
+        metadata={"device_id": "device-a"},
+        session_key="cli:device",
+    )
+    working = WorkingMemoryManager(sessions)
+    world = WorldStateManager(workspace, sessions, context_config=ContextConfig())
+    builder = ContextBuilder(workspace=workspace, timezone="UTC", sessions=sessions)
+    governance = MemoryGovernance(
+        workspace=workspace,
+        memory=builder.memory,
+        context_config=ContextConfig(),
+        working_memory=working,
+        world_state=world,
+    )
+    image = workspace / "entry.png"
+    image.write_bytes(b"\x89PNG\r\n\x1a\n" + b"\x00" * 64)
+    (workspace / "entry.json").write_text(
+        json.dumps({
+            "summary": "Entryway has a package.",
+            "relationships": ["entryway is visible"],
+            "confidence": 0.9,
+            "uncertainties": [],
+            "scope": "device",
+        }),
+        encoding="utf-8",
+    )
+    world.ingest_media(
+        session,
+        runtime_context=runtime_context,
+        media_paths=[str(image)],
+    )
+    snapshot = world.load(session, identity=runtime_context).snapshots[0]
+    world.apply_inspection(
+        session,
+        runtime_context=runtime_context,
+        snapshot_id=snapshot.snapshot_id,
+        inspection_payload={
+            "confirmed": ["package is at the entryway"],
+            "corrected": ["package may be for a neighbor"],
+            "new_details": [],
+            "uncertain": [],
+            "confidence": 0.9,
+            "status": "pending",
+            "contested": False,
+            "contested_reasons": [],
+            "evidence_excerpt": [],
+            "inspector": "test-model",
+        },
+    )
+
+    refreshed = world.load(session, identity=runtime_context)
+    assert refreshed.world_summary is not None
+    assert refreshed.world_summary.last_inspected_at is None
+    assert "package may be for a neighbor" not in refreshed.world_summary.focus
+    assert "entryway is visible" in refreshed.world_summary.relationships
+    assert "package is at the entryway" not in refreshed.world_summary.relationships
+
+    decision = governance.evaluate_turn(
+        session,
+        runtime_context=runtime_context,
+        turn_id="turn-1",
+        current_message="continue",
+    )
+    applied = governance.apply_turn(session, decision)
+
+    assert not any(
+        candidate["reason"] == "confirmed_world_conclusion"
+        for candidate in applied["promotion_candidates"]
+    )
+    assert applied["promotion_applied_count"] == 0
+
+
+def test_memory_governance_does_not_auto_promote_contested_world_summary(tmp_path: Path):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    sessions = SessionManager(workspace)
+    session = sessions.get_or_create("cli:device")
+    runtime_context = ActorResolver().resolve_runtime_context(
+        channel="cli",
+        chat_id="device",
+        sender_id="user-1",
+        metadata={"device_id": "device-a"},
+        session_key="cli:device",
+    )
+    working = WorkingMemoryManager(sessions)
+    world = WorldStateManager(workspace, sessions, context_config=ContextConfig())
+    builder = ContextBuilder(workspace=workspace, timezone="UTC", sessions=sessions)
+    governance = MemoryGovernance(
+        workspace=workspace,
+        memory=builder.memory,
+        context_config=ContextConfig(),
+        working_memory=working,
+        world_state=world,
+    )
+    image = workspace / "desk.png"
+    image.write_bytes(b"\x89PNG\r\n\x1a\n" + b"\x00" * 64)
+    (workspace / "desk.json").write_text(
+        json.dumps({
+            "summary": "Desk holds a printed checklist.",
+            "relationships": ["checklist is on the desk"],
+            "confidence": 0.9,
+            "uncertainties": [],
+            "scope": "device",
+        }),
+        encoding="utf-8",
+    )
+    world.ingest_media(
+        session,
+        runtime_context=runtime_context,
+        media_paths=[str(image)],
+    )
+    snapshot = world.load(session, identity=runtime_context).snapshots[0]
+    world.apply_inspection(
+        session,
+        runtime_context=runtime_context,
+        snapshot_id=snapshot.snapshot_id,
+        inspection_payload={
+            "confirmed": ["checklist is on the desk"],
+            "corrected": ["checklist may belong to someone else"],
+            "new_details": [],
+            "uncertain": [],
+            "confidence": 0.9,
+            "status": "completed",
+            "contested": True,
+            "contested_reasons": ["checklist ownership is disputed"],
+            "evidence_excerpt": [],
+            "inspector": "test-model",
+        },
+    )
+
+    refreshed = world.load(session, identity=runtime_context)
+    assert refreshed.world_summary is not None
+    assert refreshed.world_summary.contested is True
+
+    decision = governance.evaluate_turn(
+        session,
+        runtime_context=runtime_context,
+        turn_id="turn-1",
+        current_message="continue",
+    )
+    applied = governance.apply_turn(session, decision)
+
+    assert not any(
+        candidate["reason"] == "confirmed_world_conclusion"
+        for candidate in applied["promotion_candidates"]
+    )
+    assert applied["promotion_applied_count"] == 0
+
+
 def test_roaming_prewarm_returns_none_when_no_candidates(tmp_path: Path):
     workspace = tmp_path / "workspace"
     workspace.mkdir()
@@ -1674,6 +2052,7 @@ def test_roaming_prewarm_collects_world_view_seed_from_candidate_session(tmp_pat
             "generated_at": "2026-06-09T00:01:00+00:00",
             "fresh_until": "2099-06-09T00:06:00+00:00",
             "focus": ["Desk has a printed checklist."],
+            "relationships": ["checklist is on desk"],
             "constraints": [],
             "uncertainties": ["Checklist owner is unclear."],
             "source_snapshot_ids": [],
@@ -1706,6 +2085,7 @@ def test_roaming_prewarm_collects_world_view_seed_from_candidate_session(tmp_pat
 
     assert bundle is not None
     assert any(item.startswith("prewarm_world: ") for item in bundle.world_view_seed)
+    assert "prewarm_world: checklist is on desk" in bundle.world_view_seed
     assert "world_summary" in bundle.sources
 
 

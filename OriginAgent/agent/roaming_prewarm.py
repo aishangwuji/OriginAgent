@@ -231,6 +231,7 @@ class RoamingPrewarmService:
         items: list[str] = []
         raw_items = [
             *list(summary.get("contested_items") or []),
+            *list(summary.get("relationships") or []),
             *list(summary.get("focus") or []),
             *list(summary.get("uncertainties") or []),
         ]
