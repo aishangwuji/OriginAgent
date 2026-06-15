@@ -1,7 +1,7 @@
 # RQ-009 任务包：世界模型最小查询接口与过期机制
 
 Date: 2026-06-12
-Status: Proposed
+Status: Completed
 Scope: Phase 2 `P2A` 最小 `world_view` 读模型、过滤与 freshness 规则冻结
 
 ## title

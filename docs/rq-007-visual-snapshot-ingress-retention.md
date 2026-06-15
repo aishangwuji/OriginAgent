@@ -1,7 +1,7 @@
 # RQ-007 任务包：视觉快照采集与本地留存策略
 
 Date: 2026-06-12
-Status: Proposed
+Status: Completed
 Scope: Phase 2 `P2A` path-first snapshot ingress 与本地留存边界冻结
 
 ## title

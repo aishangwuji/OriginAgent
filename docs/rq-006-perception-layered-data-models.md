@@ -1,7 +1,7 @@
 # RQ-006 任务包：感知分层数据模型设计
 
 Date: 2026-06-12
-Status: Proposed
+Status: Completed
 Scope: Phase 2 `P2A` 快照、深查与世界摘要三层数据模型冻结
 
 ## title

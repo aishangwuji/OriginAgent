@@ -1,7 +1,7 @@
 # RQ-008 任务包：`inspect_snapshot` 深查工具原型
 
 Date: 2026-06-12
-Status: Proposed
+Status: Completed
 Scope: Phase 2 `P2A` 粗略快照到按需深查的最小工具路径冻结
 
 ## title

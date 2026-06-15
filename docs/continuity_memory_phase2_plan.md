@@ -1,8 +1,8 @@
 # OriginAgent 连续性与记忆操作系统 Phase 2 计划书
 
 Date: 2026-06-09
-Status: In Progress
-Last Reviewed: 2026-06-13
+Status: P2A Completed
+Last Reviewed: 2026-06-15
 Scope: OriginAgent 连续性主线的 Phase 2 感知快照与世界摘要接入方案
 
 ## 1. 目标
@@ -87,7 +87,13 @@ Phase 2 完成时，必须同时满足以下条件：
 6. 当感知结果存在不确定性或冲突时，世界视图能显式标注 `uncertainties` 或 `contested` 状态。
 7. introspection 可解释某轮上下文使用了哪些快照、哪些摘要、哪些过滤规则。
 
-截至 2026-06-13，上述条件在“本地文件快照原型”范围内已经部分满足；但由于尚未完成真实 ingress、`P2A` gap audit 和完整阶段收口，当前不应将本阶段标记为完成。
+截至 2026-06-15，上述条件在“本地文件快照原型”范围内已满足 `P2A` 收口口径：
+
+1. `world_view` 已从 placeholder 升级为真实可解释摘要。
+2. `SceneSnapshot` / `InspectionResult` / `WorldSummary` 三层对象已按当前 dataclass 合同稳定复用。
+3. `inspect_snapshot` 已可稳定写回 inspection 与 world summary。
+4. introspection 已可解释 `summary`、`filtered_candidates`、`freshness`、`contested`、`selection_reasons` 与 world attention 写回结果。
+5. 当前阶段仍只完成 `P2A`，不等于真实 camera / audio / sensor ingress 已启动。
 
 ## 5. 核心设计判断
 
@@ -403,7 +409,8 @@ Phase 2 至少要补齐以下 inspect 能力：
 
 当前状态：
 
-1. 代码原型已部分覆盖，正式任务包已建档，当前重点是补齐状态回填、字段契约核对与 `P2A` 验收口径。
+1. `P2A` 已完成收口，当前三层对象合同已由运行时代码与测试共同冻结。
+2. `RQ-006` 的 open questions 统一顺延到 `P2B/Phase 3`：`relationships` 聚合、`InspectionResult.status` 正式枚举、`SceneSnapshot.kind` 的多模态细分语义，本轮不继续关闭。
 
 ### 12.2 `RQ-007` 视觉快照采集与本地留存策略
 
@@ -429,7 +436,7 @@ Phase 2 至少要补齐以下 inspect 能力：
 
 当前状态：
 
-1. path-first 原型已部分覆盖，正式任务包已建档，当前重点是核对 ingress 规则、sidecar metadata 约定与现有实现差距。
+1. `P2A` 已完成收口，path-first ingress 已支持 `foo.json` 优先、`foo.<ext>.json` 兼容，以及 `uploads/inbox/user-turn` 三类 provenance 默认注入。
 
 ### 12.3 `RQ-008` `inspect_snapshot` 深查工具原型
 
@@ -455,7 +462,7 @@ Phase 2 至少要补齐以下 inspect 能力：
 
 当前状态：
 
-1. 最小原型已落地，正式任务包已建档，当前重点是核对深查写回语义与世界摘要消费路径。
+1. `P2A` 已完成收口，service path / fallback path 已统一回写 `InspectionResult` 与 `WorldSummary`，并保留 `inspection_path` 解释出口。
 
 ### 12.4 `RQ-009` 世界模型最小查询接口与过期机制
 
@@ -481,7 +488,7 @@ Phase 2 至少要补齐以下 inspect 能力：
 
 当前状态：
 
-1. 最小读模型已落地，正式任务包已建档，当前重点是核对 freshness / conflict / uncertainty 口径。
+1. `P2A` 已完成收口，`world_state` 查询面已稳定提供 `summary / filtered_candidates / freshness / contested / selection_reasons`。
 
 ### 12.5 `RQ-010` 感知结果向 continuity 主线桥接规则
 
@@ -507,7 +514,8 @@ Phase 2 至少要补齐以下 inspect 能力：
 
 当前状态：
 
-1. continuity 主线接入已部分落地，正式任务包已建档，当前重点是核对注入条件、working memory bridge 与 introspection 输出。
+1. `P2A` 已完成收口，continuity 主线已稳定注入真实 `world_state_context`，并暴露 world-derived attention 写回审计。
+2. `selection_reasons` 与 `attention_write` 已进入 introspection；更正式的 reason taxonomy 与统一预算协调顺延到后续阶段。
 
 ## 13. 实施顺序
 
@@ -612,7 +620,15 @@ Phase 2 新增或更新测试应覆盖：
 4. 当前任务可在工作记忆与世界视图之间形成最小协同。
 5. 调试者可以解释某轮上下文为何包含这些环境摘要、排除了哪些快照。
 
-截至 2026-06-12，当前仓库只应被视为达到上述目标的原型前半段，尚不足以正式标记连续性主线 `Phase 2` 完成。
+截至 2026-06-15，以上目标已在 `P2A` 范围内成立。当前明确的验收触发器为：
+
+1. `tests/agent/test_continuity_phase1.py`
+2. `tests/tools/test_runtime_status_tools.py`
+3. `tests/agent/test_loop_save_turn.py`
+4. `tests/agent/test_auto_compact.py`
+5. `tests/agent/test_active_intents.py`
+
+上述回归全部通过且无新增 failures 时，方可将 `P2A` 切到完成态。
 
 ## 19. 当前建议的下一步
 

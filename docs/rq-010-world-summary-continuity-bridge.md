@@ -1,7 +1,7 @@
 # RQ-010 任务包：感知结果向 continuity 主线桥接规则
 
 Date: 2026-06-12
-Status: Proposed
+Status: Completed
 Scope: Phase 2 `P2A` world summary 注入 prompt、working memory 与 introspection 的桥接边界冻结
 
 ## title
