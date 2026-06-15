@@ -630,6 +630,24 @@ Phase 2 新增或更新测试应覆盖：
 
 上述回归全部通过且无新增 failures 时，方可将 `P2A` 切到完成态。
 
+## 18.1 P2B 承接状态
+
+`P2A` 完成后，`Phase 2` 的下一步统一收敛为 `P2B`：
+
+1. 把当前 path-first 文件快照原型扩展为真实 producer 可复用的 ingress 主线。
+2. 在 `WorldStateManager` 内增加最小 `PerceptionEventCandidate` 事件候选层。
+3. 将这些事件暴露到 introspection / audit，而不是直接接入 `CognitiveLoop` producer。
+
+`P2B` 的主包文档为：
+
+- [`rq-011-p2b-ingress-anomaly-bridge.md`](./rq-011-p2b-ingress-anomaly-bridge.md)
+
+本轮继续保持以下边界：
+
+1. `RQ-006` 的 deferred open questions 仍留在 `P2B / Phase 3` 内处理。
+2. `WorldSummary` 继续只做短期读模型，不晋升长期事实。
+3. 世界事件不进入 prompt 明细，不进入 `MessageBus` 主链。
+
 ## 19. 当前建议的下一步
 
 最合适的下一步不是继续把本阶段写成纯规划，而是把“已存在的原型”收敛成“有文档边界的原型”：
