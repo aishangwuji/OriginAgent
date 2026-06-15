@@ -394,6 +394,13 @@ async def test_nearline_pipeline_consumes_governed_profile_candidates(tmp_path) 
     assert "release checklists" in serialized
     user_text = (tmp_path / "USER.md").read_text(encoding="utf-8")
     assert "bullet-point release updates" in user_text
+    runtime_status = pipeline.runtime_status()
+    consumer = runtime_status["profile_consumer_last_run"]
+    assert consumer["consumer"] == "nearline_profile"
+    assert consumer["consumed_count"] == 2
+    assert consumer["applied_count"] == 2
+    assert consumer["cursor_before"] == 0
+    assert consumer["cursor_after"] >= 2
 
 
 @pytest.mark.asyncio

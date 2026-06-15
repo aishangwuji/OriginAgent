@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -37,6 +37,17 @@ class NearlineProfileService:
         self.store = store or NearlineMemoryStore(self.workspace)
         self.memory_store = memory_store or MemoryStore(self.workspace)
         self._candidate_writer = GovernedMemoryWriter(self.workspace)
+        self._last_consumer_result: dict[str, Any] = {
+            "consumer": "nearline_profile",
+            "consumed_count": 0,
+            "applied_count": 0,
+            "skipped_count": 0,
+            "duplicate_count": 0,
+            "cursor_before": self._candidate_writer.read_consumer_cursor("nearline_profile"),
+            "cursor_after": self._candidate_writer.read_consumer_cursor("nearline_profile"),
+            "last_run_at": None,
+            "reason": "not_run",
+        }
 
     def synthesize_snapshot(
         self,
@@ -120,6 +131,7 @@ class NearlineProfileService:
         limit: int = 80,
         write_user_shadow: bool = False,
     ) -> ProfileSnapshot | None:
+        started_at = datetime.now(timezone.utc).isoformat()
         memcells = self.store.read_memcells(limit=limit)
         episodes = [
             item for item in self.store.read_episodes(limit=limit)
@@ -129,6 +141,7 @@ class NearlineProfileService:
             item for item in self.store.read_foresights(limit=limit)
             if not owner_id or item.owner_id == owner_id
         ]
+        cursor_before = self._candidate_writer.read_consumer_cursor("nearline_profile")
         candidates, end_cursor = self._candidate_writer.read_pending_for_consumer(
             "nearline_profile",
             kinds=("preference", "task_pattern"),
@@ -149,13 +162,42 @@ class NearlineProfileService:
             candidates=candidates,
         )
         if snapshot is None:
+            self._last_consumer_result = {
+                "consumer": "nearline_profile",
+                "consumed_count": len(candidates),
+                "applied_count": 0,
+                "skipped_count": len(candidates),
+                "duplicate_count": 0,
+                "cursor_before": cursor_before,
+                "cursor_after": cursor_before,
+                "last_run_at": started_at,
+                "reason": "no_profile_snapshot",
+            }
             return None
         self.store.append_profiles([snapshot])
+        cursor_after = cursor_before
         if candidates:
-            self._candidate_writer.advance_consumer_cursor("nearline_profile", end_cursor)
+            cursor_after = self._candidate_writer.advance_consumer_cursor("nearline_profile", end_cursor)
         if write_user_shadow:
             self.write_profile_shadow(snapshot)
+        self._last_consumer_result = {
+            "consumer": "nearline_profile",
+            "consumed_count": len(candidates),
+            "applied_count": len(candidates),
+            "skipped_count": 0,
+            "duplicate_count": 0,
+            "cursor_before": cursor_before,
+            "cursor_after": cursor_after,
+            "last_run_at": started_at,
+            "reason": "ok",
+            "owner_id": owner_id or "user",
+            "profile_id": snapshot.profile_id,
+            "profile_summary": snapshot.summary,
+        }
         return snapshot
+
+    def last_consumer_result(self) -> dict[str, Any]:
+        return dict(self._last_consumer_result)
 
     def write_profile_shadow(self, snapshot: ProfileSnapshot) -> str:
         current = self.memory_store.read_user()

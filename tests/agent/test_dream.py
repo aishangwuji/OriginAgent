@@ -111,6 +111,43 @@ class TestDreamRun:
         facts = store.fact_store.read_all()
         assert any("weekly release updates" in fact.content for fact in facts)
         assert "weekly release updates" in store.read_memory()
+        status = dream.runtime_status()
+        assert status["consumer_last_run"]["consumer"] == "dream"
+        assert status["consumer_last_run"]["consumed_count"] == 1
+        assert status["consumer_last_run"]["applied_count"] == 1
+        assert status["consumer_last_run"]["duplicate_count"] == 0
+        assert status["forgetting_execution"]["executed"] is True
+
+    async def test_dream_consumer_runtime_reports_duplicates(self, dream, mock_provider, mock_runner, store):
+        store.fact_store.upsert_fact(
+            "User works on weekly release updates",
+            category="note",
+            scope="user",
+            owner="user",
+        )
+        writer = GovernedMemoryWriter(store.workspace)
+        writer.append(MemoryCandidate(
+            candidate_id="memcand_fact_dup",
+            kind="fact",
+            summary="User works on weekly release updates",
+            source_session_key="cli:direct",
+            source_refs=["turn-2"],
+            source_excerpt="remember that I work on weekly release updates",
+            confidence=0.92,
+            sensitivity="low",
+            scope="user",
+            owner_id="user",
+            created_at="2026-06-09T00:00:01+00:00",
+            metadata={"category": "note"},
+        ))
+
+        result = await dream.run()
+
+        assert result is False
+        status = dream.runtime_status()
+        assert status["consumer_last_run"]["consumed_count"] == 1
+        assert status["consumer_last_run"]["applied_count"] == 0
+        assert status["consumer_last_run"]["duplicate_count"] == 1
 
     async def test_consumes_meta_cognition_fact_candidates_without_history(self, dream, mock_provider, mock_runner, store):
         writer = GovernedMemoryWriter(store.workspace)

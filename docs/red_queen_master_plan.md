@@ -2,7 +2,7 @@
 
 Date: 2026-06-08
 Status: In Progress
-Last Reviewed: 2026-06-13
+Last Reviewed: 2026-06-15
 Scope: OriginAgent 红后主线的持续后台思考、分层感知、世界模型与物理动作能力长期演进总计划，并与连续性、元认知、受治理演进主线保持边界对齐
 
 ## 1. 文档目标
@@ -488,10 +488,10 @@ Safe Action Layer
 目标：
 把视觉原型扩展为更稳定的环境状态系统。
 
-当前状态（2026-06-13）：
+当前状态（2026-06-15）：
 
-1. `P3A` 已完成第一轮实现收口。
-2. 多模态 snapshot 合同、world summary `relationships` 聚合、长期晋升 gating、retrieval/world/prewarm 融合闭环已进入运行时代码并有自动化证据。
+1. `P3A`、`P3B` 与 `P3C` 已完成收口，`Phase 3` 当前边界已在运行时代码、introspection / self-model 视图与自动化测试中对齐。
+2. 多模态 snapshot 合同、world summary `relationships` 聚合、长期晋升 gating、retrieval/world/prewarm 融合、governed queue 双消费者审计、forgetting / retention maintenance 与治理解释出口均已落地。
 3. 当前仍未进入 cognition bridge、动作层或 watcher/daemon 常驻进程阶段。
 
 必须交付：
@@ -676,8 +676,9 @@ Safe Action Layer
 9. `RQ-009` 世界模型最小查询接口与过期机制。当前状态：已建档，最小读模型已落地，待核对 freshness / conflict 口径。
 10. `RQ-010` 感知结果向语义事件桥接的规则定义。当前状态：已建档，continuity 主线接入已部分落地，待核对 bridge 与 introspection 输出。
 11. `RQ-011` `P2B` 真实 ingress 与感知异常桥接。当前状态：已完成。
-12. `RQ-012` `P3A` 世界模型稳定化、长期晋升与多模态融合。当前状态：已完成第一轮收口。
-13. 动作层扩展前置安全清单。当前状态：未开始。
+12. `RQ-012` `P3A` 世界模型稳定化、长期晋升与多模态融合。当前状态：已完成。
+13. `P3` 融合收口包（吸收 `RQ-013` / `RQ-014` 剩余实现边界）。当前状态：已完成。
+14. 动作层扩展前置安全清单。当前状态：未开始。
 
 ## 15. 里程碑管理建议
 
@@ -688,7 +689,7 @@ Safe Action Layer
 1. `M0` 总计划书与拆包规范冻结。当前状态：已完成。
 2. `M1` 后台认知闭环可运行。当前状态：已完成收口。
 3. `M2` 视觉分层感知原型可运行。当前状态：`Phase 2` 已完成收口。
-4. `M3` 世界模型可维护稳定环境状态。当前状态：`P3A` 已完成第一轮实现收口。
+4. `M3` 世界模型与长期治理闭环可维护稳定环境状态。当前状态：`Phase 3` 已完成收口。
 5. `M4` 安全受控的动作闭环可运行。当前状态：未开始。
 6. `M5` 长期运行和治理能力达标。当前状态：未开始。
 

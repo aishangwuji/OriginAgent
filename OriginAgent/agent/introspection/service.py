@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from contextlib import suppress
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -18,6 +19,7 @@ from OriginAgent.agent.self_model import SelfModelService, _workspace_memory_sta
 from OriginAgent.agent.skills import SkillsLoader
 from OriginAgent.agent.workflow_artifacts import summarize_workflow_artifacts
 from OriginAgent.config.schema import AgentDefaults
+from OriginAgent.memory.candidates import GovernedMemoryWriter
 from OriginAgent.memory.policy import nearline_runtime_enabled
 from OriginAgent.memory.store import NearlineMemoryStore
 
@@ -486,17 +488,7 @@ class RuntimeIntrospectionService:
                 },
                 "meta_cognition": self.meta_cognition_summary(),
             },
-            "governance": {
-                "promotions": list(continuity.get("governance", {}).get("promotion_candidates", []))
-                if isinstance(continuity.get("governance"), dict)
-                else [],
-                "forgetting": list(continuity.get("governance", {}).get("forgetting_actions", []))
-                if isinstance(continuity.get("governance"), dict)
-                else [],
-                "conflicts": int(continuity.get("governance", {}).get("promotion_conflict_count", 0) or 0)
-                if isinstance(continuity.get("governance"), dict)
-                else 0,
-            },
+            "governance": self._governance_view(continuity),
             "scope_filter": self._scope_filter_summary(
                 current_scope=current_scope,
                 current_owner_id=getattr(runtime_context, "user_id", None),
@@ -618,6 +610,114 @@ class RuntimeIntrospectionService:
                 "nearline": self._nearline_memory_summary(),
                 **_workspace_memory_state(self._workspace),
             }
+
+    def _governance_view(self, continuity: dict[str, Any]) -> dict[str, Any]:
+        producer = continuity.get("governance", {}) if isinstance(continuity, dict) else {}
+        queue_backlog = {"total": 0, "by_kind": {}, "last_candidate_at": None}
+        dream_pending = {
+            "consumer": "dream",
+            "cursor": 0,
+            "pending_count": 0,
+            "by_kind": {},
+            "oldest_pending_at": None,
+            "newest_pending_at": None,
+        }
+        nearline_pending = {
+            "consumer": "nearline_profile",
+            "cursor": 0,
+            "pending_count": 0,
+            "by_kind": {},
+            "oldest_pending_at": None,
+            "newest_pending_at": None,
+        }
+        with suppress(Exception):
+            queue = GovernedMemoryWriter(self._workspace)
+            queue_backlog = queue.summarize_queue()
+            dream_pending = queue.pending_summary_for_consumer("dream", kinds=("fact", "constraint"))
+            nearline_pending = queue.pending_summary_for_consumer(
+                "nearline_profile",
+                kinds=("preference", "task_pattern"),
+            )
+        dream_status = self._service_status(
+            getattr(self._loop, "dream", None),
+            defaults={
+                "consumer_last_run": {
+                    "consumer": "dream",
+                    "consumed_count": 0,
+                    "applied_count": 0,
+                    "skipped_count": 0,
+                    "duplicate_count": 0,
+                    "cursor_before": 0,
+                    "cursor_after": 0,
+                    "last_run_at": None,
+                    "reason": "not_available",
+                },
+                "forgetting_execution": {
+                    "executed": True,
+                    "working_memory_expired": False,
+                    "working_memory_retained": True,
+                    "working_memory_expired_session_keys": [],
+                    "working_memory_retained_session_keys": [],
+                    "stale_candidate_pruned_count": 0,
+                    "fact_confidence_decayed_count": 0,
+                    "fact_retention_changes": {},
+                    "last_run_at": None,
+                    "reason": "not_available",
+                },
+            },
+        )
+        nearline_status = self._service_status(
+            self._nearline_memory_service,
+            defaults={
+                "profile_consumer_last_run": {
+                    "consumer": "nearline_profile",
+                    "consumed_count": 0,
+                    "applied_count": 0,
+                    "skipped_count": 0,
+                    "duplicate_count": 0,
+                    "cursor_before": 0,
+                    "cursor_after": 0,
+                    "last_run_at": None,
+                    "reason": "not_available",
+                },
+            },
+        )
+        return {
+            "promotions": list(producer.get("promotion_candidates", []))
+            if isinstance(producer, dict)
+            else [],
+            "forgetting": list(producer.get("forgetting_actions", []))
+            if isinstance(producer, dict)
+            else [],
+            "conflicts": int(producer.get("promotion_conflict_count", 0) or 0)
+            if isinstance(producer, dict)
+            else 0,
+            "queue_backlog": {
+                "total": int(queue_backlog.get("total", 0) or 0),
+                "by_kind": dict(queue_backlog.get("by_kind", {}) or {}),
+                "last_candidate_at": queue_backlog.get("last_candidate_at"),
+                "oldest_pending_at": (
+                    dream_pending.get("oldest_pending_at")
+                    or nearline_pending.get("oldest_pending_at")
+                ),
+            },
+            "consumer": {
+                "dream": {
+                    "last_run": dict(dream_status.get("consumer_last_run", {}) or {}),
+                    "pending_backlog": dict(dream_pending),
+                },
+                "nearline_profile": {
+                    "last_run": dict(nearline_status.get("profile_consumer_last_run", {}) or {}),
+                    "pending_backlog": dict(nearline_pending),
+                },
+            },
+            "forgetting_execution": dict(dream_status.get("forgetting_execution", {}) or {}),
+            "stale_prune_counts": {
+                "promotion_candidates": int(
+                    (dream_status.get("forgetting_execution", {}) or {}).get("stale_candidate_pruned_count", 0) or 0
+                ),
+            },
+        }
 
     def _nearline_memory_summary(self) -> dict[str, Any]:
         try:

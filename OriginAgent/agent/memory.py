@@ -12,7 +12,7 @@ import uuid
 import weakref
 from contextlib import suppress
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Iterator
 
@@ -1716,6 +1716,30 @@ class Dream:
         self._last_report: TaskRunReport | None = None
         self._consecutive_failures = 0
         self._governed_memory = GovernedMemoryWriter(self.store.workspace)
+        initial_cursor = self._governed_memory.read_consumer_cursor("dream")
+        self._last_consumer_result: dict[str, Any] = {
+            "consumer": "dream",
+            "consumed_count": 0,
+            "applied_count": 0,
+            "skipped_count": 0,
+            "duplicate_count": 0,
+            "cursor_before": initial_cursor,
+            "cursor_after": initial_cursor,
+            "last_run_at": None,
+            "reason": "not_run",
+        }
+        self._last_forgetting_execution: dict[str, Any] = {
+            "executed": False,
+            "working_memory_expired": False,
+            "working_memory_retained": True,
+            "working_memory_expired_session_keys": [],
+            "working_memory_retained_session_keys": [],
+            "stale_candidate_pruned_count": 0,
+            "fact_confidence_decayed_count": 0,
+            "fact_retention_changes": {},
+            "last_run_at": None,
+            "reason": "not_run",
+        }
 
     @property
     def feature_flags(self) -> dict[str, bool]:
@@ -1724,6 +1748,8 @@ class Dream:
     def runtime_status(self) -> dict[str, Any]:
         return {
             "dream_enabled": True,
+            "consumer_last_run": dict(self._last_consumer_result),
+            "forgetting_execution": dict(self._last_forgetting_execution),
             **report_to_status_payload(
                 self._last_report,
                 consecutive_failures=self._consecutive_failures,
@@ -1916,6 +1942,7 @@ class Dream:
         from OriginAgent.agent.skills import BUILTIN_SKILLS_DIR
 
         started_at = now_iso()
+        forgetting_execution = self._execute_forgetting_maintenance(started_at=started_at)
         queue_result = self._consume_governed_fact_candidates()
         last_cursor = self.store.get_last_dream_cursor()
         entries = self.store.read_unprocessed_history(since_cursor=last_cursor)
@@ -1928,7 +1955,10 @@ class Dream:
                 reason="no_unprocessed_history",
                 started_at=started_at,
                 finished_at=now_iso(),
-                details=queue_result,
+                details={
+                    **queue_result,
+                    "forgetting_execution": forgetting_execution,
+                },
             ))
             return False
         if not entries and int(queue_result.get("consumed_count", 0) or 0) > 0:
@@ -1940,7 +1970,10 @@ class Dream:
                 reason="governed_memory_queue_only",
                 started_at=started_at,
                 finished_at=now_iso(),
-                details=queue_result,
+                details={
+                    **queue_result,
+                    "forgetting_execution": forgetting_execution,
+                },
             ))
             return bool(int(queue_result.get("applied_count", 0) or 0) > 0)
 
@@ -2069,7 +2102,7 @@ class Dream:
                     ))
                 return False
 
-            decayed_fact_count = self.store.decay_fact_confidence_and_rebuild_memory()
+            decayed_fact_count = int(self._last_forgetting_execution.get("fact_confidence_decayed_count", 0) or 0)
             if decayed_fact_count:
                 logger.info("Dream decayed confidence for {} active fact(s)", decayed_fact_count)
 
@@ -2226,6 +2259,8 @@ class Dream:
                     details={
                         "new_cursor": new_cursor,
                         "changes": len(changelog),
+                        "forgetting_execution": forgetting_execution,
+                        "consumer_result": dict(self._last_consumer_result),
                     },
                 ))
             else:
@@ -2282,18 +2317,85 @@ class Dream:
             current_failures=self._consecutive_failures,
         )
 
+    def _execute_forgetting_maintenance(self, *, started_at: str) -> dict[str, Any]:
+        from OriginAgent.agent.memory_governance import PromotionCandidateStore
+        from OriginAgent.agent.working_memory import WORKING_MEMORY_METADATA_KEY
+        from OriginAgent.session.manager import SessionManager
+
+        expired_session_keys: list[str] = []
+        retained_session_keys: list[str] = []
+        workspace = self.store.workspace
+        sessions = SessionManager(workspace)
+        now = datetime.now(timezone.utc)
+        for row in list(sessions.list_sessions() or []):
+            session_key = str(row.get("key") or "").strip()
+            if not session_key:
+                continue
+            session = sessions.get_or_create(session_key)
+            raw = session.metadata.get(WORKING_MEMORY_METADATA_KEY)
+            if not isinstance(raw, dict):
+                continue
+            expires_raw = str(raw.get("expires_at") or "").strip()
+            if not expires_raw:
+                retained_session_keys.append(session_key)
+                continue
+            try:
+                expires_at = datetime.fromisoformat(expires_raw.replace("Z", "+00:00"))
+            except ValueError:
+                retained_session_keys.append(session_key)
+                continue
+            if expires_at.tzinfo is None:
+                expires_at = expires_at.replace(tzinfo=timezone.utc)
+            if expires_at < now:
+                session.metadata.pop(WORKING_MEMORY_METADATA_KEY, None)
+                sessions.save(session)
+                expired_session_keys.append(session_key)
+            else:
+                retained_session_keys.append(session_key)
+        stale_candidate_pruned_count = PromotionCandidateStore(workspace).prune_stale()
+        decayed_fact_count = 0
+        with suppress(Exception):
+            decayed_fact_count = self.store.decay_fact_confidence_and_rebuild_memory()
+        execution = {
+            "executed": True,
+            "working_memory_expired": bool(expired_session_keys),
+            "working_memory_retained": not bool(expired_session_keys),
+            "working_memory_expired_session_keys": expired_session_keys[:8],
+            "working_memory_retained_session_keys": retained_session_keys[:8],
+            "stale_candidate_pruned_count": stale_candidate_pruned_count,
+            "fact_confidence_decayed_count": decayed_fact_count,
+            "fact_retention_changes": {
+                "expired_working_memory_sessions": len(expired_session_keys),
+                "retained_working_memory_sessions": len(retained_session_keys),
+            },
+            "last_run_at": started_at,
+            "reason": "ok",
+        }
+        self._last_forgetting_execution = dict(execution)
+        return execution
+
     def _consume_governed_fact_candidates(self) -> dict[str, Any]:
+        cursor_before = self._governed_memory.read_consumer_cursor("dream")
         candidates, end_cursor = self._governed_memory.read_pending_for_consumer(
             "dream",
             kinds=("fact", "constraint"),
         )
         if not candidates:
-            return {
+            result = {
+                "consumer": "dream",
                 "consumed_count": 0,
                 "applied_count": 0,
-                "cursor_advanced_to": self._governed_memory.read_consumer_cursor("dream"),
+                "skipped_count": 0,
+                "duplicate_count": 0,
+                "cursor_before": cursor_before,
+                "cursor_after": cursor_before,
+                "last_run_at": now_iso(),
+                "reason": "no_candidates",
             }
+            self._last_consumer_result = dict(result)
+            return result
         applied = 0
+        duplicate_count = 0
         with self.store._locked():
             records = self.store.fact_store.read_all_unlocked()
             known_keys = {
@@ -2312,6 +2414,7 @@ class Dream:
                     candidate.scope,
                 )
                 if canonical_key in known_keys:
+                    duplicate_count += 1
                     continue
                 self.store.fact_store.upsert_fact_in_records_unlocked(
                     records,
@@ -2333,9 +2436,17 @@ class Dream:
                 self.store.fact_store._write_records_unlocked(records)
                 memory_md = self.store.fact_store.render_memory_md_unlocked()
                 self.store._write_text_atomic(self.store.memory_file, memory_md)
-        self._governed_memory.advance_consumer_cursor("dream", end_cursor)
-        return {
+        cursor_after = self._governed_memory.advance_consumer_cursor("dream", end_cursor)
+        result = {
+            "consumer": "dream",
             "consumed_count": len(candidates),
             "applied_count": applied,
-            "cursor_advanced_to": end_cursor,
+            "skipped_count": max(0, len(candidates) - applied - duplicate_count),
+            "duplicate_count": duplicate_count,
+            "cursor_before": cursor_before,
+            "cursor_after": cursor_after,
+            "last_run_at": now_iso(),
+            "reason": "ok",
         }
+        self._last_consumer_result = dict(result)
+        return result

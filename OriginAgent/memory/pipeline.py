@@ -123,6 +123,7 @@ class NearlineMemoryPipeline:
         return {
             "nearline_enabled": bool(self.config.enabled),
             "nearline_pipeline_enabled": bool(self.config.pipeline_enabled),
+            "profile_consumer_last_run": dict(self.profile_service.last_consumer_result()),
             **report_to_status_payload(
                 self._last_report,
                 consecutive_failures=self._consecutive_failures,
@@ -317,6 +318,7 @@ class NearlineMemoryPipeline:
                     "turn_id": turn_id,
                     "channel": channel,
                     "chat_id": chat_id,
+                    "profile_consumer_last_run": dict(self.profile_service.last_consumer_result()),
                 },
             )
             self._remember_report(build_task_report(

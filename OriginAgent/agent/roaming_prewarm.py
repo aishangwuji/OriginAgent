@@ -213,6 +213,11 @@ class RoamingPrewarmService:
                 identity=runtime_context,
                 current_message=None,
             )
+            event_view = manager.recent_events(
+                session,
+                identity=runtime_context,
+                limit=max_items,
+            )
         except Exception:
             return []
         summary = payload.get("world_summary") if isinstance(payload, dict) else None
@@ -226,9 +231,51 @@ class RoamingPrewarmService:
                 fallback_summary = metadata_world.get("world_summary")
                 if isinstance(fallback_summary, dict):
                     summary = fallback_summary
+                if not isinstance(event_view, dict):
+                    fallback_events = metadata_world.get("events")
+                    if isinstance(fallback_events, list):
+                        event_view = {"recent_events": fallback_events[:max_items]}
+        else:
+            metadata_world = (
+                session.metadata.get("world_state_v1")
+                if hasattr(session, "metadata") and isinstance(session.metadata, dict)
+                else None
+            )
+            if isinstance(metadata_world, dict) and isinstance(event_view, dict):
+                if not list(event_view.get("recent_events") or []):
+                    fallback_events = metadata_world.get("events")
+                    if isinstance(fallback_events, list):
+                        event_view = {"recent_events": fallback_events[:max_items]}
         if not isinstance(summary, dict):
             return []
         items: list[str] = []
+        event_items: list[str] = []
+        metadata_world = (
+            session.metadata.get("world_state_v1")
+            if hasattr(session, "metadata") and isinstance(session.metadata, dict)
+            else None
+        )
+        if isinstance(event_view, dict):
+            for event in list(event_view.get("recent_events") or []):
+                if not isinstance(event, dict):
+                    continue
+                text = _trim_text(event.get("summary"), max_chars=180)
+                if text:
+                    event_items.append(text)
+        if not event_items and isinstance(metadata_world, dict):
+            for event in list(metadata_world.get("events") or []):
+                if not isinstance(event, dict):
+                    continue
+                text = _trim_text(event.get("summary"), max_chars=180)
+                if text:
+                    event_items.append(text)
+        for text in event_items:
+            line = f"prewarm_world: {text}"
+            if line in items:
+                continue
+            items.append(line)
+            if len(items) >= max_items:
+                return items
         raw_items = [
             *list(summary.get("contested_items") or []),
             *list(summary.get("relationships") or []),

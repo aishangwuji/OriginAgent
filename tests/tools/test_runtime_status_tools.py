@@ -537,6 +537,11 @@ async def test_inspect_context_reports_phase1_views_and_scope_filter(tmp_path) -
     assert result["views"]["world"]["recent_events"][0]["kind"] == "contested_world_state"
     assert result["views"]["world"]["event_summary"]["total"] == 1
     assert result["views"]["world"]["event_summary"]["by_kind"]["contested_world_state"] == 1
+    assert result["governance"]["consumer"]["dream"]["last_run"]["consumer"] == "dream"
+    assert result["governance"]["consumer"]["nearline_profile"]["last_run"]["consumer"] == "nearline_profile"
+    assert result["governance"]["consumer"]["dream"]["pending_backlog"]["pending_count"] >= 0
+    assert result["governance"]["queue_backlog"]["total"] >= 0
+    assert result["governance"]["forgetting_execution"]["executed"] is True
     assert result["views"]["meta_cognition"]["contract_version"] == "meta_cognition.v1.freeze"
     assert result["views"]["meta_cognition"]["recent_triggers"][0]["trigger_type"] == "tool_failure"
     assert result["views"]["meta_cognition"]["structured_reflection_enabled"] is True

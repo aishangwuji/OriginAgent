@@ -2045,6 +2045,22 @@ def test_roaming_prewarm_collects_world_view_seed_from_candidate_session(tmp_pat
         "owner_id": "user-1",
         "snapshots": [],
         "inspections": [],
+        "events": [
+            {
+                "event_id": "evt_1",
+                "kind": "contested_world_state",
+                "snapshot_id": "snap_1",
+                "inspection_id": "inspect_1",
+                "summary": "Checklist needs reconfirmation.",
+                "confidence": 0.81,
+                "contested": True,
+                "created_at": "2026-06-09T00:01:30+00:00",
+                "source": "camera.image",
+                "scope": "session",
+                "owner_id": "user-1",
+                "provenance": {"producer": "camera", "ingest_method": "workspace_inbox"},
+            }
+        ],
         "world_summary": {
             "summary_id": "world_1",
             "scope": "session",
@@ -2086,6 +2102,7 @@ def test_roaming_prewarm_collects_world_view_seed_from_candidate_session(tmp_pat
     assert bundle is not None
     assert any(item.startswith("prewarm_world: ") for item in bundle.world_view_seed)
     assert "prewarm_world: checklist is on desk" in bundle.world_view_seed
+    assert "prewarm_world: Checklist needs reconfirmation." in bundle.world_view_seed
     assert "world_summary" in bundle.sources
 
 

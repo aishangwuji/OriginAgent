@@ -89,6 +89,9 @@ def test_self_model_reports_memory_candidate_queue_states(tmp_path) -> None:
     assert queue["exists"] is False
     assert queue["pending_count"] == 0
     assert queue["last_candidate_at"] is None
+    assert queue["by_kind"] == {}
+    assert queue["by_consumer_pending"] == {}
+    assert queue["oldest_pending_at"] is None
 
     queue_file = tmp_path / "memory" / "memory_candidates.jsonl"
     queue_file.parent.mkdir(parents=True, exist_ok=True)
@@ -100,6 +103,9 @@ def test_self_model_reports_memory_candidate_queue_states(tmp_path) -> None:
     assert queue["exists"] is True
     assert queue["pending_count"] == 0
     assert queue["last_candidate_at"] is None
+    assert queue["by_kind"] == {}
+    assert queue["by_consumer_pending"] == {"dream": 0, "nearline_profile": 0}
+    assert queue["oldest_pending_at"] is None
 
     writer = GovernedMemoryWriter(tmp_path)
     writer.append(
@@ -140,6 +146,9 @@ def test_self_model_reports_memory_candidate_queue_states(tmp_path) -> None:
     assert queue["exists"] is True
     assert queue["pending_count"] == 2
     assert queue["last_candidate_at"] == "2026-06-05T10:01:00+00:00"
+    assert queue["oldest_pending_at"] == "2026-06-05T10:00:00+00:00"
+    assert queue["by_kind"] == {"preference": 1, "task_pattern": 1}
+    assert queue["by_consumer_pending"] == {"dream": 0, "nearline_profile": 2}
 
 
 def test_self_model_keeps_workspace_state_when_runtime_snapshot_memory_exists(tmp_path) -> None:

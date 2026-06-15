@@ -775,6 +775,9 @@ def _memory_candidate_queue_status(workspace: Path) -> dict[str, Any]:
             "status": "lazy_not_created",
             "pending_count": 0,
             "last_candidate_at": None,
+            "by_kind": {},
+            "by_consumer_pending": {},
+            "oldest_pending_at": None,
         }
     writer = GovernedMemoryWriter(workspace)
     candidates = []
@@ -782,14 +785,28 @@ def _memory_candidate_queue_status(workspace: Path) -> dict[str, Any]:
         candidates = writer.read_all()
     status = "active" if candidates else "empty"
     last_candidate_at = None
+    oldest_pending_at = None
     if candidates:
         last_candidate_at = str(candidates[-1].created_at or "").strip() or None
+        oldest_pending_at = str(candidates[0].created_at or "").strip() or None
+    queue_summary = writer.summarize_queue()
+    dream_pending = writer.pending_summary_for_consumer("dream", kinds=("fact", "constraint"))
+    nearline_pending = writer.pending_summary_for_consumer(
+        "nearline_profile",
+        kinds=("preference", "task_pattern"),
+    )
     return {
         "path": str(queue_path),
         "exists": True,
         "status": status,
         "pending_count": len(candidates),
         "last_candidate_at": last_candidate_at,
+        "by_kind": dict(queue_summary.get("by_kind", {}) or {}),
+        "by_consumer_pending": {
+            "dream": int(dream_pending.get("pending_count", 0) or 0),
+            "nearline_profile": int(nearline_pending.get("pending_count", 0) or 0),
+        },
+        "oldest_pending_at": oldest_pending_at,
     }
 
 

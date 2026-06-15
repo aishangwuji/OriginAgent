@@ -141,6 +141,59 @@ class GovernedMemoryWriter:
             return [], cursor
         return pending, end_cursor
 
+    def summarize_queue(
+        self,
+        *,
+        owner_id: str | None = None,
+    ) -> dict[str, Any]:
+        candidates = self.read_all(owner_id=owner_id)
+        by_kind: dict[str, int] = {}
+        last_candidate_at: str | None = None
+        for candidate in candidates:
+            by_kind[candidate.kind] = by_kind.get(candidate.kind, 0) + 1
+            created_at = str(candidate.created_at or "").strip()
+            if created_at and (last_candidate_at is None or created_at > last_candidate_at):
+                last_candidate_at = created_at
+        return {
+            "total": len(candidates),
+            "by_kind": by_kind,
+            "last_candidate_at": last_candidate_at,
+        }
+
+    def pending_summary_for_consumer(
+        self,
+        consumer: str,
+        *,
+        kinds: tuple[str, ...] | None = None,
+        owner_id: str | None = None,
+    ) -> dict[str, Any]:
+        cursor_before = self.read_consumer_cursor(consumer)
+        pending, _end_cursor = self.read_pending_for_consumer(
+            consumer,
+            kinds=kinds,
+            owner_id=owner_id,
+        )
+        by_kind: dict[str, int] = {}
+        oldest_pending_at: str | None = None
+        newest_pending_at: str | None = None
+        for candidate in pending:
+            by_kind[candidate.kind] = by_kind.get(candidate.kind, 0) + 1
+            created_at = str(candidate.created_at or "").strip()
+            if not created_at:
+                continue
+            if oldest_pending_at is None or created_at < oldest_pending_at:
+                oldest_pending_at = created_at
+            if newest_pending_at is None or created_at > newest_pending_at:
+                newest_pending_at = created_at
+        return {
+            "consumer": str(consumer or "").strip() or "default",
+            "cursor": cursor_before,
+            "pending_count": len(pending),
+            "by_kind": by_kind,
+            "oldest_pending_at": oldest_pending_at,
+            "newest_pending_at": newest_pending_at,
+        }
+
     def read_consumer_cursor(self, consumer: str) -> int:
         path = self._consumer_cursor_path(consumer)
         with suppress(OSError, ValueError):
