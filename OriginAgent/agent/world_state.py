@@ -77,6 +77,10 @@ def _path_to_workspace(path: str | Path, *, workspace: Path) -> str:
         return str(p).replace("\\", "/")
 
 
+def _path_to_posix(path: str | Path) -> str:
+    return str(path).replace("\\", "/")
+
+
 @dataclass
 class SceneSnapshot:
     snapshot_id: str
@@ -237,6 +241,7 @@ class WorldStateSnapshot:
     snapshots: list[SceneSnapshot] = field(default_factory=list)
     inspections: list[InspectionResult] = field(default_factory=list)
     world_summary: WorldSummary | None = None
+    pruning: dict[str, Any] = field(default_factory=dict)
 
     def to_json(self) -> dict[str, Any]:
         return {
@@ -248,6 +253,7 @@ class WorldStateSnapshot:
             "snapshots": [item.to_json() for item in self.snapshots],
             "inspections": [item.to_json() for item in self.inspections],
             "world_summary": self.world_summary.to_json() if self.world_summary is not None else None,
+            "pruning": dict(self.pruning),
         }
 
     @classmethod
@@ -274,6 +280,7 @@ class WorldStateSnapshot:
             snapshots=snapshots,
             inspections=inspections,
             world_summary=summary,
+            pruning=dict(raw.get("pruning") or {}) if isinstance(raw.get("pruning"), dict) else {},
         )
 
 
@@ -351,11 +358,13 @@ class WorldStateManager:
             if relative_media_path in existing_paths:
                 continue
             sidecar = self._read_sidecar(descriptor.path)
+            inferred_provenance = self._infer_provenance_from_path(relative_media_path)
             scene = self._build_scene_snapshot(
                 descriptor,
                 media_path=relative_media_path,
                 runtime_context=runtime_context,
                 sidecar=sidecar,
+                inferred_provenance=inferred_provenance,
             )
             snapshot.snapshots.append(scene)
             existing_paths.add(relative_media_path)
@@ -599,20 +608,30 @@ class WorldStateManager:
             item for item in snapshot.snapshots
             if self._is_snapshot_fresh(item, now=now)
         ]
-        snapshot.snapshots = fresh_snapshots[-6:]
-        snapshot.inspections = [
+        kept_snapshots = fresh_snapshots[-6:]
+        kept_inspections = [
             item for item in snapshot.inspections
-            if any(scene.snapshot_id == item.snapshot_id for scene in snapshot.snapshots)
+            if any(scene.snapshot_id == item.snapshot_id for scene in kept_snapshots)
         ][-6:]
-        if not snapshot.snapshots:
-            snapshot.status = "placeholder"
-            snapshot.version = "phase1"
-            snapshot.world_summary = None
-            return snapshot
-        snapshot.status = "active"
-        snapshot.version = "phase2"
-        snapshot.world_summary = self._build_world_summary(snapshot, now=now)
-        return snapshot
+        refreshed = WorldStateSnapshot(
+            status="active" if kept_snapshots else "placeholder",
+            version="phase2" if kept_snapshots else "phase1",
+            updated_at=snapshot.updated_at,
+            scope=snapshot.scope,
+            owner_id=snapshot.owner_id,
+            snapshots=list(kept_snapshots),
+            inspections=list(kept_inspections),
+            world_summary=None,
+            pruning={
+                "snapshot_count": max(0, len(snapshot.snapshots) - len(kept_snapshots)),
+                "inspection_count": max(0, len(snapshot.inspections) - len(kept_inspections)),
+                "refreshed_at": now.isoformat(),
+            },
+        )
+        if not refreshed.snapshots:
+            return refreshed
+        refreshed.world_summary = self._build_world_summary(refreshed, now=now)
+        return refreshed
 
     def _build_filtered_summary(
         self,
@@ -774,6 +793,7 @@ class WorldStateManager:
         media_path: str,
         runtime_context: RuntimeContext,
         sidecar: dict[str, Any] | None,
+        inferred_provenance: dict[str, str] | None = None,
     ) -> SceneSnapshot:
         captured_at = _utcnow_iso()
         summary = f"Uninspected image snapshot captured from {runtime_context.channel}."
@@ -781,9 +801,19 @@ class WorldStateManager:
         relationships: list[str] = []
         uncertainties = ["image has not been deeply inspected yet"]
         confidence = 0.35
+        inferred_provenance = dict(inferred_provenance or {})
         provenance = {
-            "producer": str((sidecar or {}).get("producer") or descriptor.source or "media"),
-            "ingest_method": str((sidecar or {}).get("ingest_method") or "workspace_media"),
+            "producer": str(
+                (sidecar or {}).get("producer")
+                or inferred_provenance.get("producer")
+                or descriptor.source
+                or "media"
+            ),
+            "ingest_method": str(
+                (sidecar or {}).get("ingest_method")
+                or inferred_provenance.get("ingest_method")
+                or "workspace_media"
+            ),
         }
         if isinstance(sidecar, dict):
             captured_at = str(sidecar.get("captured_at") or captured_at).strip()
@@ -821,14 +851,39 @@ class WorldStateManager:
 
     @staticmethod
     def _read_sidecar(path: Path) -> dict[str, Any] | None:
-        sidecar_path = path.with_suffix(path.suffix + ".json")
-        if not sidecar_path.is_file():
-            return None
-        try:
-            data = json.loads(sidecar_path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            return None
-        return data if isinstance(data, dict) else None
+        candidates = [path.with_suffix(".json")]
+        legacy_candidate = path.with_suffix(path.suffix + ".json")
+        if legacy_candidate not in candidates:
+            candidates.append(legacy_candidate)
+        for sidecar_path in candidates:
+            if not sidecar_path.is_file():
+                continue
+            try:
+                data = json.loads(sidecar_path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                continue
+            if isinstance(data, dict):
+                return data
+        return None
+
+    @staticmethod
+    def _infer_provenance_from_path(media_path: str) -> dict[str, str]:
+        normalized = _path_to_posix(media_path).lstrip("/")
+        parts = [part for part in normalized.split("/") if part]
+        if len(parts) >= 2 and parts[0] == "uploads":
+            return {
+                "producer": parts[1],
+                "ingest_method": "workspace_upload",
+            }
+        if len(parts) >= 2 and parts[0] == "inbox":
+            return {
+                "producer": parts[1],
+                "ingest_method": "workspace_inbox",
+            }
+        return {
+            "producer": "media",
+            "ingest_method": "workspace_media",
+        }
 
     def _is_snapshot_fresh(self, snapshot: SceneSnapshot, *, now: datetime) -> bool:
         captured_at = _parse_dt(snapshot.captured_at)
