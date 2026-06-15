@@ -114,6 +114,26 @@ def test_from_config_real_mode_lighting_client_does_not_register_tools(tmp_path)
     assert _lighting_names(loop) == []
 
 
+def test_from_config_real_mode_with_full_allowlist_registers_lighting_tools(tmp_path):
+    cfg = _config(tmp_path)
+    cfg.tools.device = DeviceToolsConfig(
+        enabled=True,
+        lighting_enabled=True,
+        mode="real",
+        backend="lighting_client",
+        real_execution_enabled=True,
+        lighting_client_endpoint="http://127.0.0.1:18080",
+    )
+
+    loop = AgentLoop.from_config(cfg, bus=MessageBus(), provider=_provider())
+
+    assert _lighting_names(loop) == [
+        "originagent_device_lighting_set_power",
+        "originagent_device_lighting_set_brightness",
+        "originagent_device_lighting_set_color_temperature",
+    ]
+
+
 def test_from_config_real_mode_with_registry_still_does_not_register_tools(tmp_path):
     cfg = _config(tmp_path)
     cfg.tools.device = DeviceToolsConfig(

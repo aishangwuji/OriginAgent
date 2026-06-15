@@ -86,6 +86,49 @@ class RuntimeStatusTool(Tool):
         return service.system_status()
 
 
+class PlanActionTool(Tool):
+    name = "originagent_plan_action"
+
+    def __init__(
+        self,
+        *,
+        introspection_service: RuntimeIntrospectionService | None = None,
+    ) -> None:
+        self._introspection_service = introspection_service
+
+    @property
+    def description(self) -> str:
+        return "Return the last cached action planner result without re-running planning."
+
+    @property
+    def parameters(self) -> dict[str, Any]:
+        return {"type": "object", "properties": {}, "additionalProperties": False}
+
+    @property
+    def read_only(self) -> bool:
+        return True
+
+    async def execute(self) -> dict[str, Any]:
+        loop = getattr(self._introspection_service, "_loop", None) if self._introspection_service is not None else None
+        audit = dict(getattr(loop, "_last_action_continuity_audit", {}) or {}) if loop is not None else {}
+        planner_result = audit.get("planner_result")
+        if not isinstance(planner_result, dict):
+            planner_result = {}
+        planning_evidence = audit.get("planning_evidence")
+        if not isinstance(planning_evidence, dict):
+            planning_evidence = {}
+        return {
+            "available": bool(planner_result),
+            "status": audit.get("status"),
+            "reason": audit.get("reason"),
+            "planner_result": dict(planner_result),
+            "planning_evidence": dict(planning_evidence),
+            "automation_origin": audit.get("automation_origin"),
+            "selected_proposal_digest": audit.get("selected_proposal_digest"),
+            "skipped_reasons": list(audit.get("skipped_reasons", []) or []),
+        }
+
+
 class InspectContextTool(Tool):
     name = "originagent_inspect_context"
 

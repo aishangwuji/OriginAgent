@@ -1,0 +1,17 @@
+id: robot
+name: Unitree G1 Robot
+version: 0.1.0
+enabled: false
+description: Unitree G1 robot action planning and preview only.
+
+capabilities:
+  - preview_robot_actions
+
+runtime:
+  module: runtime.contribution
+  factory: build_runtime_contribution
+
+activation:
+  triggers:
+    - robot
+    - unitree

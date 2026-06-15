@@ -17,6 +17,7 @@ from OriginAgent.agent.tools.runtime_status import (
     CronSummaryTool,
     InspectContextTool,
     InspectSnapshotTool,
+    PlanActionTool,
     RuntimeStatusTool,
     ToolAuditSummaryTool,
 )
@@ -424,6 +425,22 @@ async def test_inspect_context_reports_phase1_views_and_scope_filter(tmp_path) -
             "promotion_conflict_count": 1,
             "forgetting_actions": [{"kind": "empty_turn", "retained": True}],
         },
+        _last_action_continuity_audit={
+            "status": "ok",
+            "planning_inputs": {"runtime_context": {"session_key": "cli:direct"}},
+            "planning_evidence": {"automation_origin": "smart_home"},
+            "automation_origin": "smart_home",
+            "planner_result": {
+                "proposals": [{"automation_origin": "smart_home"}],
+                "planner_sources": ["ActionAutomationCoordinator"],
+                "skipped_reasons": ["RobotActionPlanner: no_proposal"],
+            },
+            "selected_proposal_digest": "proposal-1",
+            "skipped_reasons": ["RobotActionPlanner: no_proposal"],
+            "preconditions": {"outcome": "allow"},
+            "execution_result": {"status": "dry_run"},
+            "continuity_writeback": {"result_status": "dry_run"},
+        },
         _max_messages=120,
         context=context_builder,
         sessions=sessions,
@@ -567,6 +584,8 @@ async def test_inspect_context_reports_phase1_views_and_scope_filter(tmp_path) -
     assert result["scope_filter"]["current_scope"] == "session"
     assert result["scope_filter"]["visibility_matrix"]["device"] is True
     assert result["scope_filter"]["visibility_matrix"]["task"] is False
+    assert result["views"]["action"]["planner_result"]["planner_sources"] == ["ActionAutomationCoordinator"]
+    assert result["views"]["action"]["selected_proposal_digest"] == "proposal-1"
     assert any(
         candidate["source"] == "working_memory" and candidate["visible"] is True
         for candidate in result["scope_filter"]["candidates"]
@@ -575,6 +594,40 @@ async def test_inspect_context_reports_phase1_views_and_scope_filter(tmp_path) -
         candidate["source"] == "world_view" and candidate["visible"] is True
         for candidate in result["scope_filter"]["candidates"]
     )
+
+
+@pytest.mark.asyncio
+async def test_plan_action_tool_reads_cached_planner_result(tmp_path) -> None:
+    loop = SimpleNamespace(
+        _last_action_continuity_audit={
+            "status": "ok",
+            "reason": None,
+            "planning_evidence": {"automation_origin": "smart_home"},
+            "automation_origin": "smart_home",
+            "planner_result": {
+                "proposals": [{"automation_origin": "smart_home"}],
+                "planner_sources": ["ActionAutomationCoordinator"],
+                "skipped_reasons": ["RobotActionPlanner: no_proposal"],
+            },
+            "selected_proposal_digest": "proposal-1",
+            "skipped_reasons": ["RobotActionPlanner: no_proposal"],
+        }
+    )
+    tool = PlanActionTool(
+        introspection_service=RuntimeIntrospectionService(
+            loop=loop,
+            workspace=tmp_path,
+            registry=SimpleNamespace(tool_names=["originagent_plan_action"]),
+            sessions=object(),
+            pending_queues={},
+        )
+    )
+
+    result = await tool.execute()
+
+    assert result["available"] is True
+    assert result["planner_result"]["planner_sources"] == ["ActionAutomationCoordinator"]
+    assert result["selected_proposal_digest"] == "proposal-1"
 
 
 @pytest.mark.asyncio

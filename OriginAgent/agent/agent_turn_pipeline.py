@@ -11,6 +11,7 @@ from typing import Any, Awaitable, Callable
 
 from loguru import logger
 
+from OriginAgent.agent.action_continuity import ActionProposal
 from OriginAgent.agent.tools.message import MessageTool
 from OriginAgent.bus.events import InboundMessage, OutboundMessage
 from OriginAgent.command import CommandContext
@@ -150,7 +151,7 @@ class TurnPipelineDeps:
     schedule_curator_review: Callable[[TurnContext], None]
     automation_enabled: Callable[[], bool]
     device_action_executor_for_automation: Callable[[], Any | None]
-    action_automation_components: Callable[[], tuple[Any | None, Any | None]]
+    action_planner: Any
     record_action_continuity_audit: Callable[[dict[str, Any]], None]
     assemble_outbound: Callable[
         [InboundMessage, str, list[dict[str, Any]], str, bool, list[str], Callable[[str], Awaitable[None]] | None],
@@ -164,6 +165,38 @@ class AgentTurnPipeline:
 
     def __init__(self, deps: TurnPipelineDeps) -> None:
         self._deps = deps
+
+    @staticmethod
+    def _select_automation_proposal(
+        proposals: list[ActionProposal],
+        *,
+        origin: str,
+    ) -> ActionProposal | None:
+        candidates = [
+            proposal
+            for proposal in proposals
+            if proposal.automation_origin == origin and not getattr(proposal, "preview_only", False)
+        ]
+        if not candidates:
+            return None
+        if len(candidates) > 1:
+            logger.warning(
+                "Multiple executable proposals found for origin %s; selecting the first candidate",
+                origin,
+            )
+        return candidates[0]
+
+    @staticmethod
+    def _resolve_adapter_for_origin(origin: str | None, domain_contributions: list[Any]) -> Any | None:
+        if not origin:
+            return None
+        for contribution in list(domain_contributions or []):
+            provider = getattr(contribution, "action_continuity_provider", None)
+            if provider is None:
+                continue
+            if getattr(provider, "automation_origin", None) == origin:
+                return getattr(contribution, "action_continuity_writeback_adapter", None)
+        return None
 
     async def state_restore(self, ctx: TurnContext) -> str:
         """Restore checkpoint / pending user turn; extract documents."""
@@ -423,10 +456,6 @@ class AgentTurnPipeline:
         if executor is None:
             self._deps.record_action_continuity_audit({"status": "skipped", "reason": "device_executor_missing"})
             return "skip"
-        provider, adapter = self._deps.action_automation_components()
-        if provider is None or adapter is None:
-            self._deps.record_action_continuity_audit({"status": "skipped", "reason": "automation_components_missing"})
-            return "skip"
         automation_runtime_context = dataclasses.replace(
             ctx.runtime_context,
             trigger="automation",
@@ -440,16 +469,39 @@ class AgentTurnPipeline:
         max_actions = int(
             getattr(getattr(self._deps.tools_config, "device", None), "automation_max_actions_per_pass", 1) or 1
         )
-        proposal = provider.run_once(
+        planner_result = self._deps.action_planner.plan_action(
+            continuity_inputs,
             session_key=ctx.session_key,
-            continuity_inputs=continuity_inputs,
-            max_actions_per_pass=max_actions,
+            domain_contributions=self._deps.domain_runtime_contributions,
+            max_actions=max_actions,
         )
+        proposal = self._select_automation_proposal(planner_result.proposals, origin="smart_home")
         if proposal is None:
             self._deps.record_action_continuity_audit({
                 "status": "skipped",
-                "reason": "no_proposal",
+                "reason": "no_executable_proposal",
                 "planning_inputs": continuity_inputs.to_dict(),
+                "planning_evidence": {},
+                "automation_origin": None,
+                "planner_result": planner_result.to_dict(),
+                "selected_proposal_digest": None,
+                "skipped_reasons": list(planner_result.skipped_reasons),
+            })
+            return "skip"
+        adapter = self._resolve_adapter_for_origin(
+            proposal.automation_origin,
+            self._deps.domain_runtime_contributions,
+        )
+        if adapter is None:
+            self._deps.record_action_continuity_audit({
+                "status": "skipped",
+                "reason": "adapter_missing_for_selected_proposal",
+                "planning_inputs": continuity_inputs.to_dict(),
+                "planning_evidence": proposal.to_dict(),
+                "automation_origin": proposal.automation_origin,
+                "planner_result": planner_result.to_dict(),
+                "selected_proposal_digest": proposal.proposal_digest,
+                "skipped_reasons": list(planner_result.skipped_reasons),
             })
             return "skip"
         typed_action = proposal.typed_action
@@ -487,6 +539,9 @@ class AgentTurnPipeline:
             "planning_inputs": continuity_inputs.to_dict(),
             "planning_evidence": proposal.to_dict(),
             "automation_origin": proposal.automation_origin,
+            "planner_result": planner_result.to_dict(),
+            "selected_proposal_digest": proposal.proposal_digest,
+            "skipped_reasons": list(planner_result.skipped_reasons),
             "preconditions": {
                 "outcome": precondition.outcome,
                 "reason": precondition.reason,
@@ -499,6 +554,9 @@ class AgentTurnPipeline:
                 "confirmation_id": result.confirmation_id,
                 "backend_called": result.backend_called,
                 "permission_status": result.permission_status,
+                "is_real_execution": result.is_real_execution,
+                "backend_kind": result.backend_kind,
+                "physical_target_domain": result.physical_target_domain,
             },
             "continuity_writeback": dict(writeback),
         })

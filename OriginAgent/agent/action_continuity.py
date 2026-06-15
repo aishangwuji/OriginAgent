@@ -60,6 +60,7 @@ class ActionProposal:
     source_scope: str | None = None
     target_hint: str | None = None
     proposal_digest: str | None = None
+    preview_only: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         typed_action = self.typed_action
@@ -79,4 +80,5 @@ class ActionProposal:
             "source_scope": self.source_scope,
             "target_hint": self.target_hint,
             "proposal_digest": self.proposal_digest,
+            "preview_only": self.preview_only,
         }

@@ -14,6 +14,7 @@ from OriginAgent.config.schema import DeviceToolsConfig, DomainPacksConfig, Tool
 from OriginAgent.agent.action_continuity import ActionContinuityInputs, ActionWorldView
 from OriginAgent.agent.action_runtime import ActionIntent
 from OriginAgent.agent.identity import RuntimeContext
+from OriginAgent.domain_packs.robot.runtime.robot_actions import RobotActionPlanner
 from OriginAgent.domain_packs.smart_home.runtime.devices import DeviceRecord, DeviceRegistry
 from OriginAgent.domain_packs.smart_home.runtime.action_automation import ActionAutomationCoordinator
 from OriginAgent.providers.base import LLMResponse
@@ -157,6 +158,45 @@ async def test_automation_state_appends_confirmation_appendix(tmp_path: Path) ->
     assert ctx.outbound is not None
     assert "Automation" in ctx.outbound.content
     assert loop._last_action_continuity_audit["execution_result"]["status"] == "pending_confirmation"
+    assert loop._last_action_continuity_audit["planner_result"]["proposals"]
+    assert loop._last_action_continuity_audit["selected_proposal_digest"] is not None
+
+
+@pytest.mark.asyncio
+async def test_automation_state_skips_when_only_preview_proposals_exist(tmp_path: Path) -> None:
+    loop = _loop(tmp_path)
+    loop._domain_runtime_contributions = [
+        SimpleNamespace(
+            action_continuity_provider=RobotActionPlanner(),
+            action_continuity_writeback_adapter=None,
+        )
+    ]
+    loop._domain_runtime_overrides["device_action_executor"] = SimpleNamespace(
+        submit_automation=lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("should not execute"))
+    )
+    session = loop.sessions.get_or_create("cli:home")
+    loop.context.build_action_continuity_inputs = lambda session_key, runtime_context: _continuity_inputs()  # type: ignore[method-assign]
+    runtime_context = loop.actor_resolver.resolve_runtime_context(
+        channel="cli",
+        chat_id="home",
+        sender_id="alice",
+        metadata={},
+        session_key="cli:home",
+    )
+    ctx = TurnContext(
+        msg=InboundMessage(channel="cli", sender_id="alice", chat_id="home", content="hello"),
+        session_key="cli:home",
+        state=TurnState.AUTOMATION,
+        turn_id="turn-3",
+        session=session,
+        runtime_context=runtime_context,
+    )
+
+    event = await loop._state_automation(ctx)
+
+    assert event == "skip"
+    assert loop._last_action_continuity_audit["reason"] == "no_executable_proposal"
+    assert loop._last_action_continuity_audit["planner_result"]["proposals"][0]["preview_only"] is True
 
 
 @pytest.mark.asyncio
@@ -165,7 +205,10 @@ async def test_inspect_context_reports_action_view(tmp_path: Path) -> None:
     loop._last_action_continuity_audit = {
         "planning_inputs": {"session_key": "cli:home"},
         "planning_evidence": {"planning_reason": "rule based"},
-        "automation_origin": "loop_owned_rule_based",
+        "automation_origin": "smart_home",
+        "planner_result": {"proposals": [{"automation_origin": "smart_home"}]},
+        "selected_proposal_digest": "digest-1",
+        "skipped_reasons": ["RobotActionPlanner: no_proposal"],
         "preconditions": {"outcome": "allow"},
         "execution_result": {"status": "dry_run"},
         "continuity_writeback": {"result_status": "dry_run"},
@@ -173,8 +216,10 @@ async def test_inspect_context_reports_action_view(tmp_path: Path) -> None:
 
     result = await loop.tools.execute("originagent_inspect_context", {})
 
-    assert result["views"]["action"]["automation_origin"] == "loop_owned_rule_based"
+    assert result["views"]["action"]["automation_origin"] == "smart_home"
     assert result["views"]["action"]["execution_result"]["status"] == "dry_run"
+    assert result["views"]["action"]["planner_result"]["proposals"][0]["automation_origin"] == "smart_home"
+    assert result["views"]["action"]["selected_proposal_digest"] == "digest-1"
 
 
 def test_action_automation_coordinator_uses_registry_single_lighting_target() -> None:
@@ -288,7 +333,7 @@ def test_resume_precheck_denies_automation_confirmation_when_world_turns_contest
             requested_by="alice",
             payload={"device_id": "ceiling_light", "domain": "lighting", "action_type": "set_light_power", "power": "on"},
             continuity_session_ref="cli:home",
-            continuity_origin="loop_owned_rule_based",
+            continuity_origin="smart_home",
             continuity_proposal_digest="digest-1",
         ),
         SimpleNamespace(metadata={"arc_session": "cli:home"}),
@@ -298,3 +343,26 @@ def test_resume_precheck_denies_automation_confirmation_when_world_turns_contest
     assert decision is not None
     assert decision.decision == "deny"
     assert "contested" in decision.reason
+
+
+def test_robot_preview_planner_emits_preview_only_proposal() -> None:
+    proposal = RobotActionPlanner().run_once(
+        session_key="cli:robot",
+        continuity_inputs=ActionContinuityInputs(
+            runtime_context=_continuity_inputs().runtime_context,
+            working_memory=_continuity_inputs().working_memory,
+            world_view=ActionWorldView(
+                included_summary={"summary_id": "world_robot", "focus": ["robot arm near the desk"]},
+                contested_summary={"contested": False, "items": []},
+                freshness={"is_fresh": True},
+                selection_reasons=["robot_focus"],
+            ),
+            governance_summary={},
+            retrieval_hints={},
+            pending_confirmations=[],
+        ),
+    )
+
+    assert proposal is not None
+    assert proposal.preview_only is True
+    assert proposal.automation_origin == "robot"

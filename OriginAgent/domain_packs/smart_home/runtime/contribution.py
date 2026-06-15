@@ -35,5 +35,5 @@ def build_runtime_contribution(context) -> DomainRuntimeContribution:
             if tools_config is not None
             else 8,
         ),
-        action_continuity_writeback_adapter=ActionContinuityWritebackAdapter(),
+        action_continuity_writeback_adapter=ActionContinuityWritebackAdapter(domain_label="Lighting"),
     )

@@ -140,6 +140,9 @@ def test_real_mode_brightness_calls_fake_client_once_without_leaking_raw_respons
     assert "token" not in raw.casefold()
     assert "host" not in raw.casefold()
     assert "bearer" not in raw.casefold()
+    assert result.is_real_execution is True
+    assert result.backend_kind == "real_lighting"
+    assert result.physical_target_domain == "lighting"
 
 
 @pytest.mark.parametrize(

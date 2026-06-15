@@ -1531,6 +1531,23 @@ class DeviceToolsConfig(Base):
         validation_alias=AliasChoices("automationDryRunOnly", "automation_dry_run_only"),
         serialization_alias="automationDryRunOnly",
     )
+    real_execution_enabled: bool = Field(
+        default=False,
+        validation_alias=AliasChoices("realExecutionEnabled", "real_execution_enabled"),
+        serialization_alias="realExecutionEnabled",
+    )
+    lighting_client_endpoint: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("lightingClientEndpoint", "lighting_client_endpoint"),
+        serialization_alias="lightingClientEndpoint",
+    )
+    lighting_client_timeout_seconds: int = Field(
+        default=5,
+        ge=1,
+        le=60,
+        validation_alias=AliasChoices("lightingClientTimeoutSeconds", "lighting_client_timeout_seconds"),
+        serialization_alias="lightingClientTimeoutSeconds",
+    )
 
 
 class ToolAuditConfig(Base):

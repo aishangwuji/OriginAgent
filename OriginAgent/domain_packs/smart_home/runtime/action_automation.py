@@ -127,6 +127,8 @@ class ActionAutomationPreconditionGate:
 class ActionAutomationCoordinator:
     """Synchronous rule-based proposal generation for Phase 4."""
 
+    automation_origin = "smart_home"
+
     def __init__(
         self,
         *,
@@ -176,7 +178,7 @@ class ActionAutomationCoordinator:
         return ActionProposal(
             typed_action=action,
             planning_reason="Rule-based lighting automation suggested by current world summary.",
-            automation_origin="loop_owned_rule_based",
+            automation_origin=self.automation_origin,
             evidence_refs=evidence_refs,
             source_session_key=session_key,
             source_scope=continuity_inputs.runtime_context.default_scope,
@@ -245,6 +247,9 @@ class ActionAutomationCoordinator:
 class ActionContinuityWritebackAdapter:
     """Translate automation execution results into continuity-side updates."""
 
+    def __init__(self, *, domain_label: str = "Device") -> None:
+        self._domain_label = str(domain_label or "Device").strip() or "Device"
+
     def writeback(
         self,
         *,
@@ -259,7 +264,7 @@ class ActionContinuityWritebackAdapter:
         attention_items: list[str] = []
         if result.status == "pending_confirmation":
             appendix.append(
-                f"[Automation] Lighting automation needs confirmation: {result.reason} (confirmation_id={result.confirmation_id})"
+                f"[Automation] {self._domain_label} automation needs confirmation: {result.reason} (confirmation_id={result.confirmation_id})"
             )
             attention_items.append(
                 f"automation_pending_confirmation:{proposal.target_hint or proposal.typed_action.device_id}"

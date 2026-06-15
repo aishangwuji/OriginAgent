@@ -28,6 +28,7 @@ from OriginAgent.agent.tools.runtime_status import (
     CronSummaryTool,
     InspectContextTool,
     InspectSnapshotTool,
+    PlanActionTool,
     RuntimeStatusTool,
     ToolAuditSummaryTool,
 )
@@ -177,6 +178,12 @@ def register_default_tools(
             _register(factory())
 
     _register_named("ask_user", AskUserTool)
+    _register_named(
+        PlanActionTool.name,
+        lambda: PlanActionTool(
+            introspection_service=introspection_service,
+        ),
+    )
     _register_named(
         RuntimeStatusTool.name,
         lambda: RuntimeStatusTool(

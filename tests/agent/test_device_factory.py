@@ -53,6 +53,22 @@ def test_real_mode_with_lighting_client_returns_none(tmp_path):
     assert executor is None
 
 
+def test_real_mode_with_lighting_client_and_full_allowlist_returns_executor(tmp_path):
+    executor = build_device_action_executor(
+        workspace=tmp_path,
+        config=DeviceToolsConfig(
+            enabled=True,
+            lighting_enabled=True,
+            mode="real",
+            backend="lighting_client",
+            real_execution_enabled=True,
+            lighting_client_endpoint="http://127.0.0.1:18080",
+        ),
+    )
+
+    assert executor is not None
+
+
 def test_invalid_backend_returns_none(tmp_path):
     config = DeviceToolsConfig.model_construct(
         enabled=True,

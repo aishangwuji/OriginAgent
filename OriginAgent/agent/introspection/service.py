@@ -476,6 +476,17 @@ class RuntimeIntrospectionService:
                     "automation_origin": getattr(loop, "_last_action_continuity_audit", {}).get("automation_origin")
                     if loop is not None
                     else None,
+                    "planner_result": dict(
+                        getattr(loop, "_last_action_continuity_audit", {}).get("planner_result") or {}
+                    )
+                    if loop is not None
+                    else {},
+                    "selected_proposal_digest": getattr(loop, "_last_action_continuity_audit", {}).get("selected_proposal_digest")
+                    if loop is not None
+                    else None,
+                    "skipped_reasons": list(getattr(loop, "_last_action_continuity_audit", {}).get("skipped_reasons", []))
+                    if loop is not None
+                    else [],
                     "preconditions": dict(getattr(loop, "_last_action_continuity_audit", {}).get("preconditions", {}))
                     if loop is not None
                     else {},

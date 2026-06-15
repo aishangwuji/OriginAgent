@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from loguru import logger
+import httpx
 
 from OriginAgent.agent.action_runtime import SafeActionExecutor
 from OriginAgent.agent.audit import AuditLogger
@@ -36,6 +37,34 @@ class _NoopLightingClient:
         return {"ok": True}
 
 
+class _HttpLightingClient:
+    def __init__(self, endpoint: str, *, timeout_seconds: int = 5) -> None:
+        self._endpoint = endpoint.rstrip("/")
+        self._timeout_seconds = timeout_seconds
+
+    def set_power(self, device_id: str, power: str):
+        return self._post("/lighting/power", {"device_id": device_id, "power": power})
+
+    def set_brightness(self, device_id: str, brightness: int):
+        return self._post("/lighting/brightness", {"device_id": device_id, "brightness": brightness})
+
+    def set_color_temperature(self, device_id: str, temperature: str):
+        return self._post("/lighting/color-temperature", {"device_id": device_id, "temperature": temperature})
+
+    def _post(self, path: str, payload: dict[str, Any]) -> dict[str, Any]:
+        response = httpx.post(
+            f"{self._endpoint}{path}",
+            json=payload,
+            timeout=float(self._timeout_seconds),
+        )
+        response.raise_for_status()
+        try:
+            data = response.json()
+        except ValueError:
+            data = {}
+        return data if isinstance(data, dict) else {}
+
+
 def build_device_action_executor(
     *,
     workspace: Path,
@@ -53,9 +82,16 @@ def build_device_action_executor(
     if config.backend == "none":
         return None
     if config.mode == "real":
-        logger.warning("Device gateway real mode is not enabled in this release; device tools disabled.")
-        return None
-    if config.backend != "fake":
+        if config.backend != "lighting_client":
+            logger.warning("Real device mode only supports the lighting_client backend; device tools disabled.")
+            return None
+        if not config.real_execution_enabled:
+            logger.warning("Real device mode requires real_execution_enabled=true; device tools disabled.")
+            return None
+        if not str(config.lighting_client_endpoint or "").strip():
+            logger.warning("Real device mode requires lighting_client_endpoint; device tools disabled.")
+            return None
+    elif config.backend != "fake":
         logger.warning("Unsupported device backend '{}'; device tools disabled", config.backend)
         return None
 
@@ -63,7 +99,16 @@ def build_device_action_executor(
     presence = presence_store or PresenceStore(workspace)
     facts = fact_store or FactStore(workspace, config=SMART_HOME_FACT_STORE_CONFIG)
     permissions = permission_resolver or PermissionResolver()
-    backend = RealLightingBackend(_NoopLightingClient(), real_mode=False)
+    if config.mode == "real":
+        backend = RealLightingBackend(
+            _HttpLightingClient(
+                str(config.lighting_client_endpoint or "").strip(),
+                timeout_seconds=int(config.lighting_client_timeout_seconds or 5),
+            ),
+            real_mode=True,
+        )
+    else:
+        backend = RealLightingBackend(_NoopLightingClient(), real_mode=False)
     safe_executor = SafeActionExecutor(
         gate=SmartHomeActionSafetyGate(presence, facts),
         confirmation_manager=ConfirmationManager(

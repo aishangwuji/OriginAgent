@@ -256,6 +256,20 @@ def test_builtin_smart_home_domain_pack_is_available_and_explicitly_activated(
     assert disabled_pack.unavailable_reason == "disabled by config"
 
 
+def test_builtin_robot_domain_pack_is_present_and_disabled_by_manifest(tmp_path: Path) -> None:
+    manager = DomainPackManager(tmp_path)
+    pack = manager.get_pack("robot")
+
+    assert pack is not None
+    assert pack.source == "builtin"
+    assert pack.status == "unavailable"
+    assert pack.unavailable_reason == "disabled by manifest"
+    assert pack.runtime is not None
+    assert pack.runtime.module == "runtime.contribution"
+    assert "robot" in pack.triggers
+    assert "unitree" in pack.triggers
+
+
 def test_zero_capability_limit_keeps_full_active_context(tmp_path: Path) -> None:
     _write_pack(
         tmp_path / "domain_packs",

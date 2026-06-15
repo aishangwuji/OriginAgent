@@ -93,6 +93,9 @@ class ActionExecutionResult:
     backend_result: dict[str, str] = field(default_factory=dict)
     backend_called: bool = False
     permission_status: str | None = None
+    is_real_execution: bool = False
+    backend_kind: str | None = None
+    physical_target_domain: str | None = None
 
 
 @dataclass
@@ -599,6 +602,15 @@ class SafeActionExecutor:
             )
 
         status = "dry_run" if is_dry_run else "executed"
+        backend_kind = None
+        if isinstance(raw_backend_result, dict):
+            raw_backend_kind = raw_backend_result.get("backend")
+            if isinstance(raw_backend_kind, str) and raw_backend_kind.strip():
+                backend_kind = raw_backend_kind.strip()
+        physical_target_domain = None
+        raw_domain = intent.payload.get("domain")
+        if isinstance(raw_domain, str) and raw_domain.strip():
+            physical_target_domain = raw_domain.strip()
         return ActionExecutionResult(
             status=status,
             action_id=action_id,
@@ -606,6 +618,9 @@ class SafeActionExecutor:
             decision=decision,
             backend_result=backend_result,
             backend_called=True,
+            is_real_execution=not is_dry_run,
+            backend_kind=backend_kind or ("dry_run" if is_dry_run else None),
+            physical_target_domain=physical_target_domain,
         )
 
     def _record(
@@ -772,7 +787,12 @@ class SafeActionExecutor:
                 "idempotency_key_present": bool(intent.idempotency_key),
                 "payload_keys": sorted(intent.payload.keys()),
                 "backend_result_keys": sorted(result.backend_result.keys()),
+                "is_real_execution": result.is_real_execution,
             }
+            if result.backend_kind is not None:
+                metadata["backend_kind"] = result.backend_kind
+            if result.physical_target_domain is not None:
+                metadata["physical_target_domain"] = result.physical_target_domain
             typed_action_type = intent.payload.get("action_type")
             typed_action_domain = intent.payload.get("domain")
             if isinstance(typed_action_type, str) and isinstance(typed_action_domain, str):

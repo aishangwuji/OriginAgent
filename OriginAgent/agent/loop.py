@@ -33,6 +33,7 @@ from OriginAgent.agent.agent_tool_setup import (
 from OriginAgent.agent.active_intents import ActiveIntentConfig, ActiveIntentRecord, ActiveIntentService
 from OriginAgent.agent.agent_cognitive_runtime import AgentCognitiveRuntime, CognitiveRuntimeDeps
 from OriginAgent.agent.agent_loop_components import build_loop_components
+from OriginAgent.agent.action_planning import UnifiedActionPlanner
 from OriginAgent.agent.agent_turn_pipeline import (
     AgentTurnPipeline,
     StateTraceEntry,
@@ -534,7 +535,7 @@ class AgentLoop:
             schedule_curator_review=lambda ctx: self._schedule_curator_review(ctx),
             automation_enabled=lambda: self._automation_enabled(),
             device_action_executor_for_automation=lambda: self._device_action_executor_for_automation(),
-            action_automation_components=lambda: self._action_automation_components(),
+            action_planner=self.action_planner,
             record_action_continuity_audit=lambda audit: self._record_action_continuity_audit(audit),
             assemble_outbound=lambda *args, **kwargs: self._assemble_outbound(*args, **kwargs),
             get_max_messages=lambda: self._max_messages,
@@ -2653,14 +2654,6 @@ class AgentLoop:
             and getattr(cfg, "automation_enabled", False)
         )
 
-    def _action_automation_components(self) -> tuple[Any | None, Any | None]:
-        for contribution in self._domain_runtime_contributions:
-            provider = getattr(contribution, "action_continuity_provider", None)
-            adapter = getattr(contribution, "action_continuity_writeback_adapter", None)
-            if provider is not None or adapter is not None:
-                return provider, adapter
-        return None, None
-
     def _bind_action_resume_precheck(self) -> None:
         executor = self._device_action_executor_for_automation()
         safe_executor = getattr(executor, "safe_executor", None) if executor is not None else None
@@ -2673,7 +2666,8 @@ class AgentLoop:
         confirmation: Any,
         now: datetime,
     ) -> ActionDecision | None:
-        if str(getattr(intent, "continuity_origin", "") or "").strip() != "loop_owned_rule_based":
+        origin = str(getattr(intent, "continuity_origin", "") or "").strip()
+        if origin not in {"smart_home", "loop_owned_rule_based"}:
             return None
         session_key = str(getattr(intent, "continuity_session_ref", "") or "").strip()
         if not session_key:

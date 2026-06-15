@@ -11,6 +11,7 @@ from typing import Any, Callable
 
 from OriginAgent.agent import model_presets as preset_helpers
 from OriginAgent.agent.active_intents import ActiveIntentConfig, ActiveIntentService
+from OriginAgent.agent.action_planning import UnifiedActionPlanner
 from OriginAgent.agent.agent_turn_persist import TurnPersistManager
 from OriginAgent.agent.autocompact import AutoCompact
 from OriginAgent.agent.auxiliary_llm import AuxiliaryLLMRouter
@@ -249,6 +250,7 @@ def build_loop_components(
         values["sessions"],
         context_config=defaults.context,
     )
+    values["action_planner"] = UnifiedActionPlanner()
     values["tools"] = ToolRegistry(
         audit_sink=JsonlToolAuditSink(workspace),
         audit_config=values["_tool_audit_config"],
