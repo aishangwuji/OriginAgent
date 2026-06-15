@@ -546,6 +546,75 @@ def test_world_state_filtered_candidates_reports_selection_reasons_and_contested
     assert filtered["contested_summary"]["items"] == ["parcel is visible near the door"]
 
 
+def test_world_state_sidecar_prefers_new_contract_name_over_legacy(tmp_path: Path):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    sessions = SessionManager(workspace)
+    session = sessions.get_or_create("cli:direct")
+    world_state = WorldStateManager(workspace, sessions)
+    runtime_context = ActorResolver().resolve_runtime_context(
+        channel="cli",
+        chat_id="direct",
+        sender_id="user-1",
+        metadata={"device_id": "device-a"},
+        session_key="cli:direct",
+    )
+    image = workspace / "desk.png"
+    image.write_bytes(b"\x89PNG\r\n\x1a\n" + b"\x00" * 64)
+    (workspace / "desk.json").write_text(
+        '{"summary":"Preferred sidecar summary.","objects":["preferred"],"confidence":0.91}',
+        encoding="utf-8",
+    )
+    (workspace / "desk.png.json").write_text(
+        '{"summary":"Legacy sidecar summary.","objects":["legacy"],"confidence":0.42}',
+        encoding="utf-8",
+    )
+
+    world_state.ingest_media(
+        session,
+        runtime_context=runtime_context,
+        media_paths=[str(image)],
+    )
+
+    snapshot = world_state.load(session, identity=runtime_context).snapshots[0]
+    assert snapshot.summary == "Preferred sidecar summary."
+    assert snapshot.objects == ["preferred"]
+    assert snapshot.confidence == 0.91
+
+
+def test_world_state_infers_provenance_from_upload_inbox_and_user_turn_paths(tmp_path: Path):
+    workspace = tmp_path / "workspace"
+    (workspace / "uploads" / "websocket").mkdir(parents=True)
+    (workspace / "inbox" / "camera").mkdir(parents=True)
+    sessions = SessionManager(workspace)
+    runtime_context = ActorResolver().resolve_runtime_context(
+        channel="cli",
+        chat_id="direct",
+        sender_id="user-1",
+        metadata={"device_id": "device-a"},
+        session_key="cli:direct",
+    )
+
+    cases = [
+        ("cli:upload", workspace / "uploads" / "websocket" / "upload.png", "websocket", "workspace_upload"),
+        ("cli:inbox", workspace / "inbox" / "camera" / "inbox.png", "camera", "workspace_inbox"),
+        ("cli:user", workspace / "user-turn.png", "media", "workspace_media"),
+    ]
+
+    for session_key, image_path, producer, ingest_method in cases:
+        image_path.write_bytes(b"\x89PNG\r\n\x1a\n" + b"\x00" * 64)
+        session = sessions.get_or_create(session_key)
+        world_state = WorldStateManager(workspace, sessions)
+        world_state.ingest_media(
+            session,
+            runtime_context=runtime_context,
+            media_paths=[str(image_path)],
+        )
+        snapshot = world_state.load(session, identity=runtime_context).snapshots[0]
+        assert snapshot.provenance["producer"] == producer
+        assert snapshot.provenance["ingest_method"] == ingest_method
+
+
 @pytest.mark.asyncio
 async def test_loop_state_build_writes_continuity_runtime_identity_metadata(tmp_path: Path):
     workspace = tmp_path / "workspace"
@@ -1604,6 +1673,18 @@ def test_loop_world_attention_cap_applies_after_dedupe(tmp_path: Path):
         "world_contested: disputed state",
         "world_attention: extra item",
     ]
+    assert loop._last_world_attention_write == {
+        "world_attention_total": 5,
+        "world_kept": 3,
+        "world_truncated": 2,
+        "world_truncated_by_limit": True,
+        "attention_merged_items": [
+            "world_attention: duplicate item",
+            "world_uncertainty: open question",
+            "world_contested: disputed state",
+            "world_attention: extra item",
+        ],
+    }
 
 
 @pytest.mark.asyncio

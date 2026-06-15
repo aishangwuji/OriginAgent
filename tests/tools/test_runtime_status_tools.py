@@ -456,9 +456,20 @@ async def test_inspect_context_reports_phase1_views_and_scope_filter(tmp_path) -
                     "fresh_until": "2026-06-09T00:05:00+00:00",
                     "is_fresh": True,
                 },
+                "selection_reasons": ["relevant_to_message"],
                 "contested_summary": {"contested": True, "items": ["desk state disputed"]},
             },
         ),
+        _last_world_attention_write={
+            "world_attention_total": 3,
+            "world_kept": 2,
+            "world_truncated": 1,
+            "world_truncated_by_limit": True,
+            "attention_merged_items": [
+                "world_contested: desk state disputed",
+                "world_uncertainty: label unreadable",
+            ],
+        },
     )
 
     result = await InspectContextTool(
@@ -495,6 +506,9 @@ async def test_inspect_context_reports_phase1_views_and_scope_filter(tmp_path) -
     assert result["views"]["world"]["filtered_candidates"][0]["reasons"] == ["scope_hidden"]
     assert result["views"]["world"]["freshness"]["is_fresh"] is True
     assert result["views"]["world"]["contested"]["contested"] is True
+    assert result["views"]["world"]["selection_reasons"] == ["relevant_to_message"]
+    assert result["views"]["world"]["attention_write"]["world_attention_total"] == 3
+    assert result["views"]["world"]["attention_write"]["world_kept"] == 2
     assert result["views"]["meta_cognition"]["contract_version"] == "meta_cognition.v1.freeze"
     assert result["views"]["meta_cognition"]["recent_triggers"][0]["trigger_type"] == "tool_failure"
     assert result["views"]["meta_cognition"]["structured_reflection_enabled"] is True
