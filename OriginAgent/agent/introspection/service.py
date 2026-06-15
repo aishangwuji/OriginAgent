@@ -827,6 +827,8 @@ class RuntimeIntrospectionService:
                 "fresh_until": None,
                 "is_fresh": False,
             },
+            "selection_reasons": [],
+            "attention_write": {},
         }
         loop = self._loop
         sessions = getattr(loop, "sessions", None) if loop is not None else None
@@ -880,6 +882,12 @@ class RuntimeIntrospectionService:
                 if isinstance(filtered, dict)
                 else {}
             ),
+            "selection_reasons": (
+                filtered.get("selection_reasons", [])
+                if isinstance(filtered, dict)
+                else []
+            ),
+            "attention_write": dict(getattr(loop, "_last_world_attention_write", {}) or {}) if loop is not None else {},
         }
 
     def _scope_filter_summary(

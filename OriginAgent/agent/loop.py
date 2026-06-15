@@ -346,6 +346,7 @@ class AgentLoop:
         self._last_meta_cognition_summary: dict[str, Any] = {}
         self._last_meta_trigger_scan: list[dict[str, Any]] = []
         self._last_meta_artifacts: dict[str, Any] = {}
+        self._last_world_attention_write: dict[str, Any] = {}
         self._current_meta_turn_id: str | None = None
         self.commands = CommandRouter()
         register_builtin_commands(self.commands)
@@ -2039,6 +2040,7 @@ class AgentLoop:
     ) -> None:
         pending_questions = None
         attention_items = None
+        merged_attention: list[str] = []
         text = str(current_message or "").strip()
         lowered = text.lower()
         if text and ("?" in text or lowered.startswith(("how ", "what ", "why ", "can ", "should ", "do ", "is ", "are "))):
@@ -2078,6 +2080,21 @@ class AgentLoop:
                 if world_kept >= max_world_items:
                     break
             attention_items = merged_attention
+            self._last_world_attention_write = {
+                "world_attention_total": len(world_attention_items),
+                "world_kept": world_kept,
+                "world_truncated": max(0, len(world_attention_items) - world_kept),
+                "world_truncated_by_limit": bool(world_kept >= max_world_items and len(world_attention_items) > world_kept),
+                "attention_merged_items": list(merged_attention),
+            }
+        else:
+            self._last_world_attention_write = {
+                "world_attention_total": 0,
+                "world_kept": 0,
+                "world_truncated": 0,
+                "world_truncated_by_limit": False,
+                "attention_merged_items": [item for item in (attention_items or []) if item],
+            }
         self.working_memory.upsert(
             session,
             identity=runtime_context.identity,
