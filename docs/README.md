@@ -17,7 +17,9 @@
 - [`mc-004-meta-bridge-working-memory-introspection-memory-candidates.md`](./mc-004-meta-bridge-working-memory-introspection-memory-candidates.md)：`MC-004` 任务包，冻结元认知结果向 working memory、introspection 与 `memory_candidates` 的最小桥接边界。
 - [`mc-005-error-pattern-evolution-seed-bridge.md`](./mc-005-error-pattern-evolution-seed-bridge.md)：`MC-005` 任务包，冻结重复错误模式向 governed evolution signal / proposal seed 的最小桥接边界。
 - [`continuity_memory_phase1_plan.md`](./continuity_memory_phase1_plan.md)：连续性与记忆主线 `Phase 1` 已落地阶段说明，聚焦 identity、scope、working memory、context assembler 骨架的验收口径与收口方向。
-- [`continuity_memory_phase2_plan.md`](./continuity_memory_phase2_plan.md)：连续性与记忆主线 `Phase 2` 计划书，聚焦 `P2A` 文件快照 / 世界摘要原型、freshness / scope 过滤和 continuity bridge 的现状与 gap audit。
+- [`continuity_memory_phase2_plan.md`](./continuity_memory_phase2_plan.md)：连续性与记忆主线 `Phase 2` 收口计划书，覆盖 `P2A` 文件快照原型与 `P2B` 真实 ingress / anomaly bridge 的完成态边界。
+- [`rq-011-p2b-ingress-anomaly-bridge.md`](./rq-011-p2b-ingress-anomaly-bridge.md)：`RQ-011` 任务包，定义并记录 `P2B` 的真实 ingress 与感知异常桥接收口结果。
+- [`rq-012-p3a-world-model-stabilization-promotion-fusion.md`](./rq-012-p3a-world-model-stabilization-promotion-fusion.md)：`RQ-012` 任务包，记录 `P3A` 的世界模型稳定化、长期晋升 gating 与 retrieval/prewarm/world 融合闭环。
 - [`rq-001-cognitive-orchestration-boundary.md`](./rq-001-cognitive-orchestration-boundary.md)：`RQ-001` 任务包，定义后台认知编排层的职责边界与现有 runtime 的关系。
 - [`plan1.md`](./plan1.md)：历史 OriginAgent 第一阶段改造清单，保留作迁移参考。
 - [`originagent-v1-development-plan.md`](./originagent-v1-development-plan.md)：历史 OriginAgent v1 总体开发任务清单与技术落地方案。

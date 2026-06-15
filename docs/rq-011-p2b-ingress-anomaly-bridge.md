@@ -1,7 +1,7 @@
 # RQ-011 任务包：P2B 真实 Ingress 与感知异常桥接
 
 Date: 2026-06-15
-Status: In Progress
+Status: Completed
 Scope: Phase 2 `P2B` 真实 producer ingress 合同、world-state 事件候选与 introspection 暴露
 
 ## title

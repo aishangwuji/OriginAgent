@@ -1,7 +1,7 @@
 # OriginAgent 连续性与记忆操作系统 Phase 2 计划书
 
 Date: 2026-06-09
-Status: P2A Completed
+Status: Phase 2 Completed
 Last Reviewed: 2026-06-15
 Scope: OriginAgent 连续性主线的 Phase 2 感知快照与世界摘要接入方案
 
@@ -410,7 +410,7 @@ Phase 2 至少要补齐以下 inspect 能力：
 当前状态：
 
 1. `P2A` 已完成收口，当前三层对象合同已由运行时代码与测试共同冻结。
-2. `RQ-006` 的 open questions 统一顺延到 `P2B/Phase 3`：`relationships` 聚合、`InspectionResult.status` 正式枚举、`SceneSnapshot.kind` 的多模态细分语义，本轮不继续关闭。
+2. `RQ-006` 当初顺延到 `P2B / Phase 3` 的 open questions 已在后续实现中完成收敛：`WorldSummary.relationships` 已聚合冻结，`InspectionResult.status` 已按 `pending | completed | failed` 口径落地，`SceneSnapshot.kind` 已扩展到 `image | audio | video | sensor`。
 
 ### 12.2 `RQ-007` 视觉快照采集与本地留存策略
 
@@ -642,17 +642,23 @@ Phase 2 新增或更新测试应覆盖：
 
 - [`rq-011-p2b-ingress-anomaly-bridge.md`](./rq-011-p2b-ingress-anomaly-bridge.md)
 
-本轮继续保持以下边界：
+截至 2026-06-15，`P2B` 也已完成收口：
 
-1. `RQ-006` 的 deferred open questions 仍留在 `P2B / Phase 3` 内处理。
+1. `WorldStateManager` 已新增 producer batch ingest 入口，并保持 `ingest_media` / `ingest_producer_batch` 作为统一运行时入口。
+2. `PerceptionEventCandidate`、`recent_events` 与 `event_summary` 已进入 world-state 与 introspection 视图。
+3. continuity prompt 继续只消费 `WorldSummary`，未把事件明细注入 prompt。
+
+`Phase 2` 的完成态边界现收敛为：
+
+1. `RQ-006` 的 deferred open questions 已完成关闭，不再挂到后续阶段。
 2. `WorldSummary` 继续只做短期读模型，不晋升长期事实。
 3. 世界事件不进入 prompt 明细，不进入 `MessageBus` 主链。
 
 ## 19. 当前建议的下一步
 
-最合适的下一步不是继续把本阶段写成纯规划，而是把“已存在的原型”收敛成“有文档边界的原型”：
+`Phase 2` 收口完成后，下一步统一进入 `P3A`：
 
-1. 先核对当前 `world_state` / `inspect_snapshot` / introspection 实现与本计划验收口径之间的差距。
-2. 将当前能力继续明确标记为 `P2A` 文件快照原型，避免误解为真实多模态感知已开始。
-3. 同步 `RQ-006` 至 `RQ-010` 的状态标记、验收口径与剩余 gap，而不是重复把它们写成“待补档”。
-4. 在完成 gap audit 和红后 `Phase 1` 收口之后，再决定是否推进真实 ingress 或更广义的 `Phase 3` 前置设计。
+1. 在当前 `P2B` 运行时基础上稳定多模态 `world_state` 合同，不另起第二套感知对象模型。
+2. 收紧世界摘要到长期记忆的晋升门槛，保持 `MemoryCandidate` 队列为唯一 turn-time 晋升出口。
+3. 让 retrieval fusion、roaming prewarm 与 world summary 形成闭环，但不把 world 内容复制成第二份 prompt。
+4. 保持 raw perception events 留在 world-state / introspection / prewarm 边界，不接 `MessageBus` 主链，不接动作层。
