@@ -615,6 +615,128 @@ def test_world_state_infers_provenance_from_upload_inbox_and_user_turn_paths(tmp
         assert snapshot.provenance["ingest_method"] == ingest_method
 
 
+def test_world_state_batch_ingest_skips_part_files_and_dedupes_existing_media_path(tmp_path: Path):
+    workspace = tmp_path / "workspace"
+    (workspace / "uploads" / "camera").mkdir(parents=True)
+    sessions = SessionManager(workspace)
+    session = sessions.get_or_create("cli:camera")
+    world_state = WorldStateManager(workspace, sessions)
+    runtime_context = ActorResolver().resolve_runtime_context(
+        channel="cli",
+        chat_id="camera",
+        sender_id="user-1",
+        metadata={"device_id": "device-a"},
+        session_key="cli:camera",
+    )
+
+    completed = workspace / "uploads" / "camera" / "frontdoor.png"
+    completed.write_bytes(b"\x89PNG\r\n\x1a\n" + b"\x00" * 64)
+    incomplete = workspace / "uploads" / "camera" / "frontdoor-late.png.part"
+    incomplete.write_bytes(b"partial")
+
+    world_state.ingest_producer_batch(
+        session,
+        runtime_context=runtime_context,
+        media_paths=[str(completed), str(incomplete)],
+    )
+    world_state.ingest_producer_batch(
+        session,
+        runtime_context=runtime_context,
+        media_paths=[str(completed)],
+    )
+
+    snapshot = world_state.load(session, identity=runtime_context)
+    assert [item.media_path for item in snapshot.snapshots] == ["uploads/camera/frontdoor.png"]
+    assert len(snapshot.events) == 1
+    assert snapshot.events[0].kind == "snapshot_ingested"
+
+
+def test_world_state_recent_events_exposes_summary_for_batch_ingest(tmp_path: Path):
+    workspace = tmp_path / "workspace"
+    (workspace / "inbox" / "camera").mkdir(parents=True)
+    sessions = SessionManager(workspace)
+    session = sessions.get_or_create("cli:camera")
+    world_state = WorldStateManager(workspace, sessions)
+    runtime_context = ActorResolver().resolve_runtime_context(
+        channel="cli",
+        chat_id="camera",
+        sender_id="user-1",
+        metadata={"device_id": "device-a"},
+        session_key="cli:camera",
+    )
+    image = workspace / "inbox" / "camera" / "hallway.png"
+    image.write_bytes(b"\x89PNG\r\n\x1a\n" + b"\x00" * 64)
+
+    world_state.ingest_producer_batch(
+        session,
+        runtime_context=runtime_context,
+        media_paths=[str(image)],
+    )
+
+    events = world_state.recent_events(session, identity=runtime_context, limit=5)
+    assert events["event_summary"]["total"] == 1
+    assert events["event_summary"]["by_kind"]["snapshot_ingested"] == 1
+    assert events["recent_events"][0]["kind"] == "snapshot_ingested"
+    assert events["recent_events"][0]["provenance"]["ingest_method"] == "workspace_inbox"
+
+
+def test_world_state_apply_inspection_generates_contested_and_uncertain_events(tmp_path: Path):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    sessions = SessionManager(workspace)
+    session = sessions.get_or_create("cli:direct")
+    world_state = WorldStateManager(workspace, sessions)
+    runtime_context = ActorResolver().resolve_runtime_context(
+        channel="cli",
+        chat_id="direct",
+        sender_id="user-1",
+        metadata={"device_id": "device-a"},
+        session_key="cli:direct",
+    )
+    image = workspace / "desk.png"
+    image.write_bytes(b"\x89PNG\r\n\x1a\n" + b"\x00" * 64)
+    (workspace / "desk.json").write_text(
+        json.dumps({
+            "summary": "Desk looks clear.",
+            "objects": ["desk"],
+            "relationships": ["desk is visible"],
+            "uncertainties": [],
+            "confidence": 0.84,
+        }),
+        encoding="utf-8",
+    )
+
+    world_state.ingest_media(
+        session,
+        runtime_context=runtime_context,
+        media_paths=[str(image)],
+    )
+    snapshot = world_state.load(session, identity=runtime_context).snapshots[0]
+    world_state.apply_inspection(
+        session,
+        runtime_context=runtime_context,
+        snapshot_id=snapshot.snapshot_id,
+        inspection_payload={
+            "confirmed": [],
+            "corrected": ["desk may have a package on it"],
+            "new_details": ["camera angle is partially obstructed"],
+            "uncertain": ["package shape is not fully confirmed"],
+            "confidence": 0.79,
+            "status": "completed",
+            "contested": True,
+            "contested_reasons": ["desk may have a package on it"],
+            "evidence_excerpt": [],
+            "inspector": "test-model",
+        },
+    )
+
+    refreshed = world_state.load(session, identity=runtime_context)
+    kinds = [item.kind for item in refreshed.events]
+    assert "inspection_changed_summary" in kinds
+    assert "contested_world_state" in kinds
+    assert "uncertain_world_state" in kinds
+
+
 @pytest.mark.asyncio
 async def test_loop_state_build_writes_continuity_runtime_identity_metadata(tmp_path: Path):
     workspace = tmp_path / "workspace"

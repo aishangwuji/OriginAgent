@@ -829,6 +829,12 @@ class RuntimeIntrospectionService:
             },
             "selection_reasons": [],
             "attention_write": {},
+            "recent_events": [],
+            "event_summary": {
+                "total": 0,
+                "by_kind": {},
+                "latest_created_at": None,
+            },
         }
         loop = self._loop
         sessions = getattr(loop, "sessions", None) if loop is not None else None
@@ -853,6 +859,11 @@ class RuntimeIntrospectionService:
                 )
                 if runtime_context is not None
                 else {}
+            )
+            event_view = world_state.recent_events(
+                session,
+                identity=runtime_context if runtime_context is not None else None,
+                limit=5,
             )
         except Exception:
             return defaults
@@ -888,6 +899,16 @@ class RuntimeIntrospectionService:
                 else []
             ),
             "attention_write": dict(getattr(loop, "_last_world_attention_write", {}) or {}) if loop is not None else {},
+            "recent_events": (
+                event_view.get("recent_events", [])
+                if isinstance(event_view, dict)
+                else []
+            ),
+            "event_summary": (
+                event_view.get("event_summary", defaults["event_summary"])
+                if isinstance(event_view, dict)
+                else defaults["event_summary"]
+            ),
         }
 
     def _scope_filter_summary(

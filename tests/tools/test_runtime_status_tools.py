@@ -459,6 +459,29 @@ async def test_inspect_context_reports_phase1_views_and_scope_filter(tmp_path) -
                 "selection_reasons": ["relevant_to_message"],
                 "contested_summary": {"contested": True, "items": ["desk state disputed"]},
             },
+            recent_events=lambda session, identity=None, limit=5: {
+                "recent_events": [
+                    {
+                        "event_id": "evt_1",
+                        "kind": "contested_world_state",
+                        "snapshot_id": "snap_1",
+                        "inspection_id": "inspect_1",
+                        "summary": "desk state disputed",
+                        "confidence": 0.81,
+                        "contested": True,
+                        "created_at": "2026-06-09T00:01:00+00:00",
+                        "source": "camera.image",
+                        "scope": "session",
+                        "owner_id": "user-1",
+                        "provenance": {"producer": "camera", "ingest_method": "workspace_inbox"},
+                    }
+                ],
+                "event_summary": {
+                    "total": 1,
+                    "by_kind": {"contested_world_state": 1},
+                    "latest_created_at": "2026-06-09T00:01:00+00:00",
+                },
+            },
         ),
         _last_world_attention_write={
             "world_attention_total": 3,
@@ -509,6 +532,9 @@ async def test_inspect_context_reports_phase1_views_and_scope_filter(tmp_path) -
     assert result["views"]["world"]["selection_reasons"] == ["relevant_to_message"]
     assert result["views"]["world"]["attention_write"]["world_attention_total"] == 3
     assert result["views"]["world"]["attention_write"]["world_kept"] == 2
+    assert result["views"]["world"]["recent_events"][0]["kind"] == "contested_world_state"
+    assert result["views"]["world"]["event_summary"]["total"] == 1
+    assert result["views"]["world"]["event_summary"]["by_kind"]["contested_world_state"] == 1
     assert result["views"]["meta_cognition"]["contract_version"] == "meta_cognition.v1.freeze"
     assert result["views"]["meta_cognition"]["recent_triggers"][0]["trigger_type"] == "tool_failure"
     assert result["views"]["meta_cognition"]["structured_reflection_enabled"] is True

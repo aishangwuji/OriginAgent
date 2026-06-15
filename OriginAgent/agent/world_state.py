@@ -15,6 +15,7 @@ from OriginAgent.utils.attachments import AttachmentDescriptor, describe_attachm
 
 
 WORLD_STATE_METADATA_KEY = "world_state_v1"
+DEFAULT_IMAGE_UNCERTAINTY = "image has not been deeply inspected yet"
 
 
 def _utcnow() -> datetime:
@@ -232,6 +233,58 @@ class WorldSummary:
 
 
 @dataclass
+class PerceptionEventCandidate:
+    event_id: str
+    kind: str
+    snapshot_id: str
+    inspection_id: str | None
+    summary: str
+    confidence: float
+    contested: bool
+    created_at: str
+    source: str
+    scope: str
+    owner_id: str | None
+    provenance: dict[str, Any] = field(default_factory=dict)
+
+    def to_json(self) -> dict[str, Any]:
+        return asdict(self)
+
+    @classmethod
+    def from_json(cls, raw: Any) -> "PerceptionEventCandidate | None":
+        if not isinstance(raw, dict):
+            return None
+        event_id = str(raw.get("event_id") or "").strip()
+        snapshot_id = str(raw.get("snapshot_id") or "").strip()
+        kind = str(raw.get("kind") or "").strip()
+        if not event_id or not snapshot_id or not kind:
+            return None
+        try:
+            confidence = float(raw.get("confidence", 0.5))
+        except (TypeError, ValueError):
+            confidence = 0.5
+        confidence = max(0.0, min(1.0, confidence))
+        provenance = raw.get("provenance", {})
+        if not isinstance(provenance, dict):
+            provenance = {}
+        inspection_id = str(raw.get("inspection_id")).strip() if raw.get("inspection_id") else None
+        return cls(
+            event_id=event_id,
+            kind=kind,
+            snapshot_id=snapshot_id,
+            inspection_id=inspection_id,
+            summary=str(raw.get("summary") or "").strip(),
+            confidence=confidence,
+            contested=bool(raw.get("contested")),
+            created_at=str(raw.get("created_at") or _utcnow_iso()).strip(),
+            source=str(raw.get("source") or "media.image").strip() or "media.image",
+            scope=str(raw.get("scope") or "session").strip() or "session",
+            owner_id=str(raw.get("owner_id")).strip() if raw.get("owner_id") else None,
+            provenance=provenance,
+        )
+
+
+@dataclass
 class WorldStateSnapshot:
     status: str = "placeholder"
     version: str = "phase1"
@@ -240,6 +293,7 @@ class WorldStateSnapshot:
     owner_id: str | None = None
     snapshots: list[SceneSnapshot] = field(default_factory=list)
     inspections: list[InspectionResult] = field(default_factory=list)
+    events: list[PerceptionEventCandidate] = field(default_factory=list)
     world_summary: WorldSummary | None = None
     pruning: dict[str, Any] = field(default_factory=dict)
 
@@ -252,6 +306,7 @@ class WorldStateSnapshot:
             "owner_id": self.owner_id,
             "snapshots": [item.to_json() for item in self.snapshots],
             "inspections": [item.to_json() for item in self.inspections],
+            "events": [item.to_json() for item in self.events],
             "world_summary": self.world_summary.to_json() if self.world_summary is not None else None,
             "pruning": dict(self.pruning),
         }
@@ -270,6 +325,11 @@ class WorldStateSnapshot:
                 InspectionResult.from_json(value) for value in (raw.get("inspections") or [])
             ) if item is not None
         ]
+        events = [
+            item for item in (
+                PerceptionEventCandidate.from_json(value) for value in (raw.get("events") or [])
+            ) if item is not None
+        ]
         summary = WorldSummary.from_json(raw.get("world_summary"))
         return cls(
             status=str(raw.get("status") or "placeholder").strip() or "placeholder",
@@ -279,6 +339,7 @@ class WorldStateSnapshot:
             owner_id=str(raw.get("owner_id")).strip() if raw.get("owner_id") else None,
             snapshots=snapshots,
             inspections=inspections,
+            events=events,
             world_summary=summary,
             pruning=dict(raw.get("pruning") or {}) if isinstance(raw.get("pruning"), dict) else {},
         )
@@ -286,6 +347,13 @@ class WorldStateSnapshot:
 
 class WorldStateManager:
     """Session-backed minimal world-state manager for Phase 2."""
+
+    EVENT_KINDS = frozenset({
+        "snapshot_ingested",
+        "inspection_changed_summary",
+        "contested_world_state",
+        "uncertain_world_state",
+    })
 
     def __init__(
         self,
@@ -347,35 +415,34 @@ class WorldStateManager:
         media_paths: list[str] | None,
     ) -> WorldStateSnapshot:
         snapshot = self.load(session, identity=runtime_context)
-        media_paths = [path for path in (media_paths or []) if isinstance(path, str) and path]
-        added = False
-        existing_paths = {item.media_path for item in snapshot.snapshots}
-        for media_path in media_paths:
-            descriptor = describe_attachment(media_path, source="media")
-            if descriptor is None or descriptor.kind != "image":
+        descriptors = [describe_attachment(media_path, source="media") for media_path in (media_paths or []) if isinstance(media_path, str) and media_path]
+        return self._ingest_descriptors(
+            session,
+            runtime_context=runtime_context,
+            snapshot=snapshot,
+            descriptors=descriptors,
+        )
+
+    def ingest_producer_batch(
+        self,
+        session: Session,
+        *,
+        runtime_context: RuntimeContext,
+        media_paths: list[str] | None = None,
+        descriptors: list[AttachmentDescriptor | None] | None = None,
+    ) -> WorldStateSnapshot:
+        snapshot = self.load(session, identity=runtime_context)
+        collected: list[AttachmentDescriptor | None] = list(descriptors or [])
+        for media_path in media_paths or []:
+            if not isinstance(media_path, str) or not media_path:
                 continue
-            relative_media_path = _path_to_workspace(descriptor.path, workspace=self._workspace)
-            if relative_media_path in existing_paths:
-                continue
-            sidecar = self._read_sidecar(descriptor.path)
-            inferred_provenance = self._infer_provenance_from_path(relative_media_path)
-            scene = self._build_scene_snapshot(
-                descriptor,
-                media_path=relative_media_path,
-                runtime_context=runtime_context,
-                sidecar=sidecar,
-                inferred_provenance=inferred_provenance,
-            )
-            snapshot.snapshots.append(scene)
-            existing_paths.add(relative_media_path)
-            added = True
-        if added:
-            snapshot.status = "active"
-            snapshot.version = "phase2"
-            snapshot.owner_id = runtime_context.user_id
-            snapshot.scope = "session"
-        refreshed = self._refresh_summary(snapshot)
-        return self.save(session, refreshed)
+            collected.append(describe_attachment(media_path, source="media"))
+        return self._ingest_descriptors(
+            session,
+            runtime_context=runtime_context,
+            snapshot=snapshot,
+            descriptors=collected,
+        )
 
     def current_attention_items(
         self,
@@ -475,6 +542,15 @@ class WorldStateManager:
         )
         snapshot.inspections.append(inspection)
         refreshed = self._refresh_summary(snapshot)
+        refreshed.events = self._merge_recent_events(
+            previous=snapshot,
+            refreshed=refreshed,
+            new_events=self._compute_event_candidates(
+                previous=snapshot,
+                refreshed=refreshed,
+                trigger="inspection",
+            ),
+        )
         self.save(session, refreshed)
         return {
             "snapshot": target.to_json(),
@@ -602,6 +678,32 @@ class WorldStateManager:
             "contested_summary": contested_summary,
         }
 
+    def recent_events(
+        self,
+        session: Session,
+        *,
+        identity: RuntimeContext | None = None,
+        limit: int = 5,
+    ) -> dict[str, Any]:
+        snapshot = self.load(session, identity=identity)
+        ordered = sorted(
+            snapshot.events,
+            key=lambda item: _parse_dt(item.created_at) or datetime.min.replace(tzinfo=timezone.utc),
+            reverse=True,
+        )
+        recent = ordered[: max(0, int(limit or 0))]
+        by_kind: dict[str, int] = {}
+        for item in snapshot.events:
+            by_kind[item.kind] = by_kind.get(item.kind, 0) + 1
+        return {
+            "recent_events": [item.to_json() for item in recent],
+            "event_summary": {
+                "total": len(snapshot.events),
+                "by_kind": by_kind,
+                "latest_created_at": recent[0].created_at if recent else None,
+            },
+        }
+
     def _refresh_summary(self, snapshot: WorldStateSnapshot) -> WorldStateSnapshot:
         now = _utcnow()
         fresh_snapshots = [
@@ -621,6 +723,10 @@ class WorldStateManager:
             owner_id=snapshot.owner_id,
             snapshots=list(kept_snapshots),
             inspections=list(kept_inspections),
+            events=[
+                item for item in snapshot.events
+                if any(scene.snapshot_id == item.snapshot_id for scene in kept_snapshots)
+            ][-20:],
             world_summary=None,
             pruning={
                 "snapshot_count": max(0, len(snapshot.snapshots) - len(kept_snapshots)),
@@ -632,6 +738,253 @@ class WorldStateManager:
             return refreshed
         refreshed.world_summary = self._build_world_summary(refreshed, now=now)
         return refreshed
+
+    def _ingest_descriptors(
+        self,
+        session: Session,
+        *,
+        runtime_context: RuntimeContext,
+        snapshot: WorldStateSnapshot,
+        descriptors: list[AttachmentDescriptor | None],
+    ) -> WorldStateSnapshot:
+        previous_snapshot = WorldStateSnapshot.from_json(snapshot.to_json())
+        added = False
+        existing_paths = {item.media_path for item in snapshot.snapshots}
+        for descriptor in descriptors:
+            if descriptor is None or descriptor.kind != "image":
+                continue
+            if descriptor.path.suffix.lower().endswith(".part") or descriptor.name.endswith(".part"):
+                continue
+            relative_media_path = _path_to_workspace(descriptor.path, workspace=self._workspace)
+            if relative_media_path.endswith(".part") or relative_media_path in existing_paths:
+                continue
+            sidecar = self._read_sidecar(descriptor.path)
+            inferred_provenance = self._infer_provenance_from_path(relative_media_path)
+            scene = self._build_scene_snapshot(
+                descriptor,
+                media_path=relative_media_path,
+                runtime_context=runtime_context,
+                sidecar=sidecar,
+                inferred_provenance=inferred_provenance,
+            )
+            snapshot.snapshots.append(scene)
+            existing_paths.add(relative_media_path)
+            added = True
+        if added:
+            snapshot.status = "active"
+            snapshot.version = "phase2"
+            snapshot.owner_id = runtime_context.user_id
+            snapshot.scope = "session"
+        refreshed = self._refresh_summary(snapshot)
+        refreshed.events = self._merge_recent_events(
+            previous=previous_snapshot,
+            refreshed=refreshed,
+            new_events=self._compute_event_candidates(
+                previous=previous_snapshot,
+                refreshed=refreshed,
+                trigger="ingest" if added else "refresh",
+            ),
+        )
+        return self.save(session, refreshed)
+
+    def _compute_event_candidates(
+        self,
+        *,
+        previous: WorldStateSnapshot,
+        refreshed: WorldStateSnapshot,
+        trigger: str,
+    ) -> list[PerceptionEventCandidate]:
+        events: list[PerceptionEventCandidate] = []
+        previous_ids = {item.snapshot_id for item in previous.snapshots}
+        refreshed_summary = refreshed.world_summary
+        previous_summary = previous.world_summary
+        now = _utcnow_iso()
+        if trigger == "ingest":
+            for item in refreshed.snapshots:
+                if item.snapshot_id in previous_ids:
+                    continue
+                events.append(
+                    self._event_from_snapshot(
+                        kind="snapshot_ingested",
+                        snapshot=item,
+                        inspection_id=None,
+                        summary=item.summary or f"snapshot ingested from {item.source}",
+                        confidence=item.confidence,
+                        contested=False,
+                        created_at=now,
+                    )
+                )
+        if refreshed_summary is None:
+            return events
+        if trigger == "inspection":
+            latest = refreshed.inspections[-1] if refreshed.inspections else None
+            if latest is not None:
+                latest_snapshot = next(
+                    (item for item in refreshed.snapshots if item.snapshot_id == latest.snapshot_id),
+                    None,
+                )
+                if latest_snapshot is not None and (
+                    latest.corrected
+                    or latest.new_details
+                    or self._focus_changed(previous_summary, refreshed_summary)
+                ):
+                    events.append(
+                        self._event_from_snapshot(
+                            kind="inspection_changed_summary",
+                            snapshot=latest_snapshot,
+                            inspection_id=latest.inspection_id,
+                            summary=_trim_text(
+                                latest.corrected[0]
+                                if latest.corrected
+                                else latest.new_details[0]
+                                if latest.new_details
+                                else latest_snapshot.summary
+                            ),
+                            confidence=latest.confidence,
+                            contested=latest.contested,
+                            created_at=now,
+                        )
+                    )
+        if self._became_contested(previous_summary, refreshed_summary):
+            contested_snapshot = self._latest_summary_snapshot(refreshed, refreshed_summary)
+            if contested_snapshot is not None:
+                events.append(
+                    self._event_from_snapshot(
+                        kind="contested_world_state",
+                        snapshot=contested_snapshot,
+                        inspection_id=refreshed_summary.inspection_ids[-1] if refreshed_summary.inspection_ids else None,
+                        summary=_trim_text(
+                            refreshed_summary.contested_items[0]
+                            if refreshed_summary.contested_items
+                            else refreshed_summary.focus[0]
+                            if refreshed_summary.focus
+                            else contested_snapshot.summary
+                        ),
+                        confidence=contested_snapshot.confidence,
+                        contested=True,
+                        created_at=now,
+                    )
+                )
+        if self._uncertainty_opened(previous_summary, refreshed_summary):
+            uncertain_snapshot = self._latest_summary_snapshot(refreshed, refreshed_summary)
+            if uncertain_snapshot is not None:
+                events.append(
+                    self._event_from_snapshot(
+                        kind="uncertain_world_state",
+                        snapshot=uncertain_snapshot,
+                        inspection_id=refreshed_summary.inspection_ids[-1] if refreshed_summary.inspection_ids else None,
+                        summary=_trim_text(
+                            refreshed_summary.uncertainties[0]
+                            if refreshed_summary.uncertainties
+                            else uncertain_snapshot.summary
+                        ),
+                        confidence=uncertain_snapshot.confidence,
+                        contested=bool(refreshed_summary.contested),
+                        created_at=now,
+                    )
+                )
+        deduped: list[PerceptionEventCandidate] = []
+        seen_keys: set[tuple[str, str, str | None, str]] = set()
+        for event in events:
+            if event.kind not in self.EVENT_KINDS:
+                continue
+            key = (event.kind, event.snapshot_id, event.inspection_id, event.summary)
+            if key in seen_keys:
+                continue
+            seen_keys.add(key)
+            deduped.append(event)
+        return deduped
+
+    def _merge_recent_events(
+        self,
+        *,
+        previous: WorldStateSnapshot,
+        refreshed: WorldStateSnapshot,
+        new_events: list[PerceptionEventCandidate],
+    ) -> list[PerceptionEventCandidate]:
+        kept_snapshot_ids = {item.snapshot_id for item in refreshed.snapshots}
+        carried = [
+            item for item in previous.events
+            if item.snapshot_id in kept_snapshot_ids
+        ]
+        merged = [*new_events, *carried]
+        merged.sort(
+            key=lambda item: _parse_dt(item.created_at) or datetime.min.replace(tzinfo=timezone.utc),
+            reverse=True,
+        )
+        deduped: list[PerceptionEventCandidate] = []
+        seen_keys: set[tuple[str, str, str | None, str]] = set()
+        for item in merged:
+            key = (item.kind, item.snapshot_id, item.inspection_id, item.summary)
+            if key in seen_keys:
+                continue
+            seen_keys.add(key)
+            deduped.append(item)
+            if len(deduped) >= 20:
+                break
+        return deduped
+
+    @staticmethod
+    def _focus_changed(previous: WorldSummary | None, refreshed: WorldSummary | None) -> bool:
+        previous_focus = set(previous.focus if previous is not None else [])
+        refreshed_focus = set(refreshed.focus if refreshed is not None else [])
+        return previous_focus != refreshed_focus
+
+    @staticmethod
+    def _became_contested(previous: WorldSummary | None, refreshed: WorldSummary | None) -> bool:
+        return bool(refreshed and refreshed.contested and not bool(previous and previous.contested))
+
+    @staticmethod
+    def _uncertainty_opened(previous: WorldSummary | None, refreshed: WorldSummary | None) -> bool:
+        previous_uncertainties = WorldStateManager._meaningful_uncertainties(previous)
+        refreshed_uncertainties = WorldStateManager._meaningful_uncertainties(refreshed)
+        return not previous_uncertainties and bool(refreshed_uncertainties)
+
+    @staticmethod
+    def _meaningful_uncertainties(summary: WorldSummary | None) -> list[str]:
+        if summary is None:
+            return []
+        return [
+            item for item in summary.uncertainties
+            if str(item or "").strip() and str(item or "").strip() != DEFAULT_IMAGE_UNCERTAINTY
+        ]
+
+    @staticmethod
+    def _latest_summary_snapshot(
+        snapshot: WorldStateSnapshot,
+        summary: WorldSummary,
+    ) -> SceneSnapshot | None:
+        source_ids = set(summary.source_snapshot_ids)
+        for item in reversed(snapshot.snapshots):
+            if item.snapshot_id in source_ids:
+                return item
+        return snapshot.snapshots[-1] if snapshot.snapshots else None
+
+    @staticmethod
+    def _event_from_snapshot(
+        *,
+        kind: str,
+        snapshot: SceneSnapshot,
+        inspection_id: str | None,
+        summary: str,
+        confidence: float,
+        contested: bool,
+        created_at: str,
+    ) -> PerceptionEventCandidate:
+        return PerceptionEventCandidate(
+            event_id=f"evt_{uuid.uuid4().hex[:12]}",
+            kind=kind,
+            snapshot_id=snapshot.snapshot_id,
+            inspection_id=inspection_id,
+            summary=_trim_text(summary, max_chars=200),
+            confidence=max(0.0, min(1.0, float(confidence or 0.0))),
+            contested=contested,
+            created_at=created_at,
+            source=snapshot.source,
+            scope=snapshot.scope,
+            owner_id=snapshot.owner_id,
+            provenance=dict(snapshot.provenance),
+        )
 
     def _build_filtered_summary(
         self,
@@ -799,7 +1152,7 @@ class WorldStateManager:
         summary = f"Uninspected image snapshot captured from {runtime_context.channel}."
         objects: list[str] = []
         relationships: list[str] = []
-        uncertainties = ["image has not been deeply inspected yet"]
+        uncertainties = [DEFAULT_IMAGE_UNCERTAINTY]
         confidence = 0.35
         inferred_provenance = dict(inferred_provenance or {})
         provenance = {
