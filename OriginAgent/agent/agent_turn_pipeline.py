@@ -150,7 +150,6 @@ class TurnPipelineDeps:
     schedule_background_review: Callable[[TurnContext], None]
     schedule_curator_review: Callable[[TurnContext], None]
     automation_enabled: Callable[[], bool]
-    device_action_executor_for_automation: Callable[[], Any | None]
     action_planner: Any
     record_action_continuity_audit: Callable[[dict[str, Any]], None]
     assemble_outbound: Callable[
@@ -170,21 +169,59 @@ class AgentTurnPipeline:
     def _select_automation_proposal(
         proposals: list[ActionProposal],
         *,
-        origin: str,
+        preferred_origin: str | None = None,
     ) -> ActionProposal | None:
-        candidates = [
+        executable = [
             proposal
             for proposal in proposals
-            if proposal.automation_origin == origin and not getattr(proposal, "preview_only", False)
+            if not getattr(proposal, "preview_only", False)
         ]
-        if not candidates:
+        if not executable:
             return None
-        if len(candidates) > 1:
-            logger.warning(
-                "Multiple executable proposals found for origin %s; selecting the first candidate",
-                origin,
-            )
-        return candidates[0]
+        if preferred_origin:
+            preferred = [
+                proposal
+                for proposal in executable
+                if proposal.automation_origin == preferred_origin
+            ]
+            if preferred:
+                if len(preferred) > 1:
+                    logger.warning(
+                        "Multiple executable proposals found for preferred origin %s; selecting the first candidate",
+                        preferred_origin,
+                    )
+                return preferred[0]
+        for origin in ("smart_home", "robot"):
+            candidates = [
+                proposal
+                for proposal in executable
+                if proposal.automation_origin == origin
+            ]
+            if not candidates:
+                continue
+            if len(candidates) > 1:
+                logger.warning(
+                    "Multiple executable proposals found for origin %s; selecting the first candidate",
+                    origin,
+                )
+            return candidates[0]
+        return executable[0]
+
+    @staticmethod
+    def _resolve_executor_for_origin(origin: str | None, domain_contributions: list[Any]) -> Any | None:
+        if not origin:
+            return None
+        for contribution in list(domain_contributions or []):
+            provider = getattr(contribution, "action_continuity_provider", None)
+            if provider is None:
+                continue
+            if getattr(provider, "automation_origin", None) != origin:
+                continue
+            tool_context = getattr(contribution, "tool_context", {}) or {}
+            executor = tool_context.get("device_action_executor")
+            if executor is not None:
+                return executor
+        return None
 
     @staticmethod
     def _resolve_adapter_for_origin(origin: str | None, domain_contributions: list[Any]) -> Any | None:
@@ -452,10 +489,6 @@ class AgentTurnPipeline:
             return "skip"
         context = self._deps.get_context()
         working_memory = self._deps.get_working_memory()
-        executor = self._deps.device_action_executor_for_automation()
-        if executor is None:
-            self._deps.record_action_continuity_audit({"status": "skipped", "reason": "device_executor_missing"})
-            return "skip"
         automation_runtime_context = dataclasses.replace(
             ctx.runtime_context,
             trigger="automation",
@@ -475,7 +508,10 @@ class AgentTurnPipeline:
             domain_contributions=self._deps.domain_runtime_contributions,
             max_actions=max_actions,
         )
-        proposal = self._select_automation_proposal(planner_result.proposals, origin="smart_home")
+        proposal = self._select_automation_proposal(
+            planner_result.proposals,
+            preferred_origin=continuity_inputs.user_goal_domain,
+        )
         if proposal is None:
             self._deps.record_action_continuity_audit({
                 "status": "skipped",
@@ -485,6 +521,22 @@ class AgentTurnPipeline:
                 "automation_origin": None,
                 "planner_result": planner_result.to_dict(),
                 "selected_proposal_digest": None,
+                "skipped_reasons": list(planner_result.skipped_reasons),
+            })
+            return "skip"
+        executor = self._resolve_executor_for_origin(
+            proposal.automation_origin,
+            self._deps.domain_runtime_contributions,
+        )
+        if executor is None:
+            self._deps.record_action_continuity_audit({
+                "status": "skipped",
+                "reason": "executor_missing_for_selected_proposal",
+                "planning_inputs": continuity_inputs.to_dict(),
+                "planning_evidence": proposal.to_dict(),
+                "automation_origin": proposal.automation_origin,
+                "planner_result": planner_result.to_dict(),
+                "selected_proposal_digest": proposal.proposal_digest,
                 "skipped_reasons": list(planner_result.skipped_reasons),
             })
             return "skip"
@@ -542,6 +594,12 @@ class AgentTurnPipeline:
             "planner_result": planner_result.to_dict(),
             "selected_proposal_digest": proposal.proposal_digest,
             "skipped_reasons": list(planner_result.skipped_reasons),
+            "selection_reason": (
+                "preferred_origin"
+                if continuity_inputs.user_goal_domain
+                and continuity_inputs.user_goal_domain == proposal.automation_origin
+                else "domain_priority_first_executable"
+            ),
             "preconditions": {
                 "outcome": precondition.outcome,
                 "reason": precondition.reason,

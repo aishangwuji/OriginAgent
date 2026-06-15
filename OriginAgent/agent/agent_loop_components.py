@@ -265,7 +265,8 @@ def build_loop_components(
     values["_domain_runtime_contributions"] = values["domain_packs"].active_runtime_contributions(
         workspace=workspace,
         config=tools_config,
-        overrides=values["_domain_runtime_overrides"],
+        overrides=values["_domain_runtime_overrides"]
+        | {"confirmation_manager": values["_confirmation_manager"]},
     )
     values["actor_resolver"] = actor_resolver or loop.actor_resolver.__class__() if actor_resolver is None and hasattr(loop, "actor_resolver") else actor_resolver
     if values["actor_resolver"] is None:

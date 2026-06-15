@@ -565,12 +565,29 @@ class ContextBuilder:
                 pending_confirmations = []
         return ActionContinuityInputs(
             runtime_context=runtime_context,
+            user_goal_domain=self._resolve_goal_domain(session.metadata if session is not None else None),
             working_memory=working_memory,
             world_view=world_view,
             governance_summary=governance_summary,
             retrieval_hints=retrieval_hints,
             pending_confirmations=pending_confirmations,
         )
+
+    @staticmethod
+    def _resolve_goal_domain(metadata: dict[str, Any] | None) -> str | None:
+        if not isinstance(metadata, dict):
+            return None
+        for key in ("goal_domain", "target_domain", "user_goal_domain", "domain_goal"):
+            value = str(metadata.get(key) or "").strip().lower()
+            if value:
+                return value
+        goal = metadata.get("goal_state")
+        if isinstance(goal, dict):
+            for key in ("goal_domain", "target_domain", "domain"):
+                value = str(goal.get(key) or "").strip().lower()
+                if value:
+                    return value
+        return None
 
     def prepare_prewarm_bundle(
         self,

@@ -126,6 +126,9 @@ class PlanActionTool(Tool):
             "automation_origin": audit.get("automation_origin"),
             "selected_proposal_digest": audit.get("selected_proposal_digest"),
             "skipped_reasons": list(audit.get("skipped_reasons", []) or []),
+            "selection_reason": audit.get("selection_reason"),
+            "execution_result": dict(audit.get("execution_result", {}) or {}),
+            "continuity_writeback": dict(audit.get("continuity_writeback", {}) or {}),
         }
 
 

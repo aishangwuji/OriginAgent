@@ -135,6 +135,7 @@ class DomainRuntimeBuildContext:
     workspace: Path
     config: Any
     overrides: dict[str, Any] = field(default_factory=dict)
+    confirmation_manager: Any | None = None
 
 
 @dataclass(frozen=True)
@@ -704,6 +705,7 @@ class DomainPackManager:
                     workspace=Path(workspace),
                     config=config,
                     overrides=dict(overrides or {}),
+                    confirmation_manager=(dict(overrides or {})).get("confirmation_manager"),
                 ),
             )
             if contribution is not None:

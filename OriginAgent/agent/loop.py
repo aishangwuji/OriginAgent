@@ -42,6 +42,7 @@ from OriginAgent.agent.agent_turn_pipeline import (
     TurnPipelineDeps,
     TurnState,
 )
+from OriginAgent.domain_packs.robot.runtime.robot_actions import TypedRobotAction
 from OriginAgent.agent.agent_turn_persist import TurnPersistManager
 from OriginAgent.agent.autocompact import AutoCompact
 from OriginAgent.agent.auxiliary_llm import AuxiliaryLLMRouter
@@ -534,7 +535,6 @@ class AgentLoop:
             schedule_background_review=lambda ctx: self._schedule_background_review(ctx),
             schedule_curator_review=lambda ctx: self._schedule_curator_review(ctx),
             automation_enabled=lambda: self._automation_enabled(),
-            device_action_executor_for_automation=lambda: self._device_action_executor_for_automation(),
             action_planner=self.action_planner,
             record_action_continuity_audit=lambda audit: self._record_action_continuity_audit(audit),
             assemble_outbound=lambda *args, **kwargs: self._assemble_outbound(*args, **kwargs),
@@ -2655,10 +2655,19 @@ class AgentLoop:
         )
 
     def _bind_action_resume_precheck(self) -> None:
-        executor = self._device_action_executor_for_automation()
-        safe_executor = getattr(executor, "safe_executor", None) if executor is not None else None
-        if safe_executor is not None and hasattr(safe_executor, "set_resume_precheck"):
-            safe_executor.set_resume_precheck(self._resume_action_confirmation_precheck)
+        executors: list[Any] = []
+        override_executor = self._domain_runtime_overrides.get("device_action_executor")
+        if override_executor is not None:
+            executors.append(override_executor)
+        for contribution in self._domain_runtime_contributions:
+            tool_context = getattr(contribution, "tool_context", {}) or {}
+            executor = tool_context.get("device_action_executor")
+            if executor is not None and executor not in executors:
+                executors.append(executor)
+        for executor in executors:
+            safe_executor = getattr(executor, "safe_executor", None)
+            if safe_executor is not None and hasattr(safe_executor, "set_resume_precheck"):
+                safe_executor.set_resume_precheck(self._resume_action_confirmation_precheck)
 
     def _resume_action_confirmation_precheck(
         self,
@@ -2667,7 +2676,7 @@ class AgentLoop:
         now: datetime,
     ) -> ActionDecision | None:
         origin = str(getattr(intent, "continuity_origin", "") or "").strip()
-        if origin not in {"smart_home", "loop_owned_rule_based"}:
+        if origin not in {"smart_home", "loop_owned_rule_based", "robot"}:
             return None
         session_key = str(getattr(intent, "continuity_session_ref", "") or "").strip()
         if not session_key:
@@ -2701,42 +2710,65 @@ class AgentLoop:
             default_scope=str(identity.get("scope") or "session").strip() or "session",
         )
         continuity_inputs = self.context.build_action_continuity_inputs(session_key, runtime_context)
-        executor = self._device_action_executor_for_automation()
+        executor = AgentTurnPipeline._resolve_executor_for_origin(
+            origin,
+            self._domain_runtime_contributions,
+        )
         if executor is None or not hasattr(executor, "automation_preconditions"):
             return ActionDecision(
                 decision="deny",
                 reason="automation executor is unavailable during confirmation resume",
             )
         payload = getattr(intent, "payload", {}) if isinstance(getattr(intent, "payload", {}), dict) else {}
-        from OriginAgent.domain_packs.smart_home.runtime.device_actions import TypedDeviceAction
+        if origin == "robot":
+            typed_action = TypedRobotAction(
+                action_type=str(getattr(intent, "action", "") or "").strip(),
+                target=str(payload.get("target") or "").strip() or "unitree_g1",
+                parameters={
+                    key: value
+                    for key, value in payload.items()
+                    if key not in {"target", "domain", "action_type"}
+                },
+                requested_by=getattr(intent, "requested_by", None),
+                trigger="automation",
+                idempotency_key=getattr(intent, "idempotency_key", None),
+            )
+        else:
+            from OriginAgent.domain_packs.smart_home.runtime.device_actions import TypedDeviceAction
 
-        room = None
-        scope_parts = [part for part in str(getattr(intent, "scope", "") or "").split(".") if part]
-        if len(scope_parts) >= 4 and scope_parts[0] == "home":
-            room = scope_parts[1]
-        typed_action = TypedDeviceAction(
-            action_type=str(getattr(intent, "action", "") or "").strip(),
-            device_id=str(payload.get("device_id") or "").strip(),
-            domain=str(payload.get("domain") or "").strip(),
-            room=room,
-            parameters={
-                key: value
-                for key, value in payload.items()
-                if key not in {"device_id", "domain", "action_type"}
-            },
-            requested_by=getattr(intent, "requested_by", None),
-            trigger="automation",
-            idempotency_key=getattr(intent, "idempotency_key", None),
-        )
+            room = None
+            scope_parts = [part for part in str(getattr(intent, "scope", "") or "").split(".") if part]
+            if len(scope_parts) >= 4 and scope_parts[0] == "home":
+                room = scope_parts[1]
+            typed_action = TypedDeviceAction(
+                action_type=str(getattr(intent, "action", "") or "").strip(),
+                device_id=str(payload.get("device_id") or "").strip(),
+                domain=str(payload.get("domain") or "").strip(),
+                room=room,
+                parameters={
+                    key: value
+                    for key, value in payload.items()
+                    if key not in {"device_id", "domain", "action_type"}
+                },
+                requested_by=getattr(intent, "requested_by", None),
+                trigger="automation",
+                idempotency_key=getattr(intent, "idempotency_key", None),
+            )
         precondition = executor.automation_preconditions(
             typed_action,
             continuity_inputs=continuity_inputs,
         )
         if precondition.outcome == "allow":
             return None
+        if origin == "robot" and precondition.outcome == "pending_confirmation":
+            return ActionDecision(
+                decision="allow",
+                reason="robot handoff confirmation already satisfied",
+            )
         decision_map = {
             "pending_confirmation": "ask_confirmation",
             "recommended_only": "deny",
+            "deny": "deny",
             "denied": "deny",
         }
         return ActionDecision(

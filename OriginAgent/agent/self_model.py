@@ -110,6 +110,7 @@ class SelfModelService:
         }
         if self._runtime_snapshot.runtime:
             runtime.update(self._runtime_snapshot.runtime)
+        action = self._build_action()
         payload = {
             "schema_version": 1,
             "generated_at": datetime.now(timezone.utc).isoformat(),
@@ -125,6 +126,7 @@ class SelfModelService:
             "workflows": workflows,
             "facts": facts,
             "memory": memory,
+            "action": action,
             "reviews": reviews,
             "confirmations": confirmations,
             "limitations": limitations,
@@ -142,6 +144,7 @@ class SelfModelService:
         if isinstance(snapshot, dict):
             return RuntimeContextSnapshot(
                 runtime=dict(snapshot.get("runtime") or {}),
+                action=dict(snapshot.get("action") or {}),
                 confirmations=dict(snapshot.get("confirmations") or {}),
                 reviews=dict(snapshot.get("reviews") or {}),
                 background_tasks=dict(snapshot.get("background_tasks") or {}),
@@ -152,6 +155,24 @@ class SelfModelService:
                 nearline_memory_summary=dict(snapshot.get("nearline_memory_summary") or {}),
             )
         return RuntimeContextSnapshot()
+
+    def _build_action(self) -> dict[str, Any]:
+        if self._runtime_snapshot.action:
+            return dict(self._runtime_snapshot.action)
+        return {
+            "status": "idle",
+            "reason": None,
+            "planning_inputs": {},
+            "planning_evidence": {},
+            "automation_origin": None,
+            "planner_result": {},
+            "selected_proposal_digest": None,
+            "skipped_reasons": [],
+            "preconditions": {},
+            "execution_result": {},
+            "continuity_writeback": {},
+            "selection_reason": None,
+        }
 
     def _build_domains(self) -> dict[str, Any]:
         try:

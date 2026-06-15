@@ -22,6 +22,7 @@ class ActionWorldView:
 @dataclass(frozen=True)
 class ActionContinuityInputs:
     runtime_context: RuntimeContext
+    user_goal_domain: str | None = None
     working_memory: dict[str, Any] = field(default_factory=dict)
     world_view: ActionWorldView = field(default_factory=ActionWorldView)
     governance_summary: dict[str, Any] = field(default_factory=dict)
@@ -42,6 +43,7 @@ class ActionContinuityInputs:
                 "source": self.runtime_context.source,
                 "default_scope": self.runtime_context.default_scope,
             },
+            "user_goal_domain": self.user_goal_domain,
             "working_memory": dict(self.working_memory),
             "world_view": self.world_view.to_dict(),
             "governance_summary": dict(self.governance_summary),

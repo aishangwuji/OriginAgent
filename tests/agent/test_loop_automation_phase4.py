@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from OriginAgent.agent.loop import AgentLoop, TurnContext, TurnState
+from OriginAgent.agent.agent_turn_pipeline import AgentTurnPipeline
 from OriginAgent.bus.events import InboundMessage
 from OriginAgent.bus.queue import MessageBus
 from OriginAgent.config.schema import DeviceToolsConfig, DomainPacksConfig, ToolsConfig
@@ -17,6 +18,11 @@ from OriginAgent.agent.identity import RuntimeContext
 from OriginAgent.domain_packs.robot.runtime.robot_actions import RobotActionPlanner
 from OriginAgent.domain_packs.smart_home.runtime.devices import DeviceRecord, DeviceRegistry
 from OriginAgent.domain_packs.smart_home.runtime.action_automation import ActionAutomationCoordinator
+from OriginAgent.domain_packs.robot.runtime.robot_executor import (
+    RobotActionExecutor,
+    RobotActionWritebackAdapter,
+)
+from OriginAgent.domain_packs.robot.runtime.robot_actions import TypedRobotAction
 from OriginAgent.providers.base import LLMResponse
 
 
@@ -127,7 +133,7 @@ async def test_automation_state_appends_confirmation_appendix(tmp_path: Path) ->
         metadata={},
         session_key="cli:home",
     )
-    loop._domain_runtime_overrides["device_action_executor"] = SimpleNamespace(
+    fake_executor = SimpleNamespace(
         submit_automation=lambda action, continuity_inputs, proposal=None: (
             SimpleNamespace(
                 status="pending_confirmation",
@@ -136,10 +142,21 @@ async def test_automation_state_appends_confirmation_appendix(tmp_path: Path) ->
                 confirmation_id="confirmation_auto_1",
                 backend_called=False,
                 permission_status=None,
+                is_real_execution=False,
+                backend_kind="dry_run",
+                physical_target_domain="lighting",
             ),
             SimpleNamespace(outcome="pending_confirmation", reason="needs confirmation", audit={}),
         )
     )
+    smart_home_contribution = loop._domain_runtime_contributions[0]
+    loop._domain_runtime_contributions[:] = [
+        SimpleNamespace(
+            action_continuity_provider=smart_home_contribution.action_continuity_provider,
+            action_continuity_writeback_adapter=smart_home_contribution.action_continuity_writeback_adapter,
+            tool_context={"device_action_executor": fake_executor},
+        )
+    ]
     ctx = TurnContext(
         msg=InboundMessage(channel="cli", sender_id="alice", chat_id="home", content="hello"),
         session_key="cli:home",
@@ -165,17 +182,31 @@ async def test_automation_state_appends_confirmation_appendix(tmp_path: Path) ->
 @pytest.mark.asyncio
 async def test_automation_state_skips_when_only_preview_proposals_exist(tmp_path: Path) -> None:
     loop = _loop(tmp_path)
-    loop._domain_runtime_contributions = [
+    loop._domain_runtime_contributions[:] = [
         SimpleNamespace(
             action_continuity_provider=RobotActionPlanner(),
-            action_continuity_writeback_adapter=None,
+            action_continuity_writeback_adapter=RobotActionWritebackAdapter(),
+            tool_context={
+                "device_action_executor": RobotActionExecutor(
+                    confirmation_manager=loop._confirmation_manager,
+                ),
+            },
         )
     ]
-    loop._domain_runtime_overrides["device_action_executor"] = SimpleNamespace(
-        submit_automation=lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("should not execute"))
-    )
     session = loop.sessions.get_or_create("cli:home")
-    loop.context.build_action_continuity_inputs = lambda session_key, runtime_context: _continuity_inputs()  # type: ignore[method-assign]
+    loop.context.build_action_continuity_inputs = lambda session_key, runtime_context: ActionContinuityInputs(  # type: ignore[method-assign]
+        runtime_context=runtime_context,
+        working_memory={"priority_facts": ["robot preview requested"], "attention_items": [], "tool_residue": []},
+        world_view=ActionWorldView(
+            included_summary={"summary_id": "world_robot", "focus": ["robot arm near the desk"]},
+            contested_summary={"contested": False, "items": []},
+            freshness={"is_fresh": True},
+            selection_reasons=["robot_focus"],
+        ),
+        governance_summary={},
+        retrieval_hints={},
+        pending_confirmations=[],
+    )
     runtime_context = loop.actor_resolver.resolve_runtime_context(
         channel="cli",
         chat_id="home",
@@ -366,3 +397,158 @@ def test_robot_preview_planner_emits_preview_only_proposal() -> None:
     assert proposal is not None
     assert proposal.preview_only is True
     assert proposal.automation_origin == "robot"
+
+
+@pytest.mark.asyncio
+async def test_robot_simulator_proposal_runs_through_automation_state(tmp_path: Path) -> None:
+    loop = _loop(tmp_path)
+    loop._domain_runtime_contributions[:] = [
+        SimpleNamespace(
+            action_continuity_provider=RobotActionPlanner(),
+            action_continuity_writeback_adapter=RobotActionWritebackAdapter(),
+            tool_context={
+                "device_action_executor": RobotActionExecutor(
+                    confirmation_manager=loop._confirmation_manager,
+                ),
+            },
+        )
+    ]
+    loop.context.build_action_continuity_inputs = lambda session_key, runtime_context: ActionContinuityInputs(  # type: ignore[method-assign]
+        runtime_context=runtime_context,
+        user_goal_domain="robot",
+        working_memory={"priority_facts": ["robot simulator requested"], "attention_items": [], "tool_residue": []},
+        world_view=ActionWorldView(
+            included_summary={"summary_id": "world_robot", "focus": ["robot simulator request"]},
+            contested_summary={"contested": False, "items": []},
+            freshness={"is_fresh": True},
+            selection_reasons=["robot_focus"],
+        ),
+        governance_summary={},
+        retrieval_hints={},
+        pending_confirmations=[],
+    )
+    session = loop.sessions.get_or_create("cli:home")
+    runtime_context = loop.actor_resolver.resolve_runtime_context(
+        channel="cli",
+        chat_id="home",
+        sender_id="alice",
+        metadata={},
+        session_key="cli:home",
+    )
+    ctx = TurnContext(
+        msg=InboundMessage(channel="cli", sender_id="alice", chat_id="home", content="hello"),
+        session_key="cli:home",
+        state=TurnState.AUTOMATION,
+        turn_id="turn-robot",
+        session=session,
+        runtime_context=runtime_context,
+        final_content="Primary response",
+    )
+
+    event = await loop._state_automation(ctx)
+    respond = await loop._state_respond(ctx)
+
+    assert event == "ok"
+    assert respond == "ok"
+    assert loop._last_action_continuity_audit["automation_origin"] == "robot"
+    assert loop._last_action_continuity_audit["execution_result"]["backend_kind"] == "robot_simulator"
+    assert loop._last_action_continuity_audit["continuity_writeback"]["result_status"] == "dry_run"
+
+
+def test_select_automation_proposal_prefers_requested_origin() -> None:
+    smart = SimpleNamespace(automation_origin="smart_home", preview_only=False)
+    robot = SimpleNamespace(automation_origin="robot", preview_only=False)
+
+    selected = AgentTurnPipeline._select_automation_proposal(
+        [robot, smart],
+        preferred_origin="robot",
+    )
+
+    assert selected is robot
+
+
+def test_robot_executor_allows_simulator_and_marks_dry_run(tmp_path: Path) -> None:
+    loop = AgentLoop(
+        bus=MessageBus(),
+        provider=_provider(),
+        workspace=tmp_path,
+        model="test-model",
+    )
+    executor = RobotActionExecutor(
+        confirmation_manager=loop._confirmation_manager,
+    )
+    result, decision = executor.submit_automation(
+        TypedRobotAction(
+            action_type="simulate_robot_motion",
+            target="unitree_g1",
+            parameters={"mode": "simulator", "focus": "robot simulator"},
+            requested_by="alice",
+        ),
+        continuity_inputs=_continuity_inputs(),
+    )
+
+    assert decision.outcome == "allow"
+    assert result.status == "dry_run"
+    assert result.backend_kind == "robot_simulator"
+    assert result.is_real_execution is False
+
+
+def test_robot_resume_precheck_allows_handoff_when_confirmation_is_satisfied(tmp_path: Path) -> None:
+    loop = _loop(tmp_path)
+    loop._domain_runtime_contributions[:] = [
+        SimpleNamespace(
+            action_continuity_provider=RobotActionPlanner(),
+            action_continuity_writeback_adapter=RobotActionWritebackAdapter(),
+            tool_context={
+                "device_action_executor": RobotActionExecutor(
+                    confirmation_manager=loop._confirmation_manager,
+                ),
+            },
+        )
+    ]
+    session = loop.sessions.get_or_create("cli:home")
+    loop._write_continuity_runtime_identity(
+        session,
+        RuntimeContext(
+            actor_id="alice",
+            user_id="alice",
+            session_id="cli:home",
+            device_id="device-a",
+            trigger="automation",
+            channel="cli",
+            chat_id="home",
+            session_key="cli:home",
+            source="automation",
+            default_scope="session",
+        ),
+    )
+    continuity_inputs = ActionContinuityInputs(
+        runtime_context=_continuity_inputs().runtime_context,
+        working_memory={"priority_facts": [], "attention_items": [], "tool_residue": []},
+        world_view=ActionWorldView(
+            included_summary={"summary_id": "world_robot", "focus": ["robot handoff operator assist"]},
+            contested_summary={"contested": False, "items": []},
+            freshness={"is_fresh": True},
+            selection_reasons=["robot_focus"],
+        ),
+        governance_summary={},
+        retrieval_hints={},
+        pending_confirmations=[],
+    )
+    loop.context.build_action_continuity_inputs = lambda session_key, runtime_context: continuity_inputs  # type: ignore[method-assign]
+    decision = loop._resume_action_confirmation_precheck(
+        SimpleNamespace(
+            action="handoff_robot_motion",
+            scope="robot.unitree_g1",
+            payload={"target": "unitree_g1", "mode": "handoff"},
+            requested_by="alice",
+            idempotency_key="robot-handoff-1",
+            continuity_session_ref="cli:home",
+            continuity_origin="robot",
+            continuity_proposal_digest="digest-robot-1",
+        ),
+        SimpleNamespace(metadata={"arc_session": "cli:home"}),
+        datetime.fromisoformat("2026-06-09T00:00:00+00:00"),
+    )
+
+    assert decision is None or decision.decision == "allow"

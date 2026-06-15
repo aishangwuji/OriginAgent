@@ -214,6 +214,7 @@ class RuntimeIntrospectionService:
                 "curator_enabled": bool(curator_status.get("curator_enabled")),
             },
             continuity=self.continuity_summary(),
+            action=self._action_summary(),
             confirmations=confirmations,
             reviews=reviews,
             background_tasks=background_tasks,
@@ -287,6 +288,30 @@ class RuntimeIntrospectionService:
             except Exception:
                 out["world_state"] = {}
         return out
+
+    def _action_summary(self) -> dict[str, Any]:
+        loop = self._loop
+        if loop is None:
+            return {}
+        audit = dict(getattr(loop, "_last_action_continuity_audit", {}) or {})
+        planner_result = audit.get("planner_result")
+        if not isinstance(planner_result, dict):
+            planner_result = {}
+        return {
+            "source": "AgentLoop._last_action_continuity_audit",
+            "status": audit.get("status"),
+            "reason": audit.get("reason"),
+            "planning_inputs": dict(audit.get("planning_inputs", {}) or {}),
+            "planning_evidence": dict(audit.get("planning_evidence", {}) or {}),
+            "automation_origin": audit.get("automation_origin"),
+            "planner_result": dict(planner_result),
+            "selected_proposal_digest": audit.get("selected_proposal_digest"),
+            "skipped_reasons": list(audit.get("skipped_reasons", []) or []),
+            "preconditions": dict(audit.get("preconditions", {}) or {}),
+            "execution_result": dict(audit.get("execution_result", {}) or {}),
+            "continuity_writeback": dict(audit.get("continuity_writeback", {}) or {}),
+            "selection_reason": audit.get("selection_reason"),
+        }
 
     def cognition_summary(self) -> dict[str, Any]:
         loop = self._loop
@@ -496,6 +521,9 @@ class RuntimeIntrospectionService:
                     "continuity_writeback": dict(getattr(loop, "_last_action_continuity_audit", {}).get("continuity_writeback", {}))
                     if loop is not None
                     else {},
+                    "selection_reason": getattr(loop, "_last_action_continuity_audit", {}).get("selection_reason")
+                    if loop is not None
+                    else None,
                 },
                 "meta_cognition": self.meta_cognition_summary(),
             },
