@@ -12,6 +12,7 @@ from typing import Any, Callable
 from OriginAgent.agent import model_presets as preset_helpers
 from OriginAgent.agent.active_intents import ActiveIntentConfig, ActiveIntentService
 from OriginAgent.agent.action_planning import UnifiedActionPlanner
+from OriginAgent.agent.action_summary import normalize_action_summary
 from OriginAgent.agent.agent_turn_persist import TurnPersistManager
 from OriginAgent.agent.autocompact import AutoCompact
 from OriginAgent.agent.auxiliary_llm import AuxiliaryLLMRouter
@@ -505,6 +506,7 @@ def build_loop_components(
     values["_last_recovered_continuity_checkpoint"] = {}
     values["_last_governance_audit"] = {}
     values["_last_action_continuity_audit"] = {}
+    values["_cached_action_summary"] = normalize_action_summary({})
     values["_last_cognitive_scan"] = {}
     values["_last_meta_cognition_summary"] = {}
     values["_last_meta_trigger_scan"] = []

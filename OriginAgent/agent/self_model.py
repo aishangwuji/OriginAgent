@@ -9,6 +9,7 @@ from importlib.resources import files as pkg_files
 from pathlib import Path
 from typing import Any
 
+from OriginAgent.agent.action_summary import normalize_action_summary
 from OriginAgent.agent.confirmation import ConfirmationRequest, PendingConfirmationStore
 from OriginAgent.agent.domain_pack_governance import DomainPackGovernanceService
 from OriginAgent.agent.facts import FactStore, summarize_facts
@@ -158,21 +159,8 @@ class SelfModelService:
 
     def _build_action(self) -> dict[str, Any]:
         if self._runtime_snapshot.action:
-            return dict(self._runtime_snapshot.action)
-        return {
-            "status": "idle",
-            "reason": None,
-            "planning_inputs": {},
-            "planning_evidence": {},
-            "automation_origin": None,
-            "planner_result": {},
-            "selected_proposal_digest": None,
-            "skipped_reasons": [],
-            "preconditions": {},
-            "execution_result": {},
-            "continuity_writeback": {},
-            "selection_reason": None,
-        }
+            return normalize_action_summary(self._runtime_snapshot.action)
+        return normalize_action_summary({})
 
     def _build_domains(self) -> dict[str, Any]:
         try:

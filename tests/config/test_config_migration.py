@@ -198,6 +198,47 @@ def test_load_config_parses_large_model_presets_without_changing_defaults(tmp_pa
     assert config.model_presets["large-200k"].context_window_tokens == 200000
 
 
+def test_robot_g1_config_defaults_disabled_and_parses_aliases(tmp_path) -> None:
+    default_config_path = tmp_path / "default-config.json"
+    default_config_path.write_text("{}", encoding="utf-8")
+
+    default_config = load_config(default_config_path)
+
+    assert default_config.agents.defaults.robot_g1.enabled is False
+    assert default_config.agents.defaults.robot_g1.mcp_endpoint is None
+    assert default_config.agents.defaults.robot_g1.tool_timeout_seconds == 30
+    assert default_config.agents.defaults.robot_g1.perception_enabled is False
+    assert default_config.agents.defaults.robot_g1.perception_mode == "disabled"
+
+    config_path = tmp_path / "config.json"
+    config_path.write_text(
+        json.dumps(
+            {
+                "agents": {
+                    "defaults": {
+                        "robotG1": {
+                            "enabled": True,
+                            "mcpEndpoint": "http://192.168.123.164:18791/sse",
+                            "toolTimeoutSeconds": 45,
+                            "perceptionEnabled": True,
+                            "perceptionMode": "on_demand",
+                        }
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    config = load_config(config_path)
+
+    assert config.agents.defaults.robot_g1.enabled is True
+    assert config.agents.defaults.robot_g1.mcp_endpoint == "http://192.168.123.164:18791/sse"
+    assert config.agents.defaults.robot_g1.tool_timeout_seconds == 45
+    assert config.agents.defaults.robot_g1.perception_enabled is True
+    assert config.agents.defaults.robot_g1.perception_mode == "on_demand"
+
+
 def test_save_config_rewrites_legacy_my_tool_keys(tmp_path) -> None:
     config_path = tmp_path / "config.json"
     config_path.write_text(

@@ -30,6 +30,7 @@ from OriginAgent.agent.agent_tool_setup import (
     register_plugin_tools,
     should_register_exec,
 )
+from OriginAgent.agent.action_summary import normalize_action_summary
 from OriginAgent.agent.active_intents import ActiveIntentConfig, ActiveIntentRecord, ActiveIntentService
 from OriginAgent.agent.agent_cognitive_runtime import AgentCognitiveRuntime, CognitiveRuntimeDeps
 from OriginAgent.agent.agent_loop_components import build_loop_components
@@ -344,6 +345,7 @@ class AgentLoop:
         self._last_recovered_continuity_checkpoint: dict[str, Any] = {}
         self._last_governance_audit: dict[str, Any] = {}
         self._last_action_continuity_audit: dict[str, Any] = {}
+        self._cached_action_summary: dict[str, Any] = normalize_action_summary({})
         self._last_cognitive_scan: dict[str, Any] = {}
         self._last_meta_cognition_summary: dict[str, Any] = {}
         self._last_meta_trigger_scan: list[dict[str, Any]] = []
@@ -557,6 +559,7 @@ class AgentLoop:
 
     def _record_action_continuity_audit(self, audit: dict[str, Any]) -> None:
         self._last_action_continuity_audit = dict(audit)
+        self._cached_action_summary = normalize_action_summary(self._last_action_continuity_audit)
 
     def _build_cognitive_runtime_deps(self) -> CognitiveRuntimeDeps:
         return CognitiveRuntimeDeps(

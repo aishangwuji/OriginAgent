@@ -599,7 +599,7 @@ async def test_inspect_context_reports_phase1_views_and_scope_filter(tmp_path) -
 @pytest.mark.asyncio
 async def test_plan_action_tool_reads_cached_planner_result(tmp_path) -> None:
     loop = SimpleNamespace(
-        _last_action_continuity_audit={
+        _cached_action_summary={
             "status": "ok",
             "reason": None,
             "planning_evidence": {"automation_origin": "smart_home"},
@@ -611,6 +611,7 @@ async def test_plan_action_tool_reads_cached_planner_result(tmp_path) -> None:
             },
             "selected_proposal_digest": "proposal-1",
             "skipped_reasons": ["RobotActionPlanner: no_proposal"],
+            "cache_timestamp": "2026-06-16T00:00:00+00:00",
         }
     )
     tool = PlanActionTool(
@@ -628,6 +629,69 @@ async def test_plan_action_tool_reads_cached_planner_result(tmp_path) -> None:
     assert result["available"] is True
     assert result["planner_result"]["planner_sources"] == ["ActionAutomationCoordinator"]
     assert result["selected_proposal_digest"] == "proposal-1"
+    assert result["cache_timestamp"] == "2026-06-16T00:00:00+00:00"
+
+
+@pytest.mark.asyncio
+async def test_action_views_read_same_cached_summary(tmp_path) -> None:
+    cached = {
+        "status": "ok",
+        "reason": None,
+        "planning_inputs": {"session_key": "cli:direct"},
+        "planning_evidence": {"automation_origin": "smart_home"},
+        "automation_origin": "smart_home",
+        "planner_result": {
+            "proposals": [{"automation_origin": "smart_home", "proposal_digest": "proposal-1"}],
+            "planner_sources": ["ActionAutomationCoordinator"],
+            "skipped_reasons": [],
+        },
+        "selected_proposal_digest": "proposal-1",
+        "skipped_reasons": [],
+        "preconditions": {"outcome": "allow"},
+        "execution_result": {"status": "dry_run"},
+        "continuity_writeback": {"result_status": "dry_run"},
+        "cache_timestamp": "2026-06-16T00:00:00+00:00",
+    }
+    loop = SimpleNamespace(
+        _cached_action_summary=cached,
+        _last_runtime_context=None,
+        _last_continuity_session_key=None,
+        _last_context_assembly={},
+        _last_recovered_continuity_checkpoint={},
+        _last_governance_audit={},
+        _meta_cognition_runtime=None,
+        context=SimpleNamespace(_context_config=SimpleNamespace(enable_phase1_continuity=True)),
+    )
+    service = RuntimeIntrospectionService(
+        loop=loop,
+        workspace=tmp_path,
+        registry=SimpleNamespace(tool_names=["originagent_plan_action", "originagent_inspect_context"]),
+        sessions=SimpleNamespace(get_or_create=lambda key: SimpleNamespace(metadata={}, get_history=lambda **kwargs: [])),
+        pending_queues={},
+    )
+
+    plan = await PlanActionTool(introspection_service=service).execute()
+    inspect = await InspectContextTool(
+        workspace=tmp_path,
+        registry=SimpleNamespace(tool_names=["originagent_inspect_context"]),
+        sessions=SimpleNamespace(get_or_create=lambda key: SimpleNamespace(metadata={}, get_history=lambda **kwargs: [])),
+        pending_queues={},
+        introspection_service=service,
+    ).execute()
+    status = await RuntimeStatusTool(
+        workspace=tmp_path,
+        registry=SimpleNamespace(tool_names=["originagent_runtime_status"]),
+        sessions=SimpleNamespace(get_or_create=lambda key: SimpleNamespace(metadata={}, get_history=lambda **kwargs: [])),
+        pending_queues={},
+        introspection_service=service,
+    ).execute()
+
+    assert plan["selected_proposal_digest"] == "proposal-1"
+    assert inspect["views"]["action"]["selected_proposal_digest"] == "proposal-1"
+    assert status["self_model"]["action"]["selected_proposal_digest"] == "proposal-1"
+    assert plan["planner_result"] == inspect["views"]["action"]["planner_result"]
+    assert plan["planner_result"] == status["self_model"]["action"]["planner_result"]
+    assert inspect["views"]["action"]["cache_timestamp"] == "2026-06-16T00:00:00+00:00"
 
 
 @pytest.mark.asyncio

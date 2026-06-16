@@ -288,6 +288,33 @@ class DomainPacksConfig(Base):
     )
 
 
+class RobotG1Config(Base):
+    """Disabled-by-default Unitree G1 integration placeholder for P5B+."""
+
+    enabled: bool = False
+    mcp_endpoint: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("mcpEndpoint", "mcp_endpoint"),
+        serialization_alias="mcpEndpoint",
+    )
+    tool_timeout_seconds: int = Field(
+        default=30,
+        ge=1,
+        validation_alias=AliasChoices("toolTimeoutSeconds", "tool_timeout_seconds"),
+        serialization_alias="toolTimeoutSeconds",
+    )
+    perception_enabled: bool = Field(
+        default=False,
+        validation_alias=AliasChoices("perceptionEnabled", "perception_enabled"),
+        serialization_alias="perceptionEnabled",
+    )
+    perception_mode: Literal["disabled", "on_demand", "always", "interval", "motion"] = Field(
+        default="disabled",
+        validation_alias=AliasChoices("perceptionMode", "perception_mode"),
+        serialization_alias="perceptionMode",
+    )
+
+
 class BackgroundReviewConfig(Base):
     """Controlled background learning proposal generation."""
 
@@ -1170,6 +1197,11 @@ class AgentDefaults(Base):
         default_factory=DomainPacksConfig,
         validation_alias=AliasChoices("domainPacks", "domain_packs"),
         serialization_alias="domainPacks",
+    )
+    robot_g1: RobotG1Config = Field(
+        default_factory=RobotG1Config,
+        validation_alias=AliasChoices("robotG1", "robot_g1"),
+        serialization_alias="robotG1",
     )
     subagent_policy: SubagentDefaultsConfig = Field(
         default_factory=SubagentDefaultsConfig,

@@ -109,26 +109,32 @@ class PlanActionTool(Tool):
         return True
 
     async def execute(self) -> dict[str, Any]:
-        loop = getattr(self._introspection_service, "_loop", None) if self._introspection_service is not None else None
-        audit = dict(getattr(loop, "_last_action_continuity_audit", {}) or {}) if loop is not None else {}
-        planner_result = audit.get("planner_result")
+        summary = (
+            self._introspection_service._action_summary()
+            if self._introspection_service is not None
+            else {}
+        )
+        planner_result = summary.get("planner_result") if isinstance(summary, dict) else {}
         if not isinstance(planner_result, dict):
             planner_result = {}
-        planning_evidence = audit.get("planning_evidence")
+        planning_evidence = summary.get("planning_evidence") if isinstance(summary, dict) else {}
         if not isinstance(planning_evidence, dict):
             planning_evidence = {}
         return {
             "available": bool(planner_result),
-            "status": audit.get("status"),
-            "reason": audit.get("reason"),
+            "status": summary.get("status") if isinstance(summary, dict) else None,
+            "reason": summary.get("reason") if isinstance(summary, dict) else None,
             "planner_result": dict(planner_result),
             "planning_evidence": dict(planning_evidence),
-            "automation_origin": audit.get("automation_origin"),
-            "selected_proposal_digest": audit.get("selected_proposal_digest"),
-            "skipped_reasons": list(audit.get("skipped_reasons", []) or []),
-            "selection_reason": audit.get("selection_reason"),
-            "execution_result": dict(audit.get("execution_result", {}) or {}),
-            "continuity_writeback": dict(audit.get("continuity_writeback", {}) or {}),
+            "automation_origin": summary.get("automation_origin") if isinstance(summary, dict) else None,
+            "selected_proposal_digest": summary.get("selected_proposal_digest") if isinstance(summary, dict) else None,
+            "skipped_reasons": list(summary.get("skipped_reasons", []) or []) if isinstance(summary, dict) else [],
+            "selection_reason": summary.get("selection_reason") if isinstance(summary, dict) else None,
+            "execution_result": dict(summary.get("execution_result", {}) or {}) if isinstance(summary, dict) else {},
+            "continuity_writeback": dict(summary.get("continuity_writeback", {}) or {})
+            if isinstance(summary, dict)
+            else {},
+            "cache_timestamp": summary.get("cache_timestamp") if isinstance(summary, dict) else None,
         }
 
 

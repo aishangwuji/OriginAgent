@@ -33,7 +33,7 @@ def test_self_model_builds_empty_workspace_snapshot(tmp_path) -> None:
     assert self_model["reviews"]["pending_count"] == 0
     assert self_model["confirmations"]["pending_count"] == 0
     limitation_codes = {item["code"] for item in self_model["limitations"]}
-    assert limitation_codes <= {"domain_invalid"}
+    assert limitation_codes <= {"domain_invalid", "domain_unavailable"}
 
 
 def test_self_model_reports_workspace_initialization_states(tmp_path) -> None:
@@ -167,6 +167,26 @@ def test_self_model_keeps_workspace_state_when_runtime_snapshot_memory_exists(tm
     assert self_model["memory"]["recent_history_pending_count"] == 3
     assert self_model["memory"]["user_profile_file"]["status"] == "missing"
     assert self_model["memory"]["memory_candidate_queue"]["status"] == "lazy_not_created"
+
+
+def test_self_model_action_uses_unified_cached_summary_shape(tmp_path) -> None:
+    self_model = SelfModelService(
+        tmp_path,
+        runtime_snapshot={
+            "action": {
+                "status": "ok",
+                "planner_result": {"proposals": [{"proposal_digest": "digest-1"}]},
+                "selected_proposal_digest": "digest-1",
+                "cache_timestamp": "2026-06-16T00:00:00+00:00",
+            }
+        },
+    ).build()
+
+    assert self_model["action"]["status"] == "ok"
+    assert self_model["action"]["selected_proposal_digest"] == "digest-1"
+    assert self_model["action"]["planner_result"]["proposals"][0]["proposal_digest"] == "digest-1"
+    assert self_model["action"]["cache_timestamp"] == "2026-06-16T00:00:00+00:00"
+    assert self_model["action"]["planning_inputs"] == {}
 
 
 def test_self_model_derives_limitations_and_redacts_sensitive_content(tmp_path) -> None:

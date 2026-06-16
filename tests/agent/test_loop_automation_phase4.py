@@ -233,7 +233,7 @@ async def test_automation_state_skips_when_only_preview_proposals_exist(tmp_path
 @pytest.mark.asyncio
 async def test_inspect_context_reports_action_view(tmp_path: Path) -> None:
     loop = _loop(tmp_path)
-    loop._last_action_continuity_audit = {
+    loop._record_action_continuity_audit({
         "planning_inputs": {"session_key": "cli:home"},
         "planning_evidence": {"planning_reason": "rule based"},
         "automation_origin": "smart_home",
@@ -243,7 +243,7 @@ async def test_inspect_context_reports_action_view(tmp_path: Path) -> None:
         "preconditions": {"outcome": "allow"},
         "execution_result": {"status": "dry_run"},
         "continuity_writeback": {"result_status": "dry_run"},
-    }
+    })
 
     result = await loop.tools.execute("originagent_inspect_context", {})
 
@@ -251,6 +251,27 @@ async def test_inspect_context_reports_action_view(tmp_path: Path) -> None:
     assert result["views"]["action"]["execution_result"]["status"] == "dry_run"
     assert result["views"]["action"]["planner_result"]["proposals"][0]["automation_origin"] == "smart_home"
     assert result["views"]["action"]["selected_proposal_digest"] == "digest-1"
+    assert result["views"]["action"]["cache_timestamp"] == loop._cached_action_summary["cache_timestamp"]
+
+
+def test_action_summary_cache_refreshes_to_latest_audit(tmp_path: Path) -> None:
+    loop = _loop(tmp_path)
+    loop._record_action_continuity_audit({
+        "status": "ok",
+        "planner_result": {"proposals": [{"proposal_digest": "digest-1"}]},
+        "selected_proposal_digest": "digest-1",
+    })
+
+    loop._record_action_continuity_audit({
+        "status": "ok",
+        "planner_result": {"proposals": [{"proposal_digest": "digest-2"}]},
+        "selected_proposal_digest": "digest-2",
+    })
+
+    assert loop._last_action_continuity_audit["selected_proposal_digest"] == "digest-2"
+    assert loop._cached_action_summary["selected_proposal_digest"] == "digest-2"
+    assert loop._cached_action_summary["planner_result"]["proposals"][0]["proposal_digest"] == "digest-2"
+    assert loop.introspection._action_summary()["selected_proposal_digest"] == "digest-2"
 
 
 def test_action_automation_coordinator_uses_registry_single_lighting_target() -> None:
@@ -453,6 +474,7 @@ async def test_robot_simulator_proposal_runs_through_automation_state(tmp_path: 
     assert loop._last_action_continuity_audit["automation_origin"] == "robot"
     assert loop._last_action_continuity_audit["execution_result"]["backend_kind"] == "robot_simulator"
     assert loop._last_action_continuity_audit["continuity_writeback"]["result_status"] == "dry_run"
+    assert loop._cached_action_summary["selected_proposal_digest"] == loop._last_action_continuity_audit["selected_proposal_digest"]
 
 
 def test_select_automation_proposal_prefers_requested_origin() -> None:
