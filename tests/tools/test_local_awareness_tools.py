@@ -12,15 +12,22 @@ from OriginAgent.agent.local_awareness import (
     normalize_local_awareness_summary,
 )
 from OriginAgent.agent.tools.local_awareness import (
+    BindDeviceTool,
     CaptureCameraFrameTool,
     CaptureScreenTool,
     DiscoverLanDevicesTool,
     DiscoverLocalDevicesTool,
     InspectMediaTool,
+    ListDeviceBindingsTool,
     RecordAudioSampleTool,
+    RequestDevicePermissionTool,
+    RevokeDeviceBindingTool,
     SpeakTextTool,
 )
+from OriginAgent.agent.identity import ActorResolver
+from OriginAgent.agent.world_state import WorldStateManager
 from OriginAgent.config.schema import ToolsConfig
+from OriginAgent.session.manager import SessionManager
 
 
 def _tools_config(**local_overrides):
@@ -39,6 +46,24 @@ def _loop(config: ToolsConfig.LocalAwarenessConfig):
 
 def _service(loop):
     return SimpleNamespace(_loop=loop)
+
+
+def _loop_with_world(config: ToolsConfig.LocalAwarenessConfig, workspace: Path):
+    loop = _loop(config)
+    loop.sessions = SessionManager(workspace)
+    loop.world_state = WorldStateManager(workspace, loop.sessions)
+    return loop
+
+
+def _request_context(session_key: str = "cli:direct"):
+    runtime_context = ActorResolver().resolve_runtime_context(
+        channel="cli",
+        chat_id="direct",
+        sender_id="user-1",
+        metadata={"device_id": "device-a"},
+        session_key=session_key,
+    )
+    return SimpleNamespace(session_key=session_key, runtime_context=runtime_context)
 
 
 @pytest.mark.asyncio
@@ -268,6 +293,110 @@ def test_scan_targets_enforce_private_cidr_and_global_max_hosts() -> None:
 
 
 @pytest.mark.asyncio
+async def test_discovery_updates_world_state_device_events_and_summary(tmp_path: Path) -> None:
+    config = _tools_config(enabled=True, lan_discovery_enabled=True)
+    loop = _loop_with_world(config.local_awareness, tmp_path)
+    backend = LocalAwarenessBackend(command_runner=lambda *_args, **_kwargs: "")
+    backend.discover_lan_devices = lambda config: {  # type: ignore[method-assign]
+        "status": "ok",
+        "devices": [{"device_id": "dev_router", "kind": "router", "ip_addresses": ["192.168.1.1"]}],
+        "device_map": {
+            "devices": [{"device_id": "dev_router", "kind": "router", "ip_addresses": ["192.168.1.1"]}],
+            "device_count": 1,
+        },
+    }
+    tool = DiscoverLanDevicesTool(
+        workspace=tmp_path,
+        config=config,
+        backend=backend,
+        introspection_service=_service(loop),
+    )
+    tool.set_context(_request_context())
+
+    result = await tool.execute()
+
+    assert result["device_events_summary"]["device_event_count"] == 1
+    assert loop._last_local_awareness_summary["device_event_count"] == 1
+    session = loop.sessions.get_or_create("cli:direct")
+    assert loop.world_state.inspect(session)["device_events"][0]["kind"] == "appeared"
+
+
+@pytest.mark.asyncio
+async def test_device_binding_permission_tools_and_capture_gate(tmp_path: Path) -> None:
+    config = _tools_config(
+        enabled=True,
+        camera=ToolsConfig.LocalAwarenessCameraConfig(enabled=True, require_confirmation=False),
+    )
+    loop = _loop_with_world(config.local_awareness, tmp_path)
+    runtime_context = _request_context().runtime_context
+    session = loop.sessions.get_or_create("cli:direct")
+    loop.world_state.ingest_device_discovery(
+        session,
+        runtime_context=runtime_context,
+        device_map={"devices": [{"device_id": "dev_cam", "kind": "camera", "ip_addresses": ["192.168.1.9"]}]},
+    )
+    service = _service(loop)
+    bind_tool = BindDeviceTool(workspace=tmp_path, config=config, backend=loop._local_awareness_backend, introspection_service=service)
+    permission_tool = RequestDevicePermissionTool(workspace=tmp_path, config=config, backend=loop._local_awareness_backend, introspection_service=service)
+    list_tool = ListDeviceBindingsTool(workspace=tmp_path, config=config, backend=loop._local_awareness_backend, introspection_service=service)
+    capture_tool = CaptureCameraFrameTool(workspace=tmp_path, config=config, backend=loop._local_awareness_backend, introspection_service=service)
+    for tool in (bind_tool, permission_tool, list_tool, capture_tool):
+        tool.set_context(_request_context())
+
+    blocked = await capture_tool.execute(device_id="dev_cam", attach_to_world=False)
+    binding = await bind_tool.execute(device_id="dev_cam", user_label="front door camera", location="entry")
+    pending = await permission_tool.execute(device_id="dev_cam", capability="camera")
+    granted = await permission_tool.execute(device_id="dev_cam", capability="camera", grant=True, confirmation_id="confirm_cam")
+    listed = await list_tool.execute()
+    captured = await capture_tool.execute(device_id="dev_cam", attach_to_world=False)
+
+    assert blocked["status"] == "pending_confirmation"
+    assert blocked["reason"] == "camera_device_permission_required"
+    assert binding["status"] == "ok"
+    assert pending["status"] == "pending_confirmation"
+    assert granted["permission"]["status"] == "granted"
+    assert listed["device_permissions_summary"]["granted_permission_count"] == 1
+    assert captured["status"] == "ok"
+    assert captured["device_id"] == "dev_cam"
+
+
+@pytest.mark.asyncio
+async def test_revoke_device_binding_removes_capture_permission(tmp_path: Path) -> None:
+    config = _tools_config(
+        enabled=True,
+        camera=ToolsConfig.LocalAwarenessCameraConfig(enabled=True, require_confirmation=False),
+    )
+    loop = _loop_with_world(config.local_awareness, tmp_path)
+    runtime_context = _request_context().runtime_context
+    session = loop.sessions.get_or_create("cli:direct")
+    loop.world_state.ingest_device_discovery(
+        session,
+        runtime_context=runtime_context,
+        device_map={"devices": [{"device_id": "dev_cam", "kind": "camera", "ip_addresses": ["192.168.1.9"]}]},
+    )
+    loop.world_state.bind_device(session, runtime_context=runtime_context, device_id="dev_cam", user_label="front")
+    loop.world_state.request_device_permission(
+        session,
+        runtime_context=runtime_context,
+        device_id="dev_cam",
+        capability="camera",
+        status="granted",
+    )
+    service = _service(loop)
+    revoke_tool = RevokeDeviceBindingTool(workspace=tmp_path, config=config, backend=loop._local_awareness_backend, introspection_service=service)
+    capture_tool = CaptureCameraFrameTool(workspace=tmp_path, config=config, backend=loop._local_awareness_backend, introspection_service=service)
+    revoke_tool.set_context(_request_context())
+    capture_tool.set_context(_request_context())
+
+    revoked = await revoke_tool.execute("dev_cam")
+    blocked = await capture_tool.execute(device_id="dev_cam", attach_to_world=False)
+
+    assert revoked["status"] == "ok"
+    assert blocked["status"] == "pending_confirmation"
+    assert blocked["reason"] == "camera_device_permission_required"
+
+
+@pytest.mark.asyncio
 async def test_camera_capture_requires_confirmation_by_default(tmp_path: Path) -> None:
     config = _tools_config(
         enabled=True,
@@ -335,7 +464,7 @@ async def test_screen_capture_uses_screen_parameter_and_placeholder_backend(tmp_
 
     result = await tool.execute(screen_id="primary", attach_to_world=False)
 
-    assert tool.parameters["properties"].keys() == {"screen_id", "attach_to_world"}
+    assert tool.parameters["properties"].keys() == {"screen_id", "device_id", "attach_to_world"}
     assert result["status"] == "ok"
     assert result["device_id"] == "primary"
     assert result["media_path"].startswith("uploads/perception/screen_")

@@ -260,6 +260,11 @@ def test_self_model_renderer_includes_local_awareness_device_summary(tmp_path) -
                     "protocols": ["arp", "local_pnp"],
                     "last_seen_at": "2026-06-16T00:00:00+00:00",
                 },
+                "device_event_count": 1,
+                "recent_device_events": [{"kind": "appeared", "change_summary": "Device appeared: camera"}],
+                "bound_device_count": 1,
+                "granted_permission_count": 1,
+                "pending_permission_count": 0,
             },
         },
     ).build()
@@ -268,6 +273,9 @@ def test_self_model_renderer_includes_local_awareness_device_summary(tmp_path) -
 
     assert "## Local Awareness" in rendered
     assert "Devices visible: 2 total, 1 local, 1 LAN, 1 unknown" in rendered
+    assert "Bound devices: 1" in rendered
+    assert "Granted permissions: 1, pending: 0" in rendered
+    assert "Device appeared: camera" in rendered
     assert "camera:1" in rendered
     assert "`arp`" in rendered
 

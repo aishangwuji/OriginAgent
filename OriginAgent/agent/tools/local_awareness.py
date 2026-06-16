@@ -34,6 +34,9 @@ def _update_summary(loop: Any | None, *, key: str, value: dict[str, Any]) -> Non
         cached["device_map"] = dict(value["device_map"])
         if isinstance(value["device_map"].get("summary"), dict):
             cached["device_map_summary"] = dict(value["device_map"]["summary"])
+    for summary_key in ("device_events_summary", "device_bindings_summary", "device_permissions_summary"):
+        if isinstance(value.get(summary_key), dict):
+            cached[summary_key] = dict(value[summary_key])
     cached["updated_at"] = datetime.now(timezone.utc).isoformat()
     from OriginAgent.agent.local_awareness import normalize_local_awareness_summary
 
@@ -74,26 +77,69 @@ class _LocalAwarenessTool(Tool):
     def _enabled(self) -> bool:
         return bool(getattr(self._config, "enabled", False))
 
-    def _ingest_device_map(self, result: dict[str, Any]) -> None:
-        device_map = result.get("device_map")
-        if not isinstance(device_map, dict):
-            return
+    def _world_context(self) -> tuple[Any, Any, Any] | None:
         loop = self._loop
         ctx = self._request_ctx.get()
         if loop is None or ctx is None or not ctx.session_key:
-            return
+            return None
         world_state = getattr(loop, "world_state", None)
         sessions = getattr(loop, "sessions", None)
         runtime_context = getattr(ctx, "runtime_context", None)
         if world_state is None or sessions is None or runtime_context is None:
+            return None
+        return world_state, sessions.get_or_create(ctx.session_key), runtime_context
+
+    def _device_state_summary(self) -> dict[str, Any]:
+        world = self._world_context()
+        if world is None:
+            return {}
+        world_state, session, runtime_context = world
+        if hasattr(world_state, "device_state_summary"):
+            return world_state.device_state_summary(session, identity=runtime_context)
+        return {}
+
+    def _ingest_device_map(self, result: dict[str, Any]) -> None:
+        device_map = result.get("device_map")
+        if not isinstance(device_map, dict):
             return
-        session = sessions.get_or_create(ctx.session_key)
+        world = self._world_context()
+        if world is None:
+            return
+        world_state, session, runtime_context = world
         if hasattr(world_state, "ingest_device_discovery"):
-            world_state.ingest_device_discovery(
+            snapshot = world_state.ingest_device_discovery(
                 session,
                 runtime_context=runtime_context,
                 device_map=device_map,
             )
+            if hasattr(world_state, "device_state_summary"):
+                result.update(world_state.device_state_summary(session, identity=runtime_context))
+            result["device_map"] = dict(getattr(snapshot, "device_map", device_map))
+
+    def _require_device_permission(self, device_id: str | None, capability: str) -> dict[str, Any] | None:
+        if not device_id:
+            return None
+        world = self._world_context()
+        if world is None:
+            return {"status": "denied", "reason": "world_state_missing", "device_id": device_id}
+        world_state, session, runtime_context = world
+        if not hasattr(world_state, "device_capability_granted"):
+            return {"status": "denied", "reason": "device_permission_unavailable", "device_id": device_id}
+        if world_state.device_capability_granted(
+            session,
+            identity=runtime_context,
+            device_id=device_id,
+            capability=capability,
+        ):
+            return None
+        summary = world_state.device_state_summary(session, identity=runtime_context) if hasattr(world_state, "device_state_summary") else {}
+        return {
+            "status": "pending_confirmation",
+            "reason": f"{capability}_device_permission_required",
+            "device_id": device_id,
+            "capability": capability,
+            **summary,
+        }
 
 
 class DiscoverLocalDevicesTool(_LocalAwarenessTool):
@@ -118,8 +164,8 @@ class DiscoverLocalDevicesTool(_LocalAwarenessTool):
             result = _disabled("device_discovery_disabled")
         else:
             result = self._backend.discover_local_devices(config=self._config)
-        _update_summary(self._loop, key="last_discovery", value=result)
         self._ingest_device_map(result)
+        _update_summary(self._loop, key="last_discovery", value=result)
         return result
 
 
@@ -143,8 +189,159 @@ class DiscoverLanDevicesTool(_LocalAwarenessTool):
             result = _disabled("local_awareness_disabled")
         else:
             result = self._backend.discover_lan_devices(config=self._config)
-        _update_summary(self._loop, key="last_discovery", value=result)
         self._ingest_device_map(result)
+        _update_summary(self._loop, key="last_discovery", value=result)
+        return result
+
+
+class ListDeviceBindingsTool(_LocalAwarenessTool):
+    name = "originagent_list_device_bindings"
+
+    @property
+    def description(self) -> str:
+        return "List session-scoped device bindings, permissions, and recent device lifecycle events."
+
+    @property
+    def parameters(self) -> dict[str, Any]:
+        return {"type": "object", "properties": {}, "additionalProperties": False}
+
+    @property
+    def read_only(self) -> bool:
+        return True
+
+    async def execute(self) -> dict[str, Any]:
+        if not self._enabled():
+            result = _disabled("local_awareness_disabled")
+        else:
+            result = {"status": "ok", **self._device_state_summary()}
+        _update_summary(self._loop, key="last_discovery", value=result)
+        return result
+
+
+class BindDeviceTool(_LocalAwarenessTool):
+    name = "originagent_bind_device"
+
+    @property
+    def description(self) -> str:
+        return "Create a session-scoped semantic binding for a discovered device; this does not grant capture or control permission."
+
+    @property
+    def parameters(self) -> dict[str, Any]:
+        return {
+            "type": "object",
+            "properties": {
+                "device_id": {"type": "string", "minLength": 1},
+                "user_label": {"type": "string", "minLength": 1, "maxLength": 120},
+                "location": {"type": ["string", "null"], "maxLength": 120},
+            },
+            "required": ["device_id", "user_label"],
+            "additionalProperties": False,
+        }
+
+    async def execute(self, device_id: str, user_label: str, location: str | None = None) -> dict[str, Any]:
+        if not self._enabled():
+            result = _disabled("local_awareness_disabled")
+        else:
+            world = self._world_context()
+            if world is None:
+                result = {"status": "denied", "reason": "world_state_missing"}
+            else:
+                world_state, session, runtime_context = world
+                result = world_state.bind_device(
+                    session,
+                    runtime_context=runtime_context,
+                    device_id=device_id,
+                    user_label=user_label,
+                    location=location,
+                )
+        _update_summary(self._loop, key="last_discovery", value=result)
+        return result
+
+
+class RevokeDeviceBindingTool(_LocalAwarenessTool):
+    name = "originagent_revoke_device_binding"
+
+    @property
+    def description(self) -> str:
+        return "Revoke a session-scoped device binding and any active permissions for that device."
+
+    @property
+    def parameters(self) -> dict[str, Any]:
+        return {
+            "type": "object",
+            "properties": {
+                "device_id": {"type": "string", "minLength": 1},
+            },
+            "required": ["device_id"],
+            "additionalProperties": False,
+        }
+
+    async def execute(self, device_id: str) -> dict[str, Any]:
+        if not self._enabled():
+            result = _disabled("local_awareness_disabled")
+        else:
+            world = self._world_context()
+            if world is None:
+                result = {"status": "denied", "reason": "world_state_missing"}
+            else:
+                world_state, session, runtime_context = world
+                result = world_state.revoke_device_binding(
+                    session,
+                    runtime_context=runtime_context,
+                    device_id=device_id,
+                )
+        _update_summary(self._loop, key="last_discovery", value=result)
+        return result
+
+
+class RequestDevicePermissionTool(_LocalAwarenessTool):
+    name = "originagent_request_device_permission"
+
+    @property
+    def description(self) -> str:
+        return "Request or record session-scoped permission for a bound device capability; default is pending confirmation."
+
+    @property
+    def parameters(self) -> dict[str, Any]:
+        return {
+            "type": "object",
+            "properties": {
+                "device_id": {"type": "string", "minLength": 1},
+                "capability": {"type": "string", "enum": ["camera", "screen", "audio"]},
+                "grant": {"type": "boolean", "default": False},
+                "confirmation_id": {"type": ["string", "null"]},
+            },
+            "required": ["device_id", "capability"],
+            "additionalProperties": False,
+        }
+
+    async def execute(
+        self,
+        device_id: str,
+        capability: str,
+        grant: bool = False,
+        confirmation_id: str | None = None,
+    ) -> dict[str, Any]:
+        if not self._enabled():
+            result = _disabled("local_awareness_disabled")
+        else:
+            world = self._world_context()
+            if world is None:
+                result = {"status": "denied", "reason": "world_state_missing"}
+            else:
+                world_state, session, runtime_context = world
+                result = world_state.request_device_permission(
+                    session,
+                    runtime_context=runtime_context,
+                    device_id=device_id,
+                    capability=capability,
+                    status="granted" if grant else "pending",
+                    confirmation_id=confirmation_id,
+                )
+                if not grant and result.get("status") == "ok":
+                    result["status"] = "pending_confirmation"
+                    result["reason"] = "device_permission_requires_confirmation"
+        _update_summary(self._loop, key="last_discovery", value=result)
         return result
 
 
@@ -172,6 +369,8 @@ class CaptureCameraFrameTool(_LocalAwarenessTool):
             result = _disabled("local_awareness_disabled")
         elif not bool(getattr(camera, "enabled", False)):
             result = _disabled("camera_disabled")
+        elif (permission_result := self._require_device_permission(device_id, "camera")) is not None:
+            result = permission_result
         elif bool(getattr(camera, "require_confirmation", True)):
             result = _pending_confirmation("camera_capture_requires_confirmation")
         else:
@@ -212,24 +411,32 @@ class CaptureScreenTool(CaptureCameraFrameTool):
             "type": "object",
             "properties": {
                 "screen_id": {"type": ["string", "null"]},
+                "device_id": {"type": ["string", "null"]},
                 "attach_to_world": {"type": "boolean", "default": True},
             },
             "additionalProperties": False,
         }
 
-    async def execute(self, screen_id: str | None = None, attach_to_world: bool = True) -> dict[str, Any]:  # type: ignore[override]
+    async def execute(
+        self,
+        screen_id: str | None = None,
+        attach_to_world: bool = True,
+        device_id: str | None = None,
+    ) -> dict[str, Any]:  # type: ignore[override]
         screen = getattr(self._config, "screen", None)
         if not self._enabled():
             result = _disabled("local_awareness_disabled")
         elif not bool(getattr(screen, "enabled", False)):
             result = _disabled("screen_disabled")
+        elif (permission_result := self._require_device_permission(device_id, "screen")) is not None:
+            result = permission_result
         elif bool(getattr(screen, "require_confirmation", True)):
             result = _pending_confirmation("screen_capture_requires_confirmation")
         else:
             result = self._backend.capture_screen(
                 workspace=self._workspace,
                 save_dir=str(getattr(screen, "save_dir", "uploads/perception")),
-                screen_id=screen_id or getattr(screen, "screen_id", None),
+                screen_id=device_id or screen_id or getattr(screen, "screen_id", None),
             )
             if attach_to_world:
                 self._ingest_media(result.get("absolute_path") or result.get("media_path"))
@@ -264,6 +471,8 @@ class RecordAudioSampleTool(_LocalAwarenessTool):
             result = _disabled("audio_input_disabled")
         elif int(seconds) > max_seconds:
             result = {"status": "denied", "reason": "record_seconds_exceeds_limit", "max_seconds": max_seconds}
+        elif (permission_result := self._require_device_permission(device_id, "audio")) is not None:
+            result = permission_result
         elif bool(getattr(audio, "require_confirmation", True)):
             result = _pending_confirmation("audio_record_requires_confirmation")
         else:

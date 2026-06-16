@@ -479,6 +479,114 @@ def test_world_state_ingests_device_map_and_prompt_summary(tmp_path: Path):
     assert session.metadata["world_state_v1"]["device_map"]["device_count"] == 1
     assert payload["device_map_summary"]["device_count"] == 1
     assert payload["device_map_summary"]["kind_counts"] == {"router": 1}
+    assert payload["device_events_summary"]["device_event_count"] == 1
+
+
+def test_world_state_device_lifecycle_events_survive_refresh_and_stabilize_identity(tmp_path: Path):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    sessions = SessionManager(workspace)
+    session = sessions.get_or_create("cli:direct")
+    world_state = WorldStateManager(workspace, sessions)
+    runtime_context = ActorResolver().resolve_runtime_context(
+        channel="cli",
+        chat_id="direct",
+        sender_id="user-1",
+        metadata={"device_id": "device-a"},
+        session_key="cli:direct",
+    )
+    first_map = {
+        "devices": [
+            {
+                "device_id": "dev_first",
+                "kind": "camera",
+                "name": "Hall Cam",
+                "mac_address": "aa:bb:cc:dd:ee:ff",
+                "ip_addresses": ["192.168.1.10"],
+                "services": [{"port": 554, "protocol": "rtsp"}],
+                "last_seen_at": "2026-06-16T00:00:00+00:00",
+            }
+        ],
+    }
+    second_map = {
+        "devices": [
+            {
+                "device_id": "dev_second",
+                "kind": "camera",
+                "name": "Hallway Cam",
+                "mac_address": "aa:bb:cc:dd:ee:ff",
+                "ip_addresses": ["192.168.1.22"],
+                "services": [{"port": 80, "protocol": "http"}],
+                "last_seen_at": "2026-06-16T00:05:00+00:00",
+            }
+        ],
+    }
+
+    first = world_state.ingest_device_discovery(session, runtime_context=runtime_context, device_map=first_map)
+    second = world_state.ingest_device_discovery(session, runtime_context=runtime_context, device_map=second_map)
+    loaded = world_state.load(session, identity=runtime_context)
+
+    assert first.device_events[0].kind == "appeared"
+    assert second.device_map["devices"][0]["device_id"] == "dev_first"
+    event_kinds = {event.kind for event in loaded.device_events}
+    assert {"appeared", "renamed", "relocated", "updated"} <= event_kinds
+    assert loaded.device_events
+
+
+def test_world_state_device_binding_and_permission_projection(tmp_path: Path):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    sessions = SessionManager(workspace)
+    session = sessions.get_or_create("cli:direct")
+    world_state = WorldStateManager(workspace, sessions)
+    runtime_context = ActorResolver().resolve_runtime_context(
+        channel="cli",
+        chat_id="direct",
+        sender_id="user-1",
+        metadata={"device_id": "device-a"},
+        session_key="cli:direct",
+    )
+    world_state.ingest_device_discovery(
+        session,
+        runtime_context=runtime_context,
+        device_map={"devices": [{"device_id": "dev_cam", "kind": "camera", "ip_addresses": ["192.168.1.9"]}]},
+    )
+
+    binding = world_state.bind_device(
+        session,
+        runtime_context=runtime_context,
+        device_id="dev_cam",
+        user_label="front door camera",
+        location="entry",
+    )
+    pending = world_state.request_device_permission(
+        session,
+        runtime_context=runtime_context,
+        device_id="dev_cam",
+        capability="camera",
+        status="pending",
+    )
+    granted = world_state.request_device_permission(
+        session,
+        runtime_context=runtime_context,
+        device_id="dev_cam",
+        capability="camera",
+        status="granted",
+    )
+    snapshot = world_state.load(session, identity=runtime_context)
+
+    assert binding["status"] == "ok"
+    assert pending["permission"]["status"] == "pending"
+    assert granted["permission"]["status"] == "granted"
+    assert world_state.device_capability_granted(
+        session,
+        identity=runtime_context,
+        device_id="dev_cam",
+        capability="camera",
+    ) is True
+    device = snapshot.device_map["devices"][0]
+    assert device["authorized_capabilities"] == ["camera"]
+    assert device["binding"]["user_label"] == "front door camera"
 
 
 def test_world_state_apply_inspection_marks_contested_and_attention_prefixes(tmp_path: Path):

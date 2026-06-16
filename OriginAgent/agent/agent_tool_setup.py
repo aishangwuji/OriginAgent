@@ -21,12 +21,16 @@ from OriginAgent.agent.tools.image_generation import ImageGenerationTool
 from OriginAgent.agent.tools.loader import ToolLoader
 from OriginAgent.agent.tools.long_task import CompleteGoalTool, LongTaskTool
 from OriginAgent.agent.tools.local_awareness import (
+    BindDeviceTool,
     CaptureCameraFrameTool,
     CaptureScreenTool,
     DiscoverLanDevicesTool,
     DiscoverLocalDevicesTool,
     InspectMediaTool,
+    ListDeviceBindingsTool,
     RecordAudioSampleTool,
+    RequestDevicePermissionTool,
+    RevokeDeviceBindingTool,
     SpeakTextTool,
 )
 from OriginAgent.agent.tools.message import MessageTool
@@ -296,6 +300,21 @@ def register_default_tools(
             introspection_service=introspection_service,
         ),
     )
+    for tool_cls in (
+        ListDeviceBindingsTool,
+        BindDeviceTool,
+        RevokeDeviceBindingTool,
+        RequestDevicePermissionTool,
+    ):
+        _register_named(
+            tool_cls.name,
+            lambda tool_cls=tool_cls: tool_cls(
+                workspace=workspace,
+                config=config,
+                backend=local_awareness_backend,
+                introspection_service=introspection_service,
+            ),
+        )
     _register_named(
         CaptureCameraFrameTool.name,
         lambda: CaptureCameraFrameTool(

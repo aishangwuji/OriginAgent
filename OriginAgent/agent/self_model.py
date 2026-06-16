@@ -722,12 +722,24 @@ class SelfModelRenderer:
         protocols = _render_name_list([str(item) for item in summary.get("protocols") or []])
         kind_counts = summary.get("kind_counts") if isinstance(summary.get("kind_counts"), dict) else {}
         kinds = ", ".join(f"{key}:{value}" for key, value in sorted(kind_counts.items())) or "none"
+        recent_events = local_awareness.get("recent_device_events") if isinstance(local_awareness, dict) else []
+        event_preview = "none"
+        if isinstance(recent_events, list) and recent_events:
+            event_preview = "; ".join(
+                str(item.get("change_summary") or item.get("kind") or "").strip()
+                for item in recent_events[:3]
+                if isinstance(item, dict)
+            ) or "none"
         return [
             f"- Enabled: {_yes_no(bool(local_awareness.get('enabled')))}",
             f"- Devices visible: {int(summary.get('device_count', 0) or 0)} total, "
             f"{int(summary.get('local_device_count', 0) or 0)} local, "
             f"{int(summary.get('lan_device_count', 0) or 0)} LAN, "
             f"{int(summary.get('unknown_device_count', 0) or 0)} unknown",
+            f"- Bound devices: {int(local_awareness.get('bound_device_count', 0) or 0)}",
+            f"- Granted permissions: {int(local_awareness.get('granted_permission_count', 0) or 0)}, "
+            f"pending: {int(local_awareness.get('pending_permission_count', 0) or 0)}",
+            f"- Device events: {int(local_awareness.get('device_event_count', 0) or 0)} total; recent: {event_preview}",
             f"- Device kinds: {kinds}",
             f"- Protocols observed: {protocols}",
             f"- Last scan: {summary.get('last_seen_at') or 'unknown'}",

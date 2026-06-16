@@ -287,6 +287,116 @@ class PerceptionEventCandidate:
         )
 
 
+_DEVICE_EVENT_KINDS = {"appeared", "updated", "disappeared", "renamed", "relocated", "stale"}
+_DEVICE_PERMISSION_CAPABILITIES = {"camera", "screen", "audio"}
+_DEVICE_PERMISSION_STATUSES = {"pending", "granted", "denied", "revoked", "expired"}
+
+
+@dataclass
+class DeviceLifecycleEvent:
+    event_id: str
+    kind: str
+    device_id: str
+    change_summary: str
+    previous_state: dict[str, Any] | None = None
+    current_state: dict[str, Any] | None = None
+    created_at: str = field(default_factory=_utcnow_iso)
+    evidence: list[str] = field(default_factory=list)
+
+    def to_json(self) -> dict[str, Any]:
+        return asdict(self)
+
+    @classmethod
+    def from_json(cls, raw: Any) -> "DeviceLifecycleEvent | None":
+        if not isinstance(raw, dict):
+            return None
+        event_id = str(raw.get("event_id") or "").strip()
+        kind = str(raw.get("kind") or "").strip()
+        device_id = str(raw.get("device_id") or "").strip()
+        if not event_id or kind not in _DEVICE_EVENT_KINDS or not device_id:
+            return None
+        previous = raw.get("previous_state") if isinstance(raw.get("previous_state"), dict) else None
+        current = raw.get("current_state") if isinstance(raw.get("current_state"), dict) else None
+        return cls(
+            event_id=event_id,
+            kind=kind,
+            device_id=device_id,
+            change_summary=_trim_text(raw.get("change_summary"), max_chars=240),
+            previous_state=dict(previous) if previous is not None else None,
+            current_state=dict(current) if current is not None else None,
+            created_at=str(raw.get("created_at") or _utcnow_iso()).strip(),
+            evidence=_string_list(raw.get("evidence"), limit=10, max_chars=200),
+        )
+
+
+@dataclass
+class DeviceBinding:
+    device_id: str
+    user_label: str
+    location: str | None = None
+    bound_at: str = field(default_factory=_utcnow_iso)
+    bound_by_session: str | None = None
+    status: str = "active"
+
+    def to_json(self) -> dict[str, Any]:
+        return asdict(self)
+
+    @classmethod
+    def from_json(cls, raw: Any) -> "DeviceBinding | None":
+        if not isinstance(raw, dict):
+            return None
+        device_id = str(raw.get("device_id") or "").strip()
+        user_label = _trim_text(raw.get("user_label"), max_chars=120)
+        if not device_id or not user_label:
+            return None
+        status = str(raw.get("status") or "active").strip() or "active"
+        if status not in {"active", "revoked"}:
+            status = "active"
+        return cls(
+            device_id=device_id,
+            user_label=user_label,
+            location=_trim_text(raw.get("location"), max_chars=120) or None,
+            bound_at=str(raw.get("bound_at") or _utcnow_iso()).strip(),
+            bound_by_session=str(raw.get("bound_by_session")).strip() if raw.get("bound_by_session") else None,
+            status=status,
+        )
+
+
+@dataclass
+class DevicePermission:
+    device_id: str
+    capability: str
+    status: str = "pending"
+    scope: str = "session"
+    granted_at: str | None = None
+    expires_at: str | None = None
+    confirmation_id: str | None = None
+
+    def to_json(self) -> dict[str, Any]:
+        return asdict(self)
+
+    @classmethod
+    def from_json(cls, raw: Any) -> "DevicePermission | None":
+        if not isinstance(raw, dict):
+            return None
+        device_id = str(raw.get("device_id") or "").strip()
+        capability = str(raw.get("capability") or "").strip()
+        if not device_id or capability not in _DEVICE_PERMISSION_CAPABILITIES:
+            return None
+        status = str(raw.get("status") or "pending").strip() or "pending"
+        if status not in _DEVICE_PERMISSION_STATUSES:
+            status = "pending"
+        return cls(
+            device_id=device_id,
+            capability=capability,
+            status=status,
+            scope=str(raw.get("scope") or "session").strip() or "session",
+            granted_at=str(raw.get("granted_at")).strip() if raw.get("granted_at") else None,
+            expires_at=str(raw.get("expires_at")).strip() if raw.get("expires_at") else None,
+            confirmation_id=str(raw.get("confirmation_id")).strip() if raw.get("confirmation_id") else None,
+        )
+
+
 @dataclass
 class WorldStateSnapshot:
     status: str = "placeholder"
@@ -300,6 +410,9 @@ class WorldStateSnapshot:
     world_summary: WorldSummary | None = None
     pruning: dict[str, Any] = field(default_factory=dict)
     device_map: dict[str, Any] = field(default_factory=dict)
+    device_events: list[DeviceLifecycleEvent] = field(default_factory=list)
+    device_bindings: list[DeviceBinding] = field(default_factory=list)
+    device_permissions: list[DevicePermission] = field(default_factory=list)
 
     def to_json(self) -> dict[str, Any]:
         return {
@@ -314,6 +427,9 @@ class WorldStateSnapshot:
             "world_summary": self.world_summary.to_json() if self.world_summary is not None else None,
             "pruning": dict(self.pruning),
             "device_map": dict(self.device_map),
+            "device_events": [item.to_json() for item in self.device_events],
+            "device_bindings": [item.to_json() for item in self.device_bindings],
+            "device_permissions": [item.to_json() for item in self.device_permissions],
         }
 
     @classmethod
@@ -335,6 +451,21 @@ class WorldStateSnapshot:
                 PerceptionEventCandidate.from_json(value) for value in (raw.get("events") or [])
             ) if item is not None
         ]
+        device_events = [
+            item for item in (
+                DeviceLifecycleEvent.from_json(value) for value in (raw.get("device_events") or [])
+            ) if item is not None
+        ]
+        device_bindings = [
+            item for item in (
+                DeviceBinding.from_json(value) for value in (raw.get("device_bindings") or [])
+            ) if item is not None
+        ]
+        device_permissions = [
+            item for item in (
+                DevicePermission.from_json(value) for value in (raw.get("device_permissions") or [])
+            ) if item is not None
+        ]
         summary = WorldSummary.from_json(raw.get("world_summary"))
         return cls(
             status=str(raw.get("status") or "placeholder").strip() or "placeholder",
@@ -348,6 +479,9 @@ class WorldStateSnapshot:
             world_summary=summary,
             pruning=dict(raw.get("pruning") or {}) if isinstance(raw.get("pruning"), dict) else {},
             device_map=dict(raw.get("device_map") or {}) if isinstance(raw.get("device_map"), dict) else {},
+            device_events=device_events,
+            device_bindings=device_bindings,
+            device_permissions=device_permissions,
         )
 
 
@@ -385,6 +519,14 @@ class WorldStateManager:
     def inspect(self, session: Session, *, identity: RuntimeContext | None = None) -> dict[str, Any]:
         return self.load(session, identity=identity).to_json()
 
+    def device_state_summary(self, session: Session, *, identity: RuntimeContext | None = None) -> dict[str, Any]:
+        snapshot = self.load(session, identity=identity)
+        return {
+            "device_events_summary": self._device_events_summary(snapshot),
+            "device_bindings_summary": self._device_bindings_summary(snapshot),
+            "device_permissions_summary": self._device_permissions_summary(snapshot),
+        }
+
     def snapshot_prompt_payload(
         self,
         session: Session,
@@ -399,6 +541,7 @@ class WorldStateManager:
                 "version": snapshot.version,
                 "updated_at": snapshot.updated_at,
                 "device_map_summary": summarize_device_map(snapshot.device_map) if snapshot.device_map else {},
+                **self.device_state_summary(session, identity=identity),
             }
         filtered = self.filtered_candidates(
             session,
@@ -415,6 +558,7 @@ class WorldStateManager:
             "world_relationships": list((filtered.get("included_summary") or {}).get("relationships") or []),
             "recent_events": list((self.recent_events(session, identity=identity, limit=5) or {}).get("recent_events", [])),
             "device_map_summary": summarize_device_map(snapshot.device_map) if snapshot.device_map else {},
+            **self.device_state_summary(session, identity=identity),
         }
 
     def ingest_device_discovery(
@@ -425,12 +569,148 @@ class WorldStateManager:
         device_map: dict[str, Any],
     ) -> WorldStateSnapshot:
         snapshot = self.load(session, identity=runtime_context)
+        previous_map = dict(snapshot.device_map)
+        stabilized_map, lifecycle_events = self._stabilize_device_map(
+            previous_map=previous_map,
+            current_map=dict(device_map),
+        )
         snapshot.status = "active"
         snapshot.version = "phase2"
         snapshot.scope = snapshot.scope or "session"
         snapshot.owner_id = snapshot.owner_id or runtime_context.user_id
-        snapshot.device_map = dict(device_map)
+        snapshot.device_map = stabilized_map
+        snapshot.device_events = self._merge_device_events(
+            existing=snapshot.device_events,
+            new_events=lifecycle_events,
+        )
         return self.save(session, snapshot)
+
+    def bind_device(
+        self,
+        session: Session,
+        *,
+        runtime_context: RuntimeContext,
+        device_id: str,
+        user_label: str,
+        location: str | None = None,
+    ) -> dict[str, Any]:
+        snapshot = self.load(session, identity=runtime_context)
+        if self._device_by_id(snapshot.device_map, device_id) is None:
+            return {"status": "denied", "reason": "device_not_found", "device_id": device_id}
+        binding = DeviceBinding(
+            device_id=str(device_id).strip(),
+            user_label=_trim_text(user_label, max_chars=120),
+            location=_trim_text(location, max_chars=120) or None,
+            bound_by_session=runtime_context.session_id,
+        )
+        snapshot.device_bindings = [
+            item for item in snapshot.device_bindings
+            if item.device_id != binding.device_id
+        ]
+        snapshot.device_bindings.append(binding)
+        snapshot.device_map = self._apply_device_authorization(snapshot.device_map, snapshot)
+        self.save(session, snapshot)
+        return {"status": "ok", "binding": binding.to_json(), **self.device_state_summary(session, identity=runtime_context)}
+
+    def revoke_device_binding(
+        self,
+        session: Session,
+        *,
+        runtime_context: RuntimeContext,
+        device_id: str,
+    ) -> dict[str, Any]:
+        snapshot = self.load(session, identity=runtime_context)
+        found = False
+        updated: list[DeviceBinding] = []
+        for binding in snapshot.device_bindings:
+            if binding.device_id == device_id and binding.status == "active":
+                found = True
+                updated.append(DeviceBinding(
+                    device_id=binding.device_id,
+                    user_label=binding.user_label,
+                    location=binding.location,
+                    bound_at=binding.bound_at,
+                    bound_by_session=binding.bound_by_session,
+                    status="revoked",
+                ))
+            else:
+                updated.append(binding)
+        snapshot.device_bindings = updated
+        snapshot.device_permissions = [
+            permission if permission.device_id != device_id or permission.status not in {"pending", "granted"}
+            else DevicePermission(
+                device_id=permission.device_id,
+                capability=permission.capability,
+                status="revoked",
+                scope=permission.scope,
+                granted_at=permission.granted_at,
+                expires_at=permission.expires_at,
+                confirmation_id=permission.confirmation_id,
+            )
+            for permission in snapshot.device_permissions
+        ]
+        snapshot.device_map = self._apply_device_authorization(snapshot.device_map, snapshot)
+        self.save(session, snapshot)
+        return {
+            "status": "ok" if found else "not_found",
+            "device_id": device_id,
+            **self.device_state_summary(session, identity=runtime_context),
+        }
+
+    def request_device_permission(
+        self,
+        session: Session,
+        *,
+        runtime_context: RuntimeContext,
+        device_id: str,
+        capability: str,
+        status: str = "pending",
+        scope: str = "session",
+        confirmation_id: str | None = None,
+        expires_at: str | None = None,
+    ) -> dict[str, Any]:
+        capability = str(capability or "").strip()
+        if capability not in _DEVICE_PERMISSION_CAPABILITIES:
+            return {"status": "denied", "reason": "unsupported_capability", "capability": capability}
+        snapshot = self.load(session, identity=runtime_context)
+        if self._active_binding(snapshot, device_id) is None:
+            return {"status": "denied", "reason": "device_binding_required", "device_id": device_id}
+        normalized_status = status if status in _DEVICE_PERMISSION_STATUSES else "pending"
+        permission = DevicePermission(
+            device_id=device_id,
+            capability=capability,
+            status=normalized_status,
+            scope=scope or "session",
+            granted_at=_utcnow_iso() if normalized_status == "granted" else None,
+            expires_at=expires_at,
+            confirmation_id=confirmation_id,
+        )
+        snapshot.device_permissions = [
+            item for item in snapshot.device_permissions
+            if not (item.device_id == device_id and item.capability == capability and item.scope == permission.scope)
+        ]
+        snapshot.device_permissions.append(permission)
+        snapshot.device_map = self._apply_device_authorization(snapshot.device_map, snapshot)
+        self.save(session, snapshot)
+        return {"status": "ok", "permission": permission.to_json(), **self.device_state_summary(session, identity=runtime_context)}
+
+    def device_capability_granted(
+        self,
+        session: Session,
+        *,
+        identity: RuntimeContext | None = None,
+        device_id: str,
+        capability: str,
+    ) -> bool:
+        snapshot = self.load(session, identity=identity)
+        if self._active_binding(snapshot, device_id) is None:
+            return False
+        return any(
+            permission.device_id == device_id
+            and permission.capability == capability
+            and self._permission_active(permission)
+            for permission in snapshot.device_permissions
+        )
 
     def ingest_media(
         self,
@@ -741,8 +1021,8 @@ class WorldStateManager:
             if any(scene.snapshot_id == item.snapshot_id for scene in kept_snapshots)
         ][-6:]
         refreshed = WorldStateSnapshot(
-            status="active" if kept_snapshots or snapshot.device_map else "placeholder",
-            version="phase2" if kept_snapshots or snapshot.device_map else "phase1",
+            status="active" if kept_snapshots or snapshot.device_map or snapshot.device_bindings else "placeholder",
+            version="phase2" if kept_snapshots or snapshot.device_map or snapshot.device_bindings else "phase1",
             updated_at=snapshot.updated_at,
             scope=snapshot.scope,
             owner_id=snapshot.owner_id,
@@ -759,11 +1039,318 @@ class WorldStateManager:
                 "refreshed_at": now.isoformat(),
             },
             device_map=dict(snapshot.device_map),
+            device_events=sorted(
+                snapshot.device_events,
+                key=lambda item: _parse_dt(item.created_at) or datetime.min.replace(tzinfo=timezone.utc),
+                reverse=True,
+            )[:50],
+            device_bindings=list(snapshot.device_bindings),
+            device_permissions=[
+                self._expire_permission_if_needed(permission, now=now)
+                for permission in snapshot.device_permissions
+            ],
         )
         if not refreshed.snapshots:
             return refreshed
         refreshed.world_summary = self._build_world_summary(refreshed, now=now)
         return refreshed
+
+    @staticmethod
+    def _device_by_id(device_map: dict[str, Any], device_id: str) -> dict[str, Any] | None:
+        for device in list(device_map.get("devices") or []) if isinstance(device_map, dict) else []:
+            if isinstance(device, dict) and str(device.get("device_id") or "").strip() == str(device_id).strip():
+                return dict(device)
+        return None
+
+    @staticmethod
+    def _identity_key(device: dict[str, Any]) -> str:
+        mac = _trim_text(device.get("mac_address"), max_chars=80).lower()
+        if mac:
+            return f"mac:{mac}"
+        hostname = _trim_text(device.get("hostname"), max_chars=120).lower()
+        vendor = _trim_text(device.get("vendor"), max_chars=120).lower()
+        if hostname and vendor:
+            return f"host_vendor:{hostname}|{vendor}"
+        ips = sorted(str(ip).strip() for ip in device.get("ip_addresses") or [] if str(ip).strip())
+        if ips:
+            return f"ip:{','.join(ips)}"
+        name = _trim_text(device.get("name"), max_chars=120).lower()
+        return f"name:{name or device.get('device_id') or 'unknown'}"
+
+    @staticmethod
+    def _device_ips(device: dict[str, Any]) -> set[str]:
+        return {str(ip).strip() for ip in device.get("ip_addresses") or [] if str(ip).strip()}
+
+    @staticmethod
+    def _device_services(device: dict[str, Any]) -> set[str]:
+        services: set[str] = set()
+        for service in device.get("services") or []:
+            if not isinstance(service, dict):
+                continue
+            port = str(service.get("port") or "").strip()
+            protocol = str(service.get("protocol") or service.get("name") or "").strip()
+            if port or protocol:
+                services.add(f"{protocol}:{port}")
+        return services
+
+    def _stabilize_device_map(
+        self,
+        *,
+        previous_map: dict[str, Any],
+        current_map: dict[str, Any],
+    ) -> tuple[dict[str, Any], list[DeviceLifecycleEvent]]:
+        now = _utcnow_iso()
+        previous_devices = [dict(item) for item in previous_map.get("devices") or [] if isinstance(item, dict)]
+        current_devices = [dict(item) for item in current_map.get("devices") or [] if isinstance(item, dict)]
+        previous_by_id = {str(item.get("device_id") or ""): item for item in previous_devices if item.get("device_id")}
+        previous_by_identity = {self._identity_key(item): item for item in previous_devices}
+        matched_previous_ids: set[str] = set()
+        stabilized: list[dict[str, Any]] = []
+        events: list[DeviceLifecycleEvent] = []
+        for current in current_devices:
+            current_identity = self._identity_key(current)
+            previous = previous_by_identity.get(current_identity)
+            if previous is None:
+                current_ips = self._device_ips(current)
+                previous = next(
+                    (
+                        item for item in previous_devices
+                        if current_ips and self._device_ips(item) & current_ips
+                    ),
+                    None,
+                )
+            previous_id = str((previous or {}).get("device_id") or "").strip()
+            if previous is not None and previous_id:
+                current["device_id"] = previous_id
+                matched_previous_ids.add(previous_id)
+            current["identity_key"] = current_identity
+            if previous is None:
+                events.append(self._device_event(
+                    kind="appeared",
+                    device_id=str(current.get("device_id") or current_identity),
+                    previous=None,
+                    current=current,
+                    summary=f"Device appeared: {self._device_label(current)}",
+                    created_at=now,
+                ))
+            else:
+                events.extend(self._device_change_events(previous=previous, current=current, created_at=now))
+            stabilized.append(current)
+        current_ids = {str(item.get("device_id") or "") for item in stabilized}
+        for previous_id, previous in previous_by_id.items():
+            if previous_id in matched_previous_ids or previous_id in current_ids:
+                continue
+            events.append(self._device_event(
+                kind="disappeared",
+                device_id=previous_id,
+                previous=previous,
+                current=None,
+                summary=f"Device disappeared: {self._device_label(previous)}",
+                created_at=now,
+            ))
+        updated_map = dict(current_map)
+        updated_map["devices"] = stabilized
+        updated_map["device_count"] = len(stabilized)
+        updated_map["summary"] = summarize_device_map(updated_map)
+        return updated_map, events
+
+    def _device_change_events(
+        self,
+        *,
+        previous: dict[str, Any],
+        current: dict[str, Any],
+        created_at: str,
+    ) -> list[DeviceLifecycleEvent]:
+        events: list[DeviceLifecycleEvent] = []
+        device_id = str(current.get("device_id") or previous.get("device_id") or "").strip()
+        if not device_id:
+            return []
+        previous_name = _trim_text(previous.get("name") or previous.get("hostname"), max_chars=160)
+        current_name = _trim_text(current.get("name") or current.get("hostname"), max_chars=160)
+        if previous_name and current_name and previous_name != current_name:
+            events.append(self._device_event(
+                kind="renamed",
+                device_id=device_id,
+                previous=previous,
+                current=current,
+                summary=f"Device renamed from {previous_name} to {current_name}",
+                created_at=created_at,
+            ))
+        if self._device_ips(previous) != self._device_ips(current):
+            events.append(self._device_event(
+                kind="relocated",
+                device_id=device_id,
+                previous=previous,
+                current=current,
+                summary=f"Device network address changed: {self._device_label(current)}",
+                created_at=created_at,
+            ))
+        if self._device_services(previous) != self._device_services(current):
+            events.append(self._device_event(
+                kind="updated",
+                device_id=device_id,
+                previous=previous,
+                current=current,
+                summary=f"Device services changed: {self._device_label(current)}",
+                created_at=created_at,
+            ))
+        return events
+
+    @staticmethod
+    def _device_label(device: dict[str, Any]) -> str:
+        return (
+            _trim_text(device.get("name"), max_chars=120)
+            or _trim_text(device.get("hostname"), max_chars=120)
+            or _trim_text(",".join(str(ip) for ip in device.get("ip_addresses") or []), max_chars=120)
+            or _trim_text(device.get("device_id"), max_chars=120)
+            or "unknown device"
+        )
+
+    @staticmethod
+    def _device_event(
+        *,
+        kind: str,
+        device_id: str,
+        previous: dict[str, Any] | None,
+        current: dict[str, Any] | None,
+        summary: str,
+        created_at: str,
+    ) -> DeviceLifecycleEvent:
+        evidence: list[str] = []
+        for state in (current, previous):
+            if not isinstance(state, dict):
+                continue
+            evidence.extend(_string_list(state.get("evidence"), limit=4, max_chars=160))
+        return DeviceLifecycleEvent(
+            event_id=f"dev_evt_{uuid.uuid4().hex[:12]}",
+            kind=kind,
+            device_id=device_id,
+            change_summary=_trim_text(summary, max_chars=240),
+            previous_state=dict(previous) if previous is not None else None,
+            current_state=dict(current) if current is not None else None,
+            created_at=created_at,
+            evidence=_string_list(evidence, limit=8, max_chars=160),
+        )
+
+    @staticmethod
+    def _merge_device_events(
+        *,
+        existing: list[DeviceLifecycleEvent],
+        new_events: list[DeviceLifecycleEvent],
+    ) -> list[DeviceLifecycleEvent]:
+        merged = [*new_events, *existing]
+        seen: set[tuple[str, str, str]] = set()
+        out: list[DeviceLifecycleEvent] = []
+        for event in sorted(
+            merged,
+            key=lambda item: _parse_dt(item.created_at) or datetime.min.replace(tzinfo=timezone.utc),
+            reverse=True,
+        ):
+            key = (event.kind, event.device_id, event.change_summary)
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append(event)
+            if len(out) >= 50:
+                break
+        return out
+
+    @staticmethod
+    def _active_binding(snapshot: WorldStateSnapshot, device_id: str) -> DeviceBinding | None:
+        return next(
+            (
+                binding for binding in snapshot.device_bindings
+                if binding.device_id == device_id and binding.status == "active"
+            ),
+            None,
+        )
+
+    @staticmethod
+    def _permission_active(permission: DevicePermission) -> bool:
+        if permission.status != "granted":
+            return False
+        expires = _parse_dt(permission.expires_at)
+        return expires is None or expires > _utcnow()
+
+    @staticmethod
+    def _expire_permission_if_needed(permission: DevicePermission, *, now: datetime) -> DevicePermission:
+        expires = _parse_dt(permission.expires_at)
+        if permission.status == "granted" and expires is not None and expires <= now:
+            return DevicePermission(
+                device_id=permission.device_id,
+                capability=permission.capability,
+                status="expired",
+                scope=permission.scope,
+                granted_at=permission.granted_at,
+                expires_at=permission.expires_at,
+                confirmation_id=permission.confirmation_id,
+            )
+        return permission
+
+    def _apply_device_authorization(
+        self,
+        device_map: dict[str, Any],
+        snapshot: WorldStateSnapshot,
+    ) -> dict[str, Any]:
+        bindings = {
+            binding.device_id: binding
+            for binding in snapshot.device_bindings
+            if binding.status == "active"
+        }
+        granted: dict[str, list[str]] = {}
+        for permission in snapshot.device_permissions:
+            if self._permission_active(permission):
+                granted.setdefault(permission.device_id, []).append(permission.capability)
+        updated = dict(device_map)
+        devices: list[dict[str, Any]] = []
+        for raw in updated.get("devices") or []:
+            if not isinstance(raw, dict):
+                continue
+            device = dict(raw)
+            device_id = str(device.get("device_id") or "").strip()
+            binding = bindings.get(device_id)
+            device["authorized_capabilities"] = sorted(set(granted.get(device_id, [])))
+            device["binding"] = binding.to_json() if binding is not None else None
+            device["controllable"] = False
+            devices.append(device)
+        updated["devices"] = devices
+        updated["device_count"] = len(devices)
+        updated["summary"] = summarize_device_map(updated)
+        return updated
+
+    @staticmethod
+    def _device_events_summary(snapshot: WorldStateSnapshot) -> dict[str, Any]:
+        by_kind: dict[str, int] = {}
+        for event in snapshot.device_events:
+            by_kind[event.kind] = by_kind.get(event.kind, 0) + 1
+        recent = sorted(
+            snapshot.device_events,
+            key=lambda item: _parse_dt(item.created_at) or datetime.min.replace(tzinfo=timezone.utc),
+            reverse=True,
+        )[:5]
+        return {
+            "device_event_count": len(snapshot.device_events),
+            "by_kind": by_kind,
+            "recent_device_events": [event.to_json() for event in recent],
+        }
+
+    @staticmethod
+    def _device_bindings_summary(snapshot: WorldStateSnapshot) -> dict[str, Any]:
+        active = [binding for binding in snapshot.device_bindings if binding.status == "active"]
+        return {
+            "bound_device_count": len(active),
+            "bindings": [binding.to_json() for binding in active[:10]],
+        }
+
+    def _device_permissions_summary(self, snapshot: WorldStateSnapshot) -> dict[str, Any]:
+        normalized = [self._expire_permission_if_needed(item, now=_utcnow()) for item in snapshot.device_permissions]
+        granted = [item for item in normalized if self._permission_active(item)]
+        pending = [item for item in normalized if item.status == "pending"]
+        return {
+            "granted_permission_count": len(granted),
+            "pending_permission_count": len(pending),
+            "permissions": [item.to_json() for item in normalized[:20]],
+        }
 
     def _ingest_descriptors(
         self,

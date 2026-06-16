@@ -96,6 +96,21 @@ def _device_id_for(*parts: Any) -> str:
     return f"dev_{digest}"
 
 
+def _identity_key_for_device(device: dict[str, Any]) -> str:
+    mac = _safe_text(device.get("mac_address"), max_chars=80).lower()
+    if mac:
+        return f"mac:{mac}"
+    hostname = _safe_text(device.get("hostname"), max_chars=120).lower()
+    vendor = _safe_text(device.get("vendor"), max_chars=120).lower()
+    if hostname and vendor:
+        return f"host_vendor:{hostname}|{vendor}"
+    ips = sorted(str(ip).strip() for ip in device.get("ip_addresses") or [] if str(ip).strip())
+    if ips:
+        return f"ip:{','.join(ips)}"
+    name = _safe_text(device.get("name"), max_chars=120).lower()
+    return f"name:{name or device.get('device_id') or 'unknown'}"
+
+
 @dataclass(frozen=True)
 class DiscoveredDevice:
     device_id: str
@@ -112,10 +127,16 @@ class DiscoveredDevice:
     last_seen_at: str = field(default_factory=_utcnow_iso)
     evidence: list[str] = field(default_factory=list)
     risk_notes: list[str] = field(default_factory=list)
+    identity_key: str | None = None
+    authorized_capabilities: list[str] = field(default_factory=list)
+    binding: dict[str, Any] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         data = asdict(self)
         data["controllable"] = False
+        data["identity_key"] = data.get("identity_key") or _identity_key_for_device(data)
+        data["authorized_capabilities"] = list(data.get("authorized_capabilities") or [])
+        data["binding"] = data.get("binding") if isinstance(data.get("binding"), dict) else None
         data["confidence"] = max(0.0, min(1.0, float(data.get("confidence") or 0.0)))
         return data
 
@@ -153,6 +174,9 @@ class DiscoveredDevice:
             last_seen_at=_safe_text(raw.get("last_seen_at")) or _utcnow_iso(),
             evidence=_list_text(raw.get("evidence"), limit=24, max_chars=240),
             risk_notes=_list_text(raw.get("risk_notes"), limit=12, max_chars=240),
+            identity_key=_safe_text(raw.get("identity_key")) or None,
+            authorized_capabilities=_list_text(raw.get("authorized_capabilities"), limit=8, max_chars=80),
+            binding=dict(raw.get("binding")) if isinstance(raw.get("binding"), dict) else None,
         )
 
 
@@ -1204,4 +1228,26 @@ def normalize_local_awareness_summary(
     if device_map_summary:
         summary["device_map_summary"] = device_map_summary
         summary["device_count"] = int(device_map_summary.get("device_count", 0) or 0)
+    for key in ("device_events_summary", "device_bindings_summary", "device_permissions_summary"):
+        value = raw.get(key)
+        if isinstance(value, dict):
+            summary[key] = dict(value)
+    events_summary = summary.get("device_events_summary") if isinstance(summary.get("device_events_summary"), dict) else {}
+    bindings_summary = summary.get("device_bindings_summary") if isinstance(summary.get("device_bindings_summary"), dict) else {}
+    permissions_summary = summary.get("device_permissions_summary") if isinstance(summary.get("device_permissions_summary"), dict) else {}
+    summary["device_event_count"] = int(
+        events_summary.get("device_event_count", raw.get("device_event_count", 0)) or 0
+    )
+    summary["recent_device_events"] = list(
+        events_summary.get("recent_device_events") or raw.get("recent_device_events") or []
+    )
+    summary["bound_device_count"] = int(
+        bindings_summary.get("bound_device_count", raw.get("bound_device_count", 0)) or 0
+    )
+    summary["granted_permission_count"] = int(
+        permissions_summary.get("granted_permission_count", raw.get("granted_permission_count", 0)) or 0
+    )
+    summary["pending_permission_count"] = int(
+        permissions_summary.get("pending_permission_count", raw.get("pending_permission_count", 0)) or 0
+    )
     return summary
