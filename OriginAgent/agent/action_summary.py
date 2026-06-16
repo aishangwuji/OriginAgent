@@ -21,6 +21,7 @@ def normalize_action_summary(
 
     raw = dict(audit or {})
     planner_result = raw.get("planner_result")
+    normalized_planner_result = dict(planner_result) if isinstance(planner_result, dict) else {}
     planning_inputs = raw.get("planning_inputs")
     planning_evidence = raw.get("planning_evidence")
     skipped_reasons = raw.get("skipped_reasons")
@@ -29,12 +30,13 @@ def normalize_action_summary(
     continuity_writeback = raw.get("continuity_writeback")
     return {
         "source": ACTION_SUMMARY_SOURCE,
+        "available": bool(normalized_planner_result),
         "status": raw.get("status", "idle"),
         "reason": raw.get("reason"),
         "planning_inputs": dict(planning_inputs) if isinstance(planning_inputs, dict) else {},
         "planning_evidence": dict(planning_evidence) if isinstance(planning_evidence, dict) else {},
         "automation_origin": raw.get("automation_origin"),
-        "planner_result": dict(planner_result) if isinstance(planner_result, dict) else {},
+        "planner_result": normalized_planner_result,
         "selected_proposal_digest": raw.get("selected_proposal_digest"),
         "skipped_reasons": list(skipped_reasons) if isinstance(skipped_reasons, list) else [],
         "preconditions": dict(preconditions) if isinstance(preconditions, dict) else {},

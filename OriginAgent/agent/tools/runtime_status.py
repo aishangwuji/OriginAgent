@@ -121,7 +121,7 @@ class PlanActionTool(Tool):
         if not isinstance(planning_evidence, dict):
             planning_evidence = {}
         return {
-            "available": bool(planner_result),
+            "available": bool(summary.get("available")) if isinstance(summary, dict) else False,
             "status": summary.get("status") if isinstance(summary, dict) else None,
             "reason": summary.get("reason") if isinstance(summary, dict) else None,
             "planner_result": dict(planner_result),

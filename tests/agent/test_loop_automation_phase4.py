@@ -269,6 +269,7 @@ def test_action_summary_cache_refreshes_to_latest_audit(tmp_path: Path) -> None:
     })
 
     assert loop._last_action_continuity_audit["selected_proposal_digest"] == "digest-2"
+    assert loop._cached_action_summary["available"] is True
     assert loop._cached_action_summary["selected_proposal_digest"] == "digest-2"
     assert loop._cached_action_summary["planner_result"]["proposals"][0]["proposal_digest"] == "digest-2"
     assert loop.introspection._action_summary()["selected_proposal_digest"] == "digest-2"

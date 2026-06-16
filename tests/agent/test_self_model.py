@@ -183,10 +183,37 @@ def test_self_model_action_uses_unified_cached_summary_shape(tmp_path) -> None:
     ).build()
 
     assert self_model["action"]["status"] == "ok"
+    assert self_model["action"]["available"] is True
     assert self_model["action"]["selected_proposal_digest"] == "digest-1"
     assert self_model["action"]["planner_result"]["proposals"][0]["proposal_digest"] == "digest-1"
     assert self_model["action"]["cache_timestamp"] == "2026-06-16T00:00:00+00:00"
     assert self_model["action"]["planning_inputs"] == {}
+
+
+def test_self_model_action_empty_fallback_uses_unified_summary_shape(tmp_path) -> None:
+    self_model = SelfModelService(tmp_path).build()
+    action = self_model["action"]
+
+    assert {
+        "available",
+        "status",
+        "reason",
+        "planning_inputs",
+        "planning_evidence",
+        "automation_origin",
+        "planner_result",
+        "selected_proposal_digest",
+        "skipped_reasons",
+        "preconditions",
+        "execution_result",
+        "continuity_writeback",
+        "selection_reason",
+        "cache_timestamp",
+    } <= set(action)
+    assert action["available"] is False
+    assert action["status"] == "idle"
+    assert isinstance(action["cache_timestamp"], str)
+    assert action["planner_result"] == {}
 
 
 def test_self_model_derives_limitations_and_redacts_sensitive_content(tmp_path) -> None:

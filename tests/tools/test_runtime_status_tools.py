@@ -689,6 +689,9 @@ async def test_action_views_read_same_cached_summary(tmp_path) -> None:
     assert plan["selected_proposal_digest"] == "proposal-1"
     assert inspect["views"]["action"]["selected_proposal_digest"] == "proposal-1"
     assert status["self_model"]["action"]["selected_proposal_digest"] == "proposal-1"
+    assert plan["available"] is True
+    assert inspect["views"]["action"]["available"] is True
+    assert status["self_model"]["action"]["available"] is True
     assert plan["planner_result"] == inspect["views"]["action"]["planner_result"]
     assert plan["planner_result"] == status["self_model"]["action"]["planner_result"]
     assert inspect["views"]["action"]["cache_timestamp"] == "2026-06-16T00:00:00+00:00"
