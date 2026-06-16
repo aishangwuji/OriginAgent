@@ -98,6 +98,7 @@ from OriginAgent.bus.queue import MessageBus
 from OriginAgent.command import CommandContext, CommandRouter, register_builtin_commands
 from OriginAgent.config.schema import AgentDefaults
 from OriginAgent.providers.base import LLMProvider
+from OriginAgent.providers.transcription import GroqTranscriptionProvider, OpenAITranscriptionProvider
 from OriginAgent.providers.factory import ProviderSnapshot
 from OriginAgent.security.capabilities import CapabilitySnapshot
 from OriginAgent.security.grants import CapabilityGrantStore, issue_tool_approval_grant
@@ -204,6 +205,7 @@ class AgentLoop:
         session_manager: SessionManager | None = None,
         mcp_servers: dict | None = None,
         channels_config: ChannelsConfig | None = None,
+        transcription_provider_config: dict[str, Any] | None = None,
         timezone: str | None = None,
         runtime_profile: str = "default",
         session_ttl_minutes: int = 0,
@@ -328,6 +330,7 @@ class AgentLoop:
         for name, value in built.values.items():
             setattr(self, name, value)
         self._local_awareness_backend = LocalAwarenessBackend()
+        self._transcription_provider = self._build_transcription_provider(transcription_provider_config)
         self._last_local_awareness_summary: dict[str, Any] = normalize_local_awareness_summary(
             self.tools_config.local_awareness,
             backend=self._local_awareness_backend,
@@ -363,6 +366,21 @@ class AgentLoop:
         self._turn_pipeline = AgentTurnPipeline(self._build_turn_pipeline_deps())
         self._cognitive_runtime = AgentCognitiveRuntime(self._build_cognitive_runtime_deps())
         self._install_meta_cognition_observer()
+
+    def _build_transcription_provider(self, config: dict[str, Any] | None = None) -> Any | None:
+        config = dict(config or {})
+        provider_name = str(config.get("provider") or "groq").strip()
+        provider_key = str(config.get("api_key") or "").strip()
+        provider_base = str(config.get("api_base") or "").strip()
+        language = config.get("language")
+        if not provider_key:
+            return None
+        try:
+            if provider_name == "openai":
+                return OpenAITranscriptionProvider(api_key=provider_key, api_base=provider_base or None, language=language or None)
+            return GroqTranscriptionProvider(api_key=provider_key, api_base=provider_base or None, language=language or None)
+        except Exception:
+            return None
 
     @classmethod
     def from_config(
@@ -444,6 +462,21 @@ class AgentLoop:
             restrict_to_workspace=config.tools.restrict_to_workspace,
             mcp_servers=config.tools.mcp_servers,
             channels_config=config.channels,
+            transcription_provider_config={
+                "provider": config.tools.local_awareness.audio.transcription_provider
+                or config.channels.transcription_provider,
+                "api_key": (
+                    config.providers.openai.api_key
+                    if (config.tools.local_awareness.audio.transcription_provider or config.channels.transcription_provider) == "openai"
+                    else config.providers.groq.api_key
+                ),
+                "api_base": (
+                    config.providers.openai.api_base
+                    if (config.tools.local_awareness.audio.transcription_provider or config.channels.transcription_provider) == "openai"
+                    else config.providers.groq.api_base
+                ),
+                "language": config.channels.transcription_language,
+            },
             timezone=defaults.timezone,
             runtime_profile=config.runtime.profile,
             unified_session=defaults.unified_session,

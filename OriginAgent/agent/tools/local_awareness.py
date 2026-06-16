@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import mimetypes
+from collections.abc import Iterable
 from contextvars import ContextVar
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 from OriginAgent.agent.local_awareness import LocalAwarenessBackend
+from OriginAgent.providers.transcription import GroqTranscriptionProvider, OpenAITranscriptionProvider
 from OriginAgent.agent.snapshot_inspection import SnapshotInspectionService
 from OriginAgent.agent.tools.base import Tool
 from OriginAgent.agent.tools.context import RequestContext
@@ -34,9 +37,18 @@ def _update_summary(loop: Any | None, *, key: str, value: dict[str, Any]) -> Non
         cached["device_map"] = dict(value["device_map"])
         if isinstance(value["device_map"].get("summary"), dict):
             cached["device_map_summary"] = dict(value["device_map"]["summary"])
-    for summary_key in ("device_events_summary", "device_bindings_summary", "device_permissions_summary"):
+    for summary_key in (
+        "device_events_summary",
+        "device_bindings_summary",
+        "device_permissions_summary",
+        "media_queue_summary",
+        "last_scene_inspection",
+        "audio_status",
+    ):
         if isinstance(value.get(summary_key), dict):
             cached[summary_key] = dict(value[summary_key])
+    if isinstance(value.get("recent_media_events"), list):
+        cached["recent_media_events"] = list(value["recent_media_events"])
     cached["updated_at"] = datetime.now(timezone.utc).isoformat()
     from OriginAgent.agent.local_awareness import normalize_local_awareness_summary
 
@@ -47,6 +59,33 @@ def _update_summary(loop: Any | None, *, key: str, value: dict[str, Any]) -> Non
         backend=backend,
         cached=cached,
     )
+
+
+def _workspace_roots(config: Any) -> list[Path]:
+    media = getattr(config, "media", None)
+    roots = list(getattr(media, "workspace_roots", None) or [])
+    if not roots:
+        roots = ["uploads/perception"]
+    return [Path(root) for root in roots]
+
+
+def _within_workspace(path: Path, *, workspace: Path, roots: Iterable[Path]) -> bool:
+    try:
+        resolved = path.resolve()
+    except OSError:
+        return False
+    try:
+        resolved.relative_to(workspace.resolve())
+        return True
+    except Exception:
+        pass
+    for root in roots:
+        try:
+            resolved.relative_to((workspace / root).resolve())
+            return True
+        except Exception:
+            continue
+    return False
 
 
 class _LocalAwarenessTool(Tool):
@@ -116,6 +155,16 @@ class _LocalAwarenessTool(Tool):
                 result.update(world_state.device_state_summary(session, identity=runtime_context))
             result["device_map"] = dict(getattr(snapshot, "device_map", device_map))
 
+    def _refresh_world_summaries(self, result: dict[str, Any]) -> None:
+        world = self._world_context()
+        if world is None:
+            return
+        world_state, session, runtime_context = world
+        if hasattr(world_state, "device_state_summary"):
+            result.update(world_state.device_state_summary(session, identity=runtime_context))
+        if hasattr(world_state, "media_state_summary"):
+            result.update(world_state.media_state_summary(session, identity=runtime_context))
+
     def _require_device_permission(self, device_id: str | None, capability: str) -> dict[str, Any] | None:
         if not device_id:
             return None
@@ -141,6 +190,32 @@ class _LocalAwarenessTool(Tool):
             **summary,
         }
 
+    async def _auto_inspect_if_enabled(self, snapshot_id: str | None) -> dict[str, Any]:
+        media = getattr(self._config, "media", None)
+        if not snapshot_id:
+            return {"triggered": False, "reason": "snapshot_missing"}
+        if not bool(getattr(media, "auto_inspect_after_capture", False)):
+            return {"triggered": False, "reason": "auto_inspect_after_capture_disabled"}
+        world = self._world_context()
+        if world is None:
+            return {"triggered": False, "reason": "world_state_missing"}
+        loop = self._loop
+        world_state, session, runtime_context = world
+        service = SnapshotInspectionService(
+            world_state=world_state,
+            provider=getattr(loop, "provider", None),
+            model=getattr(loop, "model", None),
+            auxiliary_router=getattr(loop, "auxiliary_router", None),
+            workspace=self._workspace,
+        )
+        result = await service.inspect(
+            session,
+            runtime_context=runtime_context,
+            snapshot_id=snapshot_id,
+            requested_by=str(getattr(runtime_context, "source", None) or "local_awareness"),
+        )
+        return {"triggered": True, "result": result}
+
 
 class DiscoverLocalDevicesTool(_LocalAwarenessTool):
     name = "originagent_discover_local_devices"
@@ -155,7 +230,7 @@ class DiscoverLocalDevicesTool(_LocalAwarenessTool):
 
     @property
     def read_only(self) -> bool:
-        return True
+        return False
 
     async def execute(self) -> dict[str, Any]:
         if not self._enabled():
@@ -182,7 +257,7 @@ class DiscoverLanDevicesTool(_LocalAwarenessTool):
 
     @property
     def read_only(self) -> bool:
-        return True
+        return False
 
     async def execute(self) -> dict[str, Any]:
         if not self._enabled():
@@ -207,7 +282,7 @@ class ListDeviceBindingsTool(_LocalAwarenessTool):
 
     @property
     def read_only(self) -> bool:
-        return True
+        return False
 
     async def execute(self) -> dict[str, Any]:
         if not self._enabled():
@@ -380,22 +455,30 @@ class CaptureCameraFrameTool(_LocalAwarenessTool):
                 device_id=device_id or getattr(camera, "device_id", None),
             )
             if attach_to_world:
-                self._ingest_media(result.get("absolute_path") or result.get("media_path"))
+                snapshot_id = self._ingest_media(result.get("absolute_path") or result.get("media_path"))
+                result["snapshot_id"] = snapshot_id
+                result["auto_inspection"] = await self._auto_inspect_if_enabled(snapshot_id)
+                self._refresh_world_summaries(result)
         _update_summary(self._loop, key="last_capture", value=result)
         return result
 
-    def _ingest_media(self, media_path: Any) -> None:
+    def _ingest_media(self, media_path: Any) -> str | None:
         loop = self._loop
         ctx = self._request_ctx.get()
         if loop is None or ctx is None or not ctx.session_key or not media_path:
-            return
+            return None
         world_state = getattr(loop, "world_state", None)
         sessions = getattr(loop, "sessions", None)
         runtime_context = getattr(ctx, "runtime_context", None)
         if world_state is None or sessions is None or runtime_context is None:
-            return
+            return None
         session = sessions.get_or_create(ctx.session_key)
-        world_state.ingest_media(session, runtime_context=runtime_context, media_paths=[str(media_path)])
+        snapshot = world_state.ingest_media(session, runtime_context=runtime_context, media_paths=[str(media_path)])
+        path_text = str(media_path).replace("\\", "/")
+        for item in reversed(getattr(snapshot, "snapshots", []) or []):
+            if item.media_path == path_text or path_text.endswith(item.media_path):
+                return item.snapshot_id
+        return getattr(snapshot.snapshots[-1], "snapshot_id", None) if getattr(snapshot, "snapshots", None) else None
 
 
 class CaptureScreenTool(CaptureCameraFrameTool):
@@ -439,7 +522,10 @@ class CaptureScreenTool(CaptureCameraFrameTool):
                 screen_id=device_id or screen_id or getattr(screen, "screen_id", None),
             )
             if attach_to_world:
-                self._ingest_media(result.get("absolute_path") or result.get("media_path"))
+                snapshot_id = self._ingest_media(result.get("absolute_path") or result.get("media_path"))
+                result["snapshot_id"] = snapshot_id
+                result["auto_inspection"] = await self._auto_inspect_if_enabled(snapshot_id)
+                self._refresh_world_summaries(result)
         _update_summary(self._loop, key="last_capture", value=result)
         return result
 
@@ -482,6 +568,9 @@ class RecordAudioSampleTool(_LocalAwarenessTool):
                 seconds=int(seconds),
                 device_id=device_id or getattr(audio, "device_id", None),
             )
+            snapshot_id = self._ingest_media(result.get("absolute_path") or result.get("media_path"))
+            result["snapshot_id"] = snapshot_id
+            self._refresh_world_summaries(result)
         _update_summary(self._loop, key="last_audio", value=result)
         return result
 
@@ -515,6 +604,7 @@ class SpeakTextTool(_LocalAwarenessTool):
             result = _pending_confirmation("audio_output_requires_confirmation")
         else:
             result = self._backend.speak_text(text=text, voice=voice or getattr(audio, "voice", None))
+            result["tts_enabled"] = bool(getattr(audio, "tts_enabled", False))
         _update_summary(self._loop, key="last_audio", value=result)
         return result
 
@@ -573,6 +663,7 @@ class InspectMediaTool(_LocalAwarenessTool):
             provider=getattr(loop, "provider", None),
             model=getattr(loop, "model", None),
             auxiliary_router=getattr(loop, "auxiliary_router", None),
+            workspace=self._workspace,
         )
         result = await service.inspect(
             session,
@@ -584,3 +675,229 @@ class InspectMediaTool(_LocalAwarenessTool):
         result["media_path"] = target.media_path
         _update_summary(self._loop, key="last_media_inspection", value=result)
         return result
+
+
+class ScanWorkspaceMediaTool(_LocalAwarenessTool):
+    name = "originagent_scan_workspace_media"
+
+    @property
+    def description(self) -> str:
+        return "Scan configured workspace roots for new media files and register them in world state without auto-inspecting."
+
+    @property
+    def parameters(self) -> dict[str, Any]:
+        return {"type": "object", "properties": {}, "additionalProperties": False}
+
+    @property
+    def read_only(self) -> bool:
+        return False
+
+    async def execute(self) -> dict[str, Any]:
+        media = getattr(self._config, "media", None)
+        if not self._enabled():
+            result = _disabled("local_awareness_disabled")
+        elif not bool(getattr(media, "enabled", False)):
+            result = _disabled("media_scan_disabled")
+        else:
+            result = await self._scan_workspace_media()
+        _update_summary(self._loop, key="last_media_scan", value=result)
+        return result
+
+    async def _scan_workspace_media(self) -> dict[str, Any]:
+        media = getattr(self._config, "media", None)
+        workspace_roots = _workspace_roots(self._config)
+        supported = {str(item).lower() for item in (getattr(media, "supported_mime_types", None) or [])}
+        max_files = int(getattr(media, "max_files", 100) or 100)
+        max_file_bytes = int(getattr(media, "max_file_bytes", 10 * 1024 * 1024) or (10 * 1024 * 1024))
+        skipped: list[str] = []
+        discovered: list[str] = []
+        queued: list[str] = []
+        loop = self._loop
+        world = self._world_context()
+        if loop is None or world is None:
+            return {"status": "error", "reason": "world_state_missing"}
+        world_state, session, runtime_context = world
+        if not hasattr(world_state, "ingest_media"):
+            return {"status": "error", "reason": "world_state_unavailable"}
+        seen = 0
+        for root in workspace_roots:
+            root_path = (self._workspace / root).resolve()
+            try:
+                root_path.relative_to(self._workspace.resolve())
+            except Exception:
+                skipped.append(f"path_outside_workspace:{root.as_posix()}")
+                continue
+            if not root_path.exists():
+                continue
+            for path in sorted(root_path.rglob("*")):
+                if seen >= max_files:
+                    skipped.append("max_files_reached")
+                    break
+                if not path.is_file():
+                    continue
+                if path.is_symlink():
+                    skipped.append(f"symlink_skipped:{path.as_posix()}")
+                    continue
+                mime_type = mimetypes.guess_type(path.name)[0] or ""
+                if supported and mime_type and mime_type.lower() not in supported:
+                    skipped.append(f"mime_skipped:{path.as_posix()}")
+                    continue
+                if supported and not mime_type:
+                    skipped.append(f"mime_unknown:{path.as_posix()}")
+                    continue
+                try:
+                    stat = path.stat()
+                except OSError:
+                    skipped.append(f"unreadable:{path.as_posix()}")
+                    continue
+                if stat.st_size > max_file_bytes:
+                    skipped.append(f"file_too_large:{path.as_posix()}")
+                    continue
+                relative = path.resolve().relative_to(self._workspace.resolve()).as_posix()
+                before_snapshot = world_state.load(session, identity=runtime_context)
+                before_paths = {item.media_path for item in getattr(before_snapshot, "snapshots", []) or []}
+                ingest = getattr(world_state, "ingest_media_scan", world_state.ingest_media)
+                snapshot = ingest(session, runtime_context=runtime_context, media_paths=[relative])
+                after_paths = {item.media_path for item in getattr(snapshot, "snapshots", []) or []}
+                if relative not in before_paths and relative in after_paths:
+                    discovered.append(relative)
+                else:
+                    queued.append(relative)
+                seen += 1
+        summary = world_state.media_state_summary(session, identity=runtime_context) if hasattr(world_state, "media_state_summary") else {}
+        return {
+            "status": "ok",
+            "scanned_count": seen,
+            "discovered_media": discovered,
+            "queued_media": queued,
+            "skipped_reasons": skipped,
+            "workspace_roots": [root.as_posix() for root in workspace_roots],
+            **summary,
+        }
+
+
+class TranscribeAudioSampleTool(_LocalAwarenessTool):
+    name = "originagent_transcribe_audio_sample"
+
+    @property
+    def description(self) -> str:
+        return "Transcribe an existing workspace audio sample through the configured transcription provider."
+
+    @property
+    def parameters(self) -> dict[str, Any]:
+        return {
+            "type": "object",
+            "properties": {
+                "media_path": {"type": "string", "minLength": 1},
+            },
+            "required": ["media_path"],
+            "additionalProperties": False,
+        }
+
+    @property
+    def read_only(self) -> bool:
+        return False
+
+    async def execute(self, media_path: str) -> dict[str, Any]:
+        audio = getattr(self._config, "audio", None)
+        if not self._enabled():
+            result = _disabled("local_awareness_disabled")
+        elif not bool(getattr(audio, "transcription_enabled", False)):
+            result = _disabled("transcription_disabled")
+        else:
+            result = await self._transcribe_audio(media_path=media_path)
+        _update_summary(self._loop, key="last_audio", value=result)
+        return result
+
+    async def _transcribe_audio(self, *, media_path: str) -> dict[str, Any]:
+        loop = self._loop
+        if loop is None:
+            return {"status": "error", "reason": "loop_missing"}
+        audio = getattr(self._config, "audio", None)
+        injected = getattr(loop, "_transcription_provider", None)
+        if injected is not None and hasattr(injected, "transcribe"):
+            provider = injected
+        else:
+            provider_name = str(getattr(audio, "transcription_provider", None) or getattr(getattr(loop, "channels_config", None), "transcription_provider", "") or "groq").strip()
+            provider_key = getattr(getattr(loop, "channels_config", None), "transcription_api_key", None)
+            provider_base = getattr(getattr(loop, "channels_config", None), "transcription_api_base", None)
+            language = getattr(getattr(loop, "channels_config", None), "transcription_language", None)
+            if not provider_key:
+                return {
+                    "status": "disabled",
+                    "reason": "transcription_provider_unavailable",
+                    "provider": provider_name,
+                    "media_path": media_path,
+                }
+            if provider_name == "openai":
+                provider = OpenAITranscriptionProvider(api_key=provider_key or "", api_base=provider_base or None, language=language or None)
+            else:
+                provider = GroqTranscriptionProvider(api_key=provider_key or "", api_base=provider_base or None, language=language or None)
+        path = Path(media_path)
+        if not path.is_absolute():
+            path = self._workspace / path
+        if not _within_workspace(path, workspace=self._workspace, roots=[Path(".")]):
+            return {"status": "denied", "reason": "media_path_outside_workspace", "media_path": media_path}
+        if not path.exists() or not path.is_file():
+            return {"status": "failed", "reason": "audio_file_missing", "media_path": media_path}
+        mime_type = mimetypes.guess_type(path.name)[0] or ""
+        if not mime_type.startswith("audio/"):
+            return {
+                "status": "failed",
+                "reason": "unsupported_audio_mime_type",
+                "media_path": media_path,
+                "source_mime_type": mime_type or None,
+            }
+        try:
+            text = await provider.transcribe(str(path))
+        except Exception as exc:
+            return {
+                "status": "failed",
+                "reason": "transcription_failed",
+                "failure_reason": str(exc) or "transcription_failed",
+                "media_path": media_path,
+            }
+        world = self._world_context()
+        if world is not None:
+            world_state, session, runtime_context = world
+            snapshot = world_state.ingest_media(session, runtime_context=runtime_context, media_paths=[str(path)])
+            target = next(
+                (
+                    item for item in reversed(getattr(snapshot, "snapshots", []) or [])
+                    if item.media_path == str(media_path).replace("\\", "/") or str(path).replace("\\", "/").endswith(item.media_path)
+                ),
+                None,
+            )
+            if target is not None:
+                world_state.apply_inspection(
+                    session,
+                    runtime_context=runtime_context,
+                    snapshot_id=target.snapshot_id,
+                    requested_by="local_awareness_transcription",
+                    inspection_payload={
+                        "confirmed": [],
+                        "corrected": [],
+                        "new_details": [text] if text else [],
+                        "uncertain": [] if text else ["transcription returned no text"],
+                        "confidence": 0.7 if text else 0.2,
+                        "status": "completed" if text else "failed",
+                        "contested": False,
+                        "contested_reasons": [],
+                        "evidence_excerpt": [f"media_path: {target.media_path}"],
+                        "inspector": provider.__class__.__name__,
+                        "inspection_mode": "audio_transcription",
+                        "provider": provider.__class__.__name__,
+                        "source_media_ids": [target.snapshot_id],
+                        "source_mime_type": getattr(target, "media_mime_type", None),
+                        "failure_reason": None if text else "empty_transcription",
+                    },
+                )
+        return {
+            "status": "ok" if text else "failed",
+            "reason": None if text else "empty_transcription",
+            "transcription": text or "",
+            "media_path": media_path,
+            "provider": provider.__class__.__name__,
+            "transcription_enabled": True,
+            **(world_state.media_state_summary(session, identity=runtime_context) if world is not None and hasattr(world_state, "media_state_summary") else {}),
+        }

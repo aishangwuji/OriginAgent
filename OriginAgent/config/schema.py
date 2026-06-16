@@ -1623,9 +1623,55 @@ class ToolsConfig(Base):
         max_record_seconds: int = Field(default=5, ge=1, le=60)
         device_id: str | None = None
         voice: str | None = None
+        transcription_enabled: bool = Field(
+            default=False,
+            validation_alias=AliasChoices("transcriptionEnabled", "transcription_enabled"),
+            serialization_alias="transcriptionEnabled",
+        )
+        transcription_provider: str | None = Field(
+            default=None,
+            validation_alias=AliasChoices("transcriptionProvider", "transcription_provider"),
+            serialization_alias="transcriptionProvider",
+        )
+        tts_enabled: bool = Field(
+            default=False,
+            validation_alias=AliasChoices("ttsEnabled", "tts_enabled"),
+            serialization_alias="ttsEnabled",
+        )
 
     class LocalAwarenessMediaInspectionConfig(Base):
         enabled: bool = True
+
+    class LocalAwarenessMediaConfig(Base):
+        enabled: bool = False
+        workspace_roots: list[str] = Field(
+            default_factory=lambda: ["uploads/perception"],
+            validation_alias=AliasChoices("workspaceRoots", "workspace_roots"),
+            serialization_alias="workspaceRoots",
+        )
+        max_files: int = Field(
+            default=100,
+            ge=1,
+            le=5000,
+            validation_alias=AliasChoices("maxFiles", "max_files"),
+            serialization_alias="maxFiles",
+        )
+        max_file_bytes: int = Field(
+            default=10 * 1024 * 1024,
+            ge=1,
+            validation_alias=AliasChoices("maxFileBytes", "max_file_bytes"),
+            serialization_alias="maxFileBytes",
+        )
+        auto_inspect_after_capture: bool = Field(
+            default=False,
+            validation_alias=AliasChoices("autoInspectAfterCapture", "auto_inspect_after_capture"),
+            serialization_alias="autoInspectAfterCapture",
+        )
+        supported_mime_types: list[str] = Field(
+            default_factory=lambda: ["image/png", "image/jpeg", "image/webp", "audio/wav", "audio/mpeg", "audio/mp4"],
+            validation_alias=AliasChoices("supportedMimeTypes", "supported_mime_types"),
+            serialization_alias="supportedMimeTypes",
+        )
 
     class LocalAwarenessHardwareDiscoveryConfig(Base):
         enabled: bool = False
@@ -1654,6 +1700,9 @@ class ToolsConfig(Base):
         )
         media_inspection: "ToolsConfig.LocalAwarenessMediaInspectionConfig" = Field(
             default_factory=lambda: ToolsConfig.LocalAwarenessMediaInspectionConfig()
+        )
+        media: "ToolsConfig.LocalAwarenessMediaConfig" = Field(
+            default_factory=lambda: ToolsConfig.LocalAwarenessMediaConfig()
         )
         hardware_discovery: "ToolsConfig.LocalAwarenessHardwareDiscoveryConfig" = Field(
             default_factory=lambda: ToolsConfig.LocalAwarenessHardwareDiscoveryConfig(),

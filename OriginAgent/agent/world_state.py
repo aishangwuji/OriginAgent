@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import hashlib
+import mimetypes
 import uuid
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timedelta, timezone
@@ -99,6 +101,13 @@ class SceneSnapshot:
     confidence: float = 0.5
     uncertainties: list[str] = field(default_factory=list)
     provenance: dict[str, Any] = field(default_factory=dict)
+    media_hash: str | None = None
+    media_status: str = "pending"
+    media_mime_type: str | None = None
+    media_size_bytes: int | None = None
+    media_mtime: float | None = None
+    inspection_attempts: int = 0
+    last_inspection_error: str | None = None
 
     def to_json(self) -> dict[str, Any]:
         return asdict(self)
@@ -134,6 +143,15 @@ class SceneSnapshot:
             confidence=confidence,
             uncertainties=_string_list(raw.get("uncertainties")),
             provenance=provenance,
+            media_hash=str(raw.get("media_hash")).strip() if raw.get("media_hash") else None,
+            media_status=str(raw.get("media_status") or "pending").strip() or "pending",
+            media_mime_type=str(raw.get("media_mime_type")).strip() if raw.get("media_mime_type") else None,
+            media_size_bytes=int(raw.get("media_size_bytes")) if raw.get("media_size_bytes") is not None else None,
+            media_mtime=float(raw.get("media_mtime")) if raw.get("media_mtime") is not None else None,
+            inspection_attempts=max(0, int(raw.get("inspection_attempts", 0) or 0)),
+            last_inspection_error=str(raw.get("last_inspection_error")).strip()
+            if raw.get("last_inspection_error")
+            else None,
         )
 
 
@@ -153,6 +171,12 @@ class InspectionResult:
     contested_reasons: list[str] = field(default_factory=list)
     evidence_excerpt: list[str] = field(default_factory=list)
     inspector: str = ""
+    inspection_mode: str = "text"
+    provider: str | None = None
+    model: str | None = None
+    source_media_ids: list[str] = field(default_factory=list)
+    source_mime_type: str | None = None
+    failure_reason: str | None = None
 
     def to_json(self) -> dict[str, Any]:
         return asdict(self)
@@ -185,6 +209,12 @@ class InspectionResult:
             contested_reasons=_string_list(raw.get("contested_reasons")),
             evidence_excerpt=_string_list(raw.get("evidence_excerpt")),
             inspector=str(raw.get("inspector") or "").strip(),
+            inspection_mode=str(raw.get("inspection_mode") or "text").strip() or "text",
+            provider=str(raw.get("provider")).strip() if raw.get("provider") else None,
+            model=str(raw.get("model")).strip() if raw.get("model") else None,
+            source_media_ids=_string_list(raw.get("source_media_ids"), limit=12, max_chars=120),
+            source_mime_type=str(raw.get("source_mime_type")).strip() if raw.get("source_mime_type") else None,
+            failure_reason=str(raw.get("failure_reason")).strip() if raw.get("failure_reason") else None,
         )
 
 
@@ -290,6 +320,46 @@ class PerceptionEventCandidate:
 _DEVICE_EVENT_KINDS = {"appeared", "updated", "disappeared", "renamed", "relocated", "stale"}
 _DEVICE_PERMISSION_CAPABILITIES = {"camera", "screen", "audio"}
 _DEVICE_PERMISSION_STATUSES = {"pending", "granted", "denied", "revoked", "expired"}
+_MEDIA_EVENT_KINDS = {"discovered", "status_changed", "inspected", "failed", "skipped"}
+_MEDIA_STATUSES = {"pending", "inspecting", "inspected", "failed", "skipped"}
+
+
+@dataclass
+class MediaLifecycleEvent:
+    event_id: str
+    kind: str
+    snapshot_id: str
+    media_path: str
+    previous_status: str | None = None
+    current_status: str | None = None
+    summary: str = ""
+    created_at: str = field(default_factory=_utcnow_iso)
+    evidence: list[str] = field(default_factory=list)
+
+    def to_json(self) -> dict[str, Any]:
+        return asdict(self)
+
+    @classmethod
+    def from_json(cls, raw: Any) -> "MediaLifecycleEvent | None":
+        if not isinstance(raw, dict):
+            return None
+        event_id = str(raw.get("event_id") or "").strip()
+        kind = str(raw.get("kind") or "").strip()
+        snapshot_id = str(raw.get("snapshot_id") or "").strip()
+        media_path = str(raw.get("media_path") or "").strip()
+        if not event_id or kind not in _MEDIA_EVENT_KINDS or not snapshot_id or not media_path:
+            return None
+        return cls(
+            event_id=event_id,
+            kind=kind,
+            snapshot_id=snapshot_id,
+            media_path=media_path,
+            previous_status=str(raw.get("previous_status")).strip() if raw.get("previous_status") else None,
+            current_status=str(raw.get("current_status")).strip() if raw.get("current_status") else None,
+            summary=_trim_text(raw.get("summary"), max_chars=240),
+            created_at=str(raw.get("created_at") or _utcnow_iso()).strip(),
+            evidence=_string_list(raw.get("evidence"), limit=10, max_chars=200),
+        )
 
 
 @dataclass
@@ -413,6 +483,7 @@ class WorldStateSnapshot:
     device_events: list[DeviceLifecycleEvent] = field(default_factory=list)
     device_bindings: list[DeviceBinding] = field(default_factory=list)
     device_permissions: list[DevicePermission] = field(default_factory=list)
+    media_events: list[MediaLifecycleEvent] = field(default_factory=list)
 
     def to_json(self) -> dict[str, Any]:
         return {
@@ -430,6 +501,7 @@ class WorldStateSnapshot:
             "device_events": [item.to_json() for item in self.device_events],
             "device_bindings": [item.to_json() for item in self.device_bindings],
             "device_permissions": [item.to_json() for item in self.device_permissions],
+            "media_events": [item.to_json() for item in self.media_events],
         }
 
     @classmethod
@@ -466,6 +538,11 @@ class WorldStateSnapshot:
                 DevicePermission.from_json(value) for value in (raw.get("device_permissions") or [])
             ) if item is not None
         ]
+        media_events = [
+            item for item in (
+                MediaLifecycleEvent.from_json(value) for value in (raw.get("media_events") or [])
+            ) if item is not None
+        ]
         summary = WorldSummary.from_json(raw.get("world_summary"))
         return cls(
             status=str(raw.get("status") or "placeholder").strip() or "placeholder",
@@ -482,6 +559,7 @@ class WorldStateSnapshot:
             device_events=device_events,
             device_bindings=device_bindings,
             device_permissions=device_permissions,
+            media_events=media_events,
         )
 
 
@@ -527,6 +605,15 @@ class WorldStateManager:
             "device_permissions_summary": self._device_permissions_summary(snapshot),
         }
 
+    def media_state_summary(self, session: Session, *, identity: RuntimeContext | None = None) -> dict[str, Any]:
+        snapshot = self.load(session, identity=identity)
+        return {
+            "media_queue_summary": self._media_queue_summary(snapshot),
+            "recent_media_events": self._media_events_summary(snapshot).get("recent_media_events", []),
+            "last_scene_inspection": self._last_scene_inspection(snapshot),
+            "audio_status": self._audio_status_summary(snapshot),
+        }
+
     def snapshot_prompt_payload(
         self,
         session: Session,
@@ -542,6 +629,7 @@ class WorldStateManager:
                 "updated_at": snapshot.updated_at,
                 "device_map_summary": summarize_device_map(snapshot.device_map) if snapshot.device_map else {},
                 **self.device_state_summary(session, identity=identity),
+                **self.media_state_summary(session, identity=identity),
             }
         filtered = self.filtered_candidates(
             session,
@@ -559,6 +647,7 @@ class WorldStateManager:
             "recent_events": list((self.recent_events(session, identity=identity, limit=5) or {}).get("recent_events", [])),
             "device_map_summary": summarize_device_map(snapshot.device_map) if snapshot.device_map else {},
             **self.device_state_summary(session, identity=identity),
+            **self.media_state_summary(session, identity=identity),
         }
 
     def ingest_device_discovery(
@@ -720,12 +809,27 @@ class WorldStateManager:
         media_paths: list[str] | None,
     ) -> WorldStateSnapshot:
         snapshot = self.load(session, identity=runtime_context)
-        descriptors = [describe_attachment(media_path, source="media") for media_path in (media_paths or []) if isinstance(media_path, str) and media_path]
+        descriptors = [self._describe_workspace_attachment(media_path, source="media") for media_path in (media_paths or []) if isinstance(media_path, str) and media_path]
         return self._ingest_descriptors(
             session,
             runtime_context=runtime_context,
             snapshot=snapshot,
             descriptors=descriptors,
+        )
+
+    def ingest_media_scan(
+        self,
+        session: Session,
+        *,
+        runtime_context: RuntimeContext,
+        media_paths: list[str] | None,
+    ) -> WorldStateSnapshot:
+        """Register workspace media discovered by an explicit scan."""
+
+        return self.ingest_media(
+            session,
+            runtime_context=runtime_context,
+            media_paths=media_paths,
         )
 
     def ingest_producer_batch(
@@ -741,7 +845,7 @@ class WorldStateManager:
         for media_path in media_paths or []:
             if not isinstance(media_path, str) or not media_path:
                 continue
-            collected.append(describe_attachment(media_path, source="media"))
+            collected.append(self._describe_workspace_attachment(media_path, source="media"))
         return self._ingest_descriptors(
             session,
             runtime_context=runtime_context,
@@ -829,6 +933,10 @@ class WorldStateManager:
             confidence = target.confidence
         confidence = max(0.0, min(1.0, confidence))
         corrected = _string_list(inspection_payload.get("corrected"))
+        previous_status = target.media_status
+        target.media_status = "inspecting"
+        target.inspection_attempts = max(0, int(target.inspection_attempts or 0)) + 1
+        target.last_inspection_error = None
         inspection = InspectionResult(
             inspection_id=f"inspect_{uuid.uuid4().hex[:12]}",
             snapshot_id=target.snapshot_id,
@@ -844,8 +952,49 @@ class WorldStateManager:
             contested_reasons=_string_list(inspection_payload.get("contested_reasons")) or corrected[:4],
             evidence_excerpt=_string_list(inspection_payload.get("evidence_excerpt")),
             inspector=str(inspection_payload.get("inspector") or "").strip(),
+            inspection_mode=str(inspection_payload.get("inspection_mode") or "text").strip() or "text",
+            provider=str(inspection_payload.get("provider")).strip() if inspection_payload.get("provider") else None,
+            model=str(inspection_payload.get("model")).strip() if inspection_payload.get("model") else None,
+            source_media_ids=_string_list(inspection_payload.get("source_media_ids"), limit=12, max_chars=120),
+            source_mime_type=str(inspection_payload.get("source_mime_type")).strip()
+            if inspection_payload.get("source_mime_type")
+            else target.media_mime_type,
+            failure_reason=str(inspection_payload.get("failure_reason")).strip()
+            if inspection_payload.get("failure_reason")
+            else None,
         )
+        if inspection.status == "completed":
+            target.media_status = "inspected"
+        elif inspection.status == "skipped":
+            target.media_status = "skipped"
+        else:
+            target.media_status = "failed"
+            target.last_inspection_error = inspection.failure_reason or "; ".join(inspection.uncertain[:2]) or inspection.status
         snapshot.inspections.append(inspection)
+        snapshot.media_events = self._merge_media_events(
+            existing=snapshot.media_events,
+            new_events=[
+                self._media_event(
+                    kind="status_changed",
+                    snapshot=target,
+                    previous_status=previous_status,
+                    current_status=target.media_status,
+                    summary=f"Media inspection status changed to {target.media_status}: {target.media_path}",
+                ),
+                self._media_event(
+                    kind="inspected" if target.media_status == "inspected" else "failed",
+                    snapshot=target,
+                    previous_status=previous_status,
+                    current_status=target.media_status,
+                    summary=(
+                        f"Media inspected: {target.media_path}"
+                        if target.media_status == "inspected"
+                        else f"Media inspection failed: {target.media_path}"
+                    ),
+                    evidence=inspection.evidence_excerpt or inspection.uncertain,
+                ),
+            ],
+        )
         refreshed = self._refresh_summary(snapshot)
         refreshed.events = self._merge_recent_events(
             previous=snapshot,
@@ -991,21 +1140,36 @@ class WorldStateManager:
         limit: int = 5,
     ) -> dict[str, Any]:
         snapshot = self.load(session, identity=identity)
+        combined: list[dict[str, Any]] = []
+        for item in snapshot.events:
+            event = item.to_json()
+            event["event_family"] = "scene"
+            combined.append(event)
+        for item in snapshot.device_events:
+            event = item.to_json()
+            event["event_family"] = "device"
+            event["summary"] = event.get("change_summary", "")
+            combined.append(event)
+        for item in snapshot.media_events:
+            event = item.to_json()
+            event["event_family"] = "media"
+            combined.append(event)
         ordered = sorted(
-            snapshot.events,
-            key=lambda item: _parse_dt(item.created_at) or datetime.min.replace(tzinfo=timezone.utc),
+            combined,
+            key=lambda item: _parse_dt(item.get("created_at")) or datetime.min.replace(tzinfo=timezone.utc),
             reverse=True,
         )
         recent = ordered[: max(0, int(limit or 0))]
         by_kind: dict[str, int] = {}
-        for item in snapshot.events:
-            by_kind[item.kind] = by_kind.get(item.kind, 0) + 1
+        for item in combined:
+            key = f"{item.get('event_family')}:{item.get('kind')}"
+            by_kind[key] = by_kind.get(key, 0) + 1
         return {
-            "recent_events": [item.to_json() for item in recent],
+            "recent_events": recent,
             "event_summary": {
-                "total": len(snapshot.events),
+                "total": len(combined),
                 "by_kind": by_kind,
-                "latest_created_at": recent[0].created_at if recent else None,
+                "latest_created_at": recent[0].get("created_at") if recent else None,
             },
         }
 
@@ -1049,6 +1213,11 @@ class WorldStateManager:
                 self._expire_permission_if_needed(permission, now=now)
                 for permission in snapshot.device_permissions
             ],
+            media_events=sorted(
+                snapshot.media_events,
+                key=lambda item: _parse_dt(item.created_at) or datetime.min.replace(tzinfo=timezone.utc),
+                reverse=True,
+            )[:50],
         )
         if not refreshed.snapshots:
             return refreshed
@@ -1256,6 +1425,71 @@ class WorldStateManager:
         return out
 
     @staticmethod
+    def _media_event(
+        *,
+        kind: str,
+        snapshot: SceneSnapshot,
+        previous_status: str | None,
+        current_status: str | None,
+        summary: str,
+        evidence: list[str] | None = None,
+    ) -> MediaLifecycleEvent:
+        return MediaLifecycleEvent(
+            event_id=f"media_evt_{uuid.uuid4().hex[:12]}",
+            kind=kind if kind in _MEDIA_EVENT_KINDS else "status_changed",
+            snapshot_id=snapshot.snapshot_id,
+            media_path=snapshot.media_path,
+            previous_status=previous_status,
+            current_status=current_status,
+            summary=_trim_text(summary, max_chars=240),
+            created_at=_utcnow_iso(),
+            evidence=_string_list(evidence or [], limit=8, max_chars=160),
+        )
+
+    @staticmethod
+    def _merge_media_events(
+        *,
+        existing: list[MediaLifecycleEvent],
+        new_events: list[MediaLifecycleEvent],
+    ) -> list[MediaLifecycleEvent]:
+        merged = [*new_events, *existing]
+        seen: set[tuple[str, str, str, str | None]] = set()
+        out: list[MediaLifecycleEvent] = []
+        for event in sorted(
+            merged,
+            key=lambda item: _parse_dt(item.created_at) or datetime.min.replace(tzinfo=timezone.utc),
+            reverse=True,
+        ):
+            key = (event.kind, event.snapshot_id, event.media_path, event.current_status)
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append(event)
+            if len(out) >= 50:
+                break
+        return out
+
+    def _media_metadata(self, path: Path) -> dict[str, Any]:
+        metadata: dict[str, Any] = {
+            "media_hash": None,
+            "media_mime_type": mimetypes.guess_type(path.name)[0],
+            "media_size_bytes": None,
+            "media_mtime": None,
+        }
+        try:
+            stat = path.stat()
+            metadata["media_size_bytes"] = int(stat.st_size)
+            metadata["media_mtime"] = float(stat.st_mtime)
+            hasher = hashlib.sha256()
+            with path.open("rb") as handle:
+                for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                    hasher.update(chunk)
+            metadata["media_hash"] = hasher.hexdigest()
+        except OSError:
+            return metadata
+        return metadata
+
+    @staticmethod
     def _active_binding(snapshot: WorldStateSnapshot, device_id: str) -> DeviceBinding | None:
         return next(
             (
@@ -1335,6 +1569,114 @@ class WorldStateManager:
         }
 
     @staticmethod
+    def _media_events_summary(snapshot: WorldStateSnapshot) -> dict[str, Any]:
+        by_kind: dict[str, int] = {}
+        for event in snapshot.media_events:
+            by_kind[event.kind] = by_kind.get(event.kind, 0) + 1
+        recent = sorted(
+            snapshot.media_events,
+            key=lambda item: _parse_dt(item.created_at) or datetime.min.replace(tzinfo=timezone.utc),
+            reverse=True,
+        )[:5]
+        return {
+            "media_event_count": len(snapshot.media_events),
+            "by_kind": by_kind,
+            "recent_media_events": [event.to_json() for event in recent],
+        }
+
+    @staticmethod
+    def _media_queue_summary(snapshot: WorldStateSnapshot) -> dict[str, Any]:
+        by_status: dict[str, int] = {}
+        by_kind: dict[str, int] = {}
+        for scene in snapshot.snapshots:
+            status = scene.media_status or "pending"
+            by_status[status] = by_status.get(status, 0) + 1
+            by_kind[scene.kind] = by_kind.get(scene.kind, 0) + 1
+        recent = sorted(
+            snapshot.snapshots,
+            key=lambda item: _parse_dt(item.captured_at) or datetime.min.replace(tzinfo=timezone.utc),
+            reverse=True,
+        )[:5]
+        pending = [scene for scene in snapshot.snapshots if scene.media_status == "pending"]
+        return {
+            "media_count": len(snapshot.snapshots),
+            "uninspected_count": len(pending),
+            "by_status": by_status,
+            "by_kind": by_kind,
+            "recent_media": [
+                {
+                    "snapshot_id": scene.snapshot_id,
+                    "kind": scene.kind,
+                    "media_path": scene.media_path,
+                    "media_status": scene.media_status,
+                    "captured_at": scene.captured_at,
+                    "media_mime_type": scene.media_mime_type,
+                    "inspection_attempts": scene.inspection_attempts,
+                }
+                for scene in recent
+            ],
+            "pending_snapshot_ids": [scene.snapshot_id for scene in pending[:10]],
+        }
+
+    @staticmethod
+    def _last_scene_inspection(snapshot: WorldStateSnapshot) -> dict[str, Any]:
+        if not snapshot.inspections:
+            return {}
+        inspection = sorted(
+            snapshot.inspections,
+            key=lambda item: _parse_dt(item.requested_at) or datetime.min.replace(tzinfo=timezone.utc),
+            reverse=True,
+        )[0]
+        scene = next((item for item in snapshot.snapshots if item.snapshot_id == inspection.snapshot_id), None)
+        return {
+            "snapshot_id": inspection.snapshot_id,
+            "status": inspection.status,
+            "inspection_mode": inspection.inspection_mode,
+            "provider": inspection.provider,
+            "model": inspection.model,
+            "confidence": inspection.confidence,
+            "media_path": scene.media_path if scene is not None else None,
+            "requested_at": inspection.requested_at,
+            "failure_reason": inspection.failure_reason,
+        }
+
+    @staticmethod
+    def _audio_status_summary(snapshot: WorldStateSnapshot) -> dict[str, Any]:
+        audio = [scene for scene in snapshot.snapshots if scene.kind == "audio"]
+        latest = sorted(
+            audio,
+            key=lambda item: _parse_dt(item.captured_at) or datetime.min.replace(tzinfo=timezone.utc),
+            reverse=True,
+        )[:1]
+        latest_scene = latest[0] if latest else None
+        latest_inspection = next(
+            (
+                item for item in sorted(
+                    snapshot.inspections,
+                    key=lambda inspection: _parse_dt(inspection.requested_at) or datetime.min.replace(tzinfo=timezone.utc),
+                    reverse=True,
+                )
+                if latest_scene is not None and item.snapshot_id == latest_scene.snapshot_id
+            ),
+            None,
+        )
+        return {
+            "audio_artifact_count": len(audio),
+            "last_audio": {
+                "snapshot_id": latest_scene.snapshot_id,
+                "media_path": latest_scene.media_path,
+                "media_status": latest_scene.media_status,
+                "captured_at": latest_scene.captured_at,
+            } if latest_scene is not None else {},
+            "last_transcription_status": latest_inspection.status if latest_inspection is not None else None,
+            "last_transcription_text": (
+                latest_inspection.new_details[0]
+                if latest_inspection is not None and latest_inspection.new_details
+                else None
+            ),
+        }
+
+    @staticmethod
     def _device_bindings_summary(snapshot: WorldStateSnapshot) -> dict[str, Any]:
         active = [binding for binding in snapshot.device_bindings if binding.status == "active"]
         return {
@@ -1363,13 +1705,34 @@ class WorldStateManager:
         previous_snapshot = WorldStateSnapshot.from_json(snapshot.to_json())
         added = False
         existing_paths = {item.media_path for item in snapshot.snapshots}
+        existing_by_path = {item.media_path: item for item in snapshot.snapshots}
+        media_events: list[MediaLifecycleEvent] = []
         for descriptor in descriptors:
             if descriptor is None or descriptor.kind not in {"image", "audio", "video", "sensor"}:
                 continue
             if descriptor.path.suffix.lower().endswith(".part") or descriptor.name.endswith(".part"):
                 continue
             relative_media_path = _path_to_workspace(descriptor.path, workspace=self._workspace)
-            if relative_media_path.endswith(".part") or relative_media_path in existing_paths:
+            if relative_media_path.endswith(".part"):
+                continue
+            metadata = self._media_metadata(descriptor.path)
+            existing = existing_by_path.get(relative_media_path)
+            if existing is not None:
+                if metadata.get("media_hash") and metadata.get("media_hash") != existing.media_hash:
+                    existing.media_hash = metadata.get("media_hash")
+                    existing.media_mime_type = metadata.get("media_mime_type")
+                    existing.media_size_bytes = metadata.get("media_size_bytes")
+                    existing.media_mtime = metadata.get("media_mtime")
+                    existing.media_status = "pending"
+                    existing.last_inspection_error = None
+                    media_events.append(self._media_event(
+                        kind="status_changed",
+                        snapshot=existing,
+                        previous_status="inspected",
+                        current_status="pending",
+                        summary=f"Media changed and returned to pending: {relative_media_path}",
+                    ))
+                    added = True
                 continue
             sidecar = self._read_sidecar(descriptor.path)
             inferred_provenance = self._infer_provenance_from_path(relative_media_path)
@@ -1380,8 +1743,21 @@ class WorldStateManager:
                 sidecar=sidecar,
                 inferred_provenance=inferred_provenance,
             )
+            scene.media_hash = metadata.get("media_hash")
+            scene.media_mime_type = metadata.get("media_mime_type") or descriptor.mime
+            scene.media_size_bytes = metadata.get("media_size_bytes") or descriptor.size_bytes
+            scene.media_mtime = metadata.get("media_mtime")
+            scene.media_status = "pending"
             snapshot.snapshots.append(scene)
             existing_paths.add(relative_media_path)
+            existing_by_path[relative_media_path] = scene
+            media_events.append(self._media_event(
+                kind="discovered",
+                snapshot=scene,
+                previous_status=None,
+                current_status="pending",
+                summary=f"Media discovered: {relative_media_path}",
+            ))
             added = True
         if added:
             snapshot.status = "active"
@@ -1389,6 +1765,10 @@ class WorldStateManager:
             snapshot.owner_id = runtime_context.user_id
             snapshot.scope = "session"
         refreshed = self._refresh_summary(snapshot)
+        refreshed.media_events = self._merge_media_events(
+            existing=refreshed.media_events,
+            new_events=media_events,
+        )
         refreshed.events = self._merge_recent_events(
             previous=previous_snapshot,
             refreshed=refreshed,
@@ -1399,6 +1779,12 @@ class WorldStateManager:
             ),
         )
         return self.save(session, refreshed)
+
+    def _describe_workspace_attachment(self, path: str | Path, *, source: str) -> AttachmentDescriptor | None:
+        candidate = Path(path)
+        if not candidate.is_absolute():
+            candidate = self._workspace / candidate
+        return describe_attachment(candidate, source=source)
 
     def _compute_event_candidates(
         self,

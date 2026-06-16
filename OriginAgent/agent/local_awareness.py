@@ -347,10 +347,14 @@ class LocalAwarenessSummary:
     audio_input_enabled: bool = False
     audio_output_enabled: bool = False
     media_inspection_enabled: bool = False
+    media_scan_enabled: bool = False
+    transcription_enabled: bool = False
+    tts_enabled: bool = False
     last_discovery: dict[str, Any] = field(default_factory=dict)
     last_capture: dict[str, Any] = field(default_factory=dict)
     last_audio: dict[str, Any] = field(default_factory=dict)
     last_media_inspection: dict[str, Any] = field(default_factory=dict)
+    last_media_scan: dict[str, Any] = field(default_factory=dict)
     updated_at: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
@@ -1176,6 +1180,7 @@ def normalize_local_awareness_summary(
     screen = getattr(config, "screen", None)
     audio = getattr(config, "audio", None)
     media_inspection = getattr(config, "media_inspection", None)
+    media = getattr(config, "media", None)
     def _flag(config_value: bool, cached_key: str) -> bool:
         if config is None:
             return bool(raw.get(cached_key, False))
@@ -1212,10 +1217,14 @@ def normalize_local_awareness_summary(
             bool(getattr(media_inspection, "enabled", False)),
             "media_inspection_enabled",
         ),
+        media_scan_enabled=_flag(bool(getattr(media, "enabled", False)), "media_scan_enabled"),
+        transcription_enabled=_flag(bool(getattr(audio, "transcription_enabled", False)), "transcription_enabled"),
+        tts_enabled=_flag(bool(getattr(audio, "tts_enabled", False)), "tts_enabled"),
         last_discovery=dict(raw.get("last_discovery") or {}),
         last_capture=dict(raw.get("last_capture") or {}),
         last_audio=dict(raw.get("last_audio") or {}),
         last_media_inspection=dict(raw.get("last_media_inspection") or {}),
+        last_media_scan=dict(raw.get("last_media_scan") or {}),
         updated_at=str(raw.get("updated_at") or "") or None,
     ).to_dict()
     summary["backend_kind"] = (
@@ -1232,6 +1241,12 @@ def normalize_local_awareness_summary(
         value = raw.get(key)
         if isinstance(value, dict):
             summary[key] = dict(value)
+    for key in ("media_queue_summary", "recent_media_events", "last_scene_inspection", "audio_status"):
+        value = raw.get(key)
+        if isinstance(value, dict):
+            summary[key] = dict(value)
+        elif isinstance(value, list):
+            summary[key] = list(value)
     events_summary = summary.get("device_events_summary") if isinstance(summary.get("device_events_summary"), dict) else {}
     bindings_summary = summary.get("device_bindings_summary") if isinstance(summary.get("device_bindings_summary"), dict) else {}
     permissions_summary = summary.get("device_permissions_summary") if isinstance(summary.get("device_permissions_summary"), dict) else {}
@@ -1250,4 +1265,9 @@ def normalize_local_awareness_summary(
     summary["pending_permission_count"] = int(
         permissions_summary.get("pending_permission_count", raw.get("pending_permission_count", 0)) or 0
     )
+    media_queue = summary.get("media_queue_summary") if isinstance(summary.get("media_queue_summary"), dict) else {}
+    summary["media_count"] = int(media_queue.get("media_count", raw.get("media_count", 0)) or 0)
+    summary["uninspected_media_count"] = int(media_queue.get("uninspected_count", raw.get("uninspected_media_count", 0)) or 0)
+    recent_media_events = summary.get("recent_media_events") if isinstance(summary.get("recent_media_events"), list) else []
+    summary["media_event_count"] = int(raw.get("media_event_count", len(recent_media_events)) or len(recent_media_events))
     return summary

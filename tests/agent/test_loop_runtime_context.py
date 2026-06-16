@@ -13,7 +13,7 @@ from OriginAgent.agent.tools.registry import _safe_hash
 from OriginAgent.agent.tools.schema import StringSchema, tool_parameters_schema
 from OriginAgent.bus.events import InboundMessage
 from OriginAgent.bus.queue import MessageBus
-from OriginAgent.config.schema import DomainPacksConfig, ToolsConfig, DeviceToolsConfig
+from OriginAgent.config.schema import Config, DomainPacksConfig, ToolsConfig, DeviceToolsConfig
 from OriginAgent.security.capabilities import CapabilitySnapshot
 
 
@@ -260,6 +260,19 @@ def test_loop_routing_override_preserves_original_system_trigger(tmp_path: Path)
     assert context.actor_id == "system_runner"
     assert context.trigger == "system"
     assert context.source == "system"
+
+
+def test_loop_from_config_initializes_transcription_provider_when_enabled(tmp_path: Path):
+    config = Config()
+    config.agents.defaults.workspace = str(tmp_path)
+    config.providers.groq.api_key = "groq-key"
+    config.tools.local_awareness.enabled = True
+    config.tools.local_awareness.audio.transcription_enabled = True
+
+    loop = AgentLoop.from_config(config, provider=_provider())
+
+    assert loop._transcription_provider is not None
+    assert loop._transcription_provider.__class__.__name__ == "GroqTranscriptionProvider"
 
 
 def test_loop_runtime_context_triggers_do_not_degrade_to_user_initiated(tmp_path: Path):

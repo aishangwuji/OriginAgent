@@ -31,7 +31,9 @@ from OriginAgent.agent.tools.local_awareness import (
     RecordAudioSampleTool,
     RequestDevicePermissionTool,
     RevokeDeviceBindingTool,
+    ScanWorkspaceMediaTool,
     SpeakTextTool,
+    TranscribeAudioSampleTool,
 )
 from OriginAgent.agent.tools.message import MessageTool
 from OriginAgent.agent.tools.notebook import NotebookEditTool
@@ -354,6 +356,24 @@ def register_default_tools(
     _register_named(
         InspectMediaTool.name,
         lambda: InspectMediaTool(
+            workspace=workspace,
+            config=config,
+            backend=local_awareness_backend,
+            introspection_service=introspection_service,
+        ),
+    )
+    _register_named(
+        ScanWorkspaceMediaTool.name,
+        lambda: ScanWorkspaceMediaTool(
+            workspace=workspace,
+            config=config,
+            backend=local_awareness_backend,
+            introspection_service=introspection_service,
+        ),
+    )
+    _register_named(
+        TranscribeAudioSampleTool.name,
+        lambda: TranscribeAudioSampleTool(
             workspace=workspace,
             config=config,
             backend=local_awareness_backend,

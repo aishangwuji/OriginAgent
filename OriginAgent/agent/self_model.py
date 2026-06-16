@@ -718,6 +718,8 @@ class SelfModelRenderer:
             return [
                 f"- Enabled: {_yes_no(bool(local_awareness.get('enabled')))}",
                 "- Device map: none scanned yet",
+                f"- Media queue: {int(local_awareness.get('media_count', 0) or 0)} total, "
+                f"{int(local_awareness.get('uninspected_media_count', 0) or 0)} pending",
             ]
         protocols = _render_name_list([str(item) for item in summary.get("protocols") or []])
         kind_counts = summary.get("kind_counts") if isinstance(summary.get("kind_counts"), dict) else {}
@@ -736,10 +738,16 @@ class SelfModelRenderer:
             f"{int(summary.get('local_device_count', 0) or 0)} local, "
             f"{int(summary.get('lan_device_count', 0) or 0)} LAN, "
             f"{int(summary.get('unknown_device_count', 0) or 0)} unknown",
+            f"- Media queue: {int(local_awareness.get('media_count', 0) or 0)} total, "
+            f"{int(local_awareness.get('uninspected_media_count', 0) or 0)} pending",
             f"- Bound devices: {int(local_awareness.get('bound_device_count', 0) or 0)}",
             f"- Granted permissions: {int(local_awareness.get('granted_permission_count', 0) or 0)}, "
             f"pending: {int(local_awareness.get('pending_permission_count', 0) or 0)}",
             f"- Device events: {int(local_awareness.get('device_event_count', 0) or 0)} total; recent: {event_preview}",
+            f"- Media events: {int(local_awareness.get('media_event_count', 0) or 0)} total",
+            f"- Last inspection: {local_awareness.get('last_scene_inspection', {}).get('inspection_mode') or 'unknown'} / "
+            f"{local_awareness.get('last_scene_inspection', {}).get('status') or 'unknown'}",
+            f"- Audio status: {local_awareness.get('audio_status', {}).get('last_transcription_status') or 'unknown'}",
             f"- Device kinds: {kinds}",
             f"- Protocols observed: {protocols}",
             f"- Last scan: {summary.get('last_seen_at') or 'unknown'}",

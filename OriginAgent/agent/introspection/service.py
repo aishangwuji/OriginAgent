@@ -301,6 +301,17 @@ class RuntimeIntrospectionService:
         config = getattr(getattr(loop, "tools_config", None), "local_awareness", None) if loop is not None else None
         cached = dict(getattr(loop, "_last_local_awareness_summary", {}) or {}) if loop is not None else {}
         backend = getattr(loop, "_local_awareness_backend", None) if loop is not None else None
+        world_state = getattr(loop, "world_state", None) if loop is not None else None
+        sessions = getattr(loop, "sessions", None) if loop is not None else None
+        runtime_context = getattr(loop, "_last_runtime_context", None) if loop is not None else None
+        session_key = getattr(loop, "_last_continuity_session_key", None) if loop is not None else None
+        if world_state is not None and sessions is not None and runtime_context is not None and session_key:
+            with suppress(Exception):
+                session = sessions.get_or_create(session_key)
+                if hasattr(world_state, "media_state_summary"):
+                    cached.update(world_state.media_state_summary(session, identity=runtime_context))
+                if hasattr(world_state, "device_state_summary"):
+                    cached.update(world_state.device_state_summary(session, identity=runtime_context))
         return normalize_local_awareness_summary(config, backend=backend, cached=cached)
 
     def cognition_summary(self) -> dict[str, Any]:

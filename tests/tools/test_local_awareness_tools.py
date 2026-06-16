@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -22,7 +23,9 @@ from OriginAgent.agent.tools.local_awareness import (
     RecordAudioSampleTool,
     RequestDevicePermissionTool,
     RevokeDeviceBindingTool,
+    ScanWorkspaceMediaTool,
     SpeakTextTool,
+    TranscribeAudioSampleTool,
 )
 from OriginAgent.agent.identity import ActorResolver
 from OriginAgent.agent.world_state import WorldStateManager
@@ -41,6 +44,11 @@ def _loop(config: ToolsConfig.LocalAwarenessConfig):
         tools_config=SimpleNamespace(local_awareness=config),
         _local_awareness_backend=backend,
         _last_local_awareness_summary=normalize_local_awareness_summary(config, backend=backend),
+        channels_config=SimpleNamespace(
+            transcription_api_key="",
+            transcription_api_base="",
+            transcription_language=None,
+        ),
     )
 
 
@@ -146,6 +154,40 @@ def test_hardware_discovery_config_defaults_and_aliases() -> None:
     assert camel.hardware_discovery.service_ports == [80, 8123]
     assert snake.hardware_discovery.allowed_cidrs == ["10.0.0.0/30"]
     assert snake.hardware_discovery.max_hosts == 3
+
+
+def test_media_and_audio_config_defaults_and_aliases() -> None:
+    default = ToolsConfig.LocalAwarenessConfig()
+
+    assert default.media.enabled is False
+    assert default.media.workspace_roots == ["uploads/perception"]
+    assert default.media.auto_inspect_after_capture is False
+    assert default.audio.transcription_enabled is False
+    assert default.audio.tts_enabled is False
+
+    parsed = ToolsConfig.LocalAwarenessConfig(
+        media={
+            "enabled": True,
+            "workspaceRoots": ["uploads/perception"],
+            "maxFiles": 2,
+            "maxFileBytes": 128,
+            "autoInspectAfterCapture": True,
+            "supportedMimeTypes": ["image/png"],
+        },
+        audio={
+            "transcriptionEnabled": True,
+            "transcriptionProvider": "openai",
+            "ttsEnabled": True,
+        },
+    )
+
+    assert parsed.media.enabled is True
+    assert parsed.media.max_files == 2
+    assert parsed.media.max_file_bytes == 128
+    assert parsed.media.auto_inspect_after_capture is True
+    assert parsed.audio.transcription_enabled is True
+    assert parsed.audio.transcription_provider == "openai"
+    assert parsed.audio.tts_enabled is True
 
 
 def test_normalize_local_awareness_summary_passes_device_map_additively() -> None:
@@ -550,3 +592,169 @@ async def test_inspect_media_records_disabled_result_in_summary(tmp_path: Path) 
 
     assert result == {"status": "disabled", "reason": "local_awareness_disabled"}
     assert loop._last_local_awareness_summary["last_media_inspection"] == result
+
+
+@pytest.mark.asyncio
+async def test_scan_workspace_media_registers_pending_queue_once(tmp_path: Path) -> None:
+    media_dir = tmp_path / "uploads" / "perception"
+    media_dir.mkdir(parents=True)
+    (media_dir / "frame.png").write_bytes(
+        __import__("base64").b64decode(
+            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII="
+        )
+    )
+    config = _tools_config(
+        enabled=True,
+        media=ToolsConfig.LocalAwarenessMediaConfig(enabled=True, supportedMimeTypes=["image/png"]),
+    )
+    loop = _loop_with_world(config.local_awareness, tmp_path)
+    tool = ScanWorkspaceMediaTool(
+        workspace=tmp_path,
+        config=config,
+        backend=loop._local_awareness_backend,
+        introspection_service=_service(loop),
+    )
+    tool.set_context(_request_context())
+
+    first = await tool.execute()
+    second = await tool.execute()
+
+    assert tool.read_only is False
+    assert first["status"] == "ok"
+    assert first["discovered_media"] == ["uploads/perception/frame.png"]
+    assert first["media_queue_summary"]["uninspected_count"] == 1
+    assert second["discovered_media"] == []
+    assert second["queued_media"] == ["uploads/perception/frame.png"]
+    assert loop._last_local_awareness_summary["uninspected_media_count"] == 1
+
+
+@pytest.mark.asyncio
+async def test_scan_workspace_media_skips_large_and_unsupported_files(tmp_path: Path) -> None:
+    media_dir = tmp_path / "uploads" / "perception"
+    media_dir.mkdir(parents=True)
+    (media_dir / "too_big.png").write_bytes(b"x" * 16)
+    (media_dir / "note.txt").write_text("nope", encoding="utf-8")
+    config = _tools_config(
+        enabled=True,
+        media=ToolsConfig.LocalAwarenessMediaConfig(
+            enabled=True,
+            maxFileBytes=4,
+            supportedMimeTypes=["image/png"],
+        ),
+    )
+    loop = _loop_with_world(config.local_awareness, tmp_path)
+    tool = ScanWorkspaceMediaTool(
+        workspace=tmp_path,
+        config=config,
+        backend=loop._local_awareness_backend,
+        introspection_service=_service(loop),
+    )
+    tool.set_context(_request_context())
+
+    result = await tool.execute()
+
+    assert result["discovered_media"] == []
+    assert any(item.startswith("file_too_large:") for item in result["skipped_reasons"])
+    assert any(item.startswith("mime_skipped:") for item in result["skipped_reasons"])
+
+
+@pytest.mark.asyncio
+async def test_transcribe_audio_sample_fails_closed_without_provider(tmp_path: Path) -> None:
+    config = _tools_config(
+        enabled=True,
+        audio=ToolsConfig.LocalAwarenessAudioConfig(transcriptionEnabled=True),
+    )
+    loop = _loop_with_world(config.local_awareness, tmp_path)
+    tool = TranscribeAudioSampleTool(
+        workspace=tmp_path,
+        config=config,
+        backend=loop._local_awareness_backend,
+        introspection_service=_service(loop),
+    )
+    tool.set_context(_request_context())
+
+    result = await tool.execute("uploads/perception/audio.wav")
+
+    assert result == {
+        "status": "disabled",
+        "reason": "transcription_provider_unavailable",
+        "provider": "groq",
+        "media_path": "uploads/perception/audio.wav",
+    }
+
+
+@pytest.mark.asyncio
+async def test_transcribe_audio_sample_writes_world_state_audio_status(tmp_path: Path) -> None:
+    media_dir = tmp_path / "uploads" / "perception"
+    media_dir.mkdir(parents=True)
+    (media_dir / "audio.wav").write_bytes(b"RIFF\x24\x00\x00\x00WAVEfmt ")
+    config = _tools_config(
+        enabled=True,
+        audio=ToolsConfig.LocalAwarenessAudioConfig(transcriptionEnabled=True),
+    )
+    loop = _loop_with_world(config.local_awareness, tmp_path)
+    loop._transcription_provider = SimpleNamespace(transcribe=AsyncMock(return_value="hello room"))
+    tool = TranscribeAudioSampleTool(
+        workspace=tmp_path,
+        config=config,
+        backend=loop._local_awareness_backend,
+        introspection_service=_service(loop),
+    )
+    tool.set_context(_request_context())
+
+    result = await tool.execute("uploads/perception/audio.wav")
+
+    assert result["status"] == "ok"
+    assert result["transcription"] == "hello room"
+    assert result["audio_status"]["last_transcription_text"] == "hello room"
+
+
+@pytest.mark.asyncio
+async def test_transcribe_audio_sample_rejects_outside_workspace_path(tmp_path: Path) -> None:
+    outside = tmp_path.parent / "outside.wav"
+    outside.write_bytes(b"RIFF\x24\x00\x00\x00WAVEfmt ")
+    config = _tools_config(
+        enabled=True,
+        audio=ToolsConfig.LocalAwarenessAudioConfig(transcriptionEnabled=True),
+    )
+    loop = _loop_with_world(config.local_awareness, tmp_path)
+    loop._transcription_provider = SimpleNamespace(transcribe=AsyncMock(return_value="should not run"))
+    tool = TranscribeAudioSampleTool(
+        workspace=tmp_path,
+        config=config,
+        backend=loop._local_awareness_backend,
+        introspection_service=_service(loop),
+    )
+    tool.set_context(_request_context())
+
+    result = await tool.execute(str(outside))
+
+    assert result["status"] == "denied"
+    assert result["reason"] == "media_path_outside_workspace"
+    loop._transcription_provider.transcribe.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_transcribe_audio_sample_rejects_non_audio_file(tmp_path: Path) -> None:
+    media_dir = tmp_path / "uploads" / "perception"
+    media_dir.mkdir(parents=True)
+    (media_dir / "frame.png").write_bytes(b"not really a png")
+    config = _tools_config(
+        enabled=True,
+        audio=ToolsConfig.LocalAwarenessAudioConfig(transcriptionEnabled=True),
+    )
+    loop = _loop_with_world(config.local_awareness, tmp_path)
+    loop._transcription_provider = SimpleNamespace(transcribe=AsyncMock(return_value="should not run"))
+    tool = TranscribeAudioSampleTool(
+        workspace=tmp_path,
+        config=config,
+        backend=loop._local_awareness_backend,
+        introspection_service=_service(loop),
+    )
+    tool.set_context(_request_context())
+
+    result = await tool.execute("uploads/perception/frame.png")
+
+    assert result["status"] == "failed"
+    assert result["reason"] == "unsupported_audio_mime_type"
+    loop._transcription_provider.transcribe.assert_not_awaited()
