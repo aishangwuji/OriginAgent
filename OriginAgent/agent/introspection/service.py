@@ -11,6 +11,7 @@ from OriginAgent.agent.confirmation import PendingConfirmationStore
 from OriginAgent.agent.cognitive_audit import JsonlCognitiveAuditLedger
 from OriginAgent.agent.cognitive_scheduler import JsonlCognitiveSchedulerLedger
 from OriginAgent.agent.action_summary import action_summary_from_loop
+from OriginAgent.agent.local_awareness import normalize_local_awareness_summary
 from OriginAgent.agent.domain_pack_governance import summarize_domain_pack_governance
 from OriginAgent.agent.facts import FactStore, summarize_facts
 from OriginAgent.agent.memory import MemoryStore
@@ -175,6 +176,7 @@ class RuntimeIntrospectionService:
             **reminder_status,
             "background_tasks": background_tasks,
             "evolution": evolution_status,
+            "local_awareness": self.local_awareness_summary(),
             "self_model": self_model,
             "meta_cognition": self.meta_cognition_summary(),
         }
@@ -213,6 +215,7 @@ class RuntimeIntrospectionService:
                 "confirmation_available": self._confirmation_store is not None,
                 "background_review_enabled": bool(background_review_status.get("background_review_enabled")),
                 "curator_enabled": bool(curator_status.get("curator_enabled")),
+                "local_awareness": self.local_awareness_summary(),
             },
             continuity=self.continuity_summary(),
             action=self._action_summary(),
@@ -292,6 +295,13 @@ class RuntimeIntrospectionService:
 
     def _action_summary(self) -> dict[str, Any]:
         return action_summary_from_loop(self._loop)
+
+    def local_awareness_summary(self) -> dict[str, Any]:
+        loop = self._loop
+        config = getattr(getattr(loop, "tools_config", None), "local_awareness", None) if loop is not None else None
+        cached = dict(getattr(loop, "_last_local_awareness_summary", {}) or {}) if loop is not None else {}
+        backend = getattr(loop, "_local_awareness_backend", None) if loop is not None else None
+        return normalize_local_awareness_summary(config, backend=backend, cached=cached)
 
     def cognition_summary(self) -> dict[str, Any]:
         loop = self._loop
@@ -471,6 +481,7 @@ class RuntimeIntrospectionService:
                 "retrieval": retrieval_view,
                 "world": world_view,
                 "action": self._action_summary(),
+                "local_awareness": self.local_awareness_summary(),
                 "meta_cognition": self.meta_cognition_summary(),
             },
             "governance": self._governance_view(continuity),

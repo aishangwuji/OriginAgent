@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from OriginAgent.agent.action_summary import normalize_action_summary
+from OriginAgent.agent.local_awareness import normalize_local_awareness_summary
 from OriginAgent.agent.confirmation import ConfirmationRequest, PendingConfirmationStore
 from OriginAgent.agent.domain_pack_governance import DomainPackGovernanceService
 from OriginAgent.agent.facts import FactStore, summarize_facts
@@ -112,6 +113,7 @@ class SelfModelService:
         if self._runtime_snapshot.runtime:
             runtime.update(self._runtime_snapshot.runtime)
         action = self._build_action()
+        local_awareness = self._build_local_awareness()
         payload = {
             "schema_version": 1,
             "generated_at": datetime.now(timezone.utc).isoformat(),
@@ -128,6 +130,7 @@ class SelfModelService:
             "facts": facts,
             "memory": memory,
             "action": action,
+            "local_awareness": local_awareness,
             "reviews": reviews,
             "confirmations": confirmations,
             "limitations": limitations,
@@ -143,9 +146,12 @@ class SelfModelService:
         if isinstance(snapshot, RuntimeContextSnapshot):
             return snapshot
         if isinstance(snapshot, dict):
+            runtime = dict(snapshot.get("runtime") or {})
+            if snapshot.get("local_awareness"):
+                runtime["local_awareness"] = dict(snapshot.get("local_awareness") or {})
             return RuntimeContextSnapshot(
-                runtime=dict(snapshot.get("runtime") or {}),
                 action=dict(snapshot.get("action") or {}),
+                runtime=runtime,
                 confirmations=dict(snapshot.get("confirmations") or {}),
                 reviews=dict(snapshot.get("reviews") or {}),
                 background_tasks=dict(snapshot.get("background_tasks") or {}),
@@ -161,6 +167,12 @@ class SelfModelService:
         if self._runtime_snapshot.action:
             return normalize_action_summary(self._runtime_snapshot.action)
         return normalize_action_summary({})
+
+    def _build_local_awareness(self) -> dict[str, Any]:
+        runtime = self._runtime_snapshot.runtime
+        if isinstance(runtime, dict) and isinstance(runtime.get("local_awareness"), dict):
+            return normalize_local_awareness_summary(None, cached=runtime["local_awareness"])
+        return normalize_local_awareness_summary(None)
 
     def _build_domains(self) -> dict[str, Any]:
         try:

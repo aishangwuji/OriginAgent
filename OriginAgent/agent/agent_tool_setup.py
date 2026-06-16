@@ -20,6 +20,15 @@ from OriginAgent.agent.tools.filesystem import EditFileTool, ListDirTool, ReadFi
 from OriginAgent.agent.tools.image_generation import ImageGenerationTool
 from OriginAgent.agent.tools.loader import ToolLoader
 from OriginAgent.agent.tools.long_task import CompleteGoalTool, LongTaskTool
+from OriginAgent.agent.tools.local_awareness import (
+    CaptureCameraFrameTool,
+    CaptureScreenTool,
+    DiscoverLanDevicesTool,
+    DiscoverLocalDevicesTool,
+    InspectMediaTool,
+    RecordAudioSampleTool,
+    SpeakTextTool,
+)
 from OriginAgent.agent.tools.message import MessageTool
 from OriginAgent.agent.tools.notebook import NotebookEditTool
 from OriginAgent.agent.tools.registry import ToolRegistry
@@ -177,6 +186,12 @@ def register_default_tools(
         if _allowed(name):
             _register(factory())
 
+    local_awareness_backend = (
+        getattr(introspection_service._loop, "_local_awareness_backend", None)
+        if introspection_service is not None and getattr(introspection_service, "_loop", None) is not None
+        else None
+    )
+
     _register_named("ask_user", AskUserTool)
     _register_named(
         PlanActionTool.name,
@@ -261,6 +276,69 @@ def register_default_tools(
         lambda: ConfirmationSummaryTool(
             workspace=workspace,
             confirmation_store=confirmation_store,
+        ),
+    )
+    _register_named(
+        DiscoverLocalDevicesTool.name,
+        lambda: DiscoverLocalDevicesTool(
+            workspace=workspace,
+            config=config,
+            backend=local_awareness_backend,
+            introspection_service=introspection_service,
+        ),
+    )
+    _register_named(
+        DiscoverLanDevicesTool.name,
+        lambda: DiscoverLanDevicesTool(
+            workspace=workspace,
+            config=config,
+            backend=local_awareness_backend,
+            introspection_service=introspection_service,
+        ),
+    )
+    _register_named(
+        CaptureCameraFrameTool.name,
+        lambda: CaptureCameraFrameTool(
+            workspace=workspace,
+            config=config,
+            backend=local_awareness_backend,
+            introspection_service=introspection_service,
+        ),
+    )
+    _register_named(
+        CaptureScreenTool.name,
+        lambda: CaptureScreenTool(
+            workspace=workspace,
+            config=config,
+            backend=local_awareness_backend,
+            introspection_service=introspection_service,
+        ),
+    )
+    _register_named(
+        RecordAudioSampleTool.name,
+        lambda: RecordAudioSampleTool(
+            workspace=workspace,
+            config=config,
+            backend=local_awareness_backend,
+            introspection_service=introspection_service,
+        ),
+    )
+    _register_named(
+        SpeakTextTool.name,
+        lambda: SpeakTextTool(
+            workspace=workspace,
+            config=config,
+            backend=local_awareness_backend,
+            introspection_service=introspection_service,
+        ),
+    )
+    _register_named(
+        InspectMediaTool.name,
+        lambda: InspectMediaTool(
+            workspace=workspace,
+            config=config,
+            backend=local_awareness_backend,
+            introspection_service=introspection_service,
         ),
     )
     _register_named("long_task", lambda: LongTaskTool(sessions=sessions, bus=bus))

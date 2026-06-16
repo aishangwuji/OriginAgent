@@ -31,6 +31,7 @@ from OriginAgent.agent.agent_tool_setup import (
     should_register_exec,
 )
 from OriginAgent.agent.action_summary import normalize_action_summary
+from OriginAgent.agent.local_awareness import LocalAwarenessBackend, normalize_local_awareness_summary
 from OriginAgent.agent.active_intents import ActiveIntentConfig, ActiveIntentRecord, ActiveIntentService
 from OriginAgent.agent.agent_cognitive_runtime import AgentCognitiveRuntime, CognitiveRuntimeDeps
 from OriginAgent.agent.agent_loop_components import build_loop_components
@@ -326,6 +327,11 @@ class AgentLoop:
         )
         for name, value in built.values.items():
             setattr(self, name, value)
+        self._local_awareness_backend = LocalAwarenessBackend()
+        self._last_local_awareness_summary: dict[str, Any] = normalize_local_awareness_summary(
+            self.tools_config.local_awareness,
+            backend=self._local_awareness_backend,
+        )
         self._bind_action_resume_precheck()
         self._register_default_tools()
         if _tc.my.enable:

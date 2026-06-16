@@ -1602,6 +1602,48 @@ class ToolAuditConfig(Base):
 class ToolsConfig(Base):
     """Tools configuration."""
 
+    class LocalAwarenessCameraConfig(Base):
+        enabled: bool = False
+        require_confirmation: bool = True
+        save_dir: str = "uploads/perception"
+        max_frames_per_call: int = Field(default=1, ge=1, le=8)
+        device_id: str | None = None
+
+    class LocalAwarenessScreenConfig(Base):
+        enabled: bool = False
+        require_confirmation: bool = True
+        save_dir: str = "uploads/perception"
+        screen_id: str | None = None
+
+    class LocalAwarenessAudioConfig(Base):
+        input_enabled: bool = False
+        output_enabled: bool = False
+        require_confirmation: bool = True
+        save_dir: str = "uploads/perception"
+        max_record_seconds: int = Field(default=5, ge=1, le=60)
+        device_id: str | None = None
+        voice: str | None = None
+
+    class LocalAwarenessMediaInspectionConfig(Base):
+        enabled: bool = True
+
+    class LocalAwarenessConfig(Base):
+        enabled: bool = False
+        device_discovery_enabled: bool = True
+        lan_discovery_enabled: bool = False
+        camera: "ToolsConfig.LocalAwarenessCameraConfig" = Field(
+            default_factory=lambda: ToolsConfig.LocalAwarenessCameraConfig()
+        )
+        screen: "ToolsConfig.LocalAwarenessScreenConfig" = Field(
+            default_factory=lambda: ToolsConfig.LocalAwarenessScreenConfig()
+        )
+        audio: "ToolsConfig.LocalAwarenessAudioConfig" = Field(
+            default_factory=lambda: ToolsConfig.LocalAwarenessAudioConfig()
+        )
+        media_inspection: "ToolsConfig.LocalAwarenessMediaInspectionConfig" = Field(
+            default_factory=lambda: ToolsConfig.LocalAwarenessMediaInspectionConfig()
+        )
+
     session_search: SessionSearchConfig = Field(
         default_factory=SessionSearchConfig,
         validation_alias=AliasChoices("sessionSearch", "session_search"),
@@ -1614,6 +1656,11 @@ class ToolsConfig(Base):
     image_generation: ImageGenerationToolConfig = Field(default_factory=ImageGenerationToolConfig)
     device: DeviceToolsConfig = Field(default_factory=DeviceToolsConfig)
     audit: ToolAuditConfig = Field(default_factory=ToolAuditConfig)
+    local_awareness: "ToolsConfig.LocalAwarenessConfig" = Field(
+        default_factory=lambda: ToolsConfig.LocalAwarenessConfig(),
+        validation_alias=AliasChoices("localAwareness", "local_awareness"),
+        serialization_alias="localAwareness",
+    )
     restrict_to_workspace: bool = False  # restrict all tool access to workspace directory
     mcp_servers: dict[str, MCPServerConfig] = Field(default_factory=dict)
     ssrf_whitelist: list[str] = Field(default_factory=list)  # CIDR ranges to exempt from SSRF blocking (e.g. ["100.64.0.0/10"] for Tailscale)

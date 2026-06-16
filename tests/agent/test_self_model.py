@@ -216,6 +216,35 @@ def test_self_model_action_empty_fallback_uses_unified_summary_shape(tmp_path) -
     assert action["planner_result"] == {}
 
 
+def test_self_model_local_awareness_uses_runtime_snapshot_or_stable_fallback(tmp_path) -> None:
+    cached = {
+        "enabled": True,
+        "camera_enabled": True,
+        "last_capture": {"status": "ok", "media_path": "uploads/perception/camera.png"},
+        "updated_at": "2026-06-16T00:00:00+00:00",
+        "backend_kind": "LocalAwarenessBackend",
+    }
+    self_model = SelfModelService(
+        tmp_path,
+        runtime_snapshot={
+            "local_awareness": cached,
+        },
+    ).build()
+
+    assert self_model["local_awareness"]["enabled"] is True
+    assert self_model["local_awareness"]["camera_enabled"] is True
+    assert self_model["local_awareness"]["last_capture"]["media_path"] == "uploads/perception/camera.png"
+    assert self_model["local_awareness"]["updated_at"] == "2026-06-16T00:00:00+00:00"
+    assert self_model["local_awareness"]["backend_kind"] == "LocalAwarenessBackend"
+
+    fallback = SelfModelService(tmp_path).build()["local_awareness"]
+    assert fallback["enabled"] is False
+    assert fallback["camera_enabled"] is False
+    assert fallback["last_capture"] == {}
+    assert "updated_at" in fallback
+    assert "backend_kind" in fallback
+
+
 def test_self_model_derives_limitations_and_redacts_sensitive_content(tmp_path) -> None:
     skill_dir = tmp_path / "skills" / "lighting-troubleshooting"
     skill_dir.mkdir(parents=True)

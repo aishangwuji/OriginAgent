@@ -239,6 +239,73 @@ def test_robot_g1_config_defaults_disabled_and_parses_aliases(tmp_path) -> None:
     assert config.agents.defaults.robot_g1.perception_mode == "on_demand"
 
 
+def test_local_awareness_config_defaults_disabled_and_parses_aliases(tmp_path) -> None:
+    default_config_path = tmp_path / "default-config.json"
+    default_config_path.write_text("{}", encoding="utf-8")
+
+    default_config = load_config(default_config_path)
+
+    assert default_config.tools.local_awareness.enabled is False
+    assert default_config.tools.local_awareness.device_discovery_enabled is True
+    assert default_config.tools.local_awareness.lan_discovery_enabled is False
+    assert default_config.tools.local_awareness.camera.enabled is False
+    assert default_config.tools.local_awareness.screen.enabled is False
+    assert default_config.tools.local_awareness.audio.input_enabled is False
+    assert default_config.tools.local_awareness.audio.output_enabled is False
+    assert default_config.tools.local_awareness.media_inspection.enabled is True
+
+    config_path = tmp_path / "config.json"
+    config_path.write_text(
+        json.dumps(
+            {
+                "tools": {
+                    "localAwareness": {
+                        "enabled": True,
+                        "lanDiscoveryEnabled": True,
+                        "camera": {
+                            "enabled": True,
+                            "requireConfirmation": False,
+                            "saveDir": "uploads/local",
+                            "deviceId": "camera-1",
+                        },
+                        "screen": {
+                            "enabled": True,
+                            "screenId": "main",
+                        },
+                        "audio": {
+                            "inputEnabled": True,
+                            "outputEnabled": True,
+                            "maxRecordSeconds": 7,
+                            "voice": "local",
+                        },
+                        "mediaInspection": {
+                            "enabled": False,
+                        },
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    config = load_config(config_path)
+    local_awareness = config.tools.local_awareness
+
+    assert local_awareness.enabled is True
+    assert local_awareness.lan_discovery_enabled is True
+    assert local_awareness.camera.enabled is True
+    assert local_awareness.camera.require_confirmation is False
+    assert local_awareness.camera.save_dir == "uploads/local"
+    assert local_awareness.camera.device_id == "camera-1"
+    assert local_awareness.screen.enabled is True
+    assert local_awareness.screen.screen_id == "main"
+    assert local_awareness.audio.input_enabled is True
+    assert local_awareness.audio.output_enabled is True
+    assert local_awareness.audio.max_record_seconds == 7
+    assert local_awareness.audio.voice == "local"
+    assert local_awareness.media_inspection.enabled is False
+
+
 def test_save_config_rewrites_legacy_my_tool_keys(tmp_path) -> None:
     config_path = tmp_path / "config.json"
     config_path.write_text(

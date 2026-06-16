@@ -22,7 +22,7 @@ from OriginAgent.agent.tools.runtime_status import (
     ToolAuditSummaryTool,
 )
 from OriginAgent.agent.tools.context import RequestContext
-from OriginAgent.config.schema import DomainPacksConfig, NearlineMemoryConfig
+from OriginAgent.config.schema import DomainPacksConfig, NearlineMemoryConfig, ToolsConfig
 from OriginAgent.cron.service import CronService
 from OriginAgent.cron.types import CronSchedule
 from OriginAgent.session.search_index import SessionSearchIndexService
@@ -695,6 +695,70 @@ async def test_action_views_read_same_cached_summary(tmp_path) -> None:
     assert plan["planner_result"] == inspect["views"]["action"]["planner_result"]
     assert plan["planner_result"] == status["self_model"]["action"]["planner_result"]
     assert inspect["views"]["action"]["cache_timestamp"] == "2026-06-16T00:00:00+00:00"
+
+
+@pytest.mark.asyncio
+async def test_local_awareness_views_read_same_cached_summary(tmp_path) -> None:
+    config = ToolsConfig()
+    config.local_awareness = ToolsConfig.LocalAwarenessConfig(
+        enabled=True,
+        camera=ToolsConfig.LocalAwarenessCameraConfig(enabled=True),
+    )
+    cached = {
+        "enabled": True,
+        "device_discovery_enabled": True,
+        "lan_discovery_enabled": False,
+        "camera_enabled": True,
+        "screen_enabled": False,
+        "audio_input_enabled": False,
+        "audio_output_enabled": False,
+        "media_inspection_enabled": True,
+        "last_capture": {"status": "ok", "media_path": "uploads/perception/camera.png"},
+        "updated_at": "2026-06-16T00:00:00+00:00",
+        "backend_kind": "LocalAwarenessBackend",
+    }
+    loop = SimpleNamespace(
+        tools_config=config,
+        _last_local_awareness_summary=cached,
+        _local_awareness_backend=None,
+        _cached_action_summary={},
+        _last_runtime_context=None,
+        _last_continuity_session_key=None,
+        _last_context_assembly={},
+        _last_recovered_continuity_checkpoint={},
+        _last_governance_audit={},
+        _meta_cognition_runtime=None,
+        context=SimpleNamespace(_context_config=SimpleNamespace(enable_phase1_continuity=True)),
+    )
+    sessions = SimpleNamespace(get_or_create=lambda key: SimpleNamespace(metadata={}, get_history=lambda **kwargs: []))
+    service = RuntimeIntrospectionService(
+        loop=loop,
+        workspace=tmp_path,
+        registry=SimpleNamespace(tool_names=["originagent_runtime_status", "originagent_inspect_context"]),
+        sessions=sessions,
+        pending_queues={},
+    )
+
+    inspect = await InspectContextTool(
+        workspace=tmp_path,
+        registry=SimpleNamespace(tool_names=["originagent_inspect_context"]),
+        sessions=sessions,
+        pending_queues={},
+        introspection_service=service,
+    ).execute()
+    status = await RuntimeStatusTool(
+        workspace=tmp_path,
+        registry=SimpleNamespace(tool_names=["originagent_runtime_status"]),
+        sessions=sessions,
+        pending_queues={},
+        introspection_service=service,
+    ).execute()
+
+    assert status["local_awareness"]["last_capture"]["media_path"] == "uploads/perception/camera.png"
+    assert inspect["views"]["local_awareness"]["last_capture"] == status["local_awareness"]["last_capture"]
+    assert status["self_model"]["local_awareness"]["last_capture"] == status["local_awareness"]["last_capture"]
+    assert status["self_model"]["local_awareness"]["camera_enabled"] is True
+    assert inspect["views"]["local_awareness"]["enabled"] is True
 
 
 @pytest.mark.asyncio
