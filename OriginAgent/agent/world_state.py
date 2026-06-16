@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from OriginAgent.agent.identity import RuntimeContext
+from OriginAgent.agent.local_awareness import summarize_device_map
 from OriginAgent.session.manager import Session, SessionManager
 from OriginAgent.utils.attachments import AttachmentDescriptor, describe_attachment
 
@@ -298,6 +299,7 @@ class WorldStateSnapshot:
     events: list[PerceptionEventCandidate] = field(default_factory=list)
     world_summary: WorldSummary | None = None
     pruning: dict[str, Any] = field(default_factory=dict)
+    device_map: dict[str, Any] = field(default_factory=dict)
 
     def to_json(self) -> dict[str, Any]:
         return {
@@ -311,6 +313,7 @@ class WorldStateSnapshot:
             "events": [item.to_json() for item in self.events],
             "world_summary": self.world_summary.to_json() if self.world_summary is not None else None,
             "pruning": dict(self.pruning),
+            "device_map": dict(self.device_map),
         }
 
     @classmethod
@@ -344,6 +347,7 @@ class WorldStateSnapshot:
             events=events,
             world_summary=summary,
             pruning=dict(raw.get("pruning") or {}) if isinstance(raw.get("pruning"), dict) else {},
+            device_map=dict(raw.get("device_map") or {}) if isinstance(raw.get("device_map"), dict) else {},
         )
 
 
@@ -394,6 +398,7 @@ class WorldStateManager:
                 "status": snapshot.status,
                 "version": snapshot.version,
                 "updated_at": snapshot.updated_at,
+                "device_map_summary": summarize_device_map(snapshot.device_map) if snapshot.device_map else {},
             }
         filtered = self.filtered_candidates(
             session,
@@ -409,7 +414,23 @@ class WorldStateManager:
             "world_summary": filtered.get("included_summary") or {},
             "world_relationships": list((filtered.get("included_summary") or {}).get("relationships") or []),
             "recent_events": list((self.recent_events(session, identity=identity, limit=5) or {}).get("recent_events", [])),
+            "device_map_summary": summarize_device_map(snapshot.device_map) if snapshot.device_map else {},
         }
+
+    def ingest_device_discovery(
+        self,
+        session: Session,
+        *,
+        runtime_context: RuntimeContext,
+        device_map: dict[str, Any],
+    ) -> WorldStateSnapshot:
+        snapshot = self.load(session, identity=runtime_context)
+        snapshot.status = "active"
+        snapshot.version = "phase2"
+        snapshot.scope = snapshot.scope or "session"
+        snapshot.owner_id = snapshot.owner_id or runtime_context.user_id
+        snapshot.device_map = dict(device_map)
+        return self.save(session, snapshot)
 
     def ingest_media(
         self,
@@ -720,8 +741,8 @@ class WorldStateManager:
             if any(scene.snapshot_id == item.snapshot_id for scene in kept_snapshots)
         ][-6:]
         refreshed = WorldStateSnapshot(
-            status="active" if kept_snapshots else "placeholder",
-            version="phase2" if kept_snapshots else "phase1",
+            status="active" if kept_snapshots or snapshot.device_map else "placeholder",
+            version="phase2" if kept_snapshots or snapshot.device_map else "phase1",
             updated_at=snapshot.updated_at,
             scope=snapshot.scope,
             owner_id=snapshot.owner_id,
@@ -737,6 +758,7 @@ class WorldStateManager:
                 "inspection_count": max(0, len(snapshot.inspections) - len(kept_inspections)),
                 "refreshed_at": now.isoformat(),
             },
+            device_map=dict(snapshot.device_map),
         )
         if not refreshed.snapshots:
             return refreshed

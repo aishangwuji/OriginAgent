@@ -1627,6 +1627,18 @@ class ToolsConfig(Base):
     class LocalAwarenessMediaInspectionConfig(Base):
         enabled: bool = True
 
+    class LocalAwarenessHardwareDiscoveryConfig(Base):
+        enabled: bool = False
+        posture: Literal["strong"] = "strong"
+        allowed_cidrs: list[str] = Field(default_factory=list)
+        max_hosts: int = Field(default=256, ge=1, le=4096)
+        max_concurrency: int = Field(default=64, ge=1, le=256)
+        timeout_ms: int = Field(default=500, ge=50, le=5000)
+        active_probe_enabled: bool = True
+        service_ports: list[int] = Field(
+            default_factory=lambda: [22, 53, 80, 443, 445, 554, 1883, 1900, 5353, 5683, 8008, 8080, 8123, 8883, 9000]
+        )
+
     class LocalAwarenessConfig(Base):
         enabled: bool = False
         device_discovery_enabled: bool = True
@@ -1642,6 +1654,11 @@ class ToolsConfig(Base):
         )
         media_inspection: "ToolsConfig.LocalAwarenessMediaInspectionConfig" = Field(
             default_factory=lambda: ToolsConfig.LocalAwarenessMediaInspectionConfig()
+        )
+        hardware_discovery: "ToolsConfig.LocalAwarenessHardwareDiscoveryConfig" = Field(
+            default_factory=lambda: ToolsConfig.LocalAwarenessHardwareDiscoveryConfig(),
+            validation_alias=AliasChoices("hardwareDiscovery", "hardware_discovery"),
+            serialization_alias="hardwareDiscovery",
         )
 
     session_search: SessionSearchConfig = Field(

@@ -30,6 +30,10 @@ def _update_summary(loop: Any | None, *, key: str, value: dict[str, Any]) -> Non
         return
     cached = dict(getattr(loop, "_last_local_awareness_summary", {}) or {})
     cached[key] = dict(value)
+    if isinstance(value.get("device_map"), dict):
+        cached["device_map"] = dict(value["device_map"])
+        if isinstance(value["device_map"].get("summary"), dict):
+            cached["device_map_summary"] = dict(value["device_map"]["summary"])
     cached["updated_at"] = datetime.now(timezone.utc).isoformat()
     from OriginAgent.agent.local_awareness import normalize_local_awareness_summary
 
@@ -70,6 +74,27 @@ class _LocalAwarenessTool(Tool):
     def _enabled(self) -> bool:
         return bool(getattr(self._config, "enabled", False))
 
+    def _ingest_device_map(self, result: dict[str, Any]) -> None:
+        device_map = result.get("device_map")
+        if not isinstance(device_map, dict):
+            return
+        loop = self._loop
+        ctx = self._request_ctx.get()
+        if loop is None or ctx is None or not ctx.session_key:
+            return
+        world_state = getattr(loop, "world_state", None)
+        sessions = getattr(loop, "sessions", None)
+        runtime_context = getattr(ctx, "runtime_context", None)
+        if world_state is None or sessions is None or runtime_context is None:
+            return
+        session = sessions.get_or_create(ctx.session_key)
+        if hasattr(world_state, "ingest_device_discovery"):
+            world_state.ingest_device_discovery(
+                session,
+                runtime_context=runtime_context,
+                device_map=device_map,
+            )
+
 
 class DiscoverLocalDevicesTool(_LocalAwarenessTool):
     name = "originagent_discover_local_devices"
@@ -94,6 +119,7 @@ class DiscoverLocalDevicesTool(_LocalAwarenessTool):
         else:
             result = self._backend.discover_local_devices(config=self._config)
         _update_summary(self._loop, key="last_discovery", value=result)
+        self._ingest_device_map(result)
         return result
 
 
@@ -118,6 +144,7 @@ class DiscoverLanDevicesTool(_LocalAwarenessTool):
         else:
             result = self._backend.discover_lan_devices(config=self._config)
         _update_summary(self._loop, key="last_discovery", value=result)
+        self._ingest_device_map(result)
         return result
 
 

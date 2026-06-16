@@ -435,6 +435,52 @@ def test_build_action_continuity_inputs_includes_arc_session_pending_confirmatio
     assert continuity.pending_confirmations[0]["confirmation_id"] == "confirmation_auto_1"
 
 
+def test_world_state_ingests_device_map_and_prompt_summary(tmp_path: Path):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    sessions = SessionManager(workspace)
+    session = sessions.get_or_create("cli:direct")
+    world_state = WorldStateManager(workspace, sessions)
+    runtime_context = ActorResolver().resolve_runtime_context(
+        channel="cli",
+        chat_id="direct",
+        sender_id="user-1",
+        metadata={"device_id": "device-a"},
+        session_key="cli:direct",
+    )
+    device_map = {
+        "status": "ok",
+        "generated_at": "2026-06-16T00:00:00+00:00",
+        "devices": [
+            {
+                "device_id": "dev_router",
+                "kind": "router",
+                "ip_addresses": ["192.168.1.1"],
+                "protocols": ["arp", "dns"],
+                "controllable": False,
+                "last_seen_at": "2026-06-16T00:00:00+00:00",
+            }
+        ],
+        "device_count": 1,
+    }
+
+    snapshot = world_state.ingest_device_discovery(
+        session,
+        runtime_context=runtime_context,
+        device_map=device_map,
+    )
+    payload = world_state.snapshot_prompt_payload(
+        session,
+        identity=runtime_context,
+        current_message="what devices are nearby?",
+    )
+
+    assert snapshot.device_map["devices"][0]["device_id"] == "dev_router"
+    assert session.metadata["world_state_v1"]["device_map"]["device_count"] == 1
+    assert payload["device_map_summary"]["device_count"] == 1
+    assert payload["device_map_summary"]["kind_counts"] == {"router": 1}
+
+
 def test_world_state_apply_inspection_marks_contested_and_attention_prefixes(tmp_path: Path):
     workspace = tmp_path / "workspace"
     workspace.mkdir()

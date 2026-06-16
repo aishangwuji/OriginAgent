@@ -623,6 +623,7 @@ class SelfModelRenderer:
         reviews = self_model.get("reviews", {})
         confirmations = self_model.get("confirmations", {})
         background_tasks = self_model.get("background_tasks", {})
+        local_awareness = self_model.get("local_awareness", {})
         limitations = self_model.get("limitations", [])
 
         active_domains = [
@@ -693,6 +694,10 @@ class SelfModelRenderer:
             ),
             f"- Nearline last synced: {memory.get('nearline', {}).get('last_synced_at') or 'unknown'}",
             "",
+            "## Local Awareness",
+            "",
+            *self._render_local_awareness_lines(local_awareness if isinstance(local_awareness, dict) else {}),
+            "",
             "## Known Limitations",
             "",
         ]
@@ -705,6 +710,28 @@ class SelfModelRenderer:
         else:
             lines.append("- None.")
         return "\n".join(lines)
+
+    @staticmethod
+    def _render_local_awareness_lines(local_awareness: dict[str, Any]) -> list[str]:
+        summary = local_awareness.get("device_map_summary") if isinstance(local_awareness, dict) else {}
+        if not isinstance(summary, dict) or not summary:
+            return [
+                f"- Enabled: {_yes_no(bool(local_awareness.get('enabled')))}",
+                "- Device map: none scanned yet",
+            ]
+        protocols = _render_name_list([str(item) for item in summary.get("protocols") or []])
+        kind_counts = summary.get("kind_counts") if isinstance(summary.get("kind_counts"), dict) else {}
+        kinds = ", ".join(f"{key}:{value}" for key, value in sorted(kind_counts.items())) or "none"
+        return [
+            f"- Enabled: {_yes_no(bool(local_awareness.get('enabled')))}",
+            f"- Devices visible: {int(summary.get('device_count', 0) or 0)} total, "
+            f"{int(summary.get('local_device_count', 0) or 0)} local, "
+            f"{int(summary.get('lan_device_count', 0) or 0)} LAN, "
+            f"{int(summary.get('unknown_device_count', 0) or 0)} unknown",
+            f"- Device kinds: {kinds}",
+            f"- Protocols observed: {protocols}",
+            f"- Last scan: {summary.get('last_seen_at') or 'unknown'}",
+        ]
 
 
 def _limitation(

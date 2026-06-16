@@ -7,7 +7,7 @@ from datetime import datetime, timedelta, timezone
 from OriginAgent.agent.background_review import ReviewProposal, ReviewProposalStore
 from OriginAgent.agent.confirmation import ConfirmationRequest, PendingConfirmationStore
 from OriginAgent.agent.facts import FactStore
-from OriginAgent.agent.self_model import SelfModelService
+from OriginAgent.agent.self_model import SelfModelRenderer, SelfModelService
 from OriginAgent.config.schema import NearlineMemoryConfig
 from OriginAgent.memory.candidates import GovernedMemoryWriter, MemoryCandidate
 from OriginAgent.memory.models import ProfileSnapshot
@@ -243,6 +243,33 @@ def test_self_model_local_awareness_uses_runtime_snapshot_or_stable_fallback(tmp
     assert fallback["last_capture"] == {}
     assert "updated_at" in fallback
     assert "backend_kind" in fallback
+
+
+def test_self_model_renderer_includes_local_awareness_device_summary(tmp_path) -> None:
+    self_model = SelfModelService(
+        tmp_path,
+        runtime_snapshot={
+            "local_awareness": {
+                "enabled": True,
+                "device_map_summary": {
+                    "device_count": 2,
+                    "local_device_count": 1,
+                    "lan_device_count": 1,
+                    "unknown_device_count": 1,
+                    "kind_counts": {"camera": 1, "unknown": 1},
+                    "protocols": ["arp", "local_pnp"],
+                    "last_seen_at": "2026-06-16T00:00:00+00:00",
+                },
+            },
+        },
+    ).build()
+
+    rendered = SelfModelRenderer().render(self_model)
+
+    assert "## Local Awareness" in rendered
+    assert "Devices visible: 2 total, 1 local, 1 LAN, 1 unknown" in rendered
+    assert "camera:1" in rendered
+    assert "`arp`" in rendered
 
 
 def test_self_model_derives_limitations_and_redacts_sensitive_content(tmp_path) -> None:
