@@ -38,6 +38,13 @@ cd bridge && npm install && npm run build
 originagent gateway
 ```
 
+## Python / pytest Environment Notes
+
+- On this Windows workspace, do not assume global `python` or `py -m pytest` works. They may be unavailable even when the repo is healthy.
+- Prefer the repo venv for all validation commands: `.\.venv\Scripts\python.exe -m pytest ...`
+- If you want a shorter shell workflow, activate the venv first: `.\.venv\Scripts\Activate.ps1`
+- Treat missing global Python launcher bindings as a shell setup issue, not as proof that tests cannot run in this repo.
+
 ## High-Level Architecture
 
 ### Core Data Flow

@@ -44,6 +44,9 @@ from OriginAgent.agent.agent_turn_pipeline import (
     TurnPipelineDeps,
     TurnState,
 )
+from OriginAgent.agent.services import AgentServiceContainer
+from OriginAgent.agent.turn_orchestrator import TurnOrchestrator, TurnOrchestratorDeps
+from OriginAgent.agent.message_dispatcher import MessageDispatcher, MessageDispatcherDeps
 from OriginAgent.domain_packs.robot.runtime.robot_actions import TypedRobotAction
 from OriginAgent.agent.agent_turn_persist import TurnPersistManager
 from OriginAgent.agent.autocompact import AutoCompact
@@ -365,6 +368,14 @@ class AgentLoop:
         register_builtin_commands(self.commands)
         self._turn_pipeline = AgentTurnPipeline(self._build_turn_pipeline_deps())
         self._cognitive_runtime = AgentCognitiveRuntime(self._build_cognitive_runtime_deps())
+        self.services = AgentServiceContainer.from_mapping(
+            built.values,
+            commands=self.commands,
+            turn_pipeline=self._turn_pipeline,
+            cognitive_runtime=self._cognitive_runtime,
+        )
+        self._turn_orchestrator = TurnOrchestrator(TurnOrchestratorDeps(loop=self, services=self.services))
+        self._message_dispatcher = MessageDispatcher(MessageDispatcherDeps(loop=self))
         self._install_meta_cognition_observer()
 
     def _build_transcription_provider(self, config: dict[str, Any] | None = None) -> Any | None:
@@ -622,6 +633,21 @@ class AgentLoop:
 
     def _record_cognitive_scan(self, payload: dict[str, Any]) -> None:
         self._last_cognitive_scan = dict(payload)
+
+    def _get_turn_orchestrator(self) -> TurnOrchestrator:
+        orchestrator = getattr(self, "_turn_orchestrator", None)
+        if orchestrator is None:
+            services = getattr(self, "services", None)
+            orchestrator = TurnOrchestrator(TurnOrchestratorDeps(loop=self, services=services))
+            self._turn_orchestrator = orchestrator
+        return orchestrator
+
+    def _get_message_dispatcher(self) -> MessageDispatcher:
+        dispatcher = getattr(self, "_message_dispatcher", None)
+        if dispatcher is None:
+            dispatcher = MessageDispatcher(MessageDispatcherDeps(loop=self))
+            self._message_dispatcher = dispatcher
+        return dispatcher
 
     def _sync_subagent_runtime_limits(self) -> None:
         """Keep subagent runtime limits aligned with mutable loop settings."""
@@ -1485,221 +1511,10 @@ class AgentLoop:
         self._schedule_session_search_refresh(force=self.session_search_index.rebuild_on_start)
         self._start_active_intent_loop()
         logger.info("Agent loop started")
-
-        while self._running:
-            try:
-                msg = await asyncio.wait_for(self.bus.consume_inbound(), timeout=1.0)
-            except asyncio.TimeoutError:
-                self.auto_compact.check_expired(
-                    self._schedule_background,
-                    active_session_keys=self._pending_queues.keys(),
-                )
-                continue
-            except asyncio.CancelledError:
-                # Preserve real task cancellation so shutdown can complete cleanly.
-                # Only ignore non-task CancelledError signals that may leak from integrations.
-                if not self._running or asyncio.current_task().cancelling():
-                    raise
-                continue
-            except Exception as e:
-                logger.warning("Error consuming inbound message: {}, continuing...", e)
-                continue
-
-            raw = msg.content.strip()
-            effective_key = self._effective_session_key(msg)
-            if self.commands.is_priority(raw):
-                await self._dispatch_command_inline(
-                    msg, effective_key, raw,
-                    self.commands.dispatch_priority,
-                )
-                continue
-            # If this session already has an active pending queue (i.e. a task
-            # is processing this session), route the message there for mid-turn
-            # injection instead of creating a competing task.
-            if effective_key in self._pending_queues:
-                # Non-priority commands must not be queued for injection;
-                # dispatch them directly (same pattern as priority commands).
-                if self.commands.is_dispatchable_command(raw):
-                    await self._dispatch_command_inline(
-                        msg, effective_key, raw,
-                        self.commands.dispatch,
-                    )
-                    continue
-                pending_msg = msg
-                if effective_key != msg.session_key:
-                    pending_msg = dataclasses.replace(
-                        msg,
-                        session_key_override=effective_key,
-                    )
-                try:
-                    self._pending_queues[effective_key].put_nowait(pending_msg)
-                except asyncio.QueueFull:
-                    logger.warning(
-                        "Pending queue full for session {}, falling back to queued task",
-                        effective_key,
-                    )
-                else:
-                    logger.info(
-                        "Routed follow-up message to pending queue for session {}",
-                        effective_key,
-                    )
-                    continue
-            # Compute the effective session key before dispatching
-            # This ensures /stop command can find tasks correctly when unified session is enabled
-            task = asyncio.create_task(self._dispatch(msg))
-            self._active_tasks.setdefault(effective_key, []).append(task)
-            task.add_done_callback(
-                lambda t, k=effective_key: self._active_tasks.get(k, [])
-                and self._active_tasks[k].remove(t)
-                if t in self._active_tasks.get(k, [])
-                else None
-            )
+        await self._get_message_dispatcher().run_forever()
 
     async def _dispatch(self, msg: InboundMessage) -> None:
-        """Process a message: per-session serial, cross-session concurrent."""
-        session_key = self._effective_session_key(msg)
-        if session_key != msg.session_key:
-            msg = dataclasses.replace(msg, session_key_override=session_key)
-        lock = self._session_locks.setdefault(session_key, asyncio.Lock())
-        gate = self._concurrency_gate or nullcontext()
-
-        # Register a pending queue so follow-up messages for this session are
-        # routed here (mid-turn injection) instead of spawning a new task.
-        pending = asyncio.Queue(maxsize=20)
-        self._pending_queues[session_key] = pending
-
-        try:
-            async with lock, gate:
-                try:
-                    on_stream = on_stream_end = None
-                    if msg.metadata.get("_wants_stream"):
-                        # Split one answer into distinct stream segments.
-                        stream_base_id = f"{msg.session_key}:{time.time_ns()}"
-                        stream_segment = 0
-
-                        def _current_stream_id() -> str:
-                            return f"{stream_base_id}:{stream_segment}"
-
-                        async def on_stream(delta: str) -> None:
-                            meta = dict(msg.metadata or {})
-                            meta["_stream_delta"] = True
-                            meta["_stream_id"] = _current_stream_id()
-                            await self.bus.publish_outbound(OutboundMessage(
-                                channel=msg.channel, chat_id=msg.chat_id,
-                                content=delta,
-                                metadata=meta,
-                            ))
-
-                        async def on_stream_end(*, resuming: bool = False) -> None:
-                            nonlocal stream_segment
-                            meta = dict(msg.metadata or {})
-                            meta["_stream_end"] = True
-                            meta["_resuming"] = resuming
-                            meta["_stream_id"] = _current_stream_id()
-                            await self.bus.publish_outbound(OutboundMessage(
-                                channel=msg.channel, chat_id=msg.chat_id,
-                                content="",
-                                metadata=meta,
-                            ))
-                            stream_segment += 1
-
-                    response = await self._process_message(
-                        msg, on_stream=on_stream, on_stream_end=on_stream_end,
-                        pending_queue=pending,
-                    )
-                    if response is not None:
-                        await self.bus.publish_outbound(response)
-                    elif msg.channel == "cli":
-                        await self.bus.publish_outbound(OutboundMessage(
-                            channel=msg.channel, chat_id=msg.chat_id,
-                            content="", metadata=msg.metadata or {},
-                        ))
-                    if msg.channel == "websocket":
-                        # Signal that the turn is fully complete (all tools executed,
-                        # final text streamed).  This lets WS clients know when to
-                        # definitively stop the loading indicator.
-                        await self.bus.publish_outbound(OutboundMessage(
-                            channel=msg.channel, chat_id=msg.chat_id,
-                            content="",
-                            metadata={
-                                **msg.metadata,
-                                "_turn_end": True,
-                                "latency_ms": msg.metadata.get("webui_turn_latency_ms"),
-                                "goal_state": goal_state_ws_blob(
-                                    self.sessions.get_or_create(session_key).metadata
-                                ),
-                            },
-                        ))
-                        if msg.metadata.get("webui") is True:
-                            async def _generate_title_and_notify() -> None:
-                                generated = await maybe_generate_webui_title_after_turn(
-                                    channel=msg.channel,
-                                    metadata=msg.metadata,
-                                    sessions=self.sessions,
-                                    session_key=session_key,
-                                    provider=self.provider,
-                                    model=self.model,
-                                )
-                                if generated:
-                                    await self.bus.publish_outbound(OutboundMessage(
-                                        channel=msg.channel,
-                                        chat_id=msg.chat_id,
-                                        content="",
-                                        metadata={**msg.metadata, "_session_updated": True},
-                                    ))
-
-                            self._schedule_background(_generate_title_and_notify())
-                except asyncio.CancelledError:
-                    logger.info("Task cancelled for session {}", session_key)
-                    # Preserve partial context from the interrupted turn so
-                    # the user does not lose tool results and assistant
-                    # messages accumulated before /stop.  The checkpoint was
-                    # already persisted to session metadata by
-                    # _emit_checkpoint during tool execution; materializing
-                    # it into session history now makes it visible in the
-                    # next conversation turn.
-                    try:
-                        key = self._effective_session_key(msg)
-                        session = self.sessions.get_or_create(key)
-                        if self._restore_runtime_checkpoint(session):
-                            self._clear_pending_user_turn(session)
-                            self.sessions.save(session)
-                            logger.info(
-                                "Restored partial context for cancelled session {}",
-                                key,
-                            )
-                    except Exception:
-                        logger.debug(
-                            "Could not restore checkpoint for cancelled session {}",
-                            session_key,
-                            exc_info=True,
-                        )
-                    raise
-                except Exception:
-                    logger.exception("Error processing message for session {}", session_key)
-                    await self.bus.publish_outbound(OutboundMessage(
-                        channel=msg.channel, chat_id=msg.chat_id,
-                        content="Sorry, I encountered an error.",
-                    ))
-        finally:
-            # Drain any messages still in the pending queue and re-publish
-            # them to the bus so they are processed as fresh inbound messages
-            # rather than silently lost.
-            queue = self._pending_queues.pop(session_key, None)
-            if queue is not None:
-                leftover = 0
-                while True:
-                    try:
-                        item = queue.get_nowait()
-                    except asyncio.QueueEmpty:
-                        break
-                    await self.bus.publish_inbound(item)
-                    leftover += 1
-                if leftover:
-                    logger.info(
-                        "Re-published {} leftover message(s) to bus for session {}",
-                        leftover, session_key,
-                    )
+        return await self._get_message_dispatcher().dispatch_message(msg)
 
     async def close_mcp(self) -> None:
         """Drain pending background archives, then close MCP connections."""
@@ -2316,90 +2131,15 @@ class AgentLoop:
     ) -> OutboundMessage | None:
         """Process a single inbound message and return the response."""
         self._refresh_provider_snapshot()
-
-        if msg.channel == "system":
-            return await self._process_system_message(
-                msg,
-                session_key=session_key,
-                on_progress=on_progress,
-                on_stream=on_stream,
-                on_stream_end=on_stream_end,
-                pending_queue=pending_queue,
-                capability_snapshot=capability_snapshot,
-            )
-
-        key = session_key or msg.session_key
-        ctx = TurnContext(
-            msg=msg,
-            session=None,
-            session_key=key,
-            state=TurnState.RESTORE,
-            turn_id=f"{key}:{time.time_ns()}",
+        return await self._get_turn_orchestrator().process_message(
+            msg,
+            session_key=session_key,
             on_progress=on_progress,
             on_stream=on_stream,
             on_stream_end=on_stream_end,
             pending_queue=pending_queue,
             capability_snapshot=capability_snapshot,
         )
-        self._current_meta_turn_id = ctx.turn_id
-        try:
-            while ctx.state is not TurnState.DONE:
-                handler_name = f"_state_{ctx.state.name.lower()}"
-                handler = getattr(self, handler_name, None)
-                if handler is None:
-                    raise RuntimeError(f"Missing state handler for {ctx.state}")
-
-                t0 = time.perf_counter()
-                try:
-                    event = await handler(ctx)
-                except Exception:
-                    duration = (time.perf_counter() - t0) * 1000
-                    ctx.trace.append(
-                        StateTraceEntry(
-                            state=ctx.state,
-                            started_at=t0,
-                            duration_ms=duration,
-                            event="",
-                            error="exception",
-                        )
-                    )
-                    raise
-
-                duration = (time.perf_counter() - t0) * 1000
-                ctx.trace.append(
-                    StateTraceEntry(
-                        state=ctx.state,
-                        started_at=t0,
-                        duration_ms=duration,
-                        event=event,
-                    )
-                )
-                logger.debug(
-                    "[turn {}] State {} took {:.1f}ms -> event {}",
-                    ctx.turn_id,
-                    ctx.state.name,
-                    duration,
-                    event,
-                )
-
-                next_state = self._TRANSITIONS.get((ctx.state, event))
-                if next_state is None:
-                    raise RuntimeError(
-                        f"[turn {ctx.turn_id}] No transition from {ctx.state} "
-                        f"on event {event!r}"
-                    )
-                ctx.state = next_state
-
-            logger.debug(
-                "[turn {}] Turn completed after {} states",
-                ctx.turn_id,
-                len(ctx.trace),
-            )
-            self._scan_meta_triggers_for_turn(ctx)
-            self._schedule_meta_cognition_reflection(ctx)
-            return ctx.outbound
-        finally:
-            self._current_meta_turn_id = None
 
     def _install_meta_cognition_observer(self) -> None:
         runtime = getattr(self, "_meta_cognition_runtime", None)
@@ -2947,6 +2687,10 @@ class AgentLoop:
 
     async def _state_respond(self, ctx: TurnContext) -> str:
         return await self._turn_pipeline.state_respond(ctx)
+
+    @property
+    def _message_dispatcher_ref(self) -> MessageDispatcher:
+        return self._get_message_dispatcher()
 
     def _sanitize_persisted_blocks(
         self,

@@ -1,3 +1,10 @@
+## Python / pytest 环境（Windows）
+
+- 不要把 `py -m pytest` 失败误判成“当前环境没有可用 Python”。本仓库优先使用项目自带虚拟环境。
+- 运行测试时默认使用 `.\.venv\Scripts\python.exe -m pytest ...`，不要依赖全局 `python` 或 `py`。
+- 如果需要临时简化命令，可先执行 `.\.venv\Scripts\Activate.ps1`，之后再运行 `python -m pytest ...`。
+- 只有在 `.\.venv\Scripts\python.exe` 本身不可用时，才把它视为真实环境阻塞；单独的全局 Python / `py.exe` 异常不是阻塞事故。
+
 <!-- gitnexus:start -->
 # GitNexus — Code Intelligence
 
