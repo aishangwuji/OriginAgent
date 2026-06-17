@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import dataclasses
 import time
 from dataclasses import dataclass
 from typing import Any, Awaitable, Callable
@@ -8,39 +7,27 @@ from typing import Any, Awaitable, Callable
 from loguru import logger
 
 from OriginAgent.agent.agent_turn_pipeline import StateTraceEntry, TurnContext, TurnState
+from OriginAgent.agent.system_turn_handler import SystemTurnHandler
 from OriginAgent.bus.events import InboundMessage, OutboundMessage
 from OriginAgent.security.capabilities import CapabilitySnapshot
 
 
 @dataclass(frozen=True)
 class TurnOrchestratorDeps:
-    loop: Any
+    turn_pipeline: Any
+    transitions: dict[tuple[TurnState, str], TurnState]
+    system_turn_handler: SystemTurnHandler
+    scan_meta_triggers_for_turn: Callable[[TurnContext], None]
+    schedule_meta_cognition_reflection: Callable[[TurnContext], None]
+    set_current_meta_turn_id: Callable[[str], None]
+    clear_current_meta_turn_id: Callable[[], None]
 
 
 class TurnOrchestrator:
-    """Drive non-system turn orchestration via AgentLoop compatibility hooks.
-
-    Required loop attributes:
-    - _process_system_message
-    - _turn_pipeline
-    - _TRANSITIONS
-    - _scan_meta_triggers_for_turn
-    - _schedule_meta_cognition_reflection
-    - _current_meta_turn_id
-    """
+    """Drive turn orchestration using explicit pipeline and system-turn deps."""
 
     def __init__(self, deps: TurnOrchestratorDeps) -> None:
         self._deps = deps
-
-    @property
-    def loop(self) -> Any:
-        return self._deps.loop
-
-    def _turn_pipeline(self) -> Any:
-        pipeline = getattr(self.loop, "_turn_pipeline", None)
-        if pipeline is not None:
-            return pipeline
-        raise AttributeError("turn pipeline is not available")
 
     async def process_message(
         self,
@@ -53,7 +40,7 @@ class TurnOrchestrator:
         capability_snapshot: CapabilitySnapshot | None = None,
     ) -> OutboundMessage | None:
         if msg.channel == "system":
-            return await self.loop._process_system_message(
+            return await self._deps.system_turn_handler.process_message(
                 msg,
                 session_key=session_key,
                 on_progress=on_progress,
@@ -76,12 +63,11 @@ class TurnOrchestrator:
             pending_queue=pending_queue,
             capability_snapshot=capability_snapshot,
         )
-        self.loop._current_meta_turn_id = ctx.turn_id
+        self._deps.set_current_meta_turn_id(ctx.turn_id)
         try:
-            pipeline = self._turn_pipeline()
             while ctx.state is not TurnState.DONE:
                 handler_name = f"state_{ctx.state.name.lower()}"
-                handler = getattr(pipeline, handler_name, None)
+                handler = getattr(self._deps.turn_pipeline, handler_name, None)
                 if handler is None:
                     raise RuntimeError(f"Missing state handler for {ctx.state}")
 
@@ -118,7 +104,7 @@ class TurnOrchestrator:
                     event,
                 )
 
-                next_state = self.loop._TRANSITIONS.get((ctx.state, event))
+                next_state = self._deps.transitions.get((ctx.state, event))
                 if next_state is None:
                     raise RuntimeError(
                         f"[turn {ctx.turn_id}] No transition from {ctx.state} on event {event!r}"
@@ -130,8 +116,8 @@ class TurnOrchestrator:
                 ctx.turn_id,
                 len(ctx.trace),
             )
-            self.loop._scan_meta_triggers_for_turn(ctx)
-            self.loop._schedule_meta_cognition_reflection(ctx)
+            self._deps.scan_meta_triggers_for_turn(ctx)
+            self._deps.schedule_meta_cognition_reflection(ctx)
             return ctx.outbound
         finally:
-            self.loop._current_meta_turn_id = None
+            self._deps.clear_current_meta_turn_id()

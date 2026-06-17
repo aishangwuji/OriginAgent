@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from OriginAgent.agent.loop import AgentLoop, TurnContext, TurnState
+from OriginAgent.agent.turn_orchestrator import TurnOrchestrator, TurnOrchestratorDeps
 from OriginAgent.bus.events import InboundMessage, OutboundMessage
 
 
@@ -91,6 +92,18 @@ async def test_process_message_non_system_uses_turn_pipeline_state_machine() -> 
     loop._refresh_provider_snapshot = MagicMock()
     loop._process_system_message = AsyncMock()
     loop._turn_pipeline = RecordingPipeline()
+    loop._current_meta_turn_id = None
+    loop._turn_orchestrator = TurnOrchestrator(
+        TurnOrchestratorDeps(
+            turn_pipeline=loop._turn_pipeline,
+            transitions=loop._TRANSITIONS,
+            system_turn_handler=SimpleNamespace(process_message=loop._process_system_message),
+            scan_meta_triggers_for_turn=MagicMock(),
+            schedule_meta_cognition_reflection=MagicMock(),
+            set_current_meta_turn_id=lambda turn_id: setattr(loop, "_current_meta_turn_id", turn_id),
+            clear_current_meta_turn_id=lambda: setattr(loop, "_current_meta_turn_id", None),
+        )
+    )
 
     outbound = await loop._process_message(
         InboundMessage(channel="cli", sender_id="alice", chat_id="chat", content="hello"),
@@ -111,3 +124,29 @@ async def test_process_message_non_system_uses_turn_pipeline_state_machine() -> 
     ]
     loop._refresh_provider_snapshot.assert_called_once()
     loop._process_system_message.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_process_system_message_delegates_to_system_turn_handler() -> None:
+    loop = AgentLoop.__new__(AgentLoop)
+    loop._system_turn_handler = SimpleNamespace(
+        process_message=AsyncMock(
+            return_value=OutboundMessage(channel="system", chat_id="chat", content="done")
+        )
+    )
+
+    result = await loop._process_system_message(
+        InboundMessage(channel="system", sender_id="agent", chat_id="cli:chat", content="event")
+    )
+
+    assert result is not None
+    assert result.content == "done"
+    loop._system_turn_handler.process_message.assert_awaited_once()
+
+
+def test_get_message_dispatcher_returns_prebound_instance() -> None:
+    loop = AgentLoop.__new__(AgentLoop)
+    dispatcher = SimpleNamespace(name="dispatcher")
+    loop._message_dispatcher = dispatcher
+
+    assert loop._get_message_dispatcher() is dispatcher

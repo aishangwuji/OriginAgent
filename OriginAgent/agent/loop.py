@@ -47,6 +47,11 @@ from OriginAgent.agent.agent_turn_pipeline import (
 from OriginAgent.agent.services import AgentServiceContainer
 from OriginAgent.agent.turn_orchestrator import TurnOrchestrator, TurnOrchestratorDeps
 from OriginAgent.agent.message_dispatcher import MessageDispatcher, MessageDispatcherDeps
+from OriginAgent.agent.system_turn_handler import (
+    SystemTurnHandler,
+    SystemTurnHandlerDeps,
+    SystemTurnLoopContext,
+)
 from OriginAgent.domain_packs.robot.runtime.robot_actions import TypedRobotAction
 from OriginAgent.agent.agent_turn_persist import TurnPersistManager
 from OriginAgent.agent.autocompact import AutoCompact
@@ -374,7 +379,23 @@ class AgentLoop:
             turn_pipeline=self._turn_pipeline,
             cognitive_runtime=self._cognitive_runtime,
         )
-        self._turn_orchestrator = TurnOrchestrator(TurnOrchestratorDeps(loop=self))
+        self._system_turn_handler = SystemTurnHandler(
+            SystemTurnHandlerDeps(
+                services=self.services,
+                loop_context=self._build_system_turn_loop_context(),
+            )
+        )
+        self._turn_orchestrator = TurnOrchestrator(
+            TurnOrchestratorDeps(
+                turn_pipeline=self._turn_pipeline,
+                transitions=self._TRANSITIONS,
+                system_turn_handler=self._system_turn_handler,
+                scan_meta_triggers_for_turn=self._scan_meta_triggers_for_turn,
+                schedule_meta_cognition_reflection=self._schedule_meta_cognition_reflection,
+                set_current_meta_turn_id=self._set_current_meta_turn_id,
+                clear_current_meta_turn_id=self._clear_current_meta_turn_id,
+            )
+        )
         self._message_dispatcher = MessageDispatcher(MessageDispatcherDeps(loop=self))
         self._install_meta_cognition_observer()
 
@@ -597,6 +618,12 @@ class AgentLoop:
         self._last_runtime_context = runtime_context
         self._last_continuity_session_key = session_key
 
+    def _record_continuity_session_key(self, session_key: str) -> None:
+        self._last_continuity_session_key = session_key
+
+    def _record_context_assembly(self, payload: dict[str, Any]) -> None:
+        self._last_context_assembly = dict(payload)
+
     def _record_recovered_continuity_checkpoint(
         self,
         checkpoint: dict[str, Any] | None,
@@ -635,19 +662,49 @@ class AgentLoop:
         self._last_cognitive_scan = dict(payload)
 
     def _get_turn_orchestrator(self) -> TurnOrchestrator:
-        """Compatibility fallback for AgentLoop.__new__ and monkeypatch tests."""
-        orchestrator = getattr(self, "_turn_orchestrator", None)
-        if orchestrator is None:
-            orchestrator = TurnOrchestrator(TurnOrchestratorDeps(loop=self))
-            self._turn_orchestrator = orchestrator
-        return orchestrator
+        return self._turn_orchestrator
 
     def _get_message_dispatcher(self) -> MessageDispatcher:
-        dispatcher = getattr(self, "_message_dispatcher", None)
-        if dispatcher is None:
-            dispatcher = MessageDispatcher(MessageDispatcherDeps(loop=self))
-            self._message_dispatcher = dispatcher
-        return dispatcher
+        return self._message_dispatcher
+
+    def _build_system_turn_loop_context(self) -> SystemTurnLoopContext:
+        return SystemTurnLoopContext(
+            restore_runtime_checkpoint=lambda session: self._restore_runtime_checkpoint(session),
+            restore_pending_user_turn=lambda session: self._restore_pending_user_turn(session),
+            persist_subagent_followup=lambda session, msg: self._persist_subagent_followup(session, msg),
+            resolve_runtime_context=lambda *args, **kwargs: self._resolve_runtime_context(*args, **kwargs),
+            snapshot_for_trigger=lambda trigger: self._snapshot_for_trigger(trigger),
+            update_working_memory_from_turn=lambda *args, **kwargs: self._update_working_memory_from_turn(
+                *args,
+                **kwargs,
+            ),
+            set_tool_context=lambda *args, **kwargs: self._set_tool_context(*args, **kwargs),
+            replay_token_budget=lambda: self._replay_token_budget(),
+            snapshot_context_assembly_from_messages=lambda *args, **kwargs: self._snapshot_context_assembly_from_messages(
+                *args,
+                **kwargs,
+            ),
+            run_agent_loop=lambda *args, **kwargs: self._run_agent_loop(*args, **kwargs),
+            save_turn=lambda session, messages, skip: self._save_turn(session, messages, skip),
+            archive_session_file_cap=self._archive_session_file_cap,
+            clear_runtime_checkpoint=lambda session: self._clear_runtime_checkpoint(session),
+            schedule_background=lambda coro: self._schedule_background(coro),
+            schedule_nearline_memory=lambda ctx: self._schedule_nearline_memory(ctx),
+            get_max_messages=lambda: self._max_messages,
+            get_context_window_tokens=lambda: self.context_window_tokens,
+            record_runtime_context=lambda session_key, runtime_context: self._record_runtime_context(
+                session_key,
+                runtime_context,
+            ),
+            record_continuity_session_key=lambda session_key: self._record_continuity_session_key(session_key),
+            record_context_assembly=lambda payload: self._record_context_assembly(payload),
+        )
+
+    def _set_current_meta_turn_id(self, turn_id: str) -> None:
+        self._current_meta_turn_id = turn_id
+
+    def _clear_current_meta_turn_id(self) -> None:
+        self._current_meta_turn_id = None
 
     def _sync_subagent_runtime_limits(self) -> None:
         """Keep subagent runtime limits aligned with mutable loop settings."""
@@ -1553,11 +1610,13 @@ class AgentLoop:
         task.add_done_callback(self._background_tasks.discard)
 
     def _start_active_intent_loop(self) -> None:
+        """Compatibility shell delegating active-intent startup to AgentCognitiveRuntime."""
         self._active_intent_task = self._cognitive_runtime.start_active_intent_loop(
             self._active_intent_task
         )
 
     async def _active_intent_loop(self) -> None:
+        """Compatibility shell delegating the active-intent loop to AgentCognitiveRuntime."""
         await self._cognitive_runtime.active_intent_loop()
 
     async def _run_cognitive_pass_for_session(
@@ -1567,6 +1626,7 @@ class AgentLoop:
         active_task_count: int,
         running_subagents: int,
     ) -> list[CognitiveDecision]:
+        """Compatibility shell delegating per-session cognition to AgentCognitiveRuntime."""
         return await self._cognitive_runtime.run_cognitive_pass_for_session(
             session_key,
             active_task_count=active_task_count,
@@ -1574,6 +1634,7 @@ class AgentLoop:
         )
 
     def _active_task_count(self, session_key: str) -> int:
+        """Runtime provider used by cognitive scheduling and compatibility tests."""
         active_tasks = self._active_tasks.get(session_key, [])
         return sum(1 for task in active_tasks if not task.done())
 
@@ -1736,156 +1797,15 @@ class AgentLoop:
         pending_queue: asyncio.Queue | None = None,
         capability_snapshot: CapabilitySnapshot | None = None,
     ) -> OutboundMessage | None:
-        """Process a system inbound message (e.g. subagent announce)."""
-        channel, chat_id = (
-            msg.chat_id.split(":", 1) if ":" in msg.chat_id else ("cli", msg.chat_id)
-        )
-        logger.info("Processing system message from {}", msg.sender_id)
-        key = msg.session_key_override or f"{channel}:{chat_id}"
-        session = self.sessions.get_or_create(key)
-        if self._restore_runtime_checkpoint(session):
-            self.sessions.save(session)
-        if self._restore_pending_user_turn(session):
-            self.sessions.save(session)
-
-        session, pending = self.auto_compact.prepare_session(session, key)
-        if pending:
-            logger.info("Memory compact triggered for session {}", key)
-
-        await self.consolidator.maybe_consolidate_by_tokens(
-            session,
-            replay_max_messages=self._max_messages,
-        )
-        event_kind = str(msg.metadata.get("injected_event") or "").strip()
-        is_subagent = msg.sender_id == "subagent" or event_kind == "subagent_result"
-        is_active_intent = event_kind == "active_intent"
-        is_cognitive_event = event_kind == "cognitive_event"
-        persisted_subagent = False
-        if is_subagent and self._persist_subagent_followup(session, msg):
-            persisted_subagent = True
-            logger.debug("Subagent result persisted for session {}", key)
-            self.sessions.save(session)
-        runtime_context = self._resolve_runtime_context(
+        """Compatibility shell; delegates to SystemTurnHandler.process_message."""
+        return await self._system_turn_handler.process_message(
             msg,
-            channel=channel,
-            chat_id=chat_id,
-            session_key=key,
-        )
-        self._last_runtime_context = runtime_context
-        self._last_continuity_session_key = key
-        snapshot = capability_snapshot or self._snapshot_for_trigger(runtime_context.trigger)
-        self._update_working_memory_from_turn(
-            session,
-            runtime_context=runtime_context,
-            current_message=None if (is_subagent or is_active_intent or is_cognitive_event) else msg.content,
-            internal_event=msg.content if (is_subagent or is_active_intent or is_cognitive_event) else None,
-            media_paths=msg.media if msg.media else None,
-        )
-        self._set_tool_context(
-            channel, chat_id, msg.metadata.get("message_id"),
-            msg.metadata,
-            session_key=key,
-            capability_snapshot=snapshot,
-            runtime_context=runtime_context,
-        )
-        _hist_kwargs: dict[str, Any] = {
-            "max_messages": self._max_messages,
-            "max_tokens": self._replay_token_budget(),
-            "include_timestamps": True,
-        }
-        history = session.get_history(**_hist_kwargs)
-        history_for_model = list(history)
-        if is_subagent and persisted_subagent:
-            for index in range(len(history_for_model) - 1, -1, -1):
-                candidate = history_for_model[index]
-                if (
-                    candidate.get("role") == "assistant"
-                    and candidate.get("content") == msg.content
-                ):
-                    history_for_model.pop(index)
-                    break
-
-        messages = self.context.build_messages(
-            history=history_for_model,
-            current_message=None if (is_subagent or is_active_intent or is_cognitive_event) else msg.content,
-            media=msg.media if msg.media else None,
-            channel=channel,
-            chat_id=chat_id,
-            current_role="user",
-            sender_id=msg.sender_id,
-            session_summary=pending,
-            session_metadata=session.metadata,
-            internal_event=(
-                ("subagent_result", msg.content)
-                if is_subagent
-                else ("active_intent", msg.content)
-                if is_active_intent
-                else ("cognitive_event", msg.content) if is_cognitive_event else None
-            ),
-            runtime_context=runtime_context,
-            session_key=key,
-            context_window_tokens=self.context_window_tokens,
-            max_completion_tokens=getattr(self.provider.generation, "max_tokens", 4096),
-        )
-        self._last_context_assembly = self._snapshot_context_assembly_from_messages(
-            messages,
-            session_key=key,
-            runtime_context=runtime_context,
-        )
-        final_content, _, all_msgs, stop_reason, _ = await self._run_agent_loop(
-            messages, session=session, channel=channel, chat_id=chat_id,
-            message_id=msg.metadata.get("message_id"),
-            metadata=msg.metadata,
-            session_key=key,
+            session_key=session_key,
+            on_progress=on_progress,
+            on_stream=on_stream,
+            on_stream_end=on_stream_end,
             pending_queue=pending_queue,
-            actor_id=runtime_context.actor_id,
-            trigger=runtime_context.trigger,
-            capability_snapshot=snapshot,
-        )
-        save_skip = 1 + len(history_for_model) + (
-            1 if (is_subagent or is_active_intent or is_cognitive_event) else 0
-        )
-        self._save_turn(session, all_msgs, save_skip)
-        session.enforce_file_cap(on_archive=self._archive_session_file_cap)
-        self._clear_runtime_checkpoint(session)
-        self.sessions.save(session)
-        self._schedule_background(
-            self.consolidator.maybe_consolidate_by_tokens(
-                session,
-                replay_max_messages=self._max_messages,
-            )
-        )
-        system_ctx = TurnContext(
-            msg=msg,
-            session_key=key,
-            state=TurnState.SAVE,
-            turn_id=f"{key}:{time.time_ns()}",
-            session=session,
-            final_content=final_content,
-            all_messages=all_msgs,
-            stop_reason=stop_reason,
-            runtime_context=runtime_context,
-        )
-        self._schedule_nearline_memory(system_ctx)
-        options = ask_user_options_from_messages(all_msgs) if stop_reason == "ask_user" else []
-        content, buttons = ask_user_outbound(
-            final_content or "Background task completed.",
-            options,
-            channel,
-        )
-        outbound_metadata: dict[str, Any] = {}
-        if channel == "slack" and key.startswith("slack:") and key.count(":") >= 2:
-            outbound_metadata["slack"] = {"thread_ts": key.split(":", 2)[2]}
-        if origin_message_id := msg.metadata.get("origin_message_id"):
-            outbound_metadata["origin_message_id"] = origin_message_id
-        if channel == "websocket":
-            outbound_metadata["goal_state"] = goal_state_ws_blob(session.metadata)
-        return OutboundMessage(
-            channel=channel,
-            chat_id=chat_id,
-            content=content,
-            buttons=buttons,
-            metadata=outbound_metadata,
+            capability_snapshot=capability_snapshot,
         )
 
     def _update_working_memory_from_turn(

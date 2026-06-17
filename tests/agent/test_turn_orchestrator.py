@@ -7,16 +7,50 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from OriginAgent.agent.agent_turn_pipeline import TurnContext, TurnState
+from OriginAgent.agent.system_turn_handler import SystemTurnHandler
 from OriginAgent.agent.turn_orchestrator import TurnOrchestrator, TurnOrchestratorDeps
 from OriginAgent.bus.events import InboundMessage, OutboundMessage
 
 
+def _make_orchestrator(
+    *,
+    turn_pipeline: object,
+    transitions: dict[tuple[TurnState, str], TurnState],
+    system_turn_handler: SystemTurnHandler | object | None = None,
+    scan_meta_triggers_for_turn: MagicMock | None = None,
+    schedule_meta_cognition_reflection: MagicMock | None = None,
+    meta_state: dict[str, str | None] | None = None,
+) -> tuple[TurnOrchestrator, dict[str, str | None], MagicMock, MagicMock]:
+    state = meta_state or {"current": None}
+    scan = scan_meta_triggers_for_turn or MagicMock()
+    schedule = schedule_meta_cognition_reflection or MagicMock()
+    handler = system_turn_handler or SimpleNamespace(process_message=AsyncMock())
+    orchestrator = TurnOrchestrator(
+        TurnOrchestratorDeps(
+            turn_pipeline=turn_pipeline,
+            transitions=transitions,
+            system_turn_handler=handler,  # type: ignore[arg-type]
+            scan_meta_triggers_for_turn=scan,
+            schedule_meta_cognition_reflection=schedule,
+            set_current_meta_turn_id=lambda turn_id: state.__setitem__("current", turn_id),
+            clear_current_meta_turn_id=lambda: state.__setitem__("current", None),
+        )
+    )
+    return orchestrator, state, scan, schedule
+
+
 @pytest.mark.asyncio
 async def test_turn_orchestrator_delegates_system_messages() -> None:
-    loop = SimpleNamespace(
-        _process_system_message=AsyncMock(return_value=OutboundMessage(channel="system", chat_id="x", content="ok")),
+    system_turn_handler = SimpleNamespace(
+        process_message=AsyncMock(
+            return_value=OutboundMessage(channel="system", chat_id="x", content="ok")
+        )
     )
-    orchestrator = TurnOrchestrator(TurnOrchestratorDeps(loop=loop))
+    orchestrator, _state, _scan, _schedule = _make_orchestrator(
+        turn_pipeline=SimpleNamespace(),
+        transitions={},
+        system_turn_handler=system_turn_handler,
+    )
 
     result = await orchestrator.process_message(
         InboundMessage(channel="system", sender_id="agent", chat_id="cli:chat", content="event"),
@@ -25,7 +59,7 @@ async def test_turn_orchestrator_delegates_system_messages() -> None:
 
     assert result is not None
     assert result.content == "ok"
-    loop._process_system_message.assert_awaited_once()
+    system_turn_handler.process_message.assert_awaited_once()
 
 
 @pytest.mark.asyncio
@@ -67,9 +101,10 @@ async def test_turn_orchestrator_runs_transition_driver_and_meta_hooks() -> None
             ctx.outbound = OutboundMessage(channel="cli", chat_id="chat", content="done")
             return "ok"
 
-    loop = SimpleNamespace(
-        _turn_pipeline=RecordingPipeline(),
-        _TRANSITIONS={
+    pipeline = RecordingPipeline()
+    orchestrator, state, scan, schedule = _make_orchestrator(
+        turn_pipeline=pipeline,
+        transitions={
             (TurnState.RESTORE, "ok"): TurnState.COMPACT,
             (TurnState.COMPACT, "ok"): TurnState.COMMAND,
             (TurnState.COMMAND, "dispatch"): TurnState.BUILD,
@@ -79,11 +114,7 @@ async def test_turn_orchestrator_runs_transition_driver_and_meta_hooks() -> None
             (TurnState.AUTOMATION, "skip"): TurnState.RESPOND,
             (TurnState.RESPOND, "ok"): TurnState.DONE,
         },
-        _scan_meta_triggers_for_turn=MagicMock(),
-        _schedule_meta_cognition_reflection=MagicMock(),
-        _current_meta_turn_id=None,
     )
-    orchestrator = TurnOrchestrator(TurnOrchestratorDeps(loop=loop))
 
     outbound = await orchestrator.process_message(
         InboundMessage(channel="cli", sender_id="alice", chat_id="chat", content="hello"),
@@ -92,7 +123,7 @@ async def test_turn_orchestrator_runs_transition_driver_and_meta_hooks() -> None
 
     assert outbound is not None
     assert outbound.content == "done"
-    assert loop._turn_pipeline.calls == [
+    assert pipeline.calls == [
         "RESTORE",
         "COMPACT",
         "COMMAND",
@@ -102,9 +133,9 @@ async def test_turn_orchestrator_runs_transition_driver_and_meta_hooks() -> None
         "AUTOMATION",
         "RESPOND",
     ]
-    loop._scan_meta_triggers_for_turn.assert_called_once()
-    loop._schedule_meta_cognition_reflection.assert_called_once()
-    assert loop._current_meta_turn_id is None
+    scan.assert_called_once()
+    schedule.assert_called_once()
+    assert state["current"] is None
 
 
 @pytest.mark.asyncio
@@ -140,9 +171,9 @@ async def test_turn_orchestrator_records_state_trace() -> None:
     def capture_scan(ctx: TurnContext) -> None:
         captured_ctx.append(ctx)
 
-    loop = SimpleNamespace(
-        _turn_pipeline=RecordingPipeline(),
-        _TRANSITIONS={
+    orchestrator, _state, _scan, _schedule = _make_orchestrator(
+        turn_pipeline=RecordingPipeline(),
+        transitions={
             (TurnState.RESTORE, "ok"): TurnState.COMPACT,
             (TurnState.COMPACT, "ok"): TurnState.COMMAND,
             (TurnState.COMMAND, "dispatch"): TurnState.BUILD,
@@ -152,11 +183,8 @@ async def test_turn_orchestrator_records_state_trace() -> None:
             (TurnState.AUTOMATION, "skip"): TurnState.RESPOND,
             (TurnState.RESPOND, "ok"): TurnState.DONE,
         },
-        _scan_meta_triggers_for_turn=MagicMock(side_effect=capture_scan),
-        _schedule_meta_cognition_reflection=MagicMock(),
-        _current_meta_turn_id=None,
+        scan_meta_triggers_for_turn=MagicMock(side_effect=capture_scan),
     )
-    orchestrator = TurnOrchestrator(TurnOrchestratorDeps(loop=loop))
 
     outbound = await orchestrator.process_message(
         InboundMessage(channel="cli", sender_id="alice", chat_id="chat", content="hello"),
@@ -198,16 +226,12 @@ async def test_turn_orchestrator_records_exception_trace_and_reraises() -> None:
         async def state_compact(self, ctx: TurnContext) -> str:
             raise RuntimeError("boom")
 
-    loop = SimpleNamespace(
-        _turn_pipeline=FailingPipeline(),
-        _TRANSITIONS={
+    orchestrator, state, scan, schedule = _make_orchestrator(
+        turn_pipeline=FailingPipeline(),
+        transitions={
             (TurnState.RESTORE, "ok"): TurnState.COMPACT,
         },
-        _scan_meta_triggers_for_turn=MagicMock(),
-        _schedule_meta_cognition_reflection=MagicMock(),
-        _current_meta_turn_id=None,
     )
-    orchestrator = TurnOrchestrator(TurnOrchestratorDeps(loop=loop))
 
     with pytest.raises(RuntimeError, match="boom"):
         await orchestrator.process_message(
@@ -215,9 +239,9 @@ async def test_turn_orchestrator_records_exception_trace_and_reraises() -> None:
             session_key="cli:chat",
         )
 
-    loop._scan_meta_triggers_for_turn.assert_not_called()
-    loop._schedule_meta_cognition_reflection.assert_not_called()
-    assert loop._current_meta_turn_id is None
+    scan.assert_not_called()
+    schedule.assert_not_called()
+    assert state["current"] is None
 
 
 @pytest.mark.asyncio
@@ -226,14 +250,10 @@ async def test_turn_orchestrator_reraises_cancelled_error_and_clears_turn_id() -
         async def state_restore(self, ctx: TurnContext) -> str:
             raise asyncio.CancelledError()
 
-    loop = SimpleNamespace(
-        _turn_pipeline=CancelledPipeline(),
-        _TRANSITIONS={},
-        _scan_meta_triggers_for_turn=MagicMock(),
-        _schedule_meta_cognition_reflection=MagicMock(),
-        _current_meta_turn_id=None,
+    orchestrator, state, scan, schedule = _make_orchestrator(
+        turn_pipeline=CancelledPipeline(),
+        transitions={},
     )
-    orchestrator = TurnOrchestrator(TurnOrchestratorDeps(loop=loop))
 
     with pytest.raises(asyncio.CancelledError):
         await orchestrator.process_message(
@@ -241,17 +261,16 @@ async def test_turn_orchestrator_reraises_cancelled_error_and_clears_turn_id() -
             session_key="cli:chat",
         )
 
-    loop._scan_meta_triggers_for_turn.assert_not_called()
-    loop._schedule_meta_cognition_reflection.assert_not_called()
-    assert loop._current_meta_turn_id is None
+    scan.assert_not_called()
+    schedule.assert_not_called()
+    assert state["current"] is None
 
 
-def test_get_turn_orchestrator_lazy_init_supports_new_style_test_doubles() -> None:
+def test_get_turn_orchestrator_returns_prebound_instance() -> None:
     from OriginAgent.agent.loop import AgentLoop
 
     loop = AgentLoop.__new__(AgentLoop)
+    orchestrator = SimpleNamespace(name="orchestrator")
+    loop._turn_orchestrator = orchestrator
 
-    orchestrator = loop._get_turn_orchestrator()
-
-    assert orchestrator is loop._turn_orchestrator
-    assert orchestrator.loop is loop
+    assert loop._get_turn_orchestrator() is orchestrator
