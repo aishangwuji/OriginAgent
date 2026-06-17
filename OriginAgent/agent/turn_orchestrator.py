@@ -8,7 +8,6 @@ from typing import Any, Awaitable, Callable
 from loguru import logger
 
 from OriginAgent.agent.agent_turn_pipeline import StateTraceEntry, TurnContext, TurnState
-from OriginAgent.agent.services import AgentServiceContainer
 from OriginAgent.bus.events import InboundMessage, OutboundMessage
 from OriginAgent.security.capabilities import CapabilitySnapshot
 
@@ -16,10 +15,20 @@ from OriginAgent.security.capabilities import CapabilitySnapshot
 @dataclass(frozen=True)
 class TurnOrchestratorDeps:
     loop: Any
-    services: AgentServiceContainer | None = None
 
 
 class TurnOrchestrator:
+    """Drive non-system turn orchestration via AgentLoop compatibility hooks.
+
+    Required loop attributes:
+    - _process_system_message
+    - _turn_pipeline
+    - _TRANSITIONS
+    - _scan_meta_triggers_for_turn
+    - _schedule_meta_cognition_reflection
+    - _current_meta_turn_id
+    """
+
     def __init__(self, deps: TurnOrchestratorDeps) -> None:
         self._deps = deps
 
@@ -31,8 +40,6 @@ class TurnOrchestrator:
         pipeline = getattr(self.loop, "_turn_pipeline", None)
         if pipeline is not None:
             return pipeline
-        if self._deps.services is not None:
-            return self._deps.services.turn_pipeline
         raise AttributeError("turn pipeline is not available")
 
     async def process_message(

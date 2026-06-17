@@ -374,7 +374,7 @@ class AgentLoop:
             turn_pipeline=self._turn_pipeline,
             cognitive_runtime=self._cognitive_runtime,
         )
-        self._turn_orchestrator = TurnOrchestrator(TurnOrchestratorDeps(loop=self, services=self.services))
+        self._turn_orchestrator = TurnOrchestrator(TurnOrchestratorDeps(loop=self))
         self._message_dispatcher = MessageDispatcher(MessageDispatcherDeps(loop=self))
         self._install_meta_cognition_observer()
 
@@ -635,10 +635,10 @@ class AgentLoop:
         self._last_cognitive_scan = dict(payload)
 
     def _get_turn_orchestrator(self) -> TurnOrchestrator:
+        """Compatibility fallback for AgentLoop.__new__ and monkeypatch tests."""
         orchestrator = getattr(self, "_turn_orchestrator", None)
         if orchestrator is None:
-            services = getattr(self, "services", None)
-            orchestrator = TurnOrchestrator(TurnOrchestratorDeps(loop=self, services=services))
+            orchestrator = TurnOrchestrator(TurnOrchestratorDeps(loop=self))
             self._turn_orchestrator = orchestrator
         return orchestrator
 
@@ -1514,6 +1514,7 @@ class AgentLoop:
         await self._get_message_dispatcher().run_forever()
 
     async def _dispatch(self, msg: InboundMessage) -> None:
+        """Compatibility shell; delegates to MessageDispatcher.dispatch_message."""
         return await self._get_message_dispatcher().dispatch_message(msg)
 
     async def close_mcp(self) -> None:
@@ -2410,21 +2411,27 @@ class AgentLoop:
         )
 
     async def _state_restore(self, ctx: TurnContext) -> str:
+        """Compatibility wrapper; normal flow is driven by TurnOrchestrator."""
         return await self._turn_pipeline.state_restore(ctx)
 
     async def _state_compact(self, ctx: TurnContext) -> str:
+        """Compatibility wrapper; normal flow is driven by TurnOrchestrator."""
         return await self._turn_pipeline.state_compact(ctx)
 
     async def _state_command(self, ctx: TurnContext) -> str:
+        """Compatibility wrapper; normal flow is driven by TurnOrchestrator."""
         return await self._turn_pipeline.state_command(ctx)
 
     async def _state_build(self, ctx: TurnContext) -> str:
+        """Compatibility wrapper; normal flow is driven by TurnOrchestrator."""
         return await self._turn_pipeline.state_build(ctx)
 
     async def _state_run(self, ctx: TurnContext) -> str:
+        """Compatibility wrapper; normal flow is driven by TurnOrchestrator."""
         return await self._turn_pipeline.state_run(ctx)
 
     async def _state_save(self, ctx: TurnContext) -> str:
+        """Compatibility wrapper; normal flow is driven by TurnOrchestrator."""
         return await self._turn_pipeline.state_save(ctx)
 
     def _automation_enabled(self) -> bool:
@@ -2570,6 +2577,7 @@ class AgentLoop:
         return None
 
     async def _state_automation(self, ctx: TurnContext) -> str:
+        """Compatibility wrapper; normal flow is driven by TurnOrchestrator."""
         return await self._turn_pipeline.state_automation(ctx)
 
     def _schedule_session_search_refresh(
@@ -2686,6 +2694,7 @@ class AgentLoop:
         return bool((ctx.final_content or "").strip())
 
     async def _state_respond(self, ctx: TurnContext) -> str:
+        """Compatibility wrapper; normal flow is driven by TurnOrchestrator."""
         return await self._turn_pipeline.state_respond(ctx)
 
     @property

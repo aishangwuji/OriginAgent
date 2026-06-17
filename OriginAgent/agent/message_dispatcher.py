@@ -20,6 +20,17 @@ class MessageDispatcherDeps:
 
 
 class MessageDispatcher:
+    """Front-end inbound dispatcher for AgentLoop.
+
+    `run_forever()` is a long-lived consume loop and tolerates transient
+    cancellation-like bus errors unless the loop is actually stopping.
+    `dispatch_message()` handles a single turn task and must re-raise
+    `CancelledError` after checkpoint restoration.
+    """
+
+    PENDING_QUEUE_MAXSIZE = 20
+    _MAX_TRANSIENT_CANCELS = 5
+
     def __init__(self, deps: MessageDispatcherDeps) -> None:
         self._deps = deps
 
@@ -28,9 +39,11 @@ class MessageDispatcher:
         return self._deps.loop
 
     async def run_forever(self) -> None:
+        transient_cancel_count = 0
         while self.loop._running:
             try:
                 msg = await asyncio.wait_for(self.loop.bus.consume_inbound(), timeout=1.0)
+                transient_cancel_count = 0
             except asyncio.TimeoutError:
                 self.loop.auto_compact.check_expired(
                     self.loop._schedule_background,
@@ -39,6 +52,13 @@ class MessageDispatcher:
                 continue
             except asyncio.CancelledError:
                 if not self.loop._running or asyncio.current_task().cancelling():
+                    raise
+                transient_cancel_count += 1
+                if transient_cancel_count >= self._MAX_TRANSIENT_CANCELS:
+                    logger.error(
+                        "Inbound consume cancelled {} consecutive time(s); aborting dispatcher loop",
+                        transient_cancel_count,
+                    )
                     raise
                 continue
             except Exception as e:
@@ -68,7 +88,7 @@ class MessageDispatcher:
                     self.loop._pending_queues[effective_key].put_nowait(pending_msg)
                 except asyncio.QueueFull:
                     logger.warning(
-                        "Pending queue full for session {}, falling back to queued task",
+                        "Pending queue full for session {}, falling back to a new dispatch task",
                         effective_key,
                     )
                 else:
@@ -93,7 +113,7 @@ class MessageDispatcher:
             msg = dataclasses.replace(msg, session_key_override=session_key)
         lock = self.loop._session_locks.setdefault(session_key, asyncio.Lock())
         gate = self.loop._concurrency_gate or nullcontext()
-        pending = asyncio.Queue(maxsize=20)
+        pending = asyncio.Queue(maxsize=self.PENDING_QUEUE_MAXSIZE)
         self.loop._pending_queues[session_key] = pending
 
         try:
