@@ -208,6 +208,94 @@ class InspectContextTool(Tool):
         return service.inspect_context()
 
 
+class InspectHomeStateTool(Tool):
+    name = "originagent_inspect_home_state"
+
+    def __init__(
+        self,
+        *,
+        workspace: Path,
+        registry: Any,
+        sessions: Any,
+        pending_queues: dict[str, Any],
+        cron_service: CronService | None = None,
+        confirmation_store: PendingConfirmationStore | None = None,
+        audit_mode: str = "minimal",
+        runtime_profile: str = "default",
+        domain_pack_manager: Any | None = None,
+        background_review_service: Any | None = None,
+        curator_service: Any | None = None,
+        session_search_index_service: Any | None = None,
+        evolution_config: Any | None = None,
+        nearline_memory_config: Any | None = None,
+        introspection_service: RuntimeIntrospectionService | None = None,
+    ) -> None:
+        self._workspace = Path(workspace)
+        self._registry = registry
+        self._sessions = sessions
+        self._pending_queues = pending_queues
+        self._cron_service = cron_service
+        self._confirmation_store = confirmation_store
+        self._audit_mode = audit_mode
+        self._runtime_profile = runtime_profile
+        self._domain_pack_manager = domain_pack_manager
+        self._background_review_service = background_review_service
+        self._curator_service = curator_service
+        self._session_search_index_service = session_search_index_service
+        self._evolution_config = evolution_config
+        self._nearline_memory_config = nearline_memory_config
+        self._introspection_service = introspection_service
+        self._request_ctx: ContextVar[RequestContext | None] = ContextVar(
+            "inspect_home_state_request_ctx",
+            default=None,
+        )
+
+    def set_context(self, ctx: RequestContext) -> None:
+        self._request_ctx.set(ctx)
+
+    @property
+    def description(self) -> str:
+        return "Return a read-only home state summary with attention notices."
+
+    @property
+    def parameters(self) -> dict[str, Any]:
+        return {"type": "object", "properties": {}, "additionalProperties": False}
+
+    @property
+    def read_only(self) -> bool:
+        return True
+
+    async def execute(self) -> dict[str, Any]:
+        service = self._introspection_service or RuntimeIntrospectionService(
+            workspace=self._workspace,
+            registry=self._registry,
+            sessions=self._sessions,
+            pending_queues=self._pending_queues,
+            nearline_memory_config=self._nearline_memory_config,
+            cron_service=self._cron_service,
+            confirmation_store=self._confirmation_store,
+            audit_mode=self._audit_mode,
+            runtime_profile=self._runtime_profile,
+            domain_pack_manager=self._domain_pack_manager,
+            background_review_service=self._background_review_service,
+            curator_service=self._curator_service,
+            session_search_index_service=self._session_search_index_service,
+            evolution_config=self._evolution_config,
+        )
+        ctx = self._request_ctx.get()
+        if ctx is None or not ctx.session_key:
+            return {"error": "originagent_inspect_home_state requires an active session context."}
+        runtime_context = getattr(ctx, "runtime_context", None)
+        if runtime_context is None:
+            return {"error": "originagent_inspect_home_state requires runtime identity context."}
+        loop = getattr(service, "_loop", None)
+        world_state = getattr(loop, "world_state", None) if loop is not None else None
+        if world_state is None or not hasattr(world_state, "inspect_home_state"):
+            return {"home_state": {}, "attention_notices": [], "attention_notices_summary": {}, "suggested_next_steps": []}
+        session = self._sessions.get_or_create(ctx.session_key)
+        return world_state.inspect_home_state(session, identity=runtime_context, limit=5)
+
+
 class InspectSnapshotTool(Tool):
     name = "originagent_inspect_snapshot"
 

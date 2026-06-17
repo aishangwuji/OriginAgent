@@ -468,6 +468,24 @@ class DevicePermission:
 
 
 @dataclass
+class WorldAttentionNotice:
+    notice_id: str
+    kind: str
+    severity: str
+    title: str
+    summary: str
+    source_event_ids: list[str] = field(default_factory=list)
+    related_device_ids: list[str] = field(default_factory=list)
+    related_snapshot_ids: list[str] = field(default_factory=list)
+    suggested_next_step: str | None = None
+    requires_confirmation: bool = False
+    created_at: str = field(default_factory=_utcnow_iso)
+
+    def to_json(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass
 class WorldStateSnapshot:
     status: str = "placeholder"
     version: str = "phase1"
@@ -614,6 +632,61 @@ class WorldStateManager:
             "audio_status": self._audio_status_summary(snapshot),
         }
 
+    def home_state_summary(
+        self,
+        session: Session,
+        *,
+        identity: RuntimeContext | None = None,
+    ) -> dict[str, Any]:
+        snapshot = self.load(session, identity=identity)
+        return dict(self._home_state_bundle_from_snapshot(snapshot).get("home_state") or {})
+
+    def attention_notices(
+        self,
+        session: Session,
+        *,
+        identity: RuntimeContext | None = None,
+        limit: int = 5,
+    ) -> dict[str, Any]:
+        snapshot = self.load(session, identity=identity)
+        bundle = self._home_state_bundle_from_snapshot(snapshot, display_limit=limit)
+        return {
+            "attention_notices_summary": dict(bundle.get("attention_notices_summary") or {}),
+            "attention_notices": list(bundle.get("attention_notices") or []),
+            "suggested_next_steps": list(bundle.get("suggested_next_steps") or []),
+        }
+
+    def home_state_observability(
+        self,
+        session: Session,
+        *,
+        identity: RuntimeContext | None = None,
+        limit: int = 5,
+    ) -> dict[str, Any]:
+        snapshot = self.load(session, identity=identity)
+        bundle = self._home_state_bundle_from_snapshot(snapshot, display_limit=limit)
+        return {
+            "home_state": dict(bundle.get("home_state") or {}),
+            "attention_notices_summary": dict(bundle.get("attention_notices_summary") or {}),
+            "suggested_next_steps": list(bundle.get("suggested_next_steps") or []),
+        }
+
+    def inspect_home_state(
+        self,
+        session: Session,
+        *,
+        identity: RuntimeContext | None = None,
+        limit: int = 5,
+    ) -> dict[str, Any]:
+        snapshot = self.load(session, identity=identity)
+        bundle = self._home_state_bundle_from_snapshot(snapshot, display_limit=limit)
+        return {
+            "home_state": dict(bundle.get("home_state") or {}),
+            "attention_notices_summary": dict(bundle.get("attention_notices_summary") or {}),
+            "attention_notices": list(bundle.get("attention_notices") or []),
+            "suggested_next_steps": list(bundle.get("suggested_next_steps") or []),
+        }
+
     def snapshot_prompt_payload(
         self,
         session: Session,
@@ -622,14 +695,29 @@ class WorldStateManager:
         current_message: str | None = None,
     ) -> dict[str, Any]:
         snapshot = self.load(session, identity=identity)
+        device_state = {
+            "device_events_summary": self._device_events_summary(snapshot),
+            "device_bindings_summary": self._device_bindings_summary(snapshot),
+            "device_permissions_summary": self._device_permissions_summary(snapshot),
+        }
+        media_state = {
+            "media_queue_summary": self._media_queue_summary(snapshot),
+            "recent_media_events": self._media_events_summary(snapshot).get("recent_media_events", []),
+            "last_scene_inspection": self._last_scene_inspection(snapshot),
+            "audio_status": self._audio_status_summary(snapshot),
+        }
+        home_state = self._home_state_bundle_from_snapshot(snapshot, display_limit=5)
         if identity is None:
             return {
                 "status": snapshot.status,
                 "version": snapshot.version,
                 "updated_at": snapshot.updated_at,
                 "device_map_summary": summarize_device_map(snapshot.device_map) if snapshot.device_map else {},
-                **self.device_state_summary(session, identity=identity),
-                **self.media_state_summary(session, identity=identity),
+                **device_state,
+                **media_state,
+                "home_state": dict(home_state.get("home_state") or {}),
+                "attention_notices_summary": dict(home_state.get("attention_notices_summary") or {}),
+                "suggested_next_steps": list(home_state.get("suggested_next_steps") or []),
             }
         filtered = self.filtered_candidates(
             session,
@@ -644,10 +732,13 @@ class WorldStateManager:
             "owner_id": snapshot.owner_id,
             "world_summary": filtered.get("included_summary") or {},
             "world_relationships": list((filtered.get("included_summary") or {}).get("relationships") or []),
-            "recent_events": list((self.recent_events(session, identity=identity, limit=5) or {}).get("recent_events", [])),
+            "recent_events": list((self._recent_events_from_snapshot(snapshot, limit=5) or {}).get("recent_events", [])),
             "device_map_summary": summarize_device_map(snapshot.device_map) if snapshot.device_map else {},
-            **self.device_state_summary(session, identity=identity),
-            **self.media_state_summary(session, identity=identity),
+            **device_state,
+            **media_state,
+            "home_state": dict(home_state.get("home_state") or {}),
+            "attention_notices_summary": dict(home_state.get("attention_notices_summary") or {}),
+            "suggested_next_steps": list(home_state.get("suggested_next_steps") or []),
         }
 
     def ingest_device_discovery(
@@ -860,19 +951,22 @@ class WorldStateManager:
         runtime_context: RuntimeContext,
         limit: int = 3,
     ) -> list[str]:
+        snapshot = self.load(session, identity=runtime_context)
         filtered = self.filtered_candidates(
             session,
             runtime_context=runtime_context,
             current_message=None,
         )
         summary = filtered.get("included_summary") or {}
-        if not summary:
+        notices = self._compute_attention_notices(snapshot)
+        if not summary and not notices:
             return []
         grouped_items: list[tuple[str, list[str]]] = [
             # Surface contested state first so a small attention budget still
             # preserves disagreements uncovered by inspection.
             ("world_contested", list(summary.get("contested_items") or [])),
             ("world_uncertainty", list(summary.get("uncertainties") or [])),
+            ("world_attention", self._attention_notice_lines(notices)),
             ("world_attention", list(summary.get("focus") or [])),
         ]
         trimmed: list[str] = []
@@ -1140,6 +1234,14 @@ class WorldStateManager:
         limit: int = 5,
     ) -> dict[str, Any]:
         snapshot = self.load(session, identity=identity)
+        return self._recent_events_from_snapshot(snapshot, limit=limit)
+
+    def _recent_events_from_snapshot(
+        self,
+        snapshot: WorldStateSnapshot,
+        *,
+        limit: int = 5,
+    ) -> dict[str, Any]:
         combined: list[dict[str, Any]] = []
         for item in snapshot.events:
             event = item.to_json()
@@ -1683,6 +1785,413 @@ class WorldStateManager:
             "bound_device_count": len(active),
             "bindings": [binding.to_json() for binding in active[:10]],
         }
+
+    def _home_state_bundle_from_snapshot(
+        self,
+        snapshot: WorldStateSnapshot,
+        *,
+        display_limit: int = 5,
+    ) -> dict[str, Any]:
+        if not self._home_situation_enabled():
+            return {
+                "home_state": {},
+                "attention_notices_summary": {"notice_count": 0, "by_severity": {}, "recent_notices": []},
+                "attention_notices": [],
+                "suggested_next_steps": [],
+            }
+        notices = self._compute_attention_notices(snapshot)
+        display_limit = max(0, min(int(display_limit or 0), 5))
+        shown = [notice.to_json() for notice in notices[:display_limit]]
+        by_severity: dict[str, int] = {}
+        for notice in notices:
+            by_severity[notice.severity] = by_severity.get(notice.severity, 0) + 1
+        suggested_steps: list[str] = []
+        for notice in notices[:display_limit]:
+            step = _trim_text(notice.suggested_next_step, max_chars=200)
+            if step and step not in suggested_steps:
+                suggested_steps.append(step)
+        return {
+            "home_state": self._build_home_state(snapshot, notices=notices),
+            "attention_notices_summary": {
+                "notice_count": len(notices),
+                "by_severity": by_severity,
+                "recent_notices": shown,
+            },
+            "attention_notices": shown,
+            "suggested_next_steps": suggested_steps,
+        }
+
+    def _build_home_state(
+        self,
+        snapshot: WorldStateSnapshot,
+        *,
+        notices: list[WorldAttentionNotice],
+    ) -> dict[str, Any]:
+        devices = [dict(item) for item in (snapshot.device_map.get("devices") or []) if isinstance(item, dict)]
+        bindings = [binding for binding in snapshot.device_bindings if binding.status == "active"]
+        binding_by_id = {binding.device_id: binding for binding in bindings}
+        known_locations = sorted({
+            binding.location.strip()
+            for binding in bindings
+            if isinstance(binding.location, str) and binding.location.strip()
+        })
+        known_devices = [
+            self._device_home_view(device, binding_by_id.get(str(device.get("device_id") or "").strip()))
+            for device in devices
+            if str(device.get("kind") or "").strip() != "unknown"
+            or str(device.get("device_id") or "").strip() in binding_by_id
+        ][:10]
+        unknown_devices = [
+            self._device_home_view(device, binding_by_id.get(str(device.get("device_id") or "").strip()))
+            for device in devices
+            if str(device.get("kind") or "").strip() == "unknown"
+        ][:10]
+        media_queue = self._media_queue_summary(snapshot)
+        recent_event_rows = self._recent_events_from_snapshot(snapshot, limit=5).get("recent_events", [])
+        recent_changes = [
+            {
+                "kind": str(item.get("kind") or ""),
+                "event_family": str(item.get("event_family") or ""),
+                "summary": _trim_text(item.get("summary"), max_chars=200),
+                "created_at": str(item.get("created_at") or ""),
+            }
+            for item in recent_event_rows
+            if isinstance(item, dict)
+        ]
+        uncertainties = self._home_uncertainties(snapshot)
+        risk_notes = self._home_risk_notes(snapshot)
+        status = "idle"
+        if any(notice.severity in {"high", "medium"} for notice in notices) or risk_notes:
+            status = "attention"
+        elif devices or snapshot.snapshots:
+            status = "active"
+        summary_parts = [
+            f"{len(devices)} device(s) tracked",
+            f"{int(media_queue.get('media_count', 0) or 0)} media item(s)",
+        ]
+        if known_locations:
+            summary_parts.append(f"locations: {', '.join(known_locations[:3])}")
+        if risk_notes:
+            summary_parts.append(f"risks: {risk_notes[0]}")
+        return {
+            "status": status,
+            "summary": "; ".join(summary_parts),
+            "known_locations": known_locations,
+            "known_devices": known_devices,
+            "unknown_devices": unknown_devices,
+            "active_media": {
+                "media_count": int(media_queue.get("media_count", 0) or 0),
+                "pending_count": int(media_queue.get("uninspected_count", 0) or 0),
+                "recent_media": list(media_queue.get("recent_media") or []),
+                "last_scene_inspection": self._last_scene_inspection(snapshot),
+            },
+            "recent_changes": recent_changes,
+            "uncertainties": uncertainties,
+            "risk_notes": risk_notes,
+            "confidence": self._home_confidence(snapshot),
+            "updated_at": snapshot.updated_at,
+        }
+
+    def _compute_attention_notices(self, snapshot: WorldStateSnapshot) -> list[WorldAttentionNotice]:
+        if not self._home_attention_enabled():
+            return []
+        notices: list[WorldAttentionNotice] = []
+        device_by_id = {
+            str(item.get("device_id") or "").strip(): dict(item)
+            for item in (snapshot.device_map.get("devices") or [])
+            if isinstance(item, dict) and str(item.get("device_id") or "").strip()
+        }
+        active_binding_ids = {
+            binding.device_id
+            for binding in snapshot.device_bindings
+            if binding.status == "active"
+        }
+        for event in snapshot.device_events:
+            device = device_by_id.get(event.device_id) or dict(event.current_state or {}) or dict(event.previous_state or {})
+            if event.kind == "appeared":
+                device_kind = str(device.get("kind") or "unknown").strip() or "unknown"
+                notices.append(self._notice(
+                    kind="device_appeared",
+                    severity="medium" if device_kind == "unknown" else "low",
+                    title="Unknown device appeared" if device_kind == "unknown" else "Device appeared",
+                    summary=event.change_summary or f"Device appeared: {self._device_label(device)}",
+                    source_event_ids=[event.event_id],
+                    related_device_ids=[event.device_id],
+                    suggested_next_step=(
+                        "Ask whether to bind or inspect this device before using capture or permission tools."
+                        if device_kind == "unknown"
+                        else "Review the newly discovered device if it matters to the current task."
+                    ),
+                    requires_confirmation=device_kind == "unknown",
+                    created_at=event.created_at,
+                ))
+            elif event.kind == "disappeared":
+                bound = event.device_id in active_binding_ids
+                notices.append(self._notice(
+                    kind="device_disappeared",
+                    severity="medium" if bound else "low",
+                    title="Bound device disappeared" if bound else "Device disappeared",
+                    summary=event.change_summary or f"Device disappeared: {self._device_label(device)}",
+                    source_event_ids=[event.event_id],
+                    related_device_ids=[event.device_id],
+                    suggested_next_step=(
+                        "Confirm whether the bound device is offline before relying on it."
+                        if bound
+                        else "Re-scan later if this device was expected to stay online."
+                    ),
+                    requires_confirmation=False,
+                    created_at=event.created_at,
+                ))
+        for event in snapshot.media_events:
+            if event.kind not in {"failed", "skipped"}:
+                continue
+            notices.append(self._notice(
+                kind="media_issue",
+                severity="medium",
+                title="Media inspection needs attention",
+                summary=event.summary or f"Media {event.kind}: {event.media_path}",
+                source_event_ids=[event.event_id],
+                related_snapshot_ids=[event.snapshot_id],
+                suggested_next_step="Retry analysis or inspect the media file details before relying on it.",
+                requires_confirmation=False,
+                created_at=event.created_at,
+            ))
+        for event in snapshot.events:
+            if event.kind == "contested_world_state" or event.contested:
+                notices.append(self._notice(
+                    kind="scene_contested",
+                    severity="medium",
+                    title="Scene summary is contested",
+                    summary=event.summary or "Recent scene understanding changed after inspection.",
+                    source_event_ids=[event.event_id],
+                    related_snapshot_ids=[event.snapshot_id],
+                    suggested_next_step="Re-check the latest scene summary before making decisions from it.",
+                    requires_confirmation=False,
+                    created_at=event.created_at,
+                ))
+            elif event.kind == "uncertain_world_state":
+                notices.append(self._notice(
+                    kind="scene_uncertain",
+                    severity="medium",
+                    title="Scene understanding is uncertain",
+                    summary=event.summary or "Recent scene observations still contain uncertainty.",
+                    source_event_ids=[event.event_id],
+                    related_snapshot_ids=[event.snapshot_id],
+                    suggested_next_step="Review the uncertain scene details before acting on them.",
+                    requires_confirmation=False,
+                    created_at=event.created_at,
+                ))
+        last_inspection = self._last_inspection_record(snapshot)
+        if last_inspection is not None and _trim_text(last_inspection.failure_reason, max_chars=240):
+            notices.append(self._notice(
+                kind="inspection_failed",
+                severity="medium",
+                title="Latest inspection failed",
+                summary=_trim_text(last_inspection.failure_reason, max_chars=240),
+                source_event_ids=[last_inspection.inspection_id],
+                related_snapshot_ids=[last_inspection.snapshot_id],
+                suggested_next_step="Retry inspection or verify the media file before trusting the scene summary.",
+                requires_confirmation=False,
+                created_at=last_inspection.requested_at,
+            ))
+        audio_status = self._audio_status_summary(snapshot)
+        if audio_status.get("last_transcription_status") == "completed" and audio_status.get("last_audio"):
+            last_audio = audio_status.get("last_audio") or {}
+            notices.append(self._notice(
+                kind="audio_transcribed",
+                severity="low",
+                title="Audio transcription is available",
+                summary="A recent audio sample was transcribed and can be analyzed further if needed.",
+                related_snapshot_ids=[str(last_audio.get("snapshot_id") or "")] if last_audio.get("snapshot_id") else [],
+                suggested_next_step="Continue analyzing the available transcription if it helps the current task.",
+                requires_confirmation=False,
+                created_at=str(last_audio.get("captured_at") or snapshot.updated_at),
+            ))
+        now = _utcnow()
+        for permission in [self._expire_permission_if_needed(item, now=now) for item in snapshot.device_permissions]:
+            if permission.status not in {"pending", "denied"}:
+                continue
+            notices.append(self._notice(
+                kind=f"device_permission_{permission.status}",
+                severity="medium",
+                title=f"Device permission {permission.status}",
+                summary=f"{permission.capability} permission is {permission.status} for device {permission.device_id}.",
+                related_device_ids=[permission.device_id],
+                suggested_next_step="Ask for device permission confirmation before using targeted capture on this device.",
+                requires_confirmation=True,
+                created_at=permission.granted_at or permission.expires_at or snapshot.updated_at,
+            ))
+        risk_notes = self._home_risk_notes(snapshot)
+        if risk_notes:
+            notices.append(self._notice(
+                kind="home_risk_note",
+                severity="medium",
+                title="Home state has open risks",
+                summary=risk_notes[0],
+                suggested_next_step="Review the current home-state risks before taking the next step.",
+                requires_confirmation=False,
+                created_at=snapshot.updated_at,
+            ))
+        return self._dedupe_notices(notices)
+
+    @staticmethod
+    def _notice(
+        *,
+        kind: str,
+        severity: str,
+        title: str,
+        summary: str,
+        source_event_ids: list[str] | None = None,
+        related_device_ids: list[str] | None = None,
+        related_snapshot_ids: list[str] | None = None,
+        suggested_next_step: str | None = None,
+        requires_confirmation: bool = False,
+        created_at: str | None = None,
+    ) -> WorldAttentionNotice:
+        normalized_severity = severity if severity in {"high", "medium", "low"} else "low"
+        return WorldAttentionNotice(
+            notice_id=f"notice_{uuid.uuid4().hex[:12]}",
+            kind=str(kind or "notice").strip() or "notice",
+            severity=normalized_severity,
+            title=_trim_text(title, max_chars=120),
+            summary=_trim_text(summary, max_chars=240),
+            source_event_ids=[value for value in (source_event_ids or []) if str(value or "").strip()],
+            related_device_ids=[value for value in (related_device_ids or []) if str(value or "").strip()],
+            related_snapshot_ids=[value for value in (related_snapshot_ids or []) if str(value or "").strip()],
+            suggested_next_step=_trim_text(suggested_next_step, max_chars=200) or None,
+            requires_confirmation=bool(requires_confirmation),
+            created_at=str(created_at or _utcnow_iso()).strip(),
+        )
+
+    def _dedupe_notices(self, notices: list[WorldAttentionNotice]) -> list[WorldAttentionNotice]:
+        severity_rank = {"high": 0, "medium": 1, "low": 2}
+        ordered = sorted(
+            notices,
+            key=lambda item: (
+                severity_rank.get(item.severity, 3),
+                -((_parse_dt(item.created_at) or datetime.min.replace(tzinfo=timezone.utc)).timestamp()),
+            ),
+        )
+        seen: set[tuple[str, tuple[str, ...], tuple[str, ...], str]] = set()
+        out: list[WorldAttentionNotice] = []
+        for notice in ordered:
+            key = (
+                notice.kind,
+                tuple(sorted(notice.related_device_ids)),
+                tuple(sorted(notice.related_snapshot_ids)),
+                notice.title,
+            )
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append(notice)
+            if len(out) >= self._home_attention_max_notices():
+                break
+        return out
+
+    @staticmethod
+    def _attention_notice_lines(notices: list[WorldAttentionNotice]) -> list[str]:
+        return [
+            f"[{notice.severity}] {notice.title}: {notice.summary}"
+            for notice in notices[:5]
+            if notice.title and notice.summary
+        ]
+
+    @staticmethod
+    def _device_home_view(device: dict[str, Any], binding: DeviceBinding | None = None) -> dict[str, Any]:
+        return {
+            "device_id": str(device.get("device_id") or "").strip(),
+            "kind": str(device.get("kind") or "unknown").strip() or "unknown",
+            "name": _trim_text(device.get("name"), max_chars=120) or None,
+            "hostname": _trim_text(device.get("hostname"), max_chars=120) or None,
+            "ip_addresses": [str(ip).strip() for ip in device.get("ip_addresses") or [] if str(ip).strip()][:4],
+            "binding": binding.to_json() if binding is not None else device.get("binding"),
+            "authorized_capabilities": list(device.get("authorized_capabilities") or []),
+        }
+
+    @staticmethod
+    def _last_inspection_record(snapshot: WorldStateSnapshot) -> InspectionResult | None:
+        if not snapshot.inspections:
+            return None
+        return sorted(
+            snapshot.inspections,
+            key=lambda item: _parse_dt(item.requested_at) or datetime.min.replace(tzinfo=timezone.utc),
+            reverse=True,
+        )[0]
+
+    @staticmethod
+    def _home_uncertainties(snapshot: WorldStateSnapshot) -> list[str]:
+        values: list[str] = []
+        if snapshot.world_summary is not None:
+            values.extend(_string_list(snapshot.world_summary.uncertainties, limit=8, max_chars=200))
+        latest = WorldStateManager._last_inspection_record(snapshot)
+        if latest is not None:
+            values.extend(_string_list(latest.uncertain, limit=8, max_chars=200))
+            if latest.failure_reason:
+                values.append(_trim_text(latest.failure_reason, max_chars=200))
+        seen: list[str] = []
+        for value in values:
+            if value and value not in seen:
+                seen.append(value)
+        return seen[:8]
+
+    def _home_risk_notes(self, snapshot: WorldStateSnapshot) -> list[str]:
+        notes: list[str] = []
+        unknown_devices = [
+            item for item in (snapshot.device_map.get("devices") or [])
+            if isinstance(item, dict) and str(item.get("kind") or "").strip() == "unknown"
+        ]
+        if unknown_devices:
+            notes.append(f"{len(unknown_devices)} unknown device(s) are currently visible.")
+        failed_media = [event for event in snapshot.media_events if event.kind in {"failed", "skipped"}]
+        if failed_media:
+            notes.append("Some media analysis attempts failed or were skipped.")
+        normalized_permissions = [
+            self._expire_permission_if_needed(item, now=_utcnow())
+            for item in snapshot.device_permissions
+        ]
+        pending_or_denied = [
+            item for item in normalized_permissions
+            if item.status in {"pending", "denied"}
+        ]
+        if pending_or_denied:
+            notes.append("One or more device permissions still need attention.")
+        disappeared_bound = [
+            event for event in snapshot.device_events
+            if event.kind == "disappeared" and self._active_binding(snapshot, event.device_id) is not None
+        ]
+        if disappeared_bound:
+            notes.append("A bound device recently disappeared from discovery results.")
+        return notes[:8]
+
+    @staticmethod
+    def _home_confidence(snapshot: WorldStateSnapshot) -> float | None:
+        completed = [item.confidence for item in snapshot.inspections if item.status == "completed"]
+        if not completed:
+            return None
+        return round(sum(completed) / len(completed), 4)
+
+    def _home_situation_enabled(self) -> bool:
+        config = self._context_config
+        if config is None:
+            return True
+        return bool(getattr(config, "home_situation_enabled", True))
+
+    def _home_attention_enabled(self) -> bool:
+        config = self._context_config
+        if config is None:
+            return True
+        return bool(getattr(config, "home_attention_enabled", True))
+
+    def _home_attention_max_notices(self) -> int:
+        config = self._context_config
+        if config is None:
+            return 50
+        try:
+            value = int(getattr(config, "home_attention_max_notices", 50) or 50)
+        except (TypeError, ValueError):
+            value = 50
+        return max(1, min(value, 200))
 
     def _device_permissions_summary(self, snapshot: WorldStateSnapshot) -> dict[str, Any]:
         normalized = [self._expire_permission_if_needed(item, now=_utcnow()) for item in snapshot.device_permissions]

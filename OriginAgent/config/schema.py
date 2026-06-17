@@ -582,6 +582,28 @@ class ContextConfig(Base):
         validation_alias=AliasChoices("maxMediaBytes", "max_media_bytes"),
         serialization_alias="maxMediaBytes",
     )
+    home_situation_enabled: bool = Field(
+        default=True,
+        validation_alias=AliasChoices("homeSituationEnabled", "home_situation_enabled"),
+        serialization_alias="homeSituationEnabled",
+    )
+    home_attention_enabled: bool = Field(
+        default=True,
+        validation_alias=AliasChoices("homeAttentionEnabled", "home_attention_enabled"),
+        serialization_alias="homeAttentionEnabled",
+    )
+    home_attention_max_notices: int = Field(
+        default=50,
+        ge=1,
+        le=200,
+        validation_alias=AliasChoices("homeAttentionMaxNotices", "home_attention_max_notices"),
+        serialization_alias="homeAttentionMaxNotices",
+    )
+    proactive_home_suggestions: bool = Field(
+        default=False,
+        validation_alias=AliasChoices("proactiveHomeSuggestions", "proactive_home_suggestions"),
+        serialization_alias="proactiveHomeSuggestions",
+    )
 
 
 class ConfirmationConfig(Base):

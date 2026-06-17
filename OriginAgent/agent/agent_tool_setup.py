@@ -42,6 +42,7 @@ from OriginAgent.agent.tools.runtime_status import (
     ConfirmationSummaryTool,
     CronSummaryTool,
     InspectContextTool,
+    InspectHomeStateTool,
     InspectSnapshotTool,
     PlanActionTool,
     RuntimeStatusTool,
@@ -248,6 +249,28 @@ def register_default_tools(
             else None,
             introspection_service=introspection_service,
         )
+    )
+    _register_named(
+        InspectHomeStateTool.name,
+        lambda: InspectHomeStateTool(
+            workspace=workspace,
+            registry=registry,
+            sessions=sessions,
+            pending_queues=pending_queues,
+            cron_service=cron_service,
+            audit_mode=audit_config.mode,
+            runtime_profile=runtime_profile,
+            confirmation_store=confirmation_store,
+            domain_pack_manager=domain_pack_manager,
+            background_review_service=background_review_service,
+            curator_service=curator_service,
+            session_search_index_service=session_search_index_service,
+            evolution_config=evolution_config,
+            nearline_memory_config=getattr(introspection_service, "_nearline_memory_config", None)
+            if introspection_service is not None
+            else None,
+            introspection_service=introspection_service,
+        ),
     )
     _register_named(
         InspectSnapshotTool.name,

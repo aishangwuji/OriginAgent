@@ -171,7 +171,14 @@ class SelfModelService:
     def _build_local_awareness(self) -> dict[str, Any]:
         runtime = self._runtime_snapshot.runtime
         if isinstance(runtime, dict) and isinstance(runtime.get("local_awareness"), dict):
-            return normalize_local_awareness_summary(None, cached=runtime["local_awareness"])
+            awareness = normalize_local_awareness_summary(None, cached=runtime["local_awareness"])
+            if isinstance(runtime["local_awareness"].get("home_state"), dict):
+                awareness["home_state"] = dict(runtime["local_awareness"]["home_state"])
+            if isinstance(runtime["local_awareness"].get("attention_notices_summary"), dict):
+                awareness["attention_notices_summary"] = dict(runtime["local_awareness"]["attention_notices_summary"])
+            if isinstance(runtime["local_awareness"].get("suggested_next_steps"), list):
+                awareness["suggested_next_steps"] = list(runtime["local_awareness"]["suggested_next_steps"])
+            return awareness
         return normalize_local_awareness_summary(None)
 
     def _build_domains(self) -> dict[str, Any]:
@@ -720,6 +727,7 @@ class SelfModelRenderer:
                 "- Device map: none scanned yet",
                 f"- Media queue: {int(local_awareness.get('media_count', 0) or 0)} total, "
                 f"{int(local_awareness.get('uninspected_media_count', 0) or 0)} pending",
+                f"- Home state: {local_awareness.get('home_state_summary', {}).get('summary') or 'unavailable'}",
             ]
         protocols = _render_name_list([str(item) for item in summary.get("protocols") or []])
         kind_counts = summary.get("kind_counts") if isinstance(summary.get("kind_counts"), dict) else {}
@@ -745,6 +753,8 @@ class SelfModelRenderer:
             f"pending: {int(local_awareness.get('pending_permission_count', 0) or 0)}",
             f"- Device events: {int(local_awareness.get('device_event_count', 0) or 0)} total; recent: {event_preview}",
             f"- Media events: {int(local_awareness.get('media_event_count', 0) or 0)} total",
+            f"- Home state: {local_awareness.get('home_state_summary', {}).get('summary') or 'unavailable'}",
+            f"- Home notices: {int(local_awareness.get('attention_notices_summary', {}).get('notice_count', 0) or 0)} total",
             f"- Last inspection: {local_awareness.get('last_scene_inspection', {}).get('inspection_mode') or 'unknown'} / "
             f"{local_awareness.get('last_scene_inspection', {}).get('status') or 'unknown'}",
             f"- Audio status: {local_awareness.get('audio_status', {}).get('last_transcription_status') or 'unknown'}",

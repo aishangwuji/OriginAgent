@@ -389,7 +389,9 @@ def test_context_builder_uses_real_world_state_snapshot(tmp_path: Path):
     assert '"version": "phase2"' in world_block["text"]
     assert "Desk shows a notebook and a lamp." in world_block["text"]
     assert '"snapshots"' not in world_block["text"]
-    assert '"media_path"' not in world_block["text"]
+    assert '"media_queue_summary"' in world_block["text"]
+    assert '"recent_media_events"' in world_block["text"]
+    assert '"media_path": "desk.png"' in world_block["text"]
 
 
 def test_build_action_continuity_inputs_includes_arc_session_pending_confirmation(tmp_path: Path):
@@ -829,9 +831,12 @@ def test_world_state_recent_events_exposes_summary_for_batch_ingest(tmp_path: Pa
     )
 
     events = world_state.recent_events(session, identity=runtime_context, limit=5)
-    assert events["event_summary"]["total"] == 1
-    assert events["event_summary"]["by_kind"]["snapshot_ingested"] == 1
-    assert events["recent_events"][0]["kind"] == "snapshot_ingested"
+    assert events["event_summary"]["total"] == 2
+    assert events["event_summary"]["by_kind"] == {
+        "scene:snapshot_ingested": 1,
+        "media:discovered": 1,
+    }
+    assert {item["event_family"] for item in events["recent_events"]} == {"scene", "media"}
     assert events["recent_events"][0]["provenance"]["ingest_method"] == "workspace_inbox"
 
 

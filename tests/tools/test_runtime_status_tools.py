@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import copy
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
@@ -10,21 +11,25 @@ import pytest
 
 from OriginAgent.agent.confirmation import ConfirmationRequest, PendingConfirmationStore
 from OriginAgent.agent.domain_packs import DomainPackManager
+from OriginAgent.agent.identity import ActorResolver
 from OriginAgent.agent.introspection.service import RuntimeIntrospectionService
 from OriginAgent.agent.tools.filesystem import ReadFileTool
 from OriginAgent.agent.tools.runtime_status import (
     ConfirmationSummaryTool,
     CronSummaryTool,
     InspectContextTool,
+    InspectHomeStateTool,
     InspectSnapshotTool,
     PlanActionTool,
     RuntimeStatusTool,
     ToolAuditSummaryTool,
 )
 from OriginAgent.agent.tools.context import RequestContext
+from OriginAgent.agent.world_state import WorldStateManager
 from OriginAgent.config.schema import DomainPacksConfig, NearlineMemoryConfig, ToolsConfig
 from OriginAgent.cron.service import CronService
 from OriginAgent.cron.types import CronSchedule
+from OriginAgent.session.manager import SessionManager
 from OriginAgent.session.search_index import SessionSearchIndexService
 
 RAW_COMMAND = "echo super-secret-command"
@@ -759,6 +764,70 @@ async def test_local_awareness_views_read_same_cached_summary(tmp_path) -> None:
     assert status["self_model"]["local_awareness"]["last_capture"] == status["local_awareness"]["last_capture"]
     assert status["self_model"]["local_awareness"]["camera_enabled"] is True
     assert inspect["views"]["local_awareness"]["enabled"] is True
+
+
+@pytest.mark.asyncio
+async def test_inspect_home_state_tool_returns_read_only_home_state(tmp_path) -> None:
+    sessions = SimpleNamespace(get_or_create=lambda key: SimpleNamespace(metadata={}, get_history=lambda **kwargs: []))
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    real_sessions = SessionManager(workspace)
+    session = real_sessions.get_or_create("cli:home")
+    world_state = WorldStateManager(workspace, real_sessions)
+    runtime_context = SimpleNamespace(
+        actor_id="user-1",
+        user_id="user-1",
+        session_id="cli:home",
+        device_id="device-a",
+        trigger="user_initiated",
+        source="user_turn",
+        default_scope="session",
+        identity=SimpleNamespace(user_id="user-1"),
+    )
+    image = workspace / "living-room.png"
+    image.write_bytes(b"\x89PNG\r\n\x1a\n" + b"\x00" * 64)
+    world_state.ingest_media(
+        session,
+        runtime_context=ActorResolver().resolve_runtime_context(
+            channel="cli",
+            chat_id="home",
+            sender_id="user-1",
+            metadata={"device_id": "device-a"},
+            session_key="cli:home",
+        ),
+        media_paths=[str(image)],
+    )
+    loop = SimpleNamespace(world_state=world_state)
+    tool = InspectHomeStateTool(
+        workspace=workspace,
+        registry=SimpleNamespace(tool_names=["originagent_inspect_home_state"]),
+        sessions=real_sessions,
+        pending_queues={},
+        introspection_service=RuntimeIntrospectionService(
+            loop=loop,
+            workspace=workspace,
+            registry=SimpleNamespace(tool_names=["originagent_inspect_home_state"]),
+            sessions=real_sessions,
+            pending_queues={},
+        ),
+    )
+    tool.set_context(
+        RequestContext(
+            channel="cli",
+            chat_id="home",
+            session_key="cli:home",
+            runtime_context=runtime_context,
+        )
+    )
+
+    before = copy.deepcopy(session.metadata.get("world_state_v1"))
+    result = await tool.execute()
+    after = copy.deepcopy(session.metadata.get("world_state_v1"))
+
+    assert result["home_state"]["status"] == "active"
+    assert result["attention_notices_summary"]["notice_count"] >= 0
+    assert isinstance(result["suggested_next_steps"], list)
+    assert before == after
 
 
 @pytest.mark.asyncio

@@ -312,6 +312,8 @@ class RuntimeIntrospectionService:
                     cached.update(world_state.media_state_summary(session, identity=runtime_context))
                 if hasattr(world_state, "device_state_summary"):
                     cached.update(world_state.device_state_summary(session, identity=runtime_context))
+                if hasattr(world_state, "home_state_observability"):
+                    cached.update(world_state.home_state_observability(session, identity=runtime_context))
         return normalize_local_awareness_summary(config, backend=backend, cached=cached)
 
     def cognition_summary(self) -> dict[str, Any]:
@@ -972,6 +974,15 @@ class RuntimeIntrospectionService:
                 identity=runtime_context if runtime_context is not None else None,
                 limit=5,
             )
+            home_state = world_state.home_state_summary(
+                session,
+                identity=runtime_context if runtime_context is not None else None,
+            ) if runtime_context is not None and hasattr(world_state, "home_state_summary") else {}
+            notices = world_state.attention_notices(
+                session,
+                identity=runtime_context if runtime_context is not None else None,
+                limit=5,
+            ) if runtime_context is not None and hasattr(world_state, "attention_notices") else {}
         except Exception:
             return defaults
         summary = (
@@ -1016,6 +1027,9 @@ class RuntimeIntrospectionService:
                 if isinstance(event_view, dict)
                 else defaults["event_summary"]
             ),
+            "home_state": dict(home_state or {}),
+            "attention_notices_summary": dict(notices.get("attention_notices_summary") or {}) if isinstance(notices, dict) else {},
+            "suggested_next_steps": list(notices.get("suggested_next_steps") or []) if isinstance(notices, dict) else [],
         }
 
     def _scope_filter_summary(

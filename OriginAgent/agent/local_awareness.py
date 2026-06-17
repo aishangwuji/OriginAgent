@@ -1247,6 +1247,12 @@ def normalize_local_awareness_summary(
             summary[key] = dict(value)
         elif isinstance(value, list):
             summary[key] = list(value)
+    for key in ("home_state", "attention_notices_summary", "suggested_next_steps"):
+        value = raw.get(key)
+        if isinstance(value, dict):
+            summary[key] = dict(value)
+        elif isinstance(value, list):
+            summary[key] = list(value)
     events_summary = summary.get("device_events_summary") if isinstance(summary.get("device_events_summary"), dict) else {}
     bindings_summary = summary.get("device_bindings_summary") if isinstance(summary.get("device_bindings_summary"), dict) else {}
     permissions_summary = summary.get("device_permissions_summary") if isinstance(summary.get("device_permissions_summary"), dict) else {}
@@ -1270,4 +1276,21 @@ def normalize_local_awareness_summary(
     summary["uninspected_media_count"] = int(media_queue.get("uninspected_count", raw.get("uninspected_media_count", 0)) or 0)
     recent_media_events = summary.get("recent_media_events") if isinstance(summary.get("recent_media_events"), list) else []
     summary["media_event_count"] = int(raw.get("media_event_count", len(recent_media_events)) or len(recent_media_events))
+    home_state = summary.get("home_state") if isinstance(summary.get("home_state"), dict) else {}
+    notices_summary = summary.get("attention_notices_summary") if isinstance(summary.get("attention_notices_summary"), dict) else {}
+    summary["home_state"] = dict(home_state)
+    summary["attention_notices_summary"] = dict(notices_summary)
+    summary["suggested_next_steps"] = list(summary.get("suggested_next_steps") or raw.get("suggested_next_steps") or [])
+    if isinstance(home_state, dict):
+        summary["home_state_summary"] = {
+            "status": home_state.get("status"),
+            "summary": home_state.get("summary"),
+            "known_locations": list(home_state.get("known_locations") or []),
+            "known_device_count": len(home_state.get("known_devices") or []),
+            "unknown_device_count": len(home_state.get("unknown_devices") or []),
+            "active_media_count": int((home_state.get("active_media") or {}).get("media_count", 0) or 0),
+            "risk_note_count": len(home_state.get("risk_notes") or []),
+            "confidence": home_state.get("confidence"),
+            "updated_at": home_state.get("updated_at"),
+        }
     return summary
