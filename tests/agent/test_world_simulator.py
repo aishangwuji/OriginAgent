@@ -7,6 +7,7 @@ from pathlib import Path
 from OriginAgent.agent.facts import FactStore
 from OriginAgent.agent.world_simulator import (
     CalibrationSummary,
+    CausalEdge,
     SimulationFeedback,
     SimulationRequest,
     WorldSimulator,
@@ -68,12 +69,14 @@ def _write_fact(
     store: FactStore,
     *,
     fact_id: str = "fact-nightvision",
+    content: str | None = None,
     confidence: float = 0.8,
     support_count: int = 1,
     contradiction_count: int = 0,
 ) -> None:
+    fact_content = content or "When lights turn on in dark rooms, the camera night vision may turn on."
     store.upsert_fact(
-        "When lights turn on in dark rooms, the camera night vision may turn on.",
+        fact_content,
         category="note",
         scope="home.living_room",
         owner="user",
@@ -150,6 +153,45 @@ def test_world_simulator_promotes_confirmation_for_dark_room_and_night_vision_ed
     assert trace.uncertainty_score > 0.0
 
 
+def test_noisy_or_risk_aggregation_combines_multiple_edges(tmp_path: Path) -> None:
+    simulator, _, session = _simulator(
+        tmp_path,
+        snapshot_time="2026-06-17T11:59:30+00:00",
+    )
+    simulator._write_edges(  # noqa: SLF001 - test-only setup
+        [
+            CausalEdge(
+                edge_id="edge-a",
+                cause="light_on",
+                effect="camera_ir_on",
+                confidence=0.75,
+                alpha=9.0,
+                beta=3.0,
+            ),
+            CausalEdge(
+                edge_id="edge-b",
+                cause="light_on",
+                effect="camera_ir_on",
+                confidence=0.5833333333,
+                alpha=7.0,
+                beta=5.0,
+            ),
+        ]
+    )
+
+    trace = simulator.predict_action(
+        _lighting_request("req-noisy-or"),
+        session=session,
+        current_time=datetime(2026, 6, 17, 12, 0, tzinfo=timezone.utc),
+    )
+
+    assert trace.status == "ok"
+    assert abs(trace.risk_score - 0.8958333333333334) < 1e-9
+    assert trace.risk_score > max(
+        simulator._edge_probability(edge) for edge in simulator._read_edges()  # noqa: SLF001 - test-only inspection
+    )
+
+
 def test_quiet_hours_parser_and_beta_prior_mapping(tmp_path: Path) -> None:
     (tmp_path / "USER.md").write_text("- Quiet hours: 23:00-07:00\n", encoding="utf-8")
     simulator, _, session = _simulator(
@@ -199,8 +241,8 @@ def test_calibrate_updates_edge_weights(tmp_path: Path) -> None:
     edge = simulator._read_edges()[0]  # noqa: SLF001 - test-only inspection
 
     assert summary == CalibrationSummary(processed_feedback=1, updated_edges=1, skipped_feedback=0)
-    assert edge.alpha == 10.0
-    assert edge.beta == 3.0
+    assert edge.alpha == 9.955
+    assert edge.beta == 2.985
 
 
 def test_device_executor_attaches_simulation_metadata_and_confirmation(tmp_path: Path) -> None:

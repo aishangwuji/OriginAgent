@@ -31,6 +31,7 @@ _DEFAULT_PRIOR_ALPHA = 1.5
 _DEFAULT_PRIOR_BETA = 1.5
 _PRIOR_EQUIVALENT_SAMPLES = 10.0
 _SIMULATION_STALENESS_SECONDS = 120.0
+_CALIBRATION_DECAY_FACTOR = 0.995
 _QUIET_HOURS_RE = re.compile(r"^\s*(\d{2}):(\d{2})-(\d{2}):(\d{2})\s*$")
 
 
@@ -292,7 +293,7 @@ class WorldSimulator:
         edges = self._matching_edges(request, entities)
         if edges:
             probabilities = [self._edge_probability(edge) for edge in edges]
-            risk_score = max(probabilities)
+            risk_score = self._noisy_or(probabilities)
             uncertainty_score = max(_normalized_entropy(prob) for prob in probabilities)
         else:
             risk_score = 0.0
@@ -386,6 +387,7 @@ class WorldSimulator:
                 edge = edges_by_id.get(str(edge_id))
                 if edge is None:
                     continue
+                self._apply_calibration_decay(edge)
                 if feedback.outcome == "matched":
                     edge.alpha = _round_weight(edge.alpha + 1.0)
                 elif feedback.outcome == "contradicted":
@@ -640,6 +642,20 @@ class WorldSimulator:
         if (edge.alpha + edge.beta) <= 0:
             return 0.0
         return _normalize_probability(edge.alpha / (edge.alpha + edge.beta))
+
+    @staticmethod
+    def _noisy_or(probabilities: Iterable[float]) -> float:
+        combined = 1.0
+        seen = False
+        for probability in probabilities:
+            seen = True
+            combined *= 1.0 - _normalize_probability(probability)
+        return 1.0 - combined if seen else 0.0
+
+    @staticmethod
+    def _apply_calibration_decay(edge: CausalEdge) -> None:
+        edge.alpha = _round_weight(edge.alpha * _CALIBRATION_DECAY_FACTOR)
+        edge.beta = _round_weight(edge.beta * _CALIBRATION_DECAY_FACTOR)
 
     @staticmethod
     def _required_entities(request: SimulationRequest) -> tuple[str, ...]:
