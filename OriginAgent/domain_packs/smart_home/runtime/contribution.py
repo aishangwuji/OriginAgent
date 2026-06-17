@@ -12,13 +12,26 @@ from OriginAgent.domain_packs.smart_home.runtime.device_factory import build_dev
 
 
 def build_runtime_contribution(context) -> DomainRuntimeContribution:
+    overrides = getattr(context, "overrides", {}) or {}
     tools_config = getattr(context.config, "device", None)
-    device_registry = context.overrides.get("device_registry")
-    executor = context.overrides.get("device_action_executor")
+    device_registry = overrides.get("device_registry")
+    executor = overrides.get("device_action_executor")
+    world_state = overrides.get("world_state")
+    sessions = overrides.get("sessions")
+    timezone_name = (
+        overrides.get("timezone_name")
+        or getattr(context.config, "timezone_name", None)
+        or getattr(context.config, "timezone", None)
+        or getattr(context.workspace, "timezone", None)
+        or "UTC"
+    )
     if executor is None and tools_config is not None:
         executor = build_device_action_executor(
             workspace=context.workspace,
             config=tools_config,
+            world_state=world_state,
+            sessions=sessions,
+            timezone_name=timezone_name,
             device_registry=device_registry,
         )
     return DomainRuntimeContribution(

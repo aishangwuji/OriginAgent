@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+from types import SimpleNamespace
 from pathlib import Path
+from unittest.mock import patch
 
 from OriginAgent.agent.context import ContextBuilder
 from OriginAgent.agent.domain_packs import DomainPackManager
 from OriginAgent.config.schema import DomainPacksConfig
+from OriginAgent.config.schema import DeviceToolsConfig
 
 
 def _write_pack(
@@ -393,6 +396,44 @@ def test_manifest_parses_domain_runtime_contribution(tmp_path: Path) -> None:
     assert [contribution.tool_context for contribution in contributions] == [{"demo": "research"}]
     assert contributions[0].action_continuity_provider is None
     assert contributions[0].action_continuity_writeback_adapter is None
+
+
+def test_smart_home_runtime_contribution_prefers_override_timezone(tmp_path: Path) -> None:
+    manager = DomainPackManager(tmp_path)
+    pack = manager.get_pack("smart_home")
+
+    assert pack is not None
+    assert pack.runtime is not None
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    config = SimpleNamespace(
+        device=DeviceToolsConfig(enabled=True, lighting_enabled=True, backend="fake"),
+        timezone="Asia/Shanghai",
+        timezone_name="ignored/by/config",
+    )
+    context = SimpleNamespace(
+        pack=pack,
+        workspace=workspace,
+        config=config,
+        overrides={
+            "world_state": object(),
+            "sessions": object(),
+            "timezone_name": "America/New_York",
+        },
+    )
+
+    fake_executor = object()
+    with patch(
+        "OriginAgent.domain_packs.smart_home.runtime.device_factory.build_device_action_executor",
+        return_value=fake_executor,
+    ) as mocked_build:
+        contribution = manager._load_runtime_contribution(pack, context)  # noqa: SLF001 - regression test
+
+    assert contribution is not None
+    assert contribution.tool_context["device_action_executor"] is fake_executor
+    mocked_build.assert_called_once()
+    assert mocked_build.call_args.kwargs["timezone_name"] == "America/New_York"
 
 
 def test_inactive_domain_pack_does_not_expose_skill_entries_or_tools(tmp_path: Path) -> None:

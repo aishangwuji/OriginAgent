@@ -30,6 +30,7 @@ from OriginAgent.agent.permissions import (
     PermissionResolver,
 )
 from OriginAgent.agent.action_privacy import FORBIDDEN_METADATA_KEYS
+from OriginAgent.agent.world_simulator import SimulationTrace
 from OriginAgent.utils.helpers import ensure_dir
 
 ACTION_FORBIDDEN_PAYLOAD_KEYS = {
@@ -62,6 +63,7 @@ class ActionIntent:
     continuity_facts_ref: list[str] = field(default_factory=list)
     continuity_origin: str | None = None
     continuity_proposal_digest: str | None = None
+    simulation_trace_id: str | None = None
 
     def to_request(self) -> ActionRequest:
         return ActionRequest(
@@ -96,6 +98,10 @@ class ActionExecutionResult:
     is_real_execution: bool = False
     backend_kind: str | None = None
     physical_target_domain: str | None = None
+    simulation_status: str | None = None
+    simulation_trace_id: str | None = None
+    simulation_risk: float | None = None
+    simulation_uncertainty: float | None = None
 
 
 @dataclass
@@ -111,6 +117,28 @@ class ActionExecutionRecord:
 
 class ActionBackend(Protocol):
     def execute(self, intent: ActionIntent) -> dict[str, Any]:
+        ...
+
+
+@dataclass(frozen=True)
+class SimulationPrecheckDecision:
+    decision: str
+    trace: SimulationTrace
+    reason: str
+    prompt_suffix: str | None = None
+
+
+class ActionSimulationHook(Protocol):
+    def precheck(self, intent: ActionIntent, *, now: datetime) -> SimulationPrecheckDecision | None:
+        ...
+
+    def record_result(
+        self,
+        intent: ActionIntent,
+        result: ActionExecutionResult,
+        *,
+        now: datetime,
+    ) -> None:
         ...
 
 
@@ -180,6 +208,7 @@ class SafeActionExecutor:
         audit_logger: AuditLogger | None = None,
         scope_redactor: Callable[[str | None], str | None] | None = None,
         resume_precheck: Callable[[ActionIntent, ConfirmationRequest, datetime], ActionDecision | None] | None = None,
+        simulation_hook: ActionSimulationHook | None = None,
     ):
         self.gate = gate
         self.confirmation_manager = confirmation_manager
@@ -188,6 +217,7 @@ class SafeActionExecutor:
         self.audit_logger = audit_logger
         self._scope_redactor = scope_redactor or _default_scope_redactor
         self._resume_precheck = resume_precheck
+        self._simulation_hook = simulation_hook
         self.records: list[ActionExecutionRecord] = []
         workspace = getattr(confirmation_manager, "workspace", None)
         self._successful_key_store = (
@@ -222,30 +252,66 @@ class SafeActionExecutor:
             )
             self._record_without_decision(action_id, sanitized_intent, result, current_time)
             return result
-        request = intent.to_request()
+        simulation_precheck = self._run_simulation_precheck(sanitized_intent, now=current_time)
+        if simulation_precheck is not None:
+            sanitized_intent = replace(
+                sanitized_intent,
+                simulation_trace_id=simulation_precheck.trace.trace_id,
+            )
+            if simulation_precheck.decision == "blocked_by_simulation":
+                result = ActionExecutionResult(
+                    status="denied",
+                    action_id=action_id,
+                    reason=simulation_precheck.reason,
+                    simulation_status=simulation_precheck.trace.status,
+                    simulation_trace_id=simulation_precheck.trace.trace_id,
+                    simulation_risk=simulation_precheck.trace.risk_score,
+                    simulation_uncertainty=simulation_precheck.trace.uncertainty_score,
+                )
+                self._record_without_decision(
+                    action_id,
+                    sanitized_intent,
+                    result,
+                    current_time,
+                    gate_decision="blocked_by_simulation",
+                )
+                self._record_simulation_feedback(sanitized_intent, result, now=current_time)
+                return result
+        request = sanitized_intent.to_request()
         decision = self.gate.evaluate(request)
 
         if decision.decision == "allow":
-            permission = self._evaluate_permission(
-                action_id,
-                sanitized_intent,
-                permission="execute_action",
-                now=current_time,
-            )
-            if permission.decision != "allow":
-                result = self._permission_result(action_id, decision, permission)
+            if simulation_precheck is not None and simulation_precheck.decision == "ask_confirmation":
+                decision = ActionDecision(
+                    decision="ask_confirmation",
+                    reason=self._merge_confirmation_reason(decision.reason, simulation_precheck),
+                    supporting_facts=list(decision.supporting_facts),
+                    pending_facts=list(decision.pending_facts),
+                    presence_status=decision.presence_status,
+                )
+            else:
+                permission = self._evaluate_permission(
+                    action_id,
+                    sanitized_intent,
+                    permission="execute_action",
+                    now=current_time,
+                )
+                if permission.decision != "allow":
+                    result = self._permission_result(action_id, decision, permission)
+                    self._record(action_id, sanitized_intent, decision, result, current_time)
+                    return result
+                result = self._execute_allowed(
+                    action_id,
+                    sanitized_intent,
+                    decision,
+                    current_time,
+                )
+                result.permission_status = permission.decision
+                self._attach_simulation_metadata(result, simulation_precheck)
                 self._record(action_id, sanitized_intent, decision, result, current_time)
+                self._remember_successful_idempotency(sanitized_intent, result)
+                self._record_simulation_feedback(sanitized_intent, result, now=current_time)
                 return result
-            result = self._execute_allowed(
-                action_id,
-                sanitized_intent,
-                decision,
-                current_time,
-            )
-            result.permission_status = permission.decision
-            self._record(action_id, sanitized_intent, decision, result, current_time)
-            self._remember_successful_idempotency(sanitized_intent, result)
-            return result
 
         if decision.decision == "ask_confirmation":
             permission = self._evaluate_permission(
@@ -274,7 +340,9 @@ class SafeActionExecutor:
                     reason=_sanitize_text(str(exc), REASON_MAX_CHARS),
                     decision=decision,
                 )
+                self._attach_simulation_metadata(result, simulation_precheck)
                 self._record(action_id, sanitized_intent, decision, result, current_time)
+                self._record_simulation_feedback(sanitized_intent, result, now=current_time)
                 return result
             if confirmation is None:
                 result = ActionExecutionResult(
@@ -292,7 +360,9 @@ class SafeActionExecutor:
                     decision=decision,
                     permission_status=permission.decision,
                 )
+            self._attach_simulation_metadata(result, simulation_precheck)
             self._record(action_id, sanitized_intent, decision, result, current_time)
+            self._record_simulation_feedback(sanitized_intent, result, now=current_time)
             return result
 
         # The production safety gate does not emit notify_only today; this path
@@ -328,7 +398,9 @@ class SafeActionExecutor:
                     confirmation_id=notification.confirmation_id,
                     decision=decision,
                 )
+            self._attach_simulation_metadata(result, simulation_precheck)
             self._record(action_id, sanitized_intent, decision, result, current_time)
+            self._record_simulation_feedback(sanitized_intent, result, now=current_time)
             return result
 
         if decision.decision == "deny":
@@ -338,7 +410,9 @@ class SafeActionExecutor:
                 reason=decision.reason,
                 decision=decision,
             )
+            self._attach_simulation_metadata(result, simulation_precheck)
             self._record(action_id, sanitized_intent, decision, result, current_time)
+            self._record_simulation_feedback(sanitized_intent, result, now=current_time)
             return result
 
         result = ActionExecutionResult(
@@ -347,7 +421,9 @@ class SafeActionExecutor:
             reason=f"unsupported action decision: {decision.decision}",
             decision=decision,
         )
+        self._attach_simulation_metadata(result, simulation_precheck)
         self._record(action_id, sanitized_intent, decision, result, current_time)
+        self._record_simulation_feedback(sanitized_intent, result, now=current_time)
         return result
 
     def resume_confirmed(
@@ -793,6 +869,14 @@ class SafeActionExecutor:
                 metadata["backend_kind"] = result.backend_kind
             if result.physical_target_domain is not None:
                 metadata["physical_target_domain"] = result.physical_target_domain
+            if result.simulation_status is not None:
+                metadata["simulation_status"] = result.simulation_status
+            if result.simulation_trace_id is not None:
+                metadata["simulation_trace_id"] = result.simulation_trace_id
+            if result.simulation_risk is not None:
+                metadata["simulation_risk"] = result.simulation_risk
+            if result.simulation_uncertainty is not None:
+                metadata["simulation_uncertainty"] = result.simulation_uncertainty
             typed_action_type = intent.payload.get("action_type")
             typed_action_domain = intent.payload.get("domain")
             if isinstance(typed_action_type, str) and isinstance(typed_action_domain, str):
@@ -848,6 +932,60 @@ class SafeActionExecutor:
             )
         except Exception as exc:
             logger.warning("Audit permission decision write failed: {}", exc)
+
+    def _run_simulation_precheck(
+        self,
+        intent: ActionIntent,
+        *,
+        now: datetime,
+    ) -> SimulationPrecheckDecision | None:
+        if self._simulation_hook is None:
+            return None
+        try:
+            return self._simulation_hook.precheck(intent, now=now)
+        except Exception as exc:
+            logger.warning("Simulation precheck failed: {}", exc)
+            return None
+
+    @staticmethod
+    def _merge_confirmation_reason(
+        base_reason: str,
+        precheck: SimulationPrecheckDecision,
+    ) -> str:
+        suffix = precheck.prompt_suffix or precheck.reason
+        if not suffix:
+            return base_reason
+        if base_reason and suffix in base_reason:
+            return base_reason
+        if not base_reason:
+            return suffix
+        return f"{base_reason}; {suffix}"
+
+    @staticmethod
+    def _attach_simulation_metadata(
+        result: ActionExecutionResult,
+        precheck: SimulationPrecheckDecision | None,
+    ) -> None:
+        if precheck is None:
+            return
+        result.simulation_status = precheck.trace.status
+        result.simulation_trace_id = precheck.trace.trace_id
+        result.simulation_risk = precheck.trace.risk_score
+        result.simulation_uncertainty = precheck.trace.uncertainty_score
+
+    def _record_simulation_feedback(
+        self,
+        intent: ActionIntent,
+        result: ActionExecutionResult,
+        *,
+        now: datetime,
+    ) -> None:
+        if self._simulation_hook is None or not intent.simulation_trace_id:
+            return
+        try:
+            self._simulation_hook.record_result(intent, result, now=now)
+        except Exception as exc:
+            logger.warning("Simulation feedback write failed: {}", exc)
 
 
 def sanitize_action_payload(payload: dict[str, Any] | Any) -> dict[str, str]:

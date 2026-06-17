@@ -7,6 +7,7 @@ from contextvars import ContextVar, Token
 from typing import Any
 
 from OriginAgent.agent.tools.base import Tool, tool_parameters
+from OriginAgent.agent.tools.context import RequestContext
 from OriginAgent.agent.tools.schema import IntegerSchema, StringSchema, tool_parameters_schema
 
 from OriginAgent.domain_packs.smart_home.runtime.device_actions import TypedDeviceAction
@@ -31,6 +32,10 @@ class _LightingToolBase(Tool):
         self._real_mode = real_mode
         self._actor_id_var: ContextVar[str] = ContextVar(
             f"{self.name}_actor_id",
+            default="",
+        )
+        self._session_key_var: ContextVar[str] = ContextVar(
+            f"{self.name}_session_key",
             default="",
         )
         self._trigger_var: ContextVar[str] = ContextVar(
@@ -61,14 +66,31 @@ class _LightingToolBase(Tool):
     def description(self) -> str:
         return "Submit a typed low-risk lighting action through the OriginAgent device gateway."
 
-    def set_context(self, actor_id: str, trigger: str) -> tuple[Token[str], Token[str]]:
-        actor_token = self._actor_id_var.set(actor_id)
-        trigger_token = self._trigger_var.set(trigger)
-        return actor_token, trigger_token
+    def set_context(
+        self,
+        actor_id: str | RequestContext,
+        trigger: str | None = None,
+        *,
+        session_key: str | None = None,
+    ) -> tuple[Token[str], Token[str], Token[str]]:
+        if isinstance(actor_id, RequestContext):
+            ctx = actor_id
+            actor_value = str(ctx.actor_id or "").strip()
+            trigger_value = str(ctx.trigger or "").strip()
+            session_value = str(ctx.session_key or "").strip()
+        else:
+            actor_value = str(actor_id or "").strip()
+            trigger_value = str(trigger or "").strip()
+            session_value = str(session_key or "").strip()
+        actor_token = self._actor_id_var.set(actor_value)
+        session_token = self._session_key_var.set(session_value)
+        trigger_token = self._trigger_var.set(trigger_value)
+        return actor_token, session_token, trigger_token
 
-    def reset_context(self, tokens: tuple[Token[str], Token[str]]) -> None:
-        actor_token, trigger_token = tokens
+    def reset_context(self, tokens: tuple[Token[str], Token[str], Token[str]]) -> None:
+        actor_token, session_token, trigger_token = tokens
         self._actor_id_var.reset(actor_token)
+        self._session_key_var.reset(session_token)
         self._trigger_var.reset(trigger_token)
 
     def _actor_id(self) -> str:
@@ -82,6 +104,10 @@ class _LightingToolBase(Tool):
         if not trigger:
             raise PermissionError("device tool has no trigger context")
         return trigger
+
+    def _session_key(self) -> str | None:
+        session_key = self._session_key_var.get().strip()
+        return session_key or None
 
     def _submit(
         self,
@@ -110,7 +136,10 @@ class _LightingToolBase(Tool):
             requested_by=self._actor_id(),
             trigger=self._trigger(),
         )
-        result = self._executor.submit_typed(action)
+        result = self._executor.submit_typed(
+            action,
+            session_key=self._session_key(),
+        )
         return {
             "status": _tool_status(result.status),
             "execution_status": result.status,

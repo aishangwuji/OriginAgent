@@ -24,6 +24,7 @@ from .devices import DEVICE_SCOPE_REDACTOR
 from .facts import SMART_HOME_FACT_STORE_CONFIG
 from .permissions import PermissionResolver
 from .presence import PresenceStore
+from .world_simulation import SmartHomeWorldSimulationHook
 
 
 class _NoopLightingClient:
@@ -74,6 +75,9 @@ def build_device_action_executor(
     fact_store: FactStore | None = None,
     permission_resolver: PermissionResolver | None = None,
     device_registry: Any | None = None,
+    world_state: Any | None = None,
+    sessions: Any | None = None,
+    timezone_name: str | None = None,
 ) -> DeviceActionExecutor | None:
     if not config.enabled:
         return None
@@ -99,6 +103,15 @@ def build_device_action_executor(
     presence = presence_store or PresenceStore(workspace)
     facts = fact_store or FactStore(workspace, config=SMART_HOME_FACT_STORE_CONFIG)
     permissions = permission_resolver or PermissionResolver()
+    simulation_hook = None
+    if world_state is not None and sessions is not None:
+        simulation_hook = SmartHomeWorldSimulationHook(
+            workspace=workspace,
+            world_state=world_state,
+            fact_store=facts,
+            sessions=sessions,
+            timezone_name=timezone_name,
+        )
     if config.mode == "real":
         backend = RealLightingBackend(
             _HttpLightingClient(
@@ -120,6 +133,7 @@ def build_device_action_executor(
         permission_resolver=permissions,
         audit_logger=audit,
         scope_redactor=DEVICE_SCOPE_REDACTOR,
+        simulation_hook=simulation_hook,
     )
     return DeviceActionExecutor(
         TypedActionPlanner(DeviceActionSchemaRegistry()),

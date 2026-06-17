@@ -267,7 +267,12 @@ def build_loop_components(
         workspace=workspace,
         config=tools_config,
         overrides=values["_domain_runtime_overrides"]
-        | {"confirmation_manager": values["_confirmation_manager"]},
+        | {
+            "confirmation_manager": values["_confirmation_manager"],
+            "world_state": values["world_state"],
+            "sessions": values["sessions"],
+            "timezone_name": timezone,
+        },
     )
     values["actor_resolver"] = actor_resolver or loop.actor_resolver.__class__() if actor_resolver is None and hasattr(loop, "actor_resolver") else actor_resolver
     if values["actor_resolver"] is None:

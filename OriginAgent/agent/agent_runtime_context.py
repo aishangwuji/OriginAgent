@@ -107,8 +107,13 @@ def set_tool_context(
                 tool.set_capability_snapshot(capability_snapshot)
             if hasattr(tool, "set_context"):
                 if any(permission.startswith("device:") for permission in permissions):
-                    if actor_id is not None and trigger is not None:
-                        tool.set_context(actor_id, trigger)
+                    try:
+                        tool.set_context(request_ctx)
+                    except TypeError:
+                        if actor_id is not None and trigger is not None:
+                            tool.set_context(actor_id, trigger, session_key=effective_key)
+                        else:
+                            tool.set_context(channel, chat_id)
                 elif name == "spawn":
                     tool.set_context(channel, chat_id, effective_key=effective_key)
                     if hasattr(tool, "set_origin_message_id"):

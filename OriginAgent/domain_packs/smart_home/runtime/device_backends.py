@@ -106,12 +106,22 @@ class DeviceActionExecutor:
         self,
         action: TypedDeviceAction,
         *,
+        session_key: str | None = None,
+        world_ref: str | None = None,
+        facts_ref: list[str] | None = None,
         now: datetime | None = None,
     ) -> ActionExecutionResult:
         try:
             intent = self.planner.to_intent(action)
         except DeviceActionSchemaError as exc:
             return self._schema_failure_result(action, exc, now=now)
+        if session_key or world_ref or facts_ref:
+            intent = self._with_runtime_evidence(
+                intent,
+                session_key=session_key,
+                world_ref=world_ref,
+                facts_ref=facts_ref,
+            )
         return self.safe_executor.submit(intent, now=now)
 
     def submit_automation(
@@ -230,6 +240,36 @@ class DeviceActionExecutor:
             continuity_facts_ref=[str(item).strip() for item in facts_ref if str(item).strip()],
             continuity_origin=proposal.automation_origin,
             continuity_proposal_digest=digest,
+        )
+
+    @staticmethod
+    def _with_runtime_evidence(
+        intent: ActionIntent,
+        *,
+        session_key: str | None = None,
+        world_ref: str | None = None,
+        facts_ref: list[str] | None = None,
+    ) -> ActionIntent:
+        return ActionIntent(
+            action=intent.action,
+            scope=intent.scope,
+            trigger=intent.trigger,
+            risk=intent.risk,
+            requested_by=intent.requested_by,
+            requires_presence_empty=intent.requires_presence_empty,
+            uses_facts=list(intent.uses_facts),
+            payload=dict(intent.payload),
+            idempotency_key=intent.idempotency_key,
+            continuity_session_ref=str(session_key).strip() if session_key else None,
+            continuity_world_ref=str(world_ref).strip() if world_ref else None,
+            continuity_facts_ref=[
+                str(item).strip()
+                for item in (facts_ref or [])
+                if str(item).strip()
+            ],
+            continuity_origin=intent.continuity_origin,
+            continuity_proposal_digest=intent.continuity_proposal_digest,
+            simulation_trace_id=intent.simulation_trace_id,
         )
 
     def _schema_failure_result(
