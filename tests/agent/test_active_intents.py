@@ -357,6 +357,7 @@ async def test_agent_loop_does_not_start_active_intent_loop_when_disabled(tmp_pa
         provider=FakeProvider(LLMResponse(content="ok", finish_reason="stop")),
         workspace=tmp_path,
         model="fake-model",
+        allow_agent_initiated_messages=False,
     )
 
     loop._start_active_intent_loop()
@@ -456,9 +457,11 @@ async def test_agent_loop_prefers_cron_backed_cognitive_scheduler(tmp_path: Path
     assert cognition["scheduler"]["registered"] is True
 
 
-def test_agent_defaults_active_intents_disabled_by_default() -> None:
+def test_agent_defaults_active_intents_enabled_by_default() -> None:
     defaults = AgentDefaults()
-    assert defaults.allow_agent_initiated_messages is False
+    assert defaults.allow_agent_initiated_messages is True
+    assert defaults.active_intent_interval_seconds == 15
+    assert defaults.active_intent_session_cooldown_seconds == 600
 
 
 @pytest.mark.asyncio

@@ -97,6 +97,7 @@ async def test_discover_local_devices_reports_safe_placeholder_capabilities(tmp_
         enabled=True,
         camera=ToolsConfig.LocalAwarenessCameraConfig(enabled=True),
         audio=ToolsConfig.LocalAwarenessAudioConfig(output_enabled=True),
+        hardware_discovery=ToolsConfig.LocalAwarenessHardwareDiscoveryConfig(enabled=False),
     )
     loop = _loop(config.local_awareness)
     tool = DiscoverLocalDevicesTool(
@@ -124,7 +125,7 @@ async def test_discover_local_devices_reports_safe_placeholder_capabilities(tmp_
 def test_hardware_discovery_config_defaults_and_aliases() -> None:
     default = ToolsConfig.LocalAwarenessConfig()
 
-    assert default.hardware_discovery.enabled is False
+    assert default.hardware_discovery.enabled is True
     assert default.hardware_discovery.posture == "strong"
     assert 8123 in default.hardware_discovery.service_ports
 
@@ -231,6 +232,7 @@ async def test_lan_discovery_is_local_hostname_only_and_default_disabled(tmp_pat
 @pytest.mark.asyncio
 async def test_lan_discovery_real_backend_is_gated_by_hardware_flag(tmp_path: Path) -> None:
     config = _tools_config(enabled=True, lan_discovery_enabled=True)
+    config.local_awareness.hardware_discovery.enabled = False
     loop = _loop(config.local_awareness)
     tool = DiscoverLanDevicesTool(
         workspace=tmp_path,

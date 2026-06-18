@@ -245,9 +245,9 @@ def test_local_awareness_config_defaults_disabled_and_parses_aliases(tmp_path) -
 
     default_config = load_config(default_config_path)
 
-    assert default_config.tools.local_awareness.enabled is False
+    assert default_config.tools.local_awareness.enabled is True
     assert default_config.tools.local_awareness.device_discovery_enabled is True
-    assert default_config.tools.local_awareness.lan_discovery_enabled is False
+    assert default_config.tools.local_awareness.lan_discovery_enabled is True
     assert default_config.tools.local_awareness.camera.enabled is False
     assert default_config.tools.local_awareness.screen.enabled is False
     assert default_config.tools.local_awareness.audio.input_enabled is False

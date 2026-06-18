@@ -244,7 +244,7 @@ async def test_runtime_status_reports_evolution_defaults(tmp_path) -> None:
         pending_queues={},
     ).execute()
 
-    assert result["evolution"]["mode"] == "conservative"
+    assert result["evolution"]["mode"] == "curated"
     assert result["evolution"]["dry_run"] is True
     assert result["evolution"]["opportunity_signals_count"] == 0
     assert result["evolution"]["converted_signals_count"] == 0
@@ -483,7 +483,7 @@ async def test_runtime_status_reports_high_score_evolution_signals(tmp_path) -> 
     ).execute()
 
     evolution = result["evolution"]
-    assert evolution["mode"] == "conservative"
+    assert evolution["mode"] == "curated"
     assert evolution["dry_run"] is True
     assert evolution["opportunity_signals_count"] == 1
     assert evolution["eligible_workflow_signals"] == 1

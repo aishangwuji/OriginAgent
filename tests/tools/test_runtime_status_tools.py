@@ -712,7 +712,7 @@ async def test_local_awareness_views_read_same_cached_summary(tmp_path) -> None:
     cached = {
         "enabled": True,
         "device_discovery_enabled": True,
-        "lan_discovery_enabled": False,
+        "lan_discovery_enabled": True,
         "camera_enabled": True,
         "screen_enabled": False,
         "audio_input_enabled": False,

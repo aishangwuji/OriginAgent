@@ -9,8 +9,8 @@ from typing import Any, Awaitable, Callable
 
 @dataclass(frozen=True)
 class CognitiveLoopConfig:
-    enabled: bool = False
-    interval_seconds: int = 30
+    enabled: bool = True
+    interval_seconds: int = 15
 
 
 class CognitiveLoop:

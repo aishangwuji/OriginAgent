@@ -318,7 +318,7 @@ class RobotG1Config(Base):
 class BackgroundReviewConfig(Base):
     """Controlled background learning proposal generation."""
 
-    enabled: bool = False
+    enabled: bool = True
     max_recent_messages: int = Field(
         default=12,
         ge=1,
@@ -412,7 +412,7 @@ class BackgroundReviewConfig(Base):
 class CuratorConfig(Base):
     """Deterministic curator proposal generation."""
 
-    enabled: bool = False
+    enabled: bool = True
     max_proposals_per_run: int = Field(
         default=12,
         ge=1,
@@ -756,7 +756,7 @@ class EvolutionTrialConfig(Base):
 class EvolutionConfig(Base):
     """Governed self-evolution observability settings."""
 
-    mode: Literal["conservative", "curated", "exploratory", "aggressive"] = "conservative"
+    mode: Literal["conservative", "curated", "exploratory", "aggressive"] = "curated"
     allow_manual_override: bool = Field(
         default=False,
         validation_alias=AliasChoices("allowManualOverride", "allow_manual_override"),
@@ -985,9 +985,9 @@ class SubagentDefaultsConfig(Base):
 class MetaCognitionConfig(Base):
     """Sidecar meta-cognition trigger collection configuration."""
 
-    enabled: bool = False
+    enabled: bool = True
     trigger_collection_enabled: bool = Field(
-        default=False,
+        default=True,
         validation_alias=AliasChoices(
             "triggerCollectionEnabled",
             "trigger_collection_enabled",
@@ -1048,7 +1048,7 @@ class MetaCognitionConfig(Base):
         serialization_alias="captureTaskCompletionFromCompleteGoalOnly",
     )
     structured_reflection_enabled: bool = Field(
-        default=False,
+        default=True,
         validation_alias=AliasChoices(
             "structuredReflectionEnabled",
             "structured_reflection_enabled",
@@ -1056,7 +1056,7 @@ class MetaCognitionConfig(Base):
         serialization_alias="structuredReflectionEnabled",
     )
     working_memory_bridge_enabled: bool = Field(
-        default=False,
+        default=True,
         validation_alias=AliasChoices(
             "workingMemoryBridgeEnabled",
             "working_memory_bridge_enabled",
@@ -1064,7 +1064,7 @@ class MetaCognitionConfig(Base):
         serialization_alias="workingMemoryBridgeEnabled",
     )
     memory_candidate_bridge_enabled: bool = Field(
-        default=False,
+        default=True,
         validation_alias=AliasChoices(
             "memoryCandidateBridgeEnabled",
             "memory_candidate_bridge_enabled",
@@ -1082,7 +1082,7 @@ class MetaCognitionConfig(Base):
         serialization_alias="memoryCandidateMinConfidence",
     )
     pattern_consolidation_enabled: bool = Field(
-        default=False,
+        default=True,
         validation_alias=AliasChoices(
             "patternConsolidationEnabled",
             "pattern_consolidation_enabled",
@@ -1090,7 +1090,7 @@ class MetaCognitionConfig(Base):
         serialization_alias="patternConsolidationEnabled",
     )
     evolution_bridge_enabled: bool = Field(
-        default=False,
+        default=True,
         validation_alias=AliasChoices(
             "evolutionBridgeEnabled",
             "evolution_bridge_enabled",
@@ -1252,7 +1252,7 @@ class AgentDefaults(Base):
         ge=0,
     )  # Max messages to replay from session history (0 = use default 120, respects token budget)
     allow_agent_initiated_messages: bool = Field(
-        default=False,
+        default=True,
         validation_alias=AliasChoices(
             "allowAgentInitiatedMessages",
             "allow_agent_initiated_messages",
@@ -1260,7 +1260,7 @@ class AgentDefaults(Base):
         serialization_alias="allowAgentInitiatedMessages",
     )
     active_intent_interval_seconds: int = Field(
-        default=30,
+        default=15,
         ge=5,
         le=3600,
         validation_alias=AliasChoices(
@@ -1270,7 +1270,7 @@ class AgentDefaults(Base):
         serialization_alias="activeIntentIntervalSeconds",
     )
     active_intent_session_cooldown_seconds: int = Field(
-        default=300,
+        default=600,
         ge=0,
         le=86400,
         validation_alias=AliasChoices(
@@ -1696,7 +1696,7 @@ class ToolsConfig(Base):
         )
 
     class LocalAwarenessHardwareDiscoveryConfig(Base):
-        enabled: bool = False
+        enabled: bool = True
         posture: Literal["strong"] = "strong"
         allowed_cidrs: list[str] = Field(default_factory=list)
         max_hosts: int = Field(default=256, ge=1, le=4096)
@@ -1708,9 +1708,9 @@ class ToolsConfig(Base):
         )
 
     class LocalAwarenessConfig(Base):
-        enabled: bool = False
+        enabled: bool = True
         device_discovery_enabled: bool = True
-        lan_discovery_enabled: bool = False
+        lan_discovery_enabled: bool = True
         camera: "ToolsConfig.LocalAwarenessCameraConfig" = Field(
             default_factory=lambda: ToolsConfig.LocalAwarenessCameraConfig()
         )

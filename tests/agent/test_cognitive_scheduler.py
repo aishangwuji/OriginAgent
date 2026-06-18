@@ -18,6 +18,13 @@ class _CronService:
         return job
 
 
+def test_cognitive_scheduler_config_defaults_match_schema() -> None:
+    config = CognitiveSchedulerConfig()
+
+    assert config.enabled is True
+    assert config.interval_seconds == 15
+
+
 @pytest.mark.asyncio
 async def test_cognitive_scheduler_runs_passes_and_records_audit(tmp_path) -> None:
     scheduler = CognitiveScheduler(

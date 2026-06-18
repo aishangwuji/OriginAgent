@@ -171,7 +171,7 @@ describe("webui API helpers", () => {
           },
         ],
         web_search: { provider: "duckduckgo", providers: [] },
-        learning: { background_review: { enabled: false } },
+        learning: { background_review: { enabled: true } },
         runtime_controls: {} as Record<string, unknown>,
         mcp: { servers: [] },
         runtime: { config_path: "config.json" },

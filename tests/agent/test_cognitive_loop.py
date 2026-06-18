@@ -8,6 +8,13 @@ import pytest
 from OriginAgent.agent.cognitive_loop import CognitiveLoop, CognitiveLoopConfig
 
 
+def test_cognitive_loop_config_defaults_match_schema() -> None:
+    config = CognitiveLoopConfig()
+
+    assert config.enabled is True
+    assert config.interval_seconds == 15
+
+
 @pytest.mark.asyncio
 async def test_cognitive_loop_run_once_for_session_uses_sidecar_providers() -> None:
     processor = AsyncMock(return_value=["ok"])

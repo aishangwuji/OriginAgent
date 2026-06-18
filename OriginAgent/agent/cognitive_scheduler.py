@@ -27,8 +27,8 @@ SchedulerTrigger = Literal["cron", "manual", "fallback"]
 
 @dataclass(frozen=True)
 class CognitiveSchedulerConfig:
-    enabled: bool = False
-    interval_seconds: int = 30
+    enabled: bool = True
+    interval_seconds: int = 15
     job_id: str = "cognitive_scheduler"
     job_name: str = "cognitive_scheduler"
 

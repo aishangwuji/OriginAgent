@@ -370,7 +370,7 @@ async def test_curator_default_evolution_dry_run_does_not_write_workflow_proposa
     assert result.evolution_candidates == 1
     assert result.evolution_proposals_prepared == 0
     assert result.evolution_dry_run is True
-    assert result.evolution_mode == "conservative"
+    assert result.evolution_mode == "curated"
     assert review_store.list_records(origin=AUTO_EVOLUTION_ORIGIN, limit=10) == []
     signals = signal_store.read_all()
     assert len(signals) == 1

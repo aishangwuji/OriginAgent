@@ -661,7 +661,7 @@ async def test_settings_api_returns_safe_subset_and_updates_whitelist(
         assert body["agent"]["has_api_key"] is True
         assert body["web_search"]["provider"] == "brave"
         assert body["web_search"]["api_key_hint"] == "brav••••cret"
-        assert body["learning"]["background_review"]["enabled"] is False
+        assert body["learning"]["background_review"]["enabled"] is True
         assert body["runtime_controls"]["channels"]["show_reasoning"] is True
         assert body["runtime_controls"]["search"]["web_enabled"] is True
         assert body["runtime_controls"]["execution"]["exec_profile"] == "local_dev"

@@ -56,9 +56,9 @@ def _summarize_text(value: Any, max_chars: int = _SUMMARY_MAX_CHARS) -> str:
 
 @dataclass(frozen=True)
 class ActiveIntentConfig:
-    enabled: bool = False
-    interval_seconds: int = 30
-    session_cooldown_seconds: int = 300
+    enabled: bool = True
+    interval_seconds: int = 15
+    session_cooldown_seconds: int = 600
     intent_cooldown_seconds: int = 300
     max_messages_per_session_per_pass: int = 1
 
