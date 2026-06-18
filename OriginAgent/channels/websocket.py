@@ -295,6 +295,7 @@ def _settings_runtime_controls_payload(config: Any) -> dict[str, Any]:
             "unified_session": bool(defaults.unified_session),
             "cold_archive_enabled": bool(defaults.cold_archive_enabled),
             "allow_agent_initiated_messages": bool(defaults.allow_agent_initiated_messages),
+            "enable_backend_cognition": bool(defaults.enable_backend_cognition),
             "auxiliary_enabled": bool(defaults.auxiliary.enabled),
             "domain_packs_enabled": bool(defaults.domain_packs.enabled),
             "provider_retry_mode": defaults.provider_retry_mode,
@@ -1811,6 +1812,8 @@ class WebSocketChannel(BaseChannel):
                     set_bool(defaults, "cold_archive_enabled", agent["cold_archive_enabled"])
                 if "allow_agent_initiated_messages" in agent:
                     set_bool(defaults, "allow_agent_initiated_messages", agent["allow_agent_initiated_messages"])
+                if "enable_backend_cognition" in agent:
+                    set_bool(defaults, "enable_backend_cognition", agent["enable_backend_cognition"])
                 if "auxiliary_enabled" in agent:
                     set_bool(defaults.auxiliary, "enabled", agent["auxiliary_enabled"])
                 if "domain_packs_enabled" in agent:

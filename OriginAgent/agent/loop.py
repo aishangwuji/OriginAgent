@@ -32,7 +32,7 @@ from OriginAgent.agent.agent_tool_setup import (
 )
 from OriginAgent.agent.action_summary import normalize_action_summary
 from OriginAgent.agent.local_awareness import LocalAwarenessBackend, normalize_local_awareness_summary
-from OriginAgent.agent.active_intents import ActiveIntentConfig, ActiveIntentRecord, ActiveIntentService
+from OriginAgent.agent.active_intents import ActiveIntentConfig, ActiveIntentService
 from OriginAgent.agent.agent_cognitive_runtime import AgentCognitiveRuntime, CognitiveRuntimeDeps
 from OriginAgent.agent.agent_loop_components import build_loop_components
 from OriginAgent.agent.action_planning import UnifiedActionPlanner
@@ -256,6 +256,7 @@ class AgentLoop:
         cold_archive_enabled: bool = True,
         tool_concurrency_limit: int | None = None,
         allow_agent_initiated_messages: bool | None = None,
+        enable_backend_cognition: bool | None = None,
         active_intent_interval_seconds: int | None = None,
         active_intent_session_cooldown_seconds: int | None = None,
         active_intent_intent_cooldown_seconds: int | None = None,
@@ -330,6 +331,7 @@ class AgentLoop:
             cold_archive_enabled=cold_archive_enabled,
             tool_concurrency_limit=tool_concurrency_limit,
             allow_agent_initiated_messages=allow_agent_initiated_messages,
+            enable_backend_cognition=enable_backend_cognition,
             active_intent_interval_seconds=active_intent_interval_seconds,
             active_intent_session_cooldown_seconds=active_intent_session_cooldown_seconds,
             active_intent_intent_cooldown_seconds=active_intent_intent_cooldown_seconds,
@@ -537,6 +539,7 @@ class AgentLoop:
             evolution_config_loader=_evolution_config_loader,
             dream_config=defaults.dream,
             nearline_memory_config=defaults.nearline_memory,
+            enable_backend_cognition=defaults.enable_backend_cognition,
             **extra,
         )
 

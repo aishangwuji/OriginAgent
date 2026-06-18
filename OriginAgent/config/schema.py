@@ -1259,6 +1259,14 @@ class AgentDefaults(Base):
         ),
         serialization_alias="allowAgentInitiatedMessages",
     )
+    enable_backend_cognition: bool = Field(
+        default=True,
+        validation_alias=AliasChoices(
+            "enableBackendCognition",
+            "enable_backend_cognition",
+        ),
+        serialization_alias="enableBackendCognition",
+    )
     active_intent_interval_seconds: int = Field(
         default=15,
         ge=5,

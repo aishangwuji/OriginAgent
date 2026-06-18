@@ -319,6 +319,7 @@ class RuntimeIntrospectionService:
     def cognition_summary(self) -> dict[str, Any]:
         loop = self._loop
         enabled = bool(getattr(loop, "_cognitive_loop_enabled", False)) if loop is not None else False
+        messaging_enabled = bool(getattr(getattr(loop, "_active_intent_config", None), "enabled", False)) if loop is not None else False
         sidecar = getattr(loop, "cognitive_loop", None) if loop is not None else None
         scheduler = getattr(loop, "cognitive_scheduler", None) if loop is not None else None
         ledger = JsonlCognitiveAuditLedger(self._workspace)
@@ -326,6 +327,7 @@ class RuntimeIntrospectionService:
         summary = ledger.summary(limit=20)
         summary.update(scheduler_ledger.summary(limit=20))
         summary["enabled"] = enabled
+        summary["messaging_enabled"] = messaging_enabled
         if loop is not None:
             summary["latest_scan"] = getattr(loop, "_last_cognitive_scan", {})
         if sidecar is not None:

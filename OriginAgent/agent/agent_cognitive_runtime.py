@@ -6,11 +6,8 @@ import asyncio
 from dataclasses import dataclass
 from typing import Any, Callable
 
-from OriginAgent.agent.active_intents import ActiveIntentRecord
 from OriginAgent.agent.cognitive_events import CognitiveDecision, CognitiveEvent
 from OriginAgent.agent.identity import RuntimeContext
-from OriginAgent.bus.events import InboundMessage
-from OriginAgent.session.manager import Session
 
 
 @dataclass
@@ -58,7 +55,10 @@ class AgentCognitiveRuntime:
         active_task_count: int,
         running_subagents: int,
     ) -> list[CognitiveDecision]:
-        eligible, reason = self._deps.active_intents.eligible_session(
+        if not self._deps.cognitive_loop.config.enabled:
+            return []
+
+        eligible, reason = self._deps.active_intents.eligibility_for_cognition(
             session_key,
             active_task_count=active_task_count,
             running_subagents=running_subagents,
@@ -84,7 +84,14 @@ class AgentCognitiveRuntime:
                 action="skip",
                 outcome="skipped",
                 suppression_reason=reason or "ineligible",
-                payload=event.payload,
+                payload={
+                    **event.payload,
+                    "event_type": event.event_type,
+                    "source_type": event.source_type,
+                    "source_reference": event.source_reference,
+                    "intent_id": event.event_id,
+                    "summary": event.summary,
+                },
             )
             self._deps.cognitive_audit.append_event(event)
             self._deps.cognitive_audit.append_decision(decision)
@@ -103,6 +110,7 @@ class AgentCognitiveRuntime:
         candidates = self._deps.collect_candidates(session_key)
         decisions: list[CognitiveDecision] = []
         emitted_count = 0
+        messaging_allowed = bool(self._deps.active_intents.config.enabled)
         for candidate in candidates:
             event = candidate["event"]
             self._deps.cognitive_audit.append_event(event)
@@ -121,36 +129,18 @@ class AgentCognitiveRuntime:
             if emitted_count >= self._deps.active_intents.config.max_messages_per_session_per_pass:
                 allowed = False
                 suppression_reason = "session_message_limit"
+            if not messaging_allowed:
+                allowed = False
+                suppression_reason = "agent_messages_disabled"
             if not allowed:
                 action = "suppress"
                 outcome = "suppressed"
-                self._deps.active_intents.ledger.append(ActiveIntentRecord(
-                    timestamp=self._deps.utcnow_iso(),
-                    session_key=session_key,
-                    intent_type=event.event_type,
-                    intent_id=candidate["cooldown_key"],
-                    source_type=event.source_type,
-                    source_reference=event.source_reference,
-                    outcome="suppressed",
-                    summary=event.summary,
-                    suppression_reason=suppression_reason,
-                ))
             else:
                 await self._deps.bus.publish_inbound(candidate["message"])
                 published_internal_event = True
                 emitted_count += 1
                 if event.event_type == "scheduled_reminder":
                     self._deps.reminder_store.mark_fired(event.source_reference)
-                self._deps.active_intents.ledger.append(ActiveIntentRecord(
-                    timestamp=self._deps.utcnow_iso(),
-                    session_key=session_key,
-                    intent_type=event.event_type,
-                    intent_id=candidate["cooldown_key"],
-                    source_type=event.source_type,
-                    source_reference=event.source_reference,
-                    outcome="emitted",
-                    summary=event.summary,
-                ))
             decision = CognitiveDecision(
                 decision_id=f"decision:{event.event_id}",
                 event_id=event.event_id,
@@ -165,6 +155,8 @@ class AgentCognitiveRuntime:
                     "event_type": event.event_type,
                     "source_type": event.source_type,
                     "source_reference": event.source_reference,
+                    "intent_id": candidate["cooldown_key"],
+                    "summary": event.summary,
                 },
             )
             self._deps.cognitive_audit.append_decision(decision)

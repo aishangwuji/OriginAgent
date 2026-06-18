@@ -11,6 +11,8 @@ from pathlib import Path
 from typing import Any, Literal
 
 from OriginAgent.agent.confirmation import PendingConfirmationStore
+from OriginAgent.agent.cognitive_audit import JsonlCognitiveAuditLedger
+from OriginAgent.agent.cognitive_events import CognitiveDecision
 from OriginAgent.agent.facts import FactStore
 from OriginAgent.bus.events import InboundMessage
 from OriginAgent.bus.queue import MessageBus
@@ -141,6 +143,7 @@ class ActiveIntentService:
         confirmation_store: PendingConfirmationStore,
         fact_store: FactStore,
         config: ActiveIntentConfig,
+        cognitive_audit: JsonlCognitiveAuditLedger,
         nearline_memory_config: Any | None = None,
     ) -> None:
         self.workspace = Path(workspace)
@@ -150,6 +153,7 @@ class ActiveIntentService:
         self.fact_store = fact_store
         self.nearline_store = NearlineMemoryStore(workspace)
         self.config = config
+        self._cognitive_audit = cognitive_audit
         self._nearline_memory_config = nearline_memory_config
         self.ledger = JsonlActiveIntentLedger(workspace)
 
@@ -212,29 +216,23 @@ class ActiveIntentService:
         for candidate in candidates:
             allowed, suppression_reason = self._passes_cooldown(session_key, candidate.intent_id)
             if not allowed:
-                self.ledger.append(ActiveIntentRecord(
-                    timestamp=_utcnow_iso(),
+                self._append_decision(
                     session_key=session_key,
-                    intent_type=candidate.intent_type,
-                    intent_id=candidate.intent_id,
-                    source_type=candidate.source_type,
-                    source_reference=candidate.source_reference,
+                    candidate=candidate,
                     outcome="suppressed",
-                    summary=candidate.summary,
+                    action="suppress",
                     suppression_reason=suppression_reason,
-                ))
+                    published_internal_event=False,
+                )
                 continue
             await self.bus.publish_inbound(self._build_message(session, candidate))
-            self.ledger.append(ActiveIntentRecord(
-                timestamp=_utcnow_iso(),
+            self._append_decision(
                 session_key=session_key,
-                intent_type=candidate.intent_type,
-                intent_id=candidate.intent_id,
-                source_type=candidate.source_type,
-                source_reference=candidate.source_reference,
+                candidate=candidate,
                 outcome="emitted",
-                summary=candidate.summary,
-            ))
+                action="emit",
+                published_internal_event=True,
+            )
             emitted.append(candidate)
             if len(emitted) >= self.config.max_messages_per_session_per_pass:
                 break
@@ -365,7 +363,7 @@ class ActiveIntentService:
         now = _utcnow()
         session_cutoff = self.config.session_cooldown_seconds
         intent_cutoff = self.config.intent_cooldown_seconds
-        for record in reversed(self.ledger.recent()):
+        for record in reversed(self._merged_cooldown_records()):
             outcome = str(record.get("outcome") or "")
             if outcome != "emitted":
                 continue
@@ -380,16 +378,120 @@ class ActiveIntentService:
         return True, None
 
     def _record_skip(self, session_key: str, reason: str) -> None:
-        self.ledger.append(ActiveIntentRecord(
-            timestamp=_utcnow_iso(),
-            session_key=session_key,
+        candidate = ActiveIntentCandidate(
             intent_type="goal_nudge",
             intent_id=f"skip:{session_key}:{reason}",
+            content="",
             source_type="runtime",
             source_reference="eligibility",
+            summary=f"Skipped active intent processing: {reason}",
+        )
+        self._append_decision(
+            session_key=session_key,
+            candidate=candidate,
             outcome="skipped",
+            action="skip",
             suppression_reason=reason,
+            published_internal_event=False,
+        )
+
+    def eligibility_for_cognition(
+        self,
+        session_key: str,
+        *,
+        active_task_count: int,
+        running_subagents: int,
+    ) -> tuple[bool, str | None]:
+        _ = session_key
+        if active_task_count > 0:
+            return False, "active_tasks"
+        if running_subagents > 0:
+            return False, "running_subagents"
+        return True, None
+
+    def _append_decision(
+        self,
+        *,
+        session_key: str,
+        candidate: ActiveIntentCandidate,
+        outcome: ActiveIntentOutcome,
+        action: Literal["emit", "suppress", "skip"],
+        suppression_reason: str | None = None,
+        published_internal_event: bool,
+    ) -> None:
+        self._cognitive_audit.append_decision(CognitiveDecision(
+            decision_id=f"decision:{candidate.intent_id}:{_utcnow_iso()}",
+            event_id=candidate.intent_id,
+            session_key=session_key,
+            action=action,
+            outcome=outcome,
+            suppression_reason=suppression_reason,
+            cooldown_key=candidate.intent_id,
+            published_internal_event=published_internal_event,
+            payload={
+                "event_type": candidate.intent_type,
+                "source_type": candidate.source_type,
+                "source_reference": candidate.source_reference,
+                "intent_id": candidate.intent_id,
+                "summary": candidate.summary,
+            },
         ))
+
+    def _merged_cooldown_records(self) -> list[dict[str, Any]]:
+        cognitive_records = [
+            self._normalize_cooldown_record(record, source="cognitive")
+            for record in self._cognitive_audit.recent_decisions()
+        ]
+        legacy_records = [
+            self._normalize_cooldown_record(record, source="legacy")
+            for record in self.ledger.recent()
+        ]
+        merged: list[dict[str, Any]] = []
+        seen: set[tuple[str, str, str, str]] = set()
+        for record in reversed(cognitive_records):
+            if record is None:
+                continue
+            key = (
+                str(record.get("session_key") or ""),
+                str(record.get("intent_id") or ""),
+                str(record.get("timestamp") or ""),
+                str(record.get("outcome") or ""),
+            )
+            if key in seen:
+                continue
+            seen.add(key)
+            merged.append(record)
+        for record in reversed(legacy_records):
+            if record is None:
+                continue
+            key = (
+                str(record.get("session_key") or ""),
+                str(record.get("intent_id") or ""),
+                str(record.get("timestamp") or ""),
+                str(record.get("outcome") or ""),
+            )
+            if key in seen:
+                continue
+            seen.add(key)
+            merged.append(record)
+        merged.reverse()
+        return merged
+
+    @staticmethod
+    def _normalize_cooldown_record(record: dict[str, Any], *, source: str) -> dict[str, Any] | None:
+        timestamp = str(record.get("created_at") or record.get("timestamp") or "").strip()
+        intent_id = str(record.get("cooldown_key") or record.get("intent_id") or "").strip()
+        session_key = str(record.get("session_key") or "").strip()
+        outcome = str(record.get("outcome") or "").strip()
+        if not session_key or not intent_id or not timestamp or not outcome:
+            return None
+        return {
+            "source": source,
+            "timestamp": timestamp,
+            "intent_id": intent_id,
+            "session_key": session_key,
+            "outcome": outcome,
+        }
 
     @staticmethod
     def _build_message(session: Session, candidate: ActiveIntentCandidate) -> InboundMessage:

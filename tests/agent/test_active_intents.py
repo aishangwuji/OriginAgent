@@ -9,6 +9,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from OriginAgent.agent.active_intents import ActiveIntentConfig, ActiveIntentService
+from OriginAgent.agent.cognitive_audit import JsonlCognitiveAuditLedger
 from OriginAgent.agent.confirmation import ConfirmationRequest, PendingConfirmationStore
 from OriginAgent.agent.facts import FactStore
 from OriginAgent.bus.events import InboundMessage
@@ -55,6 +56,7 @@ def _make_service(
             intent_cooldown_seconds=300,
             max_messages_per_session_per_pass=1,
         ),
+        cognitive_audit=JsonlCognitiveAuditLedger(tmp_path),
         nearline_memory_config=(
             NearlineMemoryConfig(enabled=nearline_enabled)
             if nearline_enabled is not None
@@ -82,9 +84,10 @@ async def test_active_intents_disabled_skips_emission(tmp_path: Path) -> None:
     )
 
     assert emitted == []
-    recent = service.ledger.recent()
+    recent = service._cognitive_audit.recent_decisions()
     assert recent[-1]["outcome"] == "skipped"
     assert recent[-1]["suppression_reason"] == "disabled"
+    assert service.ledger.recent() == []
 
 
 @pytest.mark.asyncio
@@ -138,7 +141,7 @@ async def test_active_intents_suppress_repeated_goal_nudge_within_cooldown(tmp_p
 
     assert len(first) == 1
     assert second == []
-    recent = service.ledger.recent()
+    recent = service._cognitive_audit.recent_decisions()
     assert recent[-1]["outcome"] == "suppressed"
     assert recent[-1]["suppression_reason"] in {"session_cooldown", "intent_cooldown"}
 
@@ -196,7 +199,7 @@ async def test_active_intents_skip_busy_session(tmp_path: Path) -> None:
     )
 
     assert emitted == []
-    recent = service.ledger.recent()
+    recent = service._cognitive_audit.recent_decisions()
     assert recent[-1]["outcome"] == "skipped"
     assert recent[-1]["suppression_reason"] == "active_tasks"
 
@@ -272,7 +275,7 @@ async def test_active_intents_emit_due_foresight_nudge_with_cooldown(tmp_path: P
     assert msg.metadata["active_intent_type"] == "foresight_nudge"
     assert "future plan or commitment is now due" in msg.content
     assert second == []
-    recent = service.ledger.recent()
+    recent = service._cognitive_audit.recent_decisions()
     assert recent[-1]["outcome"] == "suppressed"
     assert recent[-1]["suppression_reason"] in {"session_cooldown", "intent_cooldown"}
 
@@ -357,7 +360,7 @@ async def test_agent_loop_does_not_start_active_intent_loop_when_disabled(tmp_pa
         provider=FakeProvider(LLMResponse(content="ok", finish_reason="stop")),
         workspace=tmp_path,
         model="fake-model",
-        allow_agent_initiated_messages=False,
+        enable_backend_cognition=False,
     )
 
     loop._start_active_intent_loop()
@@ -390,13 +393,22 @@ async def test_disabled_agent_loop_does_not_auto_emit_due_reminder(tmp_path: Pat
         reminder_id="disabled-r-1",
     ))
 
-    loop._start_active_intent_loop()
+    decisions = await loop._run_cognitive_pass_for_session(
+        "cli:test",
+        active_task_count=0,
+        running_subagents=0,
+    )
 
-    assert loop._active_intent_task is None
     assert loop.bus.inbound_size == 0
+    assert decisions
+    assert all(item.outcome == "suppressed" for item in decisions)
+    assert all(item.suppression_reason == "agent_messages_disabled" for item in decisions)
     reminder = loop._reminder_store.get("disabled-r-1")
     assert reminder is not None
     assert reminder.status == "pending"
+    cognition = loop.introspection.cognition_summary()
+    assert cognition["enabled"] is True
+    assert cognition["messaging_enabled"] is False
 
 
 @pytest.mark.asyncio
@@ -460,6 +472,7 @@ async def test_agent_loop_prefers_cron_backed_cognitive_scheduler(tmp_path: Path
 def test_agent_defaults_active_intents_enabled_by_default() -> None:
     defaults = AgentDefaults()
     assert defaults.allow_agent_initiated_messages is True
+    assert defaults.enable_backend_cognition is True
     assert defaults.active_intent_interval_seconds == 15
     assert defaults.active_intent_session_cooldown_seconds == 600
 
@@ -578,3 +591,25 @@ async def test_disabled_agent_loop_keeps_foreground_message_path_working(tmp_pat
 
     assert result is not None
     assert "Handled foreground." in result.content
+
+
+@pytest.mark.asyncio
+async def test_cooldown_uses_legacy_ledger_when_cognitive_audit_is_empty(tmp_path: Path) -> None:
+    from OriginAgent.agent.active_intents import ActiveIntentRecord
+
+    service, _bus, _sessions = _make_service(tmp_path, enabled=True)
+    service.ledger.append(ActiveIntentRecord(
+        timestamp=datetime.now(timezone.utc).isoformat(),
+        session_key="cli:test",
+        intent_type="goal_nudge",
+        intent_id="goal_nudge:cli:test:goal-1",
+        source_type="goal_state",
+        source_reference="goal-1",
+        outcome="emitted",
+        summary="Resume goal",
+    ))
+
+    allowed, reason = service.passes_cooldown("cli:test", "goal_nudge:cli:test:goal-1")
+
+    assert allowed is False
+    assert reason in {"session_cooldown", "intent_cooldown"}

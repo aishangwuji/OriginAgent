@@ -736,7 +736,10 @@ async def test_settings_api_returns_safe_subset_and_updates_whitelist(
             f"{port}/api/settings/runtime/update?config="
             + quote(json.dumps({
                 "channels": {"show_reasoning": False},
-                "agent": {"allow_agent_initiated_messages": True},
+                "agent": {
+                    "allow_agent_initiated_messages": True,
+                    "enable_backend_cognition": False,
+                },
                 "search": {"web_enabled": False},
                 "execution": {"exec_profile": "disabled"},
                 "subagent": {"mode": "restricted"},
@@ -750,6 +753,7 @@ async def test_settings_api_returns_safe_subset_and_updates_whitelist(
         assert runtime_body["requires_restart"] is True
         assert runtime_body["runtime_controls"]["channels"]["show_reasoning"] is False
         assert runtime_body["runtime_controls"]["agent"]["allow_agent_initiated_messages"] is True
+        assert runtime_body["runtime_controls"]["agent"]["enable_backend_cognition"] is False
         assert runtime_body["runtime_controls"]["search"]["web_enabled"] is False
         assert runtime_body["runtime_controls"]["execution"]["exec_profile"] == "disabled"
         assert runtime_body["runtime_controls"]["subagent"]["mode"] == "restricted"
@@ -761,6 +765,7 @@ async def test_settings_api_returns_safe_subset_and_updates_whitelist(
         assert saved.agents.defaults.provider == "openrouter"
         assert saved.agents.defaults.learning.background_review.enabled is True
         assert saved.agents.defaults.allow_agent_initiated_messages is True
+        assert saved.agents.defaults.enable_backend_cognition is False
         assert saved.runtime.profile == "safe"
         assert saved.channels.show_reasoning is False
         assert saved.providers.openrouter.api_key == "sk-or-test"

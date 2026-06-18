@@ -126,6 +126,7 @@ class _Sessions:
 
 class _Loop:
     _cognitive_loop_enabled = True
+    _active_intent_config = type("_Config", (), {"enabled": False})()
     cognitive_scheduler = None
 
 
@@ -174,6 +175,7 @@ def test_runtime_introspection_includes_cognition_summary(tmp_path) -> None:
     loop_summary = service.current_loop_summary()
 
     assert summary["enabled"] is True
+    assert summary["messaging_enabled"] is False
     assert summary["event_count"] == 1
     assert summary["decision_count"] == 1
     assert summary["scheduler_run_count"] == 1
@@ -202,9 +204,8 @@ def test_cognitive_audit_records_are_jsonl_on_disk(tmp_path) -> None:
     assert json.loads(lines[0])["event_type"] == "goal_nudge"
 
 
-def test_suppression_reason_matches_between_cognitive_decision_and_active_intent_record(tmp_path) -> None:
+def test_cognitive_decision_payload_can_stand_alone_without_active_intent_ledger(tmp_path) -> None:
     cognitive_ledger = JsonlCognitiveAuditLedger(tmp_path)
-    active_intent_ledger = JsonlActiveIntentLedger(tmp_path)
     decision = CognitiveDecision(
         decision_id="dec-1",
         event_id="goal_nudge:cli:test:goal-1",
@@ -213,7 +214,28 @@ def test_suppression_reason_matches_between_cognitive_decision_and_active_intent
         outcome="suppressed",
         suppression_reason="session_cooldown",
         cooldown_key="goal_nudge:cli:test:goal-1",
+        payload={
+            "event_type": "goal_nudge",
+            "source_type": "goal_state",
+            "source_reference": "goal-1",
+            "intent_id": "goal_nudge:cli:test:goal-1",
+            "summary": "Resume the active goal",
+        },
     )
+
+    cognitive_ledger.append_decision(decision)
+
+    row = cognitive_ledger.recent_decisions()[0]
+
+    assert row["payload"]["event_type"] == "goal_nudge"
+    assert row["payload"]["source_type"] == "goal_state"
+    assert row["payload"]["source_reference"] == "goal-1"
+    assert row["payload"]["intent_id"] == "goal_nudge:cli:test:goal-1"
+    assert row["payload"]["summary"] == "Resume the active goal"
+
+
+def test_legacy_active_intent_ledger_remains_readable_for_migration(tmp_path) -> None:
+    active_intent_ledger = JsonlActiveIntentLedger(tmp_path)
     record = ActiveIntentRecord(
         timestamp="2026-06-13T00:00:00+00:00",
         session_key="cli:test",
@@ -221,24 +243,16 @@ def test_suppression_reason_matches_between_cognitive_decision_and_active_intent
         intent_id="goal_nudge:cli:test:goal-1",
         source_type="goal_state",
         source_reference="goal-1",
-        outcome="suppressed",
+        outcome="emitted",
         summary="Resume the active goal",
-        suppression_reason="session_cooldown",
     )
 
-    cognitive_ledger.append_decision(decision)
     active_intent_ledger.append(record)
 
-    decision_rows = cognitive_ledger.recent_decisions()
-    active_rows = active_intent_ledger.recent()
-    matched = [
-        item for item in active_rows
-        if item.get("session_key") == decision_rows[0]["session_key"]
-        and item.get("intent_id") == decision_rows[0]["event_id"]
-    ]
+    rows = active_intent_ledger.recent()
 
-    assert len(matched) == 1
-    assert matched[0]["suppression_reason"] == decision_rows[0]["suppression_reason"]
+    assert len(rows) == 1
+    assert rows[0]["intent_id"] == "goal_nudge:cli:test:goal-1"
 
 
 def test_fallback_path_has_event_and_decision_audit_without_scheduler_run(tmp_path) -> None:

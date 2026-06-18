@@ -119,6 +119,7 @@ def build_loop_components(
     cold_archive_enabled: bool,
     tool_concurrency_limit: int | None,
     allow_agent_initiated_messages: bool | None,
+    enable_backend_cognition: bool | None,
     active_intent_interval_seconds: int | None,
     active_intent_session_cooldown_seconds: int | None,
     active_intent_intent_cooldown_seconds: int | None,
@@ -386,6 +387,12 @@ def build_loop_components(
             else active_intent_max_messages_per_session_per_pass
         ),
     )
+    cognition_enabled = (
+        defaults.enable_backend_cognition
+        if enable_backend_cognition is None
+        else enable_backend_cognition
+    )
+    values["_cognitive_audit"] = JsonlCognitiveAuditLedger(workspace)
     values["active_intents"] = ActiveIntentService(
         workspace=workspace,
         bus=bus,
@@ -393,9 +400,9 @@ def build_loop_components(
         confirmation_store=values["_confirmation_store"],
         fact_store=values["context"].memory.fact_store,
         config=values["_active_intent_config"],
+        cognitive_audit=values["_cognitive_audit"],
         nearline_memory_config=values["_nearline_memory_config"],
     )
-    values["_cognitive_audit"] = JsonlCognitiveAuditLedger(workspace)
     values["_meta_cognition_audit"] = JsonlMetaCognitionAuditLedger(workspace)
     values["_meta_cognition_runtime"] = MetaCognitionRuntime(
         config=values["_meta_cognition_config"],
@@ -412,11 +419,11 @@ def build_loop_components(
         working_memory=values["working_memory"],
         context_config=defaults.context,
     )
-    values["_cognitive_loop_enabled"] = bool(values["_active_intent_config"].enabled)
+    values["_cognitive_loop_enabled"] = bool(cognition_enabled)
     values["cognitive_scheduler"] = CognitiveScheduler(
         workspace=workspace,
         config=CognitiveSchedulerConfig(
-            enabled=values["_active_intent_config"].enabled,
+            enabled=bool(cognition_enabled),
             interval_seconds=values["_active_intent_config"].interval_seconds,
         ),
         cron_service=cron_service,
@@ -427,7 +434,7 @@ def build_loop_components(
     )
     values["cognitive_loop"] = CognitiveLoop(
         config=CognitiveLoopConfig(
-            enabled=values["_active_intent_config"].enabled,
+            enabled=bool(cognition_enabled),
             interval_seconds=values["_active_intent_config"].interval_seconds,
         ),
         session_keys_provider=values["active_intents"].session_keys,
