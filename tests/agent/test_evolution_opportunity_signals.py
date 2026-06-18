@@ -49,6 +49,35 @@ def _candidate(*, target: str = "deploy backend checks", cursors: tuple[int, ...
     )
 
 
+def test_opportunity_signal_store_persists_source_pattern_id(tmp_path) -> None:
+    store = OpportunitySignalStore(tmp_path)
+
+    store.upsert_candidates([
+        OpportunitySignalCandidate(
+            kind=SIGNAL_KIND_WORKFLOW,
+            target_key="deploy backend checks",
+            title="Workflow candidate: deploy backend checks",
+            summary="Repeated workflow-like request pattern: deploy backend checks",
+            evidence_sources=[{"cursor": 1, "timestamp": "2026-05-21 10:00", "preview": "Run checks."}],
+            source_pattern_id="pattern-123",
+        )
+    ])
+    store.upsert_candidates([
+        OpportunitySignalCandidate(
+            kind=SIGNAL_KIND_WORKFLOW,
+            target_key="deploy backend checks",
+            title="Workflow candidate: deploy backend checks",
+            summary="Repeated workflow-like request pattern: deploy backend checks",
+            evidence_sources=[{"cursor": 2, "timestamp": "2026-05-21 10:01", "preview": "Run checks again."}],
+        )
+    ])
+
+    signal = store.read_all()[0]
+
+    assert signal.source_pattern_id == "pattern-123"
+    assert signal.to_record()["source_pattern_id"] == "pattern-123"
+
+
 def test_opportunity_signal_store_upserts_and_dedupes_evidence(tmp_path) -> None:
     store = OpportunitySignalStore(tmp_path)
     first_seen = datetime(2026, 5, 20, 10, 0, tzinfo=timezone.utc)
@@ -792,6 +821,48 @@ def test_evolution_operator_retries_trial_and_updates_proposal(tmp_path) -> None
     assert trial_logs[0]["proposal_id"] == "review_auto_workflow_retry"
     assert trial_logs[0]["status"] == "passed"
     assert outcome_stats["outcome_type_counts"]["trial_retried"] == 1
+
+
+def test_evolution_operator_retry_trial_uses_payload_trial_fixtures(tmp_path) -> None:
+    signal = OpportunitySignalStore(tmp_path).upsert_candidates([_candidate(cursors=(1, 2, 3))])[0]
+    payload = build_workflow_payload_from_signal(signal, config=EvolutionConfig())
+    payload["steps"] = [
+        {
+            "title": "Read fixture notes",
+            "tool": "read_file",
+            "path": "notes.txt",
+        }
+    ]
+    payload["trial_fixtures"] = {"notes.txt": "Fallback fixture notes."}
+    ReviewProposalStore(tmp_path).append_many([
+        ReviewProposal(
+            id="review_auto_workflow_retry_defaults",
+            created_at="2026-05-20T10:00:00+00:00",
+            session_key="curator:system",
+            turn_id="turn-1",
+            origin=AUTO_EVOLUTION_ORIGIN,
+            proposal_type="workflow",
+            domain_id="core",
+            title="Create workflow",
+            content="Create a reviewed workflow.",
+            payload=payload,
+            confidence=signal.priority_score,
+        )
+    ])
+
+    result = EvolutionOperator(tmp_path, EvolutionConfig()).retry_trial(
+        "review_auto_workflow_retry_defaults",
+        actor="test",
+    )
+    preview = EvolutionOperator(tmp_path, EvolutionConfig()).preview_action(
+        "retry_trial",
+        target_id="review_auto_workflow_retry_defaults",
+    )
+
+    assert result.ok is True
+    assert result.trial is not None
+    assert result.trial["step_results"][0]["output"] == "Fallback fixture notes."
+    assert preview["preview"]["fixture_count"] == 1
 
 
 def test_evolution_operator_previews_actions_without_writing(tmp_path) -> None:

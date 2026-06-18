@@ -222,6 +222,7 @@ def build_loop_components(
         config_loader=curator_config_loader,
         evolution_config=values["evolution_config"],
         evolution_config_loader=evolution_config_loader,
+        meta_cognition_config=values["_meta_cognition_config"],
         domain_pack_manager=values["domain_packs"],
     )
     values["sessions"] = session_manager or session_manager_cls(workspace)

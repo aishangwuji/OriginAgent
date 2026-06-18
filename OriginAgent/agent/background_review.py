@@ -21,6 +21,12 @@ from OriginAgent.agent.auxiliary_llm import AuxiliaryLLMRouter, call_llm
 from OriginAgent.agent.domain_pack_governance import DomainPackGovernanceService
 from OriginAgent.agent.domain_packs import DomainPackManager
 from OriginAgent.agent.evolution import AUTO_EVOLUTION_ORIGIN, OpportunitySignalStore
+from OriginAgent.agent.evolution_config_overlay import (
+    ConfigMutationGate,
+    ConfigPatch,
+    EvolutionConfigOverlayStore,
+    apply_config_overlay,
+)
 from OriginAgent.agent.evolution_outcomes import (
     EvolutionOutcomeStore,
     proposal_outcome_context,
@@ -49,12 +55,21 @@ from OriginAgent.agent.task_runtime import (
 )
 from OriginAgent.agent.skill_artifacts import write_skill_artifact
 from OriginAgent.agent.workflow_artifacts import write_workflow_artifact
+from OriginAgent.config.loader import load_config
 from OriginAgent.config.schema import BackgroundReviewConfig, TaskRuntimeConfig
 from OriginAgent.providers.base import LLMProvider
 from OriginAgent.utils.helpers import truncate_text
 from OriginAgent.utils.prompt_templates import render_template
 
-DEFAULT_ALLOWED_PROPOSAL_TYPES = ("memory", "fact", "skill", "workflow")
+DEFAULT_ALLOWED_PROPOSAL_TYPES = (
+    "memory",
+    "fact",
+    "skill",
+    "workflow",
+    "config_overlay",
+    "prompt_policy",
+    "architecture_patch",
+)
 DEFAULT_REVIEW_ORIGIN = "background_review"
 PROPOSAL_STORE_RELATIVE = Path("memory") / "review_proposals.jsonl"
 PROPOSAL_EVENT_STORE_RELATIVE = Path("memory") / "review_proposal_events.jsonl"
@@ -72,6 +87,7 @@ _APPLY_ACTIONS_BY_TYPE = {
     "fact_conflict": "fact_relation",
     "skill": "skill",
     "workflow": "workflow",
+    "config_overlay": "config_overlay",
     "promote_skill": "promote_skill",
     "deprecate_skill": "deprecate_skill",
     "move_to_domain": "move_to_domain",
@@ -474,6 +490,8 @@ class ReviewProposalStore:
                 return self._apply_to_skill_unlocked(record, reason=reason)
             if action_kind == "workflow":
                 return self._apply_to_workflow_unlocked(record, reason=reason)
+            if action_kind == "config_overlay":
+                return self._apply_config_overlay_unlocked(record, reason=reason)
             if action_kind == "fact_relation":
                 return self._apply_fact_relation_unlocked(record, reason=reason)
             if action_kind == "promote_skill":
@@ -991,6 +1009,108 @@ class ReviewProposalStore:
             action="apply",
             ok=True,
             message="Workflow review proposal applied.",
+            proposal=self._find_unlocked(proposal_id),
+            event=event,
+            artifact=artifact,
+        )
+
+    def _apply_config_overlay_unlocked(
+        self,
+        record: dict[str, Any],
+        *,
+        reason: str = "",
+    ) -> ReviewDecisionResult:
+        proposal_id = str(record.get("id") or "")
+        payload = _proposal_payload(record)
+        patch_rows = payload.get("patches") if isinstance(payload.get("patches"), list) else []
+        if not patch_rows:
+            event = self._append_event_unlocked(
+                proposal_id,
+                status="failed",
+                reason=reason,
+                error="missing_patches",
+            )
+            return ReviewDecisionResult(
+                proposal_id=proposal_id,
+                status="failed",
+                action="apply",
+                ok=False,
+                message="Config overlay proposal is missing patches.",
+                proposal=self._find_unlocked(proposal_id),
+                event=event,
+                error="missing_patches",
+            )
+        try:
+            patches = [
+                ConfigPatch(
+                    path=str(item.get("path") or ""),
+                    value=item.get("value"),
+                    reason=str(item.get("reason") or ""),
+                )
+                for item in patch_rows
+                if isinstance(item, dict)
+            ]
+            if not patches:
+                raise ValueError("no valid patches")
+            base_config = apply_config_overlay(
+                self.workspace,
+                load_config().agents.defaults.learning.evolution,
+            )
+            for patch in patches:
+                issue = ConfigMutationGate.validate(base_config, patch)
+                if issue:
+                    raise ValueError(issue)
+            result = EvolutionConfigOverlayStore(self.workspace).apply_patches(
+                base_config,
+                patches,
+                actor="review_proposal",
+                source="background_review",
+                evidence={
+                    "proposal_id": proposal_id,
+                    "reason": _clean_text(reason, _REVIEW_REASON_MAX_CHARS),
+                },
+            )
+            if not result.ok or not result.applied:
+                rejected = result.rejected[0]["error"] if result.rejected else "overlay_apply_failed"
+                raise ValueError(str(rejected))
+            artifact = {
+                "artifact_type": "config_overlay",
+                "path": "memory/evolution_config_overrides.json",
+                "validation": result.message,
+                "overlay": result.overlay,
+                "applied_patch_count": len(result.applied),
+            }
+        except Exception as exc:
+            logger.exception("Failed to apply config overlay review proposal {}", proposal_id)
+            event = self._append_event_unlocked(
+                proposal_id,
+                status="failed",
+                reason=reason,
+                error=str(exc),
+            )
+            return ReviewDecisionResult(
+                proposal_id=proposal_id,
+                status="failed",
+                action="apply",
+                ok=False,
+                message="Failed to apply config overlay review proposal.",
+                proposal=self._find_unlocked(proposal_id),
+                event=event,
+                artifact=None,
+                error=str(exc),
+            )
+        event = self._append_event_unlocked(
+            proposal_id,
+            status="applied",
+            reason=reason,
+            artifact=artifact,
+        )
+        return ReviewDecisionResult(
+            proposal_id=proposal_id,
+            status="applied",
+            action="apply",
+            ok=True,
+            message="Config overlay review proposal applied.",
             proposal=self._find_unlocked(proposal_id),
             event=event,
             artifact=artifact,
@@ -1807,11 +1927,11 @@ def _review_subject_label(record: dict[str, Any]) -> str:
 
 def _unsupported_apply_message(record: dict[str, Any]) -> str:
     proposal_type = _proposal_type(record)
-    if proposal_type in {"merge_skill", "archive_workflow"}:
-        return f"{proposal_type} proposals are review-only in P10."
+    if proposal_type in {"merge_skill", "archive_workflow", "prompt_policy", "architecture_patch"}:
+        return f"{proposal_type} proposals are review-only in this version."
     if proposal_type == "move_to_domain":
         return "move_to_domain proposals are only apply-capable when the target is a workspace domain pack."
-    return "Only memory, fact, skill, workflow, promote_skill, deprecate_skill, and supported move_to_domain proposals can be applied."
+    return "Only memory, fact, skill, workflow, config_overlay, promote_skill, deprecate_skill, and supported move_to_domain proposals can be applied."
 
 
 def _review_apply_capability(workspace: Path, record: dict[str, Any]) -> tuple[bool, str]:

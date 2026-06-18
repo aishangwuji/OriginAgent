@@ -97,6 +97,7 @@ class OpportunitySignal:
     target_key: str
     title: str
     summary: str
+    source_pattern_id: str = ""
     evidence_sources: list[dict[str, Any]] = field(default_factory=list)
     first_seen_at: str = ""
     last_seen_at: str = ""
@@ -121,6 +122,7 @@ class OpportunitySignal:
             target_key=str(record.get("target_key") or ""),
             title=str(record.get("title") or ""),
             summary=str(record.get("summary") or ""),
+            source_pattern_id=str(record.get("source_pattern_id") or ""),
             evidence_sources=[
                 item for item in record.get("evidence_sources") or [] if isinstance(item, dict)
             ],
@@ -158,6 +160,7 @@ class OpportunitySignalCandidate:
     summary: str
     evidence_sources: list[dict[str, Any]]
     risk_level: str = "low"
+    source_pattern_id: str = ""
 
     @property
     def opportunity_id(self) -> str:
@@ -217,6 +220,7 @@ class OpportunitySignalStore:
                         target_key=_clean_signal_text(candidate.target_key, _TARGET_MAX_CHARS),
                         title=_clean_signal_text(candidate.title, 160),
                         summary=_clean_signal_text(candidate.summary, 512),
+                        source_pattern_id=_clean_signal_text(candidate.source_pattern_id, 160),
                         evidence_sources=[],
                         first_seen_at=now_iso,
                         last_seen_at=now_iso,
@@ -227,6 +231,10 @@ class OpportunitySignalStore:
                 signal.target_key = _clean_signal_text(candidate.target_key, _TARGET_MAX_CHARS) or signal.target_key
                 signal.title = _clean_signal_text(candidate.title, 160) or signal.title
                 signal.summary = _clean_signal_text(candidate.summary, 512) or signal.summary
+                if candidate.source_pattern_id:
+                    signal.source_pattern_id = (
+                        _clean_signal_text(candidate.source_pattern_id, 160) or signal.source_pattern_id
+                    )
                 signal.risk_level = candidate.risk_level or signal.risk_level
                 signal.last_seen_at = now_iso
                 signal.evidence_sources = _merge_evidence_sources(
@@ -799,6 +807,7 @@ def build_workflow_payload_from_signal(
         "evolution": {
             "origin": AUTO_EVOLUTION_ORIGIN,
             "opportunity_id": signal.opportunity_id,
+            "source_pattern_id": signal.source_pattern_id,
             "kind": signal.kind,
             "priority_score": round(signal.priority_score, 3),
             "seen_count": signal.seen_count,
@@ -841,6 +850,7 @@ def build_skill_payload_from_signal(
         "evolution": {
             "origin": AUTO_EVOLUTION_ORIGIN,
             "opportunity_id": signal.opportunity_id,
+            "source_pattern_id": signal.source_pattern_id,
             "kind": signal.kind,
             "priority_score": round(signal.priority_score, 3),
             "seen_count": signal.seen_count,

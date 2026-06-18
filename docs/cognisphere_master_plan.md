@@ -4,7 +4,7 @@ Date: 2026-06-12
 Status: Proposed
 Last Reviewed: 2026-06-12
 Scope: OriginAgent 面向 AGI 方向的内在思维、世界模拟、受治理自演化与元编程总纲
-
+1
 ## 1. 文档目标
 
 这份总纲用于为 OriginAgent 之上的 `CogniSphere` 主线建立统一施工边界。

@@ -66,6 +66,7 @@ def bridge_patterns_to_signals(
             target_key=seed.target_key,
             title=seed.title,
             summary=seed.summary,
+            source_pattern_id=pattern.pattern_id,
             evidence_sources=_build_evidence_sources(
                 seed,
                 pattern,

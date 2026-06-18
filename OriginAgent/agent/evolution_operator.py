@@ -521,6 +521,16 @@ class EvolutionOperator:
             }
         payload = dict(record.get("payload") if isinstance(record.get("payload"), dict) else {})
         payload["review_proposal_id"] = proposal_id
+        default_fixtures = (
+            {
+                str(key): str(value)
+                for key, value in dict(payload.get("trial_fixtures") or {}).items()
+                if str(key).strip()
+            }
+            if isinstance(payload.get("trial_fixtures"), dict)
+            else {}
+        )
+        effective_fixtures = {**default_fixtures, **fixtures}
         gate = SandboxEvaluator(self.workspace, self.config).evaluate_trial_workflow_payload(payload)
         return {
             "ok": True,
@@ -533,7 +543,7 @@ class EvolutionOperator:
                 "trial_gate_status": str(gate.get("status") or ""),
                 "steps_checked": _mapping(gate.get("replay_summary")).get("steps_checked", 0),
                 "blocked_steps": _mapping(gate.get("replay_summary")).get("blocked_steps", 0),
-                "fixture_count": len(fixtures),
+                "fixture_count": len(effective_fixtures),
                 "would_update_proposal_payload": True,
                 "would_write_trial_log": True,
                 "would_write_outcome": True,
@@ -576,7 +586,17 @@ class EvolutionOperator:
             )
         payload = dict(record.get("payload") if isinstance(record.get("payload"), dict) else {})
         payload["review_proposal_id"] = proposal_key
-        trial = TrialRunner(self.workspace, self.config).run_workflow_payload(payload, fixtures=fixtures or {})
+        default_fixtures = (
+            {
+                str(key): str(value)
+                for key, value in dict(payload.get("trial_fixtures") or {}).items()
+                if str(key).strip()
+            }
+            if isinstance(payload.get("trial_fixtures"), dict)
+            else {}
+        )
+        effective_fixtures = {**default_fixtures, **(fixtures or {})}
+        trial = TrialRunner(self.workspace, self.config).run_workflow_payload(payload, fixtures=effective_fixtures)
         compact_trial = compact_trial_result(trial)
         payload["trial"] = compact_trial
         payload["operator_insights"] = build_operator_insights(

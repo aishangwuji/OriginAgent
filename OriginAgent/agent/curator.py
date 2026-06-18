@@ -38,6 +38,8 @@ from OriginAgent.agent.evolution_maintenance import run_evolution_maintenance
 from OriginAgent.agent.evolution_operator import build_operator_insights
 from OriginAgent.agent.evolution_sandbox import SandboxEvaluator
 from OriginAgent.agent.facts import CONFLICT_CATEGORIES, FactStore, normalize_fact_content
+from OriginAgent.agent.meta_cognition_audit import JsonlMetaCognitionAuditLedger
+from OriginAgent.agent.meta_programming import MetaProgrammingEngine
 from OriginAgent.agent.memory import redact_memory_text
 from OriginAgent.agent.runtime_models import TaskRunReport, now_iso
 from OriginAgent.agent.task_runtime import (
@@ -104,6 +106,7 @@ class CuratorService:
         config_loader: Any | None = None,
         evolution_config: Any | None = None,
         evolution_config_loader: Any | None = None,
+        meta_cognition_config: Any | None = None,
         domain_pack_manager: DomainPackManager | None = None,
         store: ReviewProposalStore | None = None,
     ) -> None:
@@ -112,6 +115,7 @@ class CuratorService:
         self._config_loader = config_loader
         self._evolution_config = evolution_config
         self._evolution_config_loader = evolution_config_loader
+        self._meta_cognition_config = meta_cognition_config
         self.domain_pack_manager = domain_pack_manager
         self.store = store or ReviewProposalStore(self.workspace)
         self.opportunity_signals = OpportunitySignalStore(self.workspace)
@@ -120,6 +124,12 @@ class CuratorService:
         self.sandbox = SandboxEvaluator(self.workspace, self.evolution_config)
         self.promotion_gate = PromotionGate(self.evolution_config)
         self.feedback_calibrator = EvolutionFeedbackCalibrator(self.workspace, self.evolution_config)
+        self.meta_programming = MetaProgrammingEngine(
+            self.workspace,
+            meta_cognition_config=self._meta_cognition_config,
+            evolution_config=self.evolution_config,
+            audit=JsonlMetaCognitionAuditLedger(self.workspace),
+        )
         self._running = 0
         self._last_result: CuratorResult | None = None
         self._last_evolution_scan: dict[str, Any] = {}
@@ -138,6 +148,12 @@ class CuratorService:
                 self.sandbox = SandboxEvaluator(self.workspace, self._evolution_config)
                 self.promotion_gate = PromotionGate(self._evolution_config)
                 self.feedback_calibrator = EvolutionFeedbackCalibrator(self.workspace, self._evolution_config)
+                self.meta_programming = MetaProgrammingEngine(
+                    self.workspace,
+                    meta_cognition_config=self._meta_cognition_config,
+                    evolution_config=self.evolution_config,
+                    audit=JsonlMetaCognitionAuditLedger(self.workspace),
+                )
             except Exception:
                 logger.exception("Failed to refresh evolution config")
 
@@ -436,10 +452,16 @@ class CuratorService:
             return []
 
         proposals: list[ReviewProposal] = []
+        compiled_lookup = self.meta_programming.compile_for_signals(signals=signals, limit_patterns=1)
         sandbox = SandboxEvaluator(self.workspace, config)
         promotion_gate = PromotionGate(config)
         for signal in signals:
-            payload = build_workflow_payload_from_signal(signal, config=config)
+            compiled = compiled_lookup.get(signal.opportunity_id, {}).get("workflow")
+            payload = (
+                dict(compiled.payload)
+                if compiled is not None and isinstance(compiled.payload, dict)
+                else build_workflow_payload_from_signal(signal, config=config)
+            )
             payload["sandbox"] = sandbox.evaluate_workflow_payload(payload)
             gate = promotion_gate.evaluate(payload, proposal_type="workflow")
             payload["promotion_gate"] = gate.to_json()
@@ -484,6 +506,14 @@ class CuratorService:
                 confidence=max(0.1, min(0.99, signal.priority_score)),
                 origin=AUTO_EVOLUTION_ORIGIN,
             ))
+            if compiled is not None:
+                proposals.extend(self._compiled_secondary_proposals(
+                    signal=signal,
+                    compiled_lookup=compiled_lookup.get(signal.opportunity_id, {}),
+                    session_key=session_key,
+                    turn_id=turn_id,
+                    created_at=created_at,
+                ))
         self._last_evolution_scan["workflow_prepared"] = len(proposals)
         self._last_evolution_scan["prepared"] = int(self._last_evolution_scan.get("prepared", 0) or 0) + len(proposals)
         return proposals
@@ -510,9 +540,15 @@ class CuratorService:
             return []
 
         proposals: list[ReviewProposal] = []
+        compiled_lookup = self.meta_programming.compile_for_signals(signals=signals, limit_patterns=1)
         promotion_gate = PromotionGate(config)
         for signal in signals:
-            payload = build_skill_payload_from_signal(signal, config=config)
+            compiled = compiled_lookup.get(signal.opportunity_id, {}).get("skill")
+            payload = (
+                dict(compiled.payload)
+                if compiled is not None and isinstance(compiled.payload, dict)
+                else build_skill_payload_from_signal(signal, config=config)
+            )
             gate = promotion_gate.evaluate(payload, proposal_type="skill")
             payload["promotion_gate"] = gate.to_json()
             payload["operator_insights"] = build_operator_insights(
@@ -548,13 +584,82 @@ class CuratorService:
                 confidence=max(0.1, min(0.99, signal.priority_score)),
                 origin=AUTO_EVOLUTION_ORIGIN,
             ))
+            if compiled is not None:
+                proposals.extend(self._compiled_secondary_proposals(
+                    signal=signal,
+                    compiled_lookup=compiled_lookup.get(signal.opportunity_id, {}),
+                    session_key=session_key,
+                    turn_id=turn_id,
+                    created_at=created_at,
+                ))
         self._last_evolution_scan["skill_prepared"] = len(proposals)
         self._last_evolution_scan["prepared"] = int(self._last_evolution_scan.get("prepared", 0) or 0) + len(proposals)
+        return proposals
+
+    def _compiled_secondary_proposals(
+        self,
+        *,
+        signal: Any,
+        compiled_lookup: dict[str, Any],
+        session_key: str,
+        turn_id: str,
+        created_at: str,
+    ) -> list[ReviewProposal]:
+        proposals: list[ReviewProposal] = []
+        for target_type in ("config_overlay", "prompt_policy", "architecture_patch"):
+            compiled = compiled_lookup.get(target_type)
+            if compiled is None or not isinstance(getattr(compiled, "payload", None), dict):
+                continue
+            if bool(getattr(compiled, "rejected", False)):
+                continue
+            if target_type == "config_overlay" and not list(compiled.payload.get("patches") or []):
+                continue
+            proposal_type = target_type
+            title = {
+                "config_overlay": f"Apply governed config overlay for `{signal.target_key}`",
+                "prompt_policy": f"Review prompt/policy draft for `{signal.target_key}`",
+                "architecture_patch": f"Review architecture patch draft for `{signal.target_key}`",
+            }[target_type]
+            content = {
+                "config_overlay": "MetaProgrammingEngine compiled a governed config overlay candidate from a repeated pattern.",
+                "prompt_policy": "MetaProgrammingEngine compiled a review-only prompt/policy candidate from a repeated pattern.",
+                "architecture_patch": "MetaProgrammingEngine compiled a review-only architecture patch candidate from a repeated pattern.",
+            }[target_type]
+            rationale = {
+                "config_overlay": "This proposal is deterministic and must still pass governed apply checks before changing the evolution overlay.",
+                "prompt_policy": "This proposal is review-only in v1 and does not have direct apply semantics.",
+                "architecture_patch": "This proposal is review-only in v1 and does not mutate runtime topology or code.",
+            }[target_type]
+            evidence = _evidence_lines(
+                list(getattr(compiled, "evidence_sources", []) or []),
+                max_evidence=self._max_evidence(),
+                evidence_max_chars=self._evidence_max_chars(),
+            )
+            proposals.append(self._proposal(
+                session_key=session_key,
+                turn_id=turn_id,
+                created_at=created_at,
+                proposal_type=proposal_type,
+                domain_id="core",
+                title=title,
+                content=content,
+                rationale=rationale,
+                evidence=evidence,
+                payload=dict(compiled.payload),
+                confidence=(
+                    0.9
+                    if str(getattr(compiled, "risk_level", "medium") or "medium") == "high"
+                    else max(0.1, min(0.99, signal.priority_score))
+                ),
+                origin=AUTO_EVOLUTION_ORIGIN,
+            ))
         return proposals
 
     def _mark_evolution_proposals_converted(self, proposals: list[ReviewProposal]) -> None:
         for proposal in proposals:
             if proposal.origin != AUTO_EVOLUTION_ORIGIN:
+                continue
+            if proposal.proposal_type not in {"workflow", "skill"}:
                 continue
             payload = proposal.payload if isinstance(proposal.payload, dict) else {}
             evolution = payload.get("evolution") if isinstance(payload.get("evolution"), dict) else {}

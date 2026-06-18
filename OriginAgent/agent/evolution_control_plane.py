@@ -22,6 +22,7 @@ from OriginAgent.agent.evolution_sandbox import sandbox_status_counts, trial_pol
 from OriginAgent.agent.evolution_schema import validate_evolution_stores
 from OriginAgent.agent.evolution_snapshots import EvolutionRollbackService, EvolutionSnapshotStore
 from OriginAgent.agent.evolution_trial_logs import EvolutionTrialLogStore, trial_log_policy_status
+from OriginAgent.agent.meta_programming import MetaProgrammingCompilationStore
 
 EVOLUTION_MANUAL_OVERRIDE_DISABLED = (
     "Evolution manual override is disabled. Set evolution.allow_manual_override=true in config to enable."
@@ -538,6 +539,9 @@ class EvolutionControlPlane:
         trial_log_store = EvolutionTrialLogStore(self.workspace)
         schema_validation = validate_evolution_stores(self.workspace)
         config_overlay = EvolutionConfigOverlayStore(self.workspace).status()
+        meta_programming = MetaProgrammingCompilationStore(self.workspace).status()
+        proposal_type_counts = proposal_store.type_counts(origin=AUTO_EVOLUTION_ORIGIN)
+        review_only_proposals = sum(1 for record in recent_records if bool(record.get("review_only")))
         return {
             **signal_status,
             "control_plane": {
@@ -554,8 +558,11 @@ class EvolutionControlPlane:
                 "permissions": permission_summary(self.config),
             },
             "config_overlay": config_overlay,
+            "meta_programming": meta_programming,
             "pending_proposals_from_evolution": proposal_stats["pending_count"],
             "proposal_count_from_evolution": proposal_stats["proposal_count"],
+            "proposal_type_counts_from_evolution": proposal_type_counts,
+            "review_only_proposal_count": review_only_proposals,
             "auto_verified_workflows_count": auto_verified,
             "maintenance": evolution_maintenance_policy(self.config),
             "outcomes": outcome_stats,
@@ -604,6 +611,8 @@ class EvolutionControlPlane:
                 "proposals": {
                     "total": proposal_stats["proposal_count"],
                     "pending": proposal_stats["pending_count"],
+                    "by_type": proposal_type_counts,
+                    "review_only": review_only_proposals,
                     "auto_verified_workflows": auto_verified,
                 },
                 "health": health,

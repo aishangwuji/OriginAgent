@@ -14,6 +14,7 @@ from OriginAgent.agent.background_review import (
     ReviewProposalStore,
 )
 from OriginAgent.agent.evolution_dependencies import EvolutionDependencyStore
+from OriginAgent.agent.evolution_config_overlay import EvolutionConfigOverlayStore
 from OriginAgent.agent.skills import SkillsLoader
 from OriginAgent.agent.workflow_artifacts import (
     validate_workflow_artifact_content,
@@ -223,6 +224,45 @@ def test_apply_fact_conflict_persists_relation_kind_without_mutating_facts(tmp_p
         and relation["relation_type"] == "narrows"
         for relation in relations
     )
+
+
+def test_apply_config_overlay_proposal_updates_overlay_and_patch_log(tmp_path: Path) -> None:
+    store = ReviewProposalStore(tmp_path)
+    store.append_many([
+        _proposal(
+            "review_config_overlay",
+            proposal_type="config_overlay",
+            title="Apply governed overlay",
+            content="Tighten evolution config.",
+            payload={
+                "subject_type": "config_overlay",
+                "subject_id": "learning.evolution",
+                "subject_path": "memory/evolution_config_overrides.json",
+                "curator_key": "meta-config-overlay:review_config_overlay",
+                "target_state_hash": "hash-overlay-1",
+                "suggested_action": "config_overlay",
+                "patches": [
+                    {
+                        "path": "dry_run",
+                        "value": True,
+                        "reason": "Repeated failures require preview-only mode.",
+                    }
+                ],
+            },
+        )
+    ])
+
+    result = store.apply("review_config_overlay", reason="tighten safety")
+    overlay_status = EvolutionConfigOverlayStore(tmp_path).status()
+
+    assert result.ok is True
+    assert result.status == "applied"
+    assert result.artifact is not None
+    assert result.artifact["artifact_type"] == "config_overlay"
+    assert overlay_status["active"] is True
+    assert overlay_status["overrides"]["dry_run"] is True
+    assert overlay_status["patch_count"] == 1
+    assert len(overlay_status["recent_patches"]) == 1
 
 
 def test_reject_fact_proposal_lowers_matching_active_fact_confidence(tmp_path: Path) -> None:

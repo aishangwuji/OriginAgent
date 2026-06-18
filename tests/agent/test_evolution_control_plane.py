@@ -81,6 +81,9 @@ def test_control_plane_status_and_read_model(tmp_path: Path) -> None:
     assert status["policy"]["permissions"]["apply"] is False
     assert status["read_model"]["signals"]["open"] == 1
     assert status["read_model"]["proposals"]["total"] == 1
+    assert status["meta_programming"]["compiled_bundle_count"] == 0
+    assert status["proposal_type_counts_from_evolution"] == {"workflow": 1}
+    assert status["review_only_proposal_count"] == 0
     assert status["schema_validation"]["record_counts"]["opportunity_signals"] == 1
     assert signals["signals"][0]["opportunity_id"] == signal_id
     assert proposals["proposals"][0]["proposal_id"] == proposal_id
@@ -102,6 +105,8 @@ def test_control_plane_status_and_read_model(tmp_path: Path) -> None:
     assert action_map["suppress_signal"]["parameters_schema"]["required"] == ["target_id"]
     assert action_map["rollback_artifact"]["permission"] == "rollback"
     assert action_map["rollback_artifact"]["risk_level"] == "high"
+    assert status["read_model"]["proposals"]["by_type"] == {"workflow": 1}
+    assert status["read_model"]["proposals"]["review_only"] == 0
 
 
 def test_control_plane_recommendations_include_action_descriptor(tmp_path: Path) -> None:
@@ -314,3 +319,33 @@ def test_control_plane_config_overlay_status_and_clear_policy(tmp_path: Path) ->
     assert allowed["ok"] is True
     assert allowed["will_write"] is True
     assert EvolutionConfigOverlayStore(tmp_path).status()["active"] is False
+
+
+def test_control_plane_counts_review_only_evolution_proposals(tmp_path: Path) -> None:
+    ReviewProposalStore(tmp_path).append_many([
+        ReviewProposal(
+            id="review_prompt_policy_cp",
+            created_at="2026-05-20T10:00:00+00:00",
+            session_key="curator:system",
+            turn_id="turn-1",
+            origin=AUTO_EVOLUTION_ORIGIN,
+            proposal_type="prompt_policy",
+            domain_id="core",
+            title="Review prompt policy",
+            content="Review only.",
+            payload={
+                "subject_type": "prompt_policy",
+                "subject_id": "general_reasoning",
+                "curator_key": "meta-prompt-policy:cp",
+                "target_state_hash": "hash-prompt-cp",
+                "suggested_action": "review_only",
+            },
+        )
+    ])
+
+    status = EvolutionControlPlane(tmp_path, EvolutionConfig()).status()
+
+    assert status["proposal_type_counts_from_evolution"]["prompt_policy"] == 1
+    assert status["review_only_proposal_count"] == 1
+    assert status["read_model"]["proposals"]["by_type"]["prompt_policy"] == 1
+    assert status["read_model"]["proposals"]["review_only"] == 1

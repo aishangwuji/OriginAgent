@@ -23,6 +23,8 @@ from OriginAgent.agent.evolution_feedback import EvolutionFeedbackCalibrator
 from OriginAgent.agent.evolution_health_history import EvolutionHealthHistoryStore
 from OriginAgent.agent.evolution_outcomes import EvolutionOutcomeStore
 from OriginAgent.agent.evolution_snapshots import EvolutionRollbackService, EvolutionSnapshotStore
+from OriginAgent.agent.meta_cognition_audit import JsonlMetaCognitionAuditLedger
+from OriginAgent.agent.meta_cognition_models import ErrorPattern, ReflectionRecord
 from OriginAgent.agent.skills import SkillsLoader
 from OriginAgent.agent.tools.runtime_status import RuntimeStatusTool
 from OriginAgent.config.schema import EvolutionConfig
@@ -48,6 +50,7 @@ def _seed_workflow_signal(
     *,
     target: str = "deploy backend checks",
     cursors: tuple[int, ...] = (1, 2, 3),
+    source_pattern_id: str = "",
 ) -> OpportunitySignalStore:
     store = OpportunitySignalStore(workspace)
     store.upsert_candidates([
@@ -65,6 +68,7 @@ def _seed_workflow_signal(
                 }
                 for cursor in cursors
             ],
+            source_pattern_id=source_pattern_id,
         )
     ])
     return store
@@ -75,6 +79,7 @@ def _seed_skill_signal(
     *,
     target: str = "log review troubleshooting skill",
     cursors: tuple[int, ...] = (1, 2, 3, 4, 5),
+    source_pattern_id: str = "",
 ) -> OpportunitySignalStore:
     store = OpportunitySignalStore(workspace)
     store.upsert_candidates([
@@ -93,9 +98,46 @@ def _seed_skill_signal(
                 for cursor in cursors
             ],
             risk_level="medium",
+            source_pattern_id=source_pattern_id,
         )
     ])
     return store
+
+
+def _append_meta_pattern(
+    workspace: Path,
+    *,
+    pattern_id: str,
+    target_type: str = SIGNAL_KIND_WORKFLOW,
+    severity: str = "high",
+    frequency: int = 5,
+) -> None:
+    ledger = JsonlMetaCognitionAuditLedger(workspace)
+    ledger.append_reflection(
+        ReflectionRecord(
+            reflection_id=f"reflection-{pattern_id}",
+            session_key="websocket:chat-a",
+            reflection_kind="failure_analysis",
+            outcome_class="tool_failure",
+            what_failed=["Backend deploy checks were skipped."],
+            summary="Repeated backend deploy failures due to skipped checks.",
+            retention_hint="candidate",
+        )
+    )
+    ledger.append_pattern(
+        ErrorPattern(
+            pattern_id=pattern_id,
+            pattern_key=f"meta.workflow.general_reasoning.tool_failure.{pattern_id}",
+            owner_id="websocket:chat-a",
+            source_reflection_ids=[f"reflection-{pattern_id}"],
+            capability_domain="general_reasoning",
+            severity=severity,
+            frequency=frequency,
+            distinct_turn_count=3,
+            candidate_target_type=target_type,
+            summary="Repeated backend deploy failures due to skipped checks.",
+        )
+    )
 
 
 def _write_skill(
@@ -833,6 +875,73 @@ async def test_curator_generates_read_only_skill_proposal_when_enabled(tmp_path:
     assert signals[0].status == "converted"
     assert signals[0].converted_proposal_id == record["id"]
     assert signals[0].verification_status == "verified"
+
+
+@pytest.mark.asyncio
+async def test_curator_prefers_compiled_workflow_payload_and_emits_secondary_proposals(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    review_store = ReviewProposalStore(tmp_path)
+    _seed_workflow_signal(tmp_path, source_pattern_id="pattern-workflow-1")
+    _append_meta_pattern(tmp_path, pattern_id="pattern-workflow-1")
+    service = CuratorService(
+        workspace=tmp_path,
+        config=SimpleNamespace(enabled=True, max_proposals_per_run=12),
+        evolution_config=EvolutionConfig(mode="curated", dry_run=False),
+        meta_cognition_config=SimpleNamespace(evolution_bridge_enabled=True),
+        store=review_store,
+    )
+
+    def _fail_builder(*args, **kwargs):
+        raise AssertionError("legacy workflow payload builder should not be used when compiled bundle exists")
+
+    monkeypatch.setattr("OriginAgent.agent.curator.build_workflow_payload_from_signal", _fail_builder)
+
+    result = await service.review_workspace(session_key="websocket:chat-a", turn_id="turn-compiled-workflow")
+    records = review_store.list_records(origin=AUTO_EVOLUTION_ORIGIN, limit=10)
+    by_type = {record["proposal_type"]: record for record in records}
+    signal = OpportunitySignalStore(tmp_path).read_all()[0]
+
+    assert result.status == "ok"
+    assert result.proposals_written == 4
+    assert {"workflow", "config_overlay", "prompt_policy", "architecture_patch"} == set(by_type)
+    assert by_type["workflow"]["payload"]["meta_programming"]["source_pattern_id"] == "pattern-workflow-1"
+    assert by_type["workflow"]["payload"]["trial_fixtures"]["meta-pattern-notes.txt"]
+    assert by_type["config_overlay"]["can_apply"] is True
+    assert by_type["prompt_policy"]["review_only"] is True
+    assert by_type["prompt_policy"]["can_apply"] is False
+    assert by_type["architecture_patch"]["review_only"] is True
+    assert signal.converted_proposal_id == by_type["workflow"]["id"]
+
+
+@pytest.mark.asyncio
+async def test_curator_skips_rejected_compiled_config_overlay_secondary_proposal(tmp_path: Path) -> None:
+    review_store = ReviewProposalStore(tmp_path)
+    _seed_workflow_signal(tmp_path, source_pattern_id="pattern-workflow-rejected")
+    _append_meta_pattern(
+        tmp_path,
+        pattern_id="pattern-workflow-rejected",
+        severity="low",
+        frequency=5,
+    )
+    service = CuratorService(
+        workspace=tmp_path,
+        config=SimpleNamespace(enabled=True, max_proposals_per_run=12),
+        evolution_config=EvolutionConfig(
+            mode="curated",
+            dry_run=False,
+            max_proposals_per_cycle=0,
+        ),
+        meta_cognition_config=SimpleNamespace(evolution_bridge_enabled=True),
+        store=review_store,
+    )
+
+    result = await service.review_workspace(session_key="websocket:chat-a", turn_id="turn-rejected-config")
+    records = review_store.list_records(origin=AUTO_EVOLUTION_ORIGIN, limit=10)
+    proposal_types = {record["proposal_type"] for record in records}
+
+    assert result.status == "ok"
+    assert "workflow" in proposal_types
+    assert "config_overlay" not in proposal_types
+    assert {"prompt_policy", "architecture_patch"}.issubset(proposal_types)
 
 
 def test_curator_promote_apply_verifies_and_activates_workspace_skill(tmp_path: Path) -> None:
