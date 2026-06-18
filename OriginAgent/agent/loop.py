@@ -371,6 +371,7 @@ class AgentLoop:
         self._last_meta_artifacts: dict[str, Any] = {}
         self._last_world_attention_write: dict[str, Any] = {}
         self._current_meta_turn_id: str | None = None
+        self._meta_cognition_fast_path_refs: set[str] = set()
         self.commands = CommandRouter()
         register_builtin_commands(self.commands)
         self._turn_pipeline = AgentTurnPipeline(self._build_turn_pipeline_deps())
@@ -2157,6 +2158,8 @@ class AgentLoop:
         if runtime is None:
             return
         result = runtime.record_trigger(trigger, turn_id=turn_id)
+        if result.accepted and trigger.trigger_type == "user_correction":
+            self._maybe_apply_meta_fast_path(trigger)
         self._last_meta_cognition_summary = runtime.summary()
         self._last_meta_trigger_scan = [
             *list(self._last_meta_trigger_scan or []),
@@ -2175,6 +2178,7 @@ class AgentLoop:
             return
         try:
             self._current_meta_turn_id = ctx.turn_id
+            self._meta_cognition_fast_path_refs = set()
             trigger = build_user_correction_trigger(
                 session_key=ctx.session_key,
                 user_message=ctx.msg.content,
@@ -2188,6 +2192,56 @@ class AgentLoop:
             logger.debug("Meta-cognition turn-end scan failed", exc_info=True)
         finally:
             self._current_meta_turn_id = None
+
+    def _maybe_apply_meta_fast_path(self, trigger: MetaTrigger) -> None:
+        session_key = str(trigger.session_key or "").strip()
+        if not session_key or trigger.trigger_type != "user_correction":
+            return
+        sessions = getattr(self, "sessions", None)
+        working_memory = getattr(self, "working_memory", None)
+        runtime_context = getattr(self, "_last_runtime_context", None)
+        if sessions is None or working_memory is None:
+            return
+        try:
+            session = sessions.get_or_create(session_key)
+            snapshot = working_memory.load(
+                session,
+                identity=getattr(runtime_context, "identity", None) if runtime_context is not None else None,
+            )
+            payload = trigger.payload if isinstance(trigger.payload, dict) else {}
+            preview_source = payload.get("user_message_preview")
+            preview = _trim_text(preview_source, max_chars=160)
+            text = f"user_correction: {preview or 'correction recorded'}".strip()
+            prior_counts = dict(
+                (getattr(self, "_last_meta_cognition_summary", {}) or {}).get("fast_path_decision_counts", {}) or {}
+            )
+            if text in list(getattr(snapshot, "attention_items", []) or []):
+                self._meta_cognition_fast_path_refs.add(trigger.source_reference)
+                self._last_meta_cognition_summary = {
+                    **dict(getattr(self, "_last_meta_cognition_summary", {}) or {}),
+                    "fast_path_decision_counts": {
+                        **prior_counts,
+                        "fast_path_duplicate_skipped": 1
+                        + int(prior_counts.get("fast_path_duplicate_skipped", 0) or 0),
+                    },
+                }
+                return
+            working_memory.append_attention_item(
+                session,
+                text,
+                identity=getattr(runtime_context, "identity", None) if runtime_context is not None else None,
+            )
+            self._meta_cognition_fast_path_refs.add(trigger.source_reference)
+            self._last_meta_cognition_summary = {
+                **dict(getattr(self, "_last_meta_cognition_summary", {}) or {}),
+                "fast_path_decision_counts": {
+                    **prior_counts,
+                    "fast_path_working_memory_written": 1
+                    + int(prior_counts.get("fast_path_working_memory_written", 0) or 0),
+                },
+            }
+        except Exception:
+            logger.debug("Meta-cognition fast path failed", exc_info=True)
 
     def _schedule_meta_cognition_reflection(self, ctx: TurnContext) -> None:
         reflector = getattr(self, "_meta_cognition_reflector", None)
@@ -2212,6 +2266,8 @@ class AgentLoop:
             "world_summary_preview": self._meta_world_summary_preview(ctx),
             "runtime_context": self._meta_runtime_context_summary(ctx.runtime_context),
         }
+        if ctx.runtime_context is not None:
+            setattr(ctx.runtime_context, "meta_cognition_fast_path_refs", set(self._meta_cognition_fast_path_refs))
         self._schedule_background(
             self._reflect_meta_cognition_turn(
                 session_key=ctx.session_key,

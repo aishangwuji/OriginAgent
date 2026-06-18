@@ -245,6 +245,8 @@ class PendingConfirmationStore:
         self.pending_file = pending_file or self.memory_dir / "pending_confirmations.json"
         self._lock_file = self.memory_dir / ".lock"
         self._lock_factory = lock_factory
+        self._cached_signature: tuple[int, int] | None = None
+        self._cached_raw_confirmations: list[dict[str, Any]] = []
 
     def _locked(self) -> FileLock:
         if self._lock_factory is not None:
@@ -256,20 +258,7 @@ class PendingConfirmationStore:
             return self.read_all_unlocked()
 
     def read_all_unlocked(self) -> list[ConfirmationRequest]:
-        try:
-            raw = json.loads(self.pending_file.read_text(encoding="utf-8"))
-            items = raw.get("confirmations", []) if isinstance(raw, dict) else []
-            if not isinstance(items, list):
-                raise ValueError("confirmations must be a list")
-        except FileNotFoundError:
-            return []
-        except (OSError, json.JSONDecodeError, ValueError, TypeError):
-            logger.warning(
-                "Failed to read pending confirmations from {}; treating as empty",
-                self.pending_file,
-            )
-            return []
-
+        items = self._load_raw_confirmations_unlocked()
         confirmations: list[ConfirmationRequest] = []
         for item in items:
             if not isinstance(item, dict):
@@ -283,19 +272,19 @@ class PendingConfirmationStore:
             self.write_all_unlocked(confirmations)
 
     def write_all_unlocked(self, confirmations: list[ConfirmationRequest]) -> None:
-        payload = {
-            "confirmations": [
-                confirmation.to_dict()
-                for confirmation in sorted(
-                    confirmations,
-                    key=lambda item: (item.created_at, item.confirmation_id),
-                )
-            ]
-        }
+        raw_confirmations = [
+            confirmation.to_dict()
+            for confirmation in sorted(
+                confirmations,
+                key=lambda item: (item.created_at, item.confirmation_id),
+            )
+        ]
+        payload = {"confirmations": raw_confirmations}
         _write_text_atomic(
             self.pending_file,
             json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
         )
+        self._refresh_cache_from_raw(raw_confirmations)
 
     def upsert(self, confirmation: ConfirmationRequest) -> ConfirmationRequest:
         with self._locked():
@@ -326,9 +315,11 @@ class PendingConfirmationStore:
         confirmation_id: str,
         *,
         now: datetime | None = None,
+        kinds: tuple[str, ...] | None = None,
     ) -> ConfirmationRequest | None:
         current_time = _normalize_datetime(now)
         consumed_at = _format_datetime(current_time)
+        allowed_kinds = tuple(str(kind or "").strip() for kind in (kinds or ("action_confirmation",)))
         with self._locked():
             confirmations = self.read_all_unlocked()
             for confirmation in confirmations:
@@ -339,7 +330,7 @@ class PendingConfirmationStore:
                     self.write_all_unlocked(confirmations)
                     return None
                 if (
-                    confirmation.kind != "action_confirmation"
+                    confirmation.kind not in allowed_kinds
                     or confirmation.status != "confirmed_once"
                     or confirmation.consumed_at is not None
                 ):
@@ -366,6 +357,42 @@ class PendingConfirmationStore:
                     self.write_all_unlocked(confirmations)
                 return confirmation
         return None
+
+    def _load_raw_confirmations_unlocked(self) -> list[dict[str, Any]]:
+        signature = self._file_signature()
+        if signature is not None and signature == self._cached_signature:
+            return [dict(item) for item in self._cached_raw_confirmations]
+        try:
+            raw = json.loads(self.pending_file.read_text(encoding="utf-8"))
+            items = raw.get("confirmations", []) if isinstance(raw, dict) else []
+            if not isinstance(items, list):
+                raise ValueError("confirmations must be a list")
+        except FileNotFoundError:
+            self._refresh_cache_from_raw([])
+            return []
+        except (OSError, json.JSONDecodeError, ValueError, TypeError):
+            logger.warning(
+                "Failed to read pending confirmations from {}; treating as empty",
+                self.pending_file,
+            )
+            self._refresh_cache_from_raw([])
+            return []
+        normalized = [dict(item) for item in items if isinstance(item, dict)]
+        self._refresh_cache_from_raw(normalized)
+        return [dict(item) for item in normalized]
+
+    def _refresh_cache_from_raw(self, items: list[dict[str, Any]]) -> None:
+        self._cached_raw_confirmations = [dict(item) for item in items]
+        self._cached_signature = self._file_signature()
+
+    def _file_signature(self) -> tuple[int, int] | None:
+        try:
+            stat = self.pending_file.stat()
+        except FileNotFoundError:
+            return None
+        except OSError:
+            return None
+        return (int(stat.st_mtime_ns), int(stat.st_size))
 
 
 class ConfirmationManager:
@@ -671,11 +698,13 @@ class ConfirmationManager:
         confirmation_id: str,
         *,
         now: datetime | None = None,
+        kinds: tuple[str, ...] | None = None,
     ) -> ConfirmationRequest | None:
         current_time = _normalize_datetime(now)
         confirmation = self.store.claim_consumption(
             confirmation_id,
             now=current_time,
+            kinds=kinds,
         )
         if confirmation is not None:
             self._audit_confirmation_event(
@@ -691,6 +720,89 @@ class ConfirmationManager:
                 },
             )
         return confirmation
+
+    def retry_confirmation(
+        self,
+        confirmation_id: str,
+        requested_by: str,
+        now: datetime | None = None,
+    ) -> ConfirmationRequest:
+        current_time = _normalize_datetime(now)
+        with self.store._locked():
+            confirmations = self.store.read_all_unlocked()
+            target = next(
+                (
+                    confirmation
+                    for confirmation in confirmations
+                    if confirmation.confirmation_id == confirmation_id
+                ),
+                None,
+            )
+            if target is None:
+                raise ValueError("confirmation_not_found")
+            if target.kind not in {"action_confirmation", "tool_approval"}:
+                raise ValueError("retry_not_allowed")
+            if target.kind in {"notify_only", "fact_confirmation"}:
+                raise ValueError("retry_not_allowed")
+            if target.status in {"rejected", "cancelled"}:
+                raise ValueError("retry_not_allowed")
+            if target.status != "expired":
+                raise ValueError("retry_not_allowed")
+            if target.consumed_at is not None:
+                raise ValueError("retry_not_allowed")
+            if not target.action or not target.prompt or not target.decision_reason:
+                raise ValueError("retry_not_allowed")
+            root_id = str(
+                target.metadata.get("retry_root_confirmation_id")
+                or target.metadata.get("retried_from_confirmation_id")
+                or target.confirmation_id
+            ).strip() or target.confirmation_id
+            existing_count = int(target.metadata.get("retry_count") or "0")
+            retry_count = existing_count + 1
+            if retry_count > 3:
+                raise ValueError("retry_limit_reached")
+            expires_at = current_time + _ttl_for(target.kind, target.risk, self.config)
+            metadata = dict(target.metadata or {})
+            metadata["retried_from_confirmation_id"] = target.confirmation_id
+            metadata["retry_root_confirmation_id"] = root_id
+            metadata["retry_count"] = str(retry_count)
+            retried = ConfirmationRequest(
+                confirmation_id=f"confirmation_{uuid.uuid4().hex[:12]}",
+                kind=target.kind,
+                status="pending",
+                prompt=target.prompt,
+                action=target.action,
+                scope=target.scope,
+                trigger=target.trigger,
+                risk=target.risk,
+                requested_by=_optional_str(requested_by) or target.requested_by,
+                decision_reason=target.decision_reason,
+                presence_status=target.presence_status,
+                related_fact_ids=list(target.related_fact_ids),
+                created_at=_format_datetime(current_time),
+                expires_at=_format_datetime(expires_at),
+                requires_presence_empty=target.requires_presence_empty,
+                uses_facts=list(target.uses_facts),
+                action_payload=dict(target.action_payload),
+                idempotency_key=None,
+                consumed_at=None,
+                metadata=metadata,
+            )
+            confirmations.append(retried)
+            self.store.write_all_unlocked(confirmations)
+            stored = retried
+        self._audit_confirmation_event(
+            stored,
+            decision="retried",
+            reason="confirmation retried",
+            now=current_time,
+            metadata={
+                "retried_from_confirmation_id": confirmation_id,
+                "retry_root_confirmation_id": root_id,
+                "retry_count": retry_count,
+            },
+        )
+        return stored
 
     def expire_confirmation_if_needed(
         self,

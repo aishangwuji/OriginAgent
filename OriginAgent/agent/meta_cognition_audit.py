@@ -104,12 +104,24 @@ class JsonlMetaCognitionAuditLedger:
         seeds = self.recent_evolution_seeds(limit=limit)
         decision_counts: dict[str, int] = {}
         suppression_reason_counts: dict[str, int] = {}
+        uncertainty_values: list[float] = []
+        latest_high_uncertainty_reflection: dict[str, Any] | None = None
         for record in decisions:
             decision = str(record.get("decision") or "unknown")
             decision_counts[decision] = decision_counts.get(decision, 0) + 1
             reason = str(record.get("suppression_reason") or "").strip()
             if reason:
                 suppression_reason_counts[reason] = suppression_reason_counts.get(reason, 0) + 1
+        for record in reflections:
+            payload = dict(record.get("payload") or {}) if isinstance(record.get("payload"), dict) else {}
+            raw_score = payload.get("uncertainty_score")
+            try:
+                score = max(0.0, min(float(raw_score), 1.0))
+            except (TypeError, ValueError):
+                continue
+            uncertainty_values.append(score)
+            if score >= 0.5:
+                latest_high_uncertainty_reflection = record
         return {
             "trigger_count": len(triggers),
             "decision_count": len(decisions),
@@ -128,6 +140,13 @@ class JsonlMetaCognitionAuditLedger:
             "recent_trigger_types": [record.get("trigger_type") for record in triggers],
             "decision_counts": decision_counts,
             "suppression_reason_counts": suppression_reason_counts,
+            "uncertainty_stats": {
+                "avg": (sum(uncertainty_values) / len(uncertainty_values)) if uncertainty_values else 0.0,
+                "max": max(uncertainty_values) if uncertainty_values else 0.0,
+                "high_count": sum(1 for item in uncertainty_values if item >= 0.5),
+                "threshold": 0.5,
+            },
+            "latest_high_uncertainty_reflection": latest_high_uncertainty_reflection,
         }
 
     def _append(self, path: Path, payload: dict[str, Any]) -> None:

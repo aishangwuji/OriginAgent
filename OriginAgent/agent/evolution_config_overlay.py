@@ -11,7 +11,11 @@ from typing import Any
 
 from filelock import FileLock
 
+from OriginAgent.agent.evolution_dependencies import EvolutionDependencyStore
+from OriginAgent.agent.evolution_feedback import feedback_status
+from OriginAgent.agent.evolution_health import evolution_health_score
 from OriginAgent.agent.evolution_outcomes import EvolutionOutcomeStore, safe_append_outcome
+from OriginAgent.agent.evolution_sandbox import sandbox_status_counts, trial_policy_status
 from OriginAgent.utils.helpers import ensure_dir
 
 OVERLAY_SCHEMA_VERSION = "originagent.evolution.config_overlay.v1"
@@ -126,6 +130,8 @@ class EvolutionConfigOverlayStore:
         now = datetime.now(timezone.utc).isoformat()
         next_overrides = deepcopy(overrides)
         effective_before = self.effective_config(config)
+        candidate_records: list[dict[str, Any]] = []
+        candidate_patches: list[ConfigPatch] = []
 
         for patch in patches:
             old_value = _get_path(effective_before, patch.path)
@@ -160,11 +166,67 @@ class EvolutionConfigOverlayStore:
                     },
                 )
                 continue
-            _set_path_in_mapping(next_overrides, patch.path, patch.value)
-            _set_path(effective_before, patch.path, patch.value)
-            record["status"] = "applied"
-            applied.append(record)
-            self._append_patch_log(record)
+            record["status"] = "pending_canary"
+            candidate_records.append(record)
+            candidate_patches.append(normalized)
+
+        if candidate_patches:
+            try:
+                current_health = self._compute_health(effective_before)
+                shadow_config = deepcopy(effective_before)
+                shadow_overrides = deepcopy(next_overrides)
+                for patch in candidate_patches:
+                    _set_path_in_mapping(shadow_overrides, patch.path, patch.value)
+                    _set_path(shadow_config, patch.path, patch.value)
+                shadow_health = self._compute_health(shadow_config)
+                current_score = float(current_health.get("score") or 0.0)
+                shadow_score = float(shadow_health.get("score") or 0.0)
+                if shadow_score < current_score - 5.0:
+                    for record in candidate_records:
+                        record["status"] = "canary_rejected"
+                        record["error"] = "canary_health_drop"
+                        record["current_health"] = {"score": current_score, "level": current_health.get("level")}
+                        record["shadow_health"] = {"score": shadow_score, "level": shadow_health.get("level")}
+                        rejected.append(record)
+                        self._append_patch_log(record)
+                        safe_append_outcome(
+                            EvolutionOutcomeStore(self.workspace),
+                            CONFIG_PATCH_REJECTED,
+                            metadata={
+                                "actor": actor,
+                                "source": source,
+                                "path": record["patch"]["path"],
+                                "error": "canary_health_drop",
+                            },
+                        )
+                else:
+                    for patch, record in zip(candidate_patches, candidate_records, strict=False):
+                        _set_path_in_mapping(next_overrides, patch.path, patch.value)
+                        _set_path(effective_before, patch.path, patch.value)
+                        record["status"] = "applied"
+                        record["current_health"] = {"score": current_score, "level": current_health.get("level")}
+                        record["shadow_health"] = {"score": shadow_score, "level": shadow_health.get("level")}
+                        applied.append(record)
+                        self._append_patch_log(record)
+            except Exception as exc:
+                detail = str(exc)
+                for record in candidate_records:
+                    record["status"] = "canary_rejected"
+                    record["error"] = "canary_unavailable"
+                    record["detail"] = detail
+                    rejected.append(record)
+                    self._append_patch_log(record)
+                    safe_append_outcome(
+                        EvolutionOutcomeStore(self.workspace),
+                        CONFIG_PATCH_REJECTED,
+                        metadata={
+                            "actor": actor,
+                            "source": source,
+                            "path": record["patch"]["path"],
+                            "error": "canary_unavailable",
+                            "detail": detail,
+                        },
+                    )
 
         if applied:
             next_overlay = {
@@ -202,6 +264,20 @@ class EvolutionConfigOverlayStore:
             rejected=rejected,
             overlay=overlay,
             message="No governed config override patches were applied.",
+        )
+
+    def _compute_health(self, config: Any | None) -> dict[str, Any]:
+        outcome_stats = EvolutionOutcomeStore(self.workspace).stats()
+        dependency_stats = EvolutionDependencyStore(self.workspace).stats()
+        feedback_stats = feedback_status(self.workspace, config)
+        sandbox_counts = sandbox_status_counts(self.workspace)
+        trial_status = trial_policy_status(config)
+        return evolution_health_score(
+            outcome_stats=outcome_stats,
+            dependency_stats=dependency_stats,
+            feedback_stats=feedback_stats,
+            sandbox_counts=sandbox_counts,
+            trial_status=trial_status,
         )
 
     def clear(self, *, actor: str = "auto_evolution", source: str = "self_tuning") -> dict[str, Any]:

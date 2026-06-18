@@ -17,8 +17,16 @@ def _write_pack(
     tool_source: str,
     tool_manifest: str,
     pack_id: str = "research",
+    source_kind: str = "builtin",
 ) -> DomainPackManager:
-    pack = workspace / "domain_packs" / pack_id
+    if source_kind == "builtin":
+        builtin_dir = workspace / "builtin_packs"
+        pack = builtin_dir / pack_id
+        manager_workspace = workspace / "workspace"
+    else:
+        builtin_dir = workspace / "empty"
+        pack = workspace / "domain_packs" / pack_id
+        manager_workspace = workspace
     tools_dir = pack / "tools"
     tools_dir.mkdir(parents=True)
     (pack / "CAPABILITIES.md").write_text("# Research\n", encoding="utf-8")
@@ -29,9 +37,9 @@ def _write_pack(
         encoding="utf-8",
     )
     return DomainPackManager(
-        workspace,
+        manager_workspace,
         config=DomainPacksConfig(active=[pack_id] if active else []),
-        builtin_dir=workspace / "empty",
+        builtin_dir=builtin_dir,
     )
 
 
@@ -115,6 +123,26 @@ def test_domain_tool_loader_ignores_inactive_pack(tmp_path: Path) -> None:
     assert DomainToolLoader(manager).load(SimpleNamespace(), registry) == []
     assert not registry.has("research_search")
     assert manager.domain_tool_runtime_records("research") == []
+
+
+def test_domain_tool_loader_skips_workspace_pack_python_tools(tmp_path: Path) -> None:
+    manager = _write_pack(
+        tmp_path,
+        tool_source=_READ_ONLY_TOOL,
+        tool_manifest=(
+            "  - id: research_search\n"
+            "    module: tools.search\n"
+            "    class: ResearchSearchTool\n"
+            "    permissions: []\n"
+        ),
+        source_kind="workspace",
+    )
+    registry = ToolRegistry()
+
+    assert DomainToolLoader(manager).load(SimpleNamespace(), registry) == []
+    records = manager.domain_tool_runtime_records("research")
+    assert records[0].status == "skipped"
+    assert records[0].reason == "executable_python_disabled_for_workspace_pack"
 
 
 def test_domain_tool_loader_skips_conflicts_and_non_read_only_without_permissions(

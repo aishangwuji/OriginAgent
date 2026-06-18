@@ -572,6 +572,7 @@ async def test_inspect_context_reports_phase1_views_and_scope_filter(tmp_path) -
     assert result["views"]["meta_cognition"]["recent_confidence_traces"][0]["trace_id"] == "trace_1"
     assert result["views"]["meta_cognition"]["recent_patterns"][0]["pattern_id"] == "pattern_1"
     assert result["views"]["meta_cognition"]["recent_evolution_seeds"][0]["seed_id"] == "seed_1"
+    assert result["views"]["meta_cognition"]["uncertainty_stats"]["threshold"] == 0.5
     assert result["views"]["meta_cognition"]["working_memory_bridge"]["decision_counts"]["attention_appended"] == 1
     assert result["views"]["meta_cognition"]["memory_candidate_bridge"]["decision_counts"]["queued"] == 1
     assert result["last_context_assembly"]["assembly_order"] == [

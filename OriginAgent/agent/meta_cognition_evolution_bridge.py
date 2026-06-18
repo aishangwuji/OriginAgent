@@ -60,7 +60,7 @@ def bridge_patterns_to_signals(
         if existing is not None and existing.status == "suppressed":
             results.append(EvolutionBridgeResult(decision="suppressed_signal_present", pattern=pattern))
             continue
-        seed = _build_seed(pattern, target_type=target_type)
+        seed = _build_seed(pattern, target_type=target_type, artifact_lookup=artifact_lookup)
         candidate = OpportunitySignalCandidate(
             kind=target_type,
             target_key=seed.target_key,
@@ -85,6 +85,7 @@ def _prioritize_patterns(patterns: list[ErrorPattern]) -> list[ErrorPattern]:
     return sorted(
         patterns,
         key=lambda item: (
+            float(item.pattern_score or 0.0),
             1 if item.severity == "high" else 0,
             int(item.frequency or 0),
             1 if "tool_failure" in item.trigger_types else (1 if "user_correction" in item.trigger_types else 0),
@@ -94,7 +95,12 @@ def _prioritize_patterns(patterns: list[ErrorPattern]) -> list[ErrorPattern]:
     )
 
 
-def _build_seed(pattern: ErrorPattern, *, target_type: str) -> EvolutionSeed:
+def _build_seed(
+    pattern: ErrorPattern,
+    *,
+    target_type: str,
+    artifact_lookup: dict[str, dict[str, Any]],
+) -> EvolutionSeed:
     dominant_trigger_type = pattern.trigger_types[0] if pattern.trigger_types else "meta"
     slug = _pattern_slug(pattern.summary)
     prefix = "meta.workflow" if target_type == SIGNAL_KIND_WORKFLOW else "meta.skill"
@@ -128,17 +134,42 @@ def _build_seed(pattern: ErrorPattern, *, target_type: str) -> EvolutionSeed:
         ),
         summary=summary,
         hypothesis=redact_meta_text(pattern.summary, max_chars=240),
-        confidence=_seed_confidence(pattern),
+        confidence=_seed_confidence(pattern, artifact_lookup=artifact_lookup),
         severity="high" if pattern.severity == "high" else "medium",
         evidence_refs=_seed_evidence_refs(pattern),
         supporting_reflection_ids=list(pattern.source_reflection_ids[:6]),
     )
 
 
-def _seed_confidence(pattern: ErrorPattern) -> float:
-    base = 0.72 if pattern.severity == "high" else 0.65
-    bonus = min(float(pattern.frequency) * 0.03, 0.18)
-    return max(0.0, min(base + bonus, 0.95))
+def _seed_confidence(
+    pattern: ErrorPattern,
+    *,
+    artifact_lookup: dict[str, dict[str, Any]],
+) -> float:
+    base = 0.68 if pattern.severity == "high" else 0.62
+    frequency_bonus = min(float(pattern.frequency or 0.0) * 0.03, 0.15)
+    recency_bonus = float(pattern.recency_score or 0.0) * 0.08
+    uncertainty_penalty = _pattern_mean_uncertainty(pattern, artifact_lookup=artifact_lookup) * 0.12
+    return max(0.0, min(base + frequency_bonus + recency_bonus - uncertainty_penalty, 0.95))
+
+
+def _pattern_mean_uncertainty(
+    pattern: ErrorPattern,
+    *,
+    artifact_lookup: dict[str, dict[str, Any]],
+) -> float:
+    uncertainties: list[float] = []
+    for reflection_id in list(pattern.source_reflection_ids or [])[:3]:
+        row = artifact_lookup.get(f"meta:reflection:{reflection_id}") or {}
+        payload = dict(row.get("payload") or {}) if isinstance(row.get("payload"), dict) else {}
+        item = payload.get("uncertainty_score")
+        try:
+            uncertainties.append(max(0.0, min(float(item), 1.0)))
+        except (TypeError, ValueError):
+            continue
+    if not uncertainties:
+        return 0.0
+    return sum(uncertainties) / len(uncertainties)
 
 
 def _seed_evidence_refs(pattern: ErrorPattern) -> list[str]:

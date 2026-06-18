@@ -324,6 +324,7 @@ def test_meta_cognition_summary_is_independent_from_continuity(tmp_path: Path) -
     assert summary["working_memory_bridge"]["enabled"] is False
     assert summary["recent_patterns"] == []
     assert summary["recent_evolution_seeds"] == []
+    assert summary["uncertainty_stats"]["threshold"] == 0.5
 
 def _reflector(
     tmp_path: Path,
@@ -527,7 +528,11 @@ async def test_meta_cognition_reflector_writes_candidate_queue_for_high_confiden
     )
 
     assert result.status == "ok"
-    assert reflector.audit.recent_reflections(limit=10)[0]["retention_hint"] == "candidate"
+    reflection_row = reflector.audit.recent_reflections(limit=10)[0]
+    trace_row = reflector.audit.recent_confidence_traces(limit=10)[0]
+    assert reflection_row["retention_hint"] == "candidate"
+    assert reflection_row["payload"]["uncertainty_score"] < 0.5
+    assert trace_row["payload"]["uncertainty_score"] == reflection_row["payload"]["uncertainty_score"]
     writer = GovernedMemoryWriter(tmp_path)
     candidates = writer.read_all()
     assert len(candidates) == 1
@@ -535,6 +540,76 @@ async def test_meta_cognition_reflector_writes_candidate_queue_for_high_confiden
     assert candidates[0].metadata["origin"] == "meta_cognition"
     assert working_memory.append_attention_item.call_count == 1
     assert working_memory.append_pending_question.call_count == 1
+
+
+def test_meta_cognition_reflector_skips_attention_when_fast_path_ref_present(tmp_path: Path) -> None:
+    working_memory = SimpleNamespace(
+        inspect=lambda session, identity=None: {"attention_items": [], "pending_questions": []},
+        load=lambda session, identity=None: SimpleNamespace(attention_items=[], pending_questions=[]),
+        append_attention_item=MagicMock(),
+        append_pending_question=MagicMock(),
+    )
+    reflector = _reflector(
+        tmp_path,
+        config=_config(working_memory_bridge_enabled=True),
+        working_memory=working_memory,
+    )
+    reflection = ReflectionRecord(
+        reflection_id="r1",
+        session_key="cli:direct",
+        what_failed=["user_correction: concise please"],
+        summary="summary",
+        payload={"source_reference": "user_correction:pref"},
+    )
+
+    reflector._bridge_to_working_memory(
+        session=object(),
+        reflection=reflection,
+        runtime_context=SimpleNamespace(identity=None, meta_cognition_fast_path_refs={"user_correction:pref"}),
+    )
+
+    assert working_memory.append_attention_item.call_count == 0
+
+
+def test_meta_cognition_summary_exposes_fast_path_decision_counts(tmp_path: Path) -> None:
+    from OriginAgent.agent.introspection.service import RuntimeIntrospectionService
+
+    loop = SimpleNamespace(
+        _meta_cognition_runtime=SimpleNamespace(
+            summary=lambda: {
+                "contract_version": "meta_cognition.v1.freeze",
+                "enabled": True,
+                "trigger_collection_enabled": True,
+                "runtime_status": {},
+                "recent_triggers": [],
+                "recent_decisions": [],
+                "decision_counts": {},
+                "suppression_reason_counts": {},
+            }
+        ),
+        _meta_cognition_reflector=None,
+        _last_meta_cognition_summary={
+            "fast_path_decision_counts": {
+                "fast_path_working_memory_written": 1,
+                "fast_path_duplicate_skipped": 2,
+            }
+        },
+        _last_meta_artifacts={},
+    )
+    service = RuntimeIntrospectionService(
+        loop=loop,
+        workspace=tmp_path,
+        registry=SimpleNamespace(tool_names=[]),
+        sessions=object(),
+        pending_queues={},
+    )
+
+    summary = service.meta_cognition_summary()
+
+    assert summary["fast_path_decision_counts"] == {
+        "fast_path_working_memory_written": 1,
+        "fast_path_duplicate_skipped": 2,
+    }
 
 
 def test_consolidate_error_patterns_merges_repeated_reflections() -> None:
@@ -580,6 +655,8 @@ def test_consolidate_error_patterns_merges_repeated_reflections() -> None:
     assert pattern.frequency == 3
     assert pattern.candidate_target_type == "workflow_candidate"
     assert pattern.severity == "high"
+    assert pattern.recency_score > 0.0
+    assert pattern.pattern_score > 0.0
     assert result.eligible_patterns[0].pattern_id == pattern.pattern_id
 
 
@@ -711,3 +788,136 @@ async def test_meta_cognition_reflector_generates_patterns_and_seeds(tmp_path: P
     assert len(patterns) >= 1
     assert len(seeds) >= 1
     assert seeds[-1]["change_target_type"] == "workflow_candidate"
+
+
+@pytest.mark.asyncio
+async def test_meta_cognition_reflector_records_uncertainty_without_trace(tmp_path: Path) -> None:
+    router = MagicMock()
+    router.call_llm = AsyncMock(
+        return_value=SimpleNamespace(
+            finish_reason="stop",
+            content="""
+```json
+{
+  "journal_enrichment": {"summary": "tool failure observed"},
+  "reflection": {
+    "summary": "",
+    "reflection_kind": "error_review",
+    "outcome_class": "incorrect",
+    "root_cause_hypotheses": [],
+    "what_worked": [],
+    "what_failed": [],
+    "learned_rule_candidate": null,
+    "confidence": 0.2,
+    "retention_hint": "candidate"
+  },
+  "confidence_trace": null
+}
+```""",
+        )
+    )
+    reflector = _reflector(
+        tmp_path,
+        config=_config(structured_reflection_enabled=True),
+        router=router,
+    )
+    trigger = MetaTrigger(
+        trigger_id="mc_trigger_uq",
+        session_key="cli:direct",
+        trigger_type="tool_failure",
+        source_type="tool_execution_observer",
+        source_reference="grep:uq",
+        evidence_refs=["tool:grep"],
+        payload={"status": "error"},
+    )
+
+    result = await reflector.reflect_turn(
+        session_key="cli:direct",
+        turn_id="turn-uq",
+        turn_snapshot={"user_message": "retry", "assistant_final_content": "done"},
+        accepted_triggers=[trigger],
+        runtime_context=SimpleNamespace(identity=None, user_id="user-1"),
+    )
+
+    assert result.status == "ok"
+    reflection_row = reflector.audit.recent_reflections(limit=10)[0]
+    assert reflection_row["payload"]["uncertainty_score"] >= 0.5
+    assert "missing_summary" in reflection_row["payload"]["uncertainty_reason_codes"]
+    assert reflector.audit.recent_confidence_traces(limit=10) == []
+
+
+@pytest.mark.asyncio
+async def test_meta_cognition_prompt_includes_historical_similar_sections(tmp_path: Path) -> None:
+    reflector = _reflector(tmp_path, config=_config(structured_reflection_enabled=True))
+    reflector.audit.append_pattern(ErrorPattern(
+        pattern_id="meta_pattern_hist",
+        pattern_key="pk_hist",
+        owner_id="user-1",
+        updated_at="2026-06-13T00:10:00+00:00",
+        trigger_types=["tool_failure"],
+        capability_domain="tool/grep",
+        severity="high",
+        frequency=3,
+        distinct_turn_count=3,
+        recency_score=1.0,
+        pattern_score=0.91,
+        candidate_target_type="workflow_candidate",
+        summary="Retry grep-like tool calls with rg fallback",
+    ))
+    reflector.audit.append_reflection(ReflectionRecord(
+        reflection_id="hist_reflection",
+        session_key="cli:direct",
+        created_at="2026-06-13T00:09:00+00:00",
+        source_entry_ids=["j1"],
+        reflection_kind="error_review",
+        outcome_class="incorrect",
+        root_cause_hypotheses=["Tool retry strategy missing"],
+        what_failed=["Tool retry strategy missing"],
+        confidence=0.9,
+        summary="Repeated fallback issue",
+        payload={"owner_id": "user-1", "trigger_types": ["tool_failure"]},
+    ))
+    session = reflector.sessions.get_or_create("cli:direct")
+    prompt = reflector._build_prompt(
+        session=session,
+        turn_id="turn-historical",
+        accepted_triggers=[
+            MetaTrigger(
+                trigger_id="mc_trigger_hist",
+                session_key="cli:direct",
+                trigger_type="tool_failure",
+                source_type="tool_execution_observer",
+                source_reference="grep:pattern",
+                evidence_refs=["tool:grep"],
+            )
+        ],
+        turn_snapshot={
+            "user_message": "retry grep",
+            "assistant_final_content": "done",
+            "previous_assistant_message": "try grep",
+        },
+        runtime_context=SimpleNamespace(identity=None, user_id="user-1"),
+        historical_context=reflector._retrieve_historical_context(
+            accepted_triggers=[
+                MetaTrigger(
+                    trigger_id="mc_trigger_hist",
+                    session_key="cli:direct",
+                    trigger_type="tool_failure",
+                    source_type="tool_execution_observer",
+                    source_reference="grep:pattern",
+                    evidence_refs=["tool:grep"],
+                )
+            ],
+            turn_snapshot={
+                "user_message": "retry grep",
+                "assistant_final_content": "done",
+                "previous_assistant_message": "try grep",
+            },
+            owner_id="user-1",
+        ),
+    )
+
+    assert "## Historical Similar Patterns" in prompt
+    assert "## Historical Similar Reflections" in prompt
+    assert "Retry grep-like tool calls with rg fallback" in prompt
+    assert "Repeated fallback issue" in prompt

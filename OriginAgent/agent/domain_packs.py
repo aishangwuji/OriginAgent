@@ -179,6 +179,8 @@ class DomainPack:
     verification_status: str = "unknown"
     source_info: DomainPackSourceInfo = field(default_factory=DomainPackSourceInfo)
     overrides_builtin: bool = False
+    executable_python_allowed: bool = False
+    override_execution_warning: str | None = None
 
     @property
     def available(self) -> bool:
@@ -251,6 +253,7 @@ class DomainPackValidator:
             installed_from=str(manifest.source.installed_from if manifest.source else ""),
             installed_at=str(manifest.source.installed_at if manifest.source else ""),
         )
+        executable_python_allowed = source == "builtin"
         verification_status = manifest.verification_status
         requires = DomainPackRequires(
             bins=tuple(manifest.requires.bins),
@@ -261,8 +264,16 @@ class DomainPackValidator:
         workflows, workflow_errors = self._validate_workflows(manifest, pack_dir)
         policies, policy_errors = self._validate_file_list(manifest.policies, pack_dir, "policies")
         schemas, schema_errors = self._validate_file_list(manifest.schemas, pack_dir, "schemas")
-        tools, tool_errors = self._validate_tools(manifest, pack_dir)
-        runtime, runtime_errors = self._validate_runtime(manifest, pack_dir)
+        tools, tool_errors = self._validate_tools(
+            manifest,
+            pack_dir,
+            executable_python_allowed=executable_python_allowed,
+        )
+        runtime, runtime_errors = self._validate_runtime(
+            manifest,
+            pack_dir,
+            executable_python_allowed=executable_python_allowed,
+        )
         evals, eval_errors = self._validate_evals(
             manifest,
             skills=skills,
@@ -328,6 +339,7 @@ class DomainPackValidator:
             manifest=manifest.model_dump(),
             verification_status=verification_status,
             source_info=source_info,
+            executable_python_allowed=executable_python_allowed,
         )
 
     @staticmethod
@@ -375,6 +387,8 @@ class DomainPackValidator:
         self,
         manifest: DomainPackManifest,
         pack_dir: Path,
+        *,
+        executable_python_allowed: bool,
     ) -> tuple[list[DomainToolDeclaration], list[str]]:
         declarations: list[DomainToolDeclaration] = []
         errors: list[str] = []
@@ -399,6 +413,14 @@ class DomainPackValidator:
                 ))
                 errors.append(f"{tool_id}: missing tool module file")
                 continue
+            if not executable_python_allowed:
+                declarations.append(DomainToolDeclaration(
+                    id=tool_id, module=tool_decl.module, class_name=tool_decl.class_name,
+                    module_path=module_path, permissions=tuple(tool_decl.permissions),
+                    audit=tool_decl.audit, status="skipped",
+                    unavailable_reason="executable_python_disabled_for_workspace_pack",
+                ))
+                continue
             declarations.append(DomainToolDeclaration(
                 id=tool_id, module=tool_decl.module, class_name=tool_decl.class_name,
                 module_path=module_path, permissions=tuple(tool_decl.permissions),
@@ -410,6 +432,8 @@ class DomainPackValidator:
         self,
         manifest: DomainPackManifest,
         pack_dir: Path,
+        *,
+        executable_python_allowed: bool,
     ) -> tuple[DomainRuntimeDeclaration | None, list[str]]:
         if manifest.runtime is None:
             return None, []
@@ -422,6 +446,17 @@ class DomainPackValidator:
                     unavailable_reason="missing runtime module file",
                 ),
                 ["runtime: missing runtime module file"],
+            )
+        if not executable_python_allowed:
+            return (
+                DomainRuntimeDeclaration(
+                    module=manifest.runtime.module,
+                    factory=manifest.runtime.factory,
+                    module_path=module_path,
+                    status="skipped",
+                    unavailable_reason="executable_python_disabled_for_workspace_pack",
+                ),
+                [],
             )
         return (
             DomainRuntimeDeclaration(
@@ -635,6 +670,8 @@ class DomainPackManager:
                     lines.append(f"  Skills: {skill_summary}")
                 if tool_summary:
                     lines.append(f"  Tools: {tool_summary}")
+                if pack.override_execution_warning:
+                    lines.append(f"  Warning: {pack.override_execution_warning}")
         return "\n".join(lines)
 
     def build_active_context(self) -> str:
@@ -751,7 +788,14 @@ class DomainPackManager:
         for pack_dir in self._pack_dirs(self.workspace_dir):
             pack = self._validator.validate_pack(pack_dir, source="workspace")
             if pack.id in builtin_packs:
-                pack = replace(pack, overrides_builtin=True)
+                pack = replace(
+                    pack,
+                    overrides_builtin=True,
+                    override_execution_warning=(
+                        f"workspace pack {pack.id} overrides builtin {pack.id}; "
+                        "Python execution disabled for override pack"
+                    ),
+                )
             packs[pack.id] = pack
         return packs
 
@@ -762,6 +806,8 @@ class DomainPackManager:
     ) -> DomainRuntimeContribution | None:
         declaration = pack.runtime
         if declaration is None or declaration.module_path is None:
+            return None
+        if not pack.executable_python_allowed:
             return None
         try:
             module_file = declaration.module_path.resolve()

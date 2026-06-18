@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import re
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -88,12 +89,13 @@ def consolidate_error_patterns(
             group_key=group_key,
             reflections=items,
             config=config,
+            now=now,
         )
         patterns.append(pattern)
         if _is_eligible_pattern(pattern, config=config, current_turn_reflection_ids=current_ids):
             eligible.append(pattern)
-    patterns.sort(key=lambda item: (item.frequency, item.updated_at, item.pattern_id), reverse=True)
-    eligible.sort(key=lambda item: (item.severity == "high", item.frequency, item.updated_at), reverse=True)
+    patterns.sort(key=lambda item: (item.pattern_score, item.updated_at, item.pattern_id), reverse=True)
+    eligible.sort(key=lambda item: (item.pattern_score, item.updated_at, item.pattern_id), reverse=True)
     return PatternConsolidationResult(
         patterns=patterns,
         eligible_patterns=eligible,
@@ -214,6 +216,7 @@ def _build_pattern(
     group_key: tuple[str, str, str, str, str],
     reflections: list[ReflectionRecord],
     config: Any,
+    now: datetime | None = None,
 ) -> ErrorPattern:
     candidate_target_type, capability_domain, dominant_trigger_type, normalized_rule_text, dominant_outcome = group_key
     pattern_key = _stable_hash(list(group_key))
@@ -250,6 +253,24 @@ def _build_pattern(
         for item in ordered
         for entry_id in (item.source_entry_ids or [item.reflection_id])
     })
+    severity = _pattern_severity(ordered, dominant_trigger_type)
+    latest_updated_at = _parse_iso(latest.created_at) or datetime.now(timezone.utc)
+    effective_now = now or datetime.now(timezone.utc)
+    delta_days = max(0.0, (effective_now - latest_updated_at).total_seconds() / 86400.0)
+    recency_score = math.exp(-math.log(2) * delta_days / 7.0)
+    severity_value = 1.0 if severity == "high" else (0.6 if severity == "medium" else 0.0)
+    frequency_value = min(len(ordered) / 5.0, 1.0)
+    distinct_turn_value = min(distinct_turns / 4.0, 1.0)
+    pattern_score = max(
+        0.0,
+        min(
+            0.35 * severity_value
+            + 0.25 * frequency_value
+            + 0.20 * distinct_turn_value
+            + 0.20 * recency_score,
+            1.0,
+        ),
+    )
     return ErrorPattern(
         pattern_id=f"meta_pattern_{pattern_key[:16]}",
         pattern_key=pattern_key,
@@ -261,9 +282,11 @@ def _build_pattern(
         source_session_keys=source_session_keys,
         trigger_types=trigger_types,
         capability_domain=capability_domain,
-        severity=_pattern_severity(ordered, dominant_trigger_type),
+        severity=severity,
         frequency=len(ordered),
         distinct_turn_count=distinct_turns,
+        recency_score=recency_score,
+        pattern_score=pattern_score,
         example_refs=redact_meta_list(example_refs, max_items=max_example_refs, max_chars=160),
         candidate_target_type=candidate_target_type or None,
         summary=summary or dominant_outcome or capability_domain,

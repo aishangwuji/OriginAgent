@@ -358,6 +358,7 @@ class RuntimeIntrospectionService:
             "recent_evolution_seeds": [],
             "decision_counts": {},
             "suppression_reason_counts": {},
+            "uncertainty_stats": {"avg": 0.0, "max": 0.0, "high_count": 0, "threshold": 0.5},
             "artifact_status": {},
             "working_memory_bridge": {"enabled": False, "last_status": "disabled", "decision_counts": {}},
             "memory_candidate_bridge": {"enabled": False, "last_status": "disabled", "decision_counts": {}},
@@ -427,11 +428,13 @@ class RuntimeIntrospectionService:
             summary.setdefault("pattern_counts", {})
             summary.setdefault("seed_counts", {})
             summary.setdefault("last_signal_upserts", [])
+        summary.setdefault("uncertainty_stats", {"avg": 0.0, "max": 0.0, "high_count": 0, "threshold": 0.5})
         last_summary = dict(getattr(loop, "_last_meta_cognition_summary", {}) or {})
         if last_summary:
             summary.setdefault("runtime_status", last_summary.get("runtime_status", {}))
             summary.setdefault("artifact_status", last_summary.get("artifact_status", {}))
             summary.setdefault("bridge_decision_counts", last_summary.get("bridge_decision_counts", {}))
+            summary.setdefault("fast_path_decision_counts", last_summary.get("fast_path_decision_counts", {}))
         last_artifacts = dict(getattr(loop, "_last_meta_artifacts", {}) or {})
         if last_artifacts:
             summary.setdefault("recent_journals", list(last_artifacts.get("recent_journals") or []))
@@ -439,6 +442,7 @@ class RuntimeIntrospectionService:
             summary.setdefault("recent_confidence_traces", list(last_artifacts.get("recent_confidence_traces") or []))
             summary.setdefault("recent_patterns", list(last_artifacts.get("recent_patterns") or []))
             summary.setdefault("recent_evolution_seeds", list(last_artifacts.get("recent_evolution_seeds") or []))
+        summary.setdefault("fast_path_decision_counts", {})
         return summary
 
     def inspect_context(self) -> dict[str, Any]:
@@ -1193,6 +1197,15 @@ class RuntimeIntrospectionService:
             "active_domain_pack_ids": [pack.id for pack in packs if getattr(pack, "active", False)],
             "registered_domain_tools_count": int(counts.get("registered", 0) or 0),
             "skipped_domain_tools_count": int(counts.get("skipped", 0) or 0),
+            "domain_pack_execution": [
+                {
+                    "id": pack.id,
+                    "source": pack.source,
+                    "executable_python_allowed": bool(getattr(pack, "executable_python_allowed", False)),
+                    "override_execution_warning": getattr(pack, "override_execution_warning", None),
+                }
+                for pack in packs
+            ],
             **governance,
         }
 

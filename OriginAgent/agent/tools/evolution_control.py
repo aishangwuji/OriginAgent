@@ -26,8 +26,7 @@ class EvolutionControlTool(Tool):
         return (
             "Operate the governed evolution control plane. Supports read-only status, "
             "signal/proposal inspection, structured action discovery, non-mutating "
-            "previews, and guarded executions. Write executions still require "
-            "learning.evolution.allow_manual_override=true."
+            "previews, and guarded executions. Write actions require approval confirmation."
         )
 
     @property
@@ -48,6 +47,7 @@ class EvolutionControlTool(Tool):
                         "list_config_overlay",
                         "preview_action",
                         "execute_action",
+                        "request_override_confirmation",
                         "generate_report",
                         "explain_health",
                         "validate_schema",
@@ -65,6 +65,7 @@ class EvolutionControlTool(Tool):
                 "artifact_name": {"type": "string"},
                 "snapshot_id": {"type": "string"},
                 "period_days": {"type": "integer", "minimum": 1, "maximum": 90},
+                "approval_confirmation_id": {"type": "string"},
                 "status": {"type": "string"},
                 "kind": {"type": "string"},
                 "proposal_type": {"type": "string"},
@@ -90,6 +91,7 @@ class EvolutionControlTool(Tool):
         artifact_name: str = "",
         snapshot_id: str = "",
         period_days: int = 7,
+        approval_confirmation_id: str = "",
         status: str = "",
         kind: str = "",
         proposal_type: str = "",
@@ -148,5 +150,15 @@ class EvolutionControlTool(Tool):
                 period_days=period_days,
                 actor=self._actor,
                 source=self._source,
+                approval_confirmation_id=approval_confirmation_id or None,
+            )
+        if op == "request_override_confirmation":
+            if not action_kind:
+                return {"ok": False, "error": "missing_action_kind", "message": "request_override_confirmation requires action_kind."}
+            return plane.request_override_confirmation(
+                action_kind,
+                target_id=target_id,
+                reason=reason,
+                requested_by=self._actor,
             )
         return {"ok": False, "error": "unsupported_operation", "message": f"Unsupported operation `{operation}`."}

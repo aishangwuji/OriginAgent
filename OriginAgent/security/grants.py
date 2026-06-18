@@ -11,6 +11,8 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Literal
 
+from filelock import FileLock
+
 from OriginAgent.agent.confirmation import ConfirmationRequest
 from OriginAgent.cron.types import CronPayload
 from OriginAgent.security.capabilities import CapabilitySnapshot, CapabilitySource, CapabilityTrigger
@@ -159,11 +161,19 @@ class CapabilityGrantStore:
     def __init__(self, workspace: Path):
         self.workspace = Path(workspace)
         self.path = self.workspace / "memory" / "security" / "capability_grants.json"
+        self._lock_path = self.workspace / "memory" / "security" / ".capability_grants.lock"
+        self._cached_signature: tuple[int, int] | None = None
+        self._cached_raw_grants: list[dict[str, Any]] = []
+
+    def _locked(self) -> FileLock:
+        self._lock_path.parent.mkdir(parents=True, exist_ok=True)
+        return FileLock(str(self._lock_path))
 
     def put(self, grant: CapabilityGrant) -> None:
-        grants = {item.grant_id: item for item in self.list_all()}
-        grants[grant.grant_id] = grant
-        self._save(list(grants.values()))
+        with self._locked():
+            grants = {item.grant_id: item for item in self._list_all_unlocked()}
+            grants[grant.grant_id] = grant
+            self._save_unlocked(list(grants.values()))
 
     def get(self, grant_id: str) -> CapabilityGrant | None:
         for grant in self.list_all():
@@ -172,45 +182,49 @@ class CapabilityGrantStore:
         return None
 
     def revoke(self, grant_id: str, *, revoked_at: datetime | None = None) -> bool:
-        grants = self.list_all()
-        found = False
-        revoked = _format_datetime(revoked_at or datetime.now(timezone.utc))
-        updated: list[CapabilityGrant] = []
-        for grant in grants:
-            if grant.grant_id == grant_id:
-                found = True
-                updated.append(
-                    CapabilityGrant(
-                        grant_id=grant.grant_id,
-                        created_by=grant.created_by,
-                        created_at=grant.created_at,
-                        expires_at=grant.expires_at,
-                        revoked_at=revoked,
-                        source=grant.source,
-                        can_exec=grant.can_exec,
-                        can_read_files=grant.can_read_files,
-                        can_write_files=grant.can_write_files,
-                        can_send_cross_target=grant.can_send_cross_target,
-                        can_create_cron=grant.can_create_cron,
-                        can_spawn=grant.can_spawn,
-                        allowed_device_domains=grant.allowed_device_domains,
-                        allowed_mcp_scopes=grant.allowed_mcp_scopes,
+        with self._locked():
+            grants = self._list_all_unlocked()
+            found = False
+            revoked = _format_datetime(revoked_at or datetime.now(timezone.utc))
+            updated: list[CapabilityGrant] = []
+            for grant in grants:
+                if grant.grant_id == grant_id:
+                    found = True
+                    updated.append(
+                        CapabilityGrant(
+                            grant_id=grant.grant_id,
+                            created_by=grant.created_by,
+                            created_at=grant.created_at,
+                            expires_at=grant.expires_at,
+                            revoked_at=revoked,
+                            source=grant.source,
+                            can_exec=grant.can_exec,
+                            can_read_files=grant.can_read_files,
+                            can_write_files=grant.can_write_files,
+                            can_send_cross_target=grant.can_send_cross_target,
+                            can_create_cron=grant.can_create_cron,
+                            can_spawn=grant.can_spawn,
+                            allowed_device_domains=grant.allowed_device_domains,
+                            allowed_mcp_scopes=grant.allowed_mcp_scopes,
+                            approval_confirmation_id=grant.approval_confirmation_id,
+                            session_key=grant.session_key,
+                            tool_name=grant.tool_name,
+                            purpose=grant.purpose,
+                            metadata=(dict(grant.metadata) if isinstance(grant.metadata, dict) else grant.metadata),
+                        )
                     )
-                )
-            else:
-                updated.append(grant)
-        if found:
-            self._save(updated)
-        return found
+                else:
+                    updated.append(grant)
+            if found:
+                self._save_unlocked(updated)
+            return found
 
     def list_all(self) -> list[CapabilityGrant]:
-        try:
-            data = json.loads(self.path.read_text(encoding="utf-8"))
-        except FileNotFoundError:
-            return []
-        except (json.JSONDecodeError, OSError, TypeError):
-            return []
-        grants = data.get("grants", []) if isinstance(data, dict) else []
+        with self._locked():
+            return self._list_all_unlocked()
+
+    def _list_all_unlocked(self) -> list[CapabilityGrant]:
+        grants = self._load_raw_unlocked()
         result: list[CapabilityGrant] = []
         for item in grants:
             if not isinstance(item, dict):
@@ -219,6 +233,23 @@ class CapabilityGrantStore:
             if grant.grant_id:
                 result.append(grant)
         return result
+
+    def _load_raw_unlocked(self) -> list[dict[str, Any]]:
+        signature = self._file_signature()
+        if signature is not None and signature == self._cached_signature:
+            return [dict(item) for item in self._cached_raw_grants]
+        try:
+            data = json.loads(self.path.read_text(encoding="utf-8"))
+        except FileNotFoundError:
+            self._refresh_cache_from_raw([])
+            return []
+        except (json.JSONDecodeError, OSError, TypeError):
+            self._refresh_cache_from_raw([])
+            return []
+        grants = data.get("grants", []) if isinstance(data, dict) else []
+        normalized = [dict(item) for item in grants if isinstance(item, dict)]
+        self._refresh_cache_from_raw(normalized)
+        return [dict(item) for item in normalized]
 
     def list_active(self) -> list[CapabilityGrant]:
         return [grant for grant in self.list_all() if grant.is_active()]
@@ -270,7 +301,7 @@ class CapabilityGrantStore:
         items.sort(key=lambda grant: (grant.created_at, grant.grant_id))
         return items[-1]
 
-    def _save(self, grants: list[CapabilityGrant]) -> None:
+    def _save_unlocked(self, grants: list[CapabilityGrant]) -> None:
         payload = {
             "version": 1,
             "grants": [grant.to_dict() for grant in grants],
@@ -284,9 +315,23 @@ class CapabilityGrantStore:
                 handle.flush()
                 os.fsync(handle.fileno())
             os.replace(tmp, self.path)
+            self._refresh_cache_from_raw(payload["grants"])
         except BaseException:
             tmp.unlink(missing_ok=True)
             raise
+
+    def _refresh_cache_from_raw(self, grants: list[dict[str, Any]]) -> None:
+        self._cached_raw_grants = [dict(item) for item in grants]
+        self._cached_signature = self._file_signature()
+
+    def _file_signature(self) -> tuple[int, int] | None:
+        try:
+            stat = self.path.stat()
+        except FileNotFoundError:
+            return None
+        except OSError:
+            return None
+        return (int(stat.st_mtime_ns), int(stat.st_size))
 
 
 def snapshot_for_cron_payload(
@@ -341,6 +386,51 @@ def issue_tool_approval_grant(
         tool_name=metadata.get("tool_name"),
         purpose=f"tool_approval:{metadata.get('tool_name') or confirmation.action or 'unknown'}",
         metadata=metadata | flags,
+    )
+    grant_store.put(grant)
+    return grant
+
+
+def issue_evolution_override_grant(
+    *,
+    confirmation: ConfirmationRequest,
+    grant_store: CapabilityGrantStore,
+    action_kind: str,
+    target_id: str,
+    reason_digest: str,
+    approved_by: str | None = None,
+    now: datetime | None = None,
+) -> CapabilityGrant:
+    existing = grant_store.latest_active_for_confirmation(
+        confirmation.confirmation_id,
+        now=now,
+    )
+    if existing is not None and existing.purpose == "evolution_override":
+        return existing
+    current_time = _normalize_datetime(now or datetime.now(timezone.utc))
+    metadata = dict(confirmation.metadata or {})
+    metadata.update({
+        "action_kind": str(action_kind or "").strip(),
+        "target_id": str(target_id or "").strip(),
+        "reason_digest": str(reason_digest or "").strip(),
+    })
+    grant = CapabilityGrant(
+        grant_id=f"grant_{uuid.uuid4().hex[:12]}",
+        created_by=str(approved_by or confirmation.requested_by or "user_confirmation"),
+        created_at=_format_datetime(current_time),
+        expires_at=_format_datetime(current_time + _TOOL_APPROVAL_GRANT_TTL),
+        source="user_confirmation",
+        can_exec=False,
+        can_read_files=False,
+        can_write_files=False,
+        can_send_cross_target=False,
+        can_create_cron=False,
+        can_spawn=False,
+        approval_confirmation_id=confirmation.confirmation_id,
+        session_key=metadata.get("session_key"),
+        tool_name="originagent_evolution_control",
+        purpose="evolution_override",
+        metadata=metadata,
     )
     grant_store.put(grant)
     return grant

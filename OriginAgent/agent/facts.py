@@ -1115,6 +1115,8 @@ class FactStore:
         self.relation_store = FactRelationStore(workspace, path=self.relations_file)
         self.event_store = FactEventStore(workspace, path=self.fact_events_file)
         self.semantic_resolver = FactSemanticResolver(workspace, path=self.semantic_index_file)
+        self._cached_signature: tuple[int, int] | None = None
+        self._cached_raw_records: list[dict[str, Any]] = []
 
     @staticmethod
     def _normalize_feature_flags(feature_flags: dict[str, bool] | None) -> dict[str, bool]:
@@ -1139,7 +1141,18 @@ class FactStore:
             return self.read_all_unlocked()
 
     def read_all_unlocked(self) -> list[FactRecord]:
+        raw_records = self._load_raw_records_unlocked()
         records: list[FactRecord] = []
+        for parsed in raw_records:
+            with suppress(ValueError, TypeError):
+                records.append(FactRecord.from_dict(parsed))
+        return records
+
+    def _load_raw_records_unlocked(self) -> list[dict[str, Any]]:
+        signature = self._file_signature()
+        if signature is not None and signature == self._cached_signature:
+            return [dict(item) for item in self._cached_raw_records]
+        records: list[dict[str, Any]] = []
         with suppress(FileNotFoundError):
             with open(self.facts_file, "r", encoding="utf-8") as f:
                 for line_no, line in enumerate(f, start=1):
@@ -1150,7 +1163,7 @@ class FactStore:
                         parsed = json.loads(raw_line)
                         if not isinstance(parsed, dict):
                             raise ValueError("fact line is not an object")
-                        records.append(FactRecord.from_dict(parsed))
+                        records.append(parsed)
                     except (json.JSONDecodeError, ValueError, TypeError):
                         logger.warning(
                             "Skipping invalid facts.jsonl line {} in {}",
@@ -1158,7 +1171,21 @@ class FactStore:
                             self.facts_file,
                         )
                         continue
-        return records
+        self._refresh_cache_from_raw(records)
+        return [dict(item) for item in records]
+
+    def _refresh_cache_from_raw(self, records: list[dict[str, Any]]) -> None:
+        self._cached_raw_records = [dict(item) for item in records]
+        self._cached_signature = self._file_signature()
+
+    def _file_signature(self) -> tuple[int, int] | None:
+        try:
+            stat = self.facts_file.stat()
+        except FileNotFoundError:
+            return None
+        except OSError:
+            return None
+        return (int(stat.st_mtime_ns), int(stat.st_size))
 
     def runtime_status(self) -> dict[str, Any]:
         with self._locked():
@@ -1882,6 +1909,7 @@ class FactStore:
             for record in records
         )
         _write_text_atomic(self.facts_file, text)
+        self._refresh_cache_from_raw([record.to_dict() for record in records])
 
     def _new_fact_id(self, records: list[FactRecord]) -> str:
         existing = {record.fact_id for record in records}

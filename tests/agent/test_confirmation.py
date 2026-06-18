@@ -471,6 +471,81 @@ def test_claim_consumption_logs_consumed_event(tmp_path):
     )] == ["created", "confirmed_once", "consumed"]
 
 
+def test_claim_consumption_supports_tool_approval_kind(tmp_path):
+    manager = ConfirmationManager(tmp_path)
+    confirmation = manager.create_tool_approval(
+        tool_name="originagent_evolution_control",
+        prompt="Approve write?",
+        decision_reason="write needs approval",
+        requested_by="alice",
+        metadata={"action_kind": "suppress_signal", "target_id": "signal-1", "reason_digest": "abcd"},
+        now=NOW,
+    )
+    manager.resolve_user_reply(confirmation.confirmation_id, "yes", now=NOW)
+
+    claimed = manager.claim_consumption(
+        confirmation.confirmation_id,
+        now=NOW,
+        kinds=("tool_approval",),
+    )
+
+    assert claimed is not None
+    assert claimed.kind == "tool_approval"
+
+
+def test_retry_confirmation_creates_new_pending_copy_and_audits(tmp_path):
+    audit = AuditLogger(tmp_path)
+    manager = ConfirmationManager(tmp_path, audit_logger=audit)
+    confirmation = manager.create_tool_approval(
+        tool_name="exec",
+        prompt="Approve exec?",
+        decision_reason="exec approval",
+        requested_by="alice",
+        now=NOW,
+    )
+    manager.expire_old(now=NOW + timedelta(minutes=6))
+
+    retried = manager.retry_confirmation(
+        confirmation.confirmation_id,
+        requested_by="alice",
+        now=NOW + timedelta(minutes=6, seconds=1),
+    )
+
+    assert retried.confirmation_id != confirmation.confirmation_id
+    assert retried.status == "pending"
+    assert retried.metadata["retried_from_confirmation_id"] == confirmation.confirmation_id
+    assert retried.metadata["retry_root_confirmation_id"] == confirmation.confirmation_id
+    assert retried.metadata["retry_count"] == "1"
+    assert [event.decision for event in audit.find_by_confirmation_id(retried.confirmation_id)] == ["retried"]
+
+
+def test_retry_confirmation_enforces_limit(tmp_path):
+    manager = ConfirmationManager(tmp_path)
+    original = manager.create_tool_approval(
+        tool_name="exec",
+        prompt="Approve exec?",
+        decision_reason="exec approval",
+        requested_by="alice",
+        now=NOW,
+    )
+    manager.expire_old(now=NOW + timedelta(minutes=6))
+    current = original
+    for step in range(3):
+        current = manager.retry_confirmation(
+            current.confirmation_id,
+            requested_by="alice",
+            now=NOW + timedelta(minutes=6 + step, seconds=step + 1),
+        )
+        manager.expire_old(now=NOW + timedelta(minutes=12 + step))
+
+    with pytest.raises(ValueError, match="retry_limit_reached"):
+        manager.retry_confirmation(
+            current.confirmation_id,
+            requested_by="alice",
+            now=NOW + timedelta(minutes=20),
+        )
+
+
 def test_audit_write_failure_does_not_change_confirmation_result(tmp_path):
     manager = ConfirmationManager(tmp_path, audit_logger=FailingAuditLogger())
     confirmation = manager.create_from_action_decision(request(), decision(), now=NOW)

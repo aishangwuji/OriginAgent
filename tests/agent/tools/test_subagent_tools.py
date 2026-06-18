@@ -157,9 +157,51 @@ async def test_spawn_persists_subagent_task_record(tmp_path):
     assert rows[-1]["parent_session_key"] == "cli:direct"
     assert rows[-1]["terminal_status"] == "spawned"
     assert rows[-1]["task_label"] == "inspect"
+    live_path = tmp_path / "memory" / "subagents" / "live" / f"{rows[-1]['subagent_id']}.json"
+    assert live_path.exists()
 
     release.set()
     await asyncio.gather(*mgr._running_tasks.values(), return_exceptions=True)
+
+
+def test_subagent_manager_reconciles_stale_live_files(tmp_path):
+    from OriginAgent.agent.subagent import SubagentManager
+    from OriginAgent.bus.queue import MessageBus
+
+    live_dir = tmp_path / "memory" / "subagents" / "live"
+    live_dir.mkdir(parents=True, exist_ok=True)
+    (live_dir / "stale-1.json").write_text(
+        json.dumps({
+            "subagent_id": "stale-1",
+            "root_subagent_id": "stale-1",
+            "parent_subagent_id": None,
+            "parent_session_key": "cli:direct",
+            "task_label": "stale task",
+            "phase": "awaiting_tools",
+            "iteration": 1,
+            "started_at": "2026-06-18T00:00:00+00:00",
+            "last_heartbeat_at": "2026-06-18T00:00:01+00:00",
+            "current_tool_name": "read_file",
+            "grant_ref": "",
+            "isolation_mode": "shared_process",
+            "subagent_depth": 1,
+        }),
+        encoding="utf-8",
+    )
+    provider = MagicMock()
+    provider.get_default_model.return_value = "test-model"
+
+    mgr = SubagentManager(
+        provider=provider,
+        workspace=tmp_path,
+        bus=MessageBus(),
+        max_tool_result_chars=_MAX_TOOL_RESULT_CHARS,
+    )
+
+    status = mgr.runtime_status()
+    assert status["subagent_lost_since_restart_count"] == 1
+    assert status["subagent_stale_entries"][0]["subagent_id"] == "stale-1"
+    assert not (live_dir / "stale-1.json").exists()
 
 
 @pytest.mark.asyncio

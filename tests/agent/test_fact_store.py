@@ -288,6 +288,17 @@ def test_bad_json_lines_are_skipped_and_dropped_on_rewrite(fact_store):
     assert len(fact_store.read_all()) == 1
 
 
+def test_fact_store_cache_refreshes_after_write(fact_store):
+    fact_store.upsert_fact("Use warm lights", category="preference")
+    first = fact_store.read_all()
+    assert len(first) == 1
+
+    fact_store.upsert_fact("Use quiet notifications", category="preference")
+    second = fact_store.read_all()
+
+    assert len(second) == 2
+
+
 def test_render_memory_md_is_deterministic_by_category_scope_content_and_id(fact_store):
     fact_store.upsert_fact(
         "Wake at 07:30",

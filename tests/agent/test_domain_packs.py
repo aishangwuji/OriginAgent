@@ -91,6 +91,8 @@ def test_discovers_builtin_and_workspace_with_workspace_override(tmp_path: Path)
     assert packs["research"].source == "workspace"
     assert packs["research"].name == "Workspace Research"
     assert packs["office"].source == "builtin"
+    assert packs["research"].executable_python_allowed is False
+    assert packs["research"].override_execution_warning is not None
 
 
 def test_invalid_manifests_are_reported_without_raising(tmp_path: Path) -> None:
@@ -354,7 +356,8 @@ def test_manifest_parses_domain_skills_and_tools_without_raising(tmp_path: Path)
     ]
 
     tools = {tool.id: tool for tool in pack_state.tools}
-    assert tools["research_search"].status == "available"
+    assert tools["research_search"].status == "skipped"
+    assert tools["research_search"].unavailable_reason == "executable_python_disabled_for_workspace_pack"
     assert tools["research_search"].permissions == ()
     assert tools["research_missing_module"].status == "skipped"
     assert "missing tool module file" in tools["research_missing_module"].unavailable_reason
@@ -392,10 +395,81 @@ def test_manifest_parses_domain_runtime_contribution(tmp_path: Path) -> None:
 
     assert pack_state is not None
     assert pack_state.runtime is not None
-    assert pack_state.runtime.status == "available"
+    assert pack_state.runtime.status == "skipped"
+    assert pack_state.runtime.unavailable_reason == "executable_python_disabled_for_workspace_pack"
+    assert contributions == []
+
+
+def test_workspace_pack_runtime_is_skipped_even_when_declared(tmp_path: Path) -> None:
+    pack = _write_pack(
+        tmp_path / "domain_packs",
+        "research",
+        pack_id="research",
+        name="Research",
+        capabilities_text="# Research",
+    )
+    runtime_dir = pack / "runtime"
+    runtime_dir.mkdir()
+    (runtime_dir / "contribution.py").write_text(
+        "raise RuntimeError('should not import')\n",
+        encoding="utf-8",
+    )
+    manifest = pack / "domain_pack.yaml"
+    manifest.write_text(
+        manifest.read_text(encoding="utf-8")
+        + "\nruntime:\n  module: runtime.contribution\n  factory: build_runtime_contribution\n",
+        encoding="utf-8",
+    )
+
+    manager = DomainPackManager(tmp_path, config=DomainPacksConfig(active=["research"]))
+    pack_state = manager.get_pack("research")
+    contributions = manager.active_runtime_contributions(
+        workspace=tmp_path,
+        config=object(),
+    )
+
+    assert pack_state is not None
+    assert pack_state.runtime is not None
+    assert pack_state.runtime.status == "skipped"
+    assert pack_state.runtime.unavailable_reason == "executable_python_disabled_for_workspace_pack"
+    assert contributions == []
+
+
+def test_builtin_pack_runtime_still_executes(tmp_path: Path) -> None:
+    builtin = tmp_path / "builtin"
+    _write_pack(
+        builtin,
+        "research",
+        pack_id="research",
+        name="Research",
+        capabilities_text="# Research",
+    )
+    runtime_dir = builtin / "research" / "runtime"
+    runtime_dir.mkdir()
+    (runtime_dir / "contribution.py").write_text(
+        "from OriginAgent.agent.domain_packs import DomainRuntimeContribution\n"
+        "def build_runtime_contribution(context):\n"
+        "    return DomainRuntimeContribution(tool_context={'demo': context.pack.id})\n",
+        encoding="utf-8",
+    )
+    manifest = builtin / "research" / "domain_pack.yaml"
+    manifest.write_text(
+        manifest.read_text(encoding="utf-8")
+        + "\nruntime:\n  module: runtime.contribution\n  factory: build_runtime_contribution\n",
+        encoding="utf-8",
+    )
+
+    manager = DomainPackManager(
+        tmp_path / "workspace",
+        config=DomainPacksConfig(active=["research"]),
+        builtin_dir=builtin,
+    )
+    contributions = manager.active_runtime_contributions(
+        workspace=tmp_path,
+        config=object(),
+    )
+
     assert [contribution.tool_context for contribution in contributions] == [{"demo": "research"}]
-    assert contributions[0].action_continuity_provider is None
-    assert contributions[0].action_continuity_writeback_adapter is None
 
 
 def test_smart_home_runtime_contribution_prefers_override_timezone(tmp_path: Path) -> None:

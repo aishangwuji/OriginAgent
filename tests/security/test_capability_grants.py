@@ -189,6 +189,11 @@ def test_grant_store_put_get_list_revoke_and_tuple_persistence(tmp_path) -> None
         created_at=_now().isoformat(),
         allowed_device_domains=("lighting",),
         allowed_mcp_scopes=("read",),
+        approval_confirmation_id="confirmation-1",
+        session_key="session-1",
+        tool_name="originagent_evolution_control",
+        purpose="evolution_override",
+        metadata={"action_kind": "suppress_signal"},
     )
 
     store.put(grant)
@@ -203,6 +208,11 @@ def test_grant_store_put_get_list_revoke_and_tuple_persistence(tmp_path) -> None
     revoked = fresh.get("grant-secret-1")
     assert revoked is not None
     assert revoked.is_active(_now()) is False
+    assert revoked.approval_confirmation_id == "confirmation-1"
+    assert revoked.session_key == "session-1"
+    assert revoked.tool_name == "originagent_evolution_control"
+    assert revoked.purpose == "evolution_override"
+    assert revoked.metadata == {"action_kind": "suppress_signal"}
     assert fresh.list_active() == []
     assert fresh.revoke("missing") is False
 

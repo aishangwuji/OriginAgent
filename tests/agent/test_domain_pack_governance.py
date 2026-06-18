@@ -136,3 +136,33 @@ def test_stats_with_live_manager_preserves_active_runtime_state(tmp_path: Path) 
     assert record["active"] is True
     assert manager.get_pack("research") is not None
     assert manager.get_pack("research").active is True
+
+
+def test_eval_workspace_pack_reports_python_execution_disabled(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    pack_dir = workspace / "domain_packs" / "research"
+    _write_pack_source(pack_dir, "research")
+    tools_dir = pack_dir / "tools"
+    tools_dir.mkdir(parents=True, exist_ok=True)
+    (tools_dir / "search.py").write_text("raise RuntimeError('should not import')\n", encoding="utf-8")
+    manifest = pack_dir / "domain_pack.yaml"
+    manifest.write_text(
+        manifest.read_text(encoding="utf-8")
+        + "\ntools:\n  - id: research_search\n    module: tools.search\n    class: ResearchSearchTool\n    permissions: []\n",
+        encoding="utf-8",
+    )
+    manager = DomainPackManager(
+        workspace,
+        config=DomainPacksConfig(active=["research"]),
+        builtin_dir=tmp_path / "empty",
+    )
+    service = DomainPackGovernanceService(workspace, domain_pack_manager=manager)
+
+    result = service.eval_pack("research")
+
+    assert result.ok is False
+    assert result.eval_result is not None
+    assert any(
+        "executable_python_disabled_for_workspace_pack" in str(check.get("message"))
+        for check in result.eval_result["checks"]
+    )

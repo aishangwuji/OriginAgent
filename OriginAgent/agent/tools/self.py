@@ -18,7 +18,7 @@ if TYPE_CHECKING:
 
 
 EVOLUTION_MANUAL_OVERRIDE_DISABLED = (
-    "Evolution manual override is disabled. Set evolution.allow_manual_override=true in config to enable."
+    "Evolution write actions require approval confirmation."
 )
 
 
@@ -178,7 +178,7 @@ class MyTool(Tool):
             "Scratchpad keys persist across turns but not restarts.\n"
             "- evolution inspect/explain/list/preview/report actions are read-only operator views.\n"
             "- evolution control actions and retry_trial are writes and require "
-            "learning.evolution.allow_manual_override=true.\n"
+            "approval_confirmation_id.\n"
             "Key values: _current_iteration (current progress), "
             "max_iterations - _current_iteration = remaining iterations.\n"
             "Note: web_config and exec_config are readable but read-only.\n"
@@ -628,6 +628,7 @@ class MyTool(Tool):
             "artifact_name": str(value.get("artifact_name") or ""),
             "snapshot_id": str(value.get("snapshot_id") or ""),
             "period_days": self._coerce_period_days(value.get("period_days"), default=7),
+            "approval_confirmation_id": str(value.get("approval_confirmation_id") or "").strip() or None,
         }
 
     @staticmethod

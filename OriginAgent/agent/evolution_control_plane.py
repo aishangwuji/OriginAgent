@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
@@ -23,9 +24,11 @@ from OriginAgent.agent.evolution_schema import validate_evolution_stores
 from OriginAgent.agent.evolution_snapshots import EvolutionRollbackService, EvolutionSnapshotStore
 from OriginAgent.agent.evolution_trial_logs import EvolutionTrialLogStore, trial_log_policy_status
 from OriginAgent.agent.meta_programming import MetaProgrammingCompilationStore
+from OriginAgent.agent.confirmation import ConfirmationManager, ConfirmationRequest
+from OriginAgent.security.grants import CapabilityGrantStore, issue_evolution_override_grant
 
 EVOLUTION_MANUAL_OVERRIDE_DISABLED = (
-    "Evolution manual override is disabled. Set evolution.allow_manual_override=true in config to enable."
+    "Evolution write actions require approval confirmation."
 )
 
 READ_ACTIONS = frozenset({
@@ -136,16 +139,6 @@ class EvolutionPolicy:
                 mode=mode,
             )
         requires_override = permission in {"maintenance", "override", "rollback"}
-        if execution and requires_override and not bool(getattr(self.config, "allow_manual_override", False)):
-            return EvolutionPolicyDecision(
-                allowed=False,
-                action_kind=action,
-                permission=permission,
-                reason=EVOLUTION_MANUAL_OVERRIDE_DISABLED,
-                requires_manual_override=True,
-                dry_run=dry_run,
-                mode=mode,
-            )
         return EvolutionPolicyDecision(
             allowed=True,
             action_kind=action,
@@ -166,6 +159,8 @@ class EvolutionControlPlane:
         self.config = apply_config_overlay(self.workspace, config)
         self.policy = EvolutionPolicy(config)
         self.operator = EvolutionOperator(self.workspace, self.config)
+        self.confirmations = ConfirmationManager(self.workspace)
+        self.grants = CapabilityGrantStore(self.workspace)
 
     def status(self) -> dict[str, Any]:
         """Return the unified dashboard-ready evolution read model."""
@@ -357,7 +352,7 @@ class EvolutionControlPlane:
                 fixtures=fixtures or {},
                 force_cleanup=force_cleanup,
             )
-        return self._with_policy(result, decision, will_execute=False)
+        return self._with_policy(result, decision, will_execute=False, config=self.config)
 
     def execute_action(
         self,
@@ -373,11 +368,12 @@ class EvolutionControlPlane:
         period_days: int = 7,
         actor: str = "control_plane",
         source: str = "control_plane",
+        approval_confirmation_id: str | None = None,
     ) -> dict[str, Any]:
         action = normalize_action_kind(action_kind)
         decision = self.policy.decide(action, execution=True)
         if not decision.allowed:
-            error = "unsupported_action" if decision.permission == "unknown" else "manual_override_disabled"
+            error = "unsupported_action"
             result = self._with_policy(
                 self._action_result(
                     ok=False,
@@ -390,6 +386,7 @@ class EvolutionControlPlane:
                 ),
                 decision,
                 will_execute=True,
+                config=self.config,
             )
             self._append_control_outcome(
                 CONTROL_EVENT_DENIED,
@@ -404,6 +401,53 @@ class EvolutionControlPlane:
                 self._execute_read_action(action, target_id=target_id, period_days=period_days),
                 decision,
                 will_execute=True,
+                config=self.config,
+            )
+        reason_digest = _reason_digest(reason)
+        if action in WRITE_ACTIONS:
+            confirmation_target_id = "evolution_config" if action == "clear_config_overlay" else (artifact_name or target_id or "")
+            approval = self._validate_write_confirmation(
+                action_kind=action,
+                target_id=confirmation_target_id,
+                reason=reason,
+                approval_confirmation_id=approval_confirmation_id,
+            )
+            if approval is None:
+                result = self._with_policy(
+                    self._action_result(
+                        ok=False,
+                        action_kind=action,
+                        target_type=target_type_for_action(action),
+                        target_id=artifact_name or target_id,
+                        will_write=False,
+                        error="approval_confirmation_required",
+                        message=EVOLUTION_MANUAL_OVERRIDE_DISABLED,
+                    ),
+                    decision,
+                    will_execute=True,
+                    config=self.config,
+                )
+                result["allowed"] = False
+                self._append_control_outcome(
+                    CONTROL_EVENT_DENIED,
+                    result,
+                    decision,
+                    actor=actor,
+                    source=source,
+                )
+                return result
+            self.confirmations.claim_consumption(
+                approval.confirmation_id,
+                now=None,
+                kinds=("tool_approval",),
+            )
+            issue_evolution_override_grant(
+                confirmation=approval,
+                grant_store=self.grants,
+                action_kind=action,
+                target_id=confirmation_target_id,
+                reason_digest=reason_digest,
+                approved_by=actor,
             )
         if action == "suppress_signal":
             signal = OpportunitySignalStore(self.workspace).suppress_signal(target_id, reason=reason)
@@ -500,7 +544,7 @@ class EvolutionControlPlane:
                 error="unsupported_action",
                 message=f"Unsupported evolution control-plane action `{action_kind}`.",
             )
-        result = self._with_policy(result, decision, will_execute=True)
+        result = self._with_policy(result, decision, will_execute=True, config=self.config)
         self._append_control_outcome(
             CONTROL_EVENT_EXECUTED if result.get("ok") else CONTROL_EVENT_FAILED,
             result,
@@ -547,13 +591,15 @@ class EvolutionControlPlane:
             "control_plane": {
                 "version": "originagent.evolution.control_plane.v2",
                 "actions_count": len(READ_ACTIONS | WRITE_ACTIONS),
-                "manual_override_enabled": bool(getattr(self.config, "allow_manual_override", False) if self.config is not None else False),
+                "manual_override_enabled": False,
+                "manual_override_warning": _deprecated_manual_override_warning(self.config),
                 "safety_boundaries": safety_boundaries(),
             },
             "policy": {
                 "mode": str(getattr(self.config, "mode", "conservative") if self.config is not None else "conservative"),
                 "dry_run": bool(getattr(self.config, "dry_run", True) if self.config is not None else True),
                 "allow_manual_override": bool(getattr(self.config, "allow_manual_override", False) if self.config is not None else False),
+                "allow_manual_override_warning": _deprecated_manual_override_warning(self.config),
                 "overlay_active": bool(config_overlay.get("active")),
                 "permissions": permission_summary(self.config),
             },
@@ -724,13 +770,15 @@ class EvolutionControlPlane:
             "dry_run": dry_run,
             "control_plane": {
                 "version": "originagent.evolution.control_plane.v2",
-                "manual_override_enabled": bool(getattr(self.config, "allow_manual_override", False) if self.config is not None else False),
+                "manual_override_enabled": False,
+                "manual_override_warning": _deprecated_manual_override_warning(self.config),
                 "safety_boundaries": safety_boundaries(),
             },
             "policy": {
                 "mode": mode,
                 "dry_run": dry_run,
                 "allow_manual_override": bool(getattr(self.config, "allow_manual_override", False) if self.config is not None else False),
+                "allow_manual_override_warning": _deprecated_manual_override_warning(self.config),
                 "overlay_active": False,
                 "permissions": permission_summary(self.config),
             },
@@ -856,6 +904,83 @@ class EvolutionControlPlane:
         )
         return recommendation
 
+    def request_override_confirmation(
+        self,
+        action_kind: str,
+        *,
+        target_id: str,
+        reason: str,
+        requested_by: str,
+    ) -> dict[str, Any]:
+        action = normalize_action_kind(action_kind)
+        if action not in WRITE_ACTIONS:
+            return {
+                "ok": False,
+                "error": "unsupported_action",
+                "message": f"Override confirmation is only supported for write actions, got `{action_kind}`.",
+            }
+        prompt = "\n".join([
+            f"Action: {action}",
+            f"Target: {target_id or '(none)'}",
+            f"Risk: {risk_level_for_action(action)}",
+            f"Reason: {reason or '(none)'}",
+            "Approve this evolution control action once?",
+        ])
+        confirmation = self.confirmations.create_tool_approval(
+            tool_name="originagent_evolution_control",
+            prompt=prompt,
+            decision_reason="evolution write action requires approval confirmation",
+            requested_by=requested_by,
+            risk=risk_level_for_action(action),
+            metadata={
+                "action_kind": action,
+                "target_id": str(target_id or "").strip(),
+                "reason_digest": _reason_digest(reason),
+            },
+            action_payload={
+                "action_kind": action,
+                "target_id": str(target_id or "").strip(),
+                "reason_digest": _reason_digest(reason),
+            },
+            idempotency_key=f"evolution_override:{action}:{target_id}:{_reason_digest(reason)}",
+        )
+        return {
+            "ok": True,
+            "confirmation": confirmation.to_dict(),
+            "message": "Evolution write action approval requested.",
+        }
+
+    def _validate_write_confirmation(
+        self,
+        *,
+        action_kind: str,
+        target_id: str,
+        reason: str,
+        approval_confirmation_id: str | None,
+    ) -> ConfirmationRequest | None:
+        if not str(approval_confirmation_id or "").strip():
+            return None
+        confirmation = self.confirmations.expire_confirmation_if_needed(str(approval_confirmation_id).strip())
+        if confirmation is None:
+            return None
+        if confirmation.kind != "tool_approval":
+            return None
+        if confirmation.status != "confirmed_once":
+            return None
+        if confirmation.consumed_at is not None:
+            return None
+        metadata = confirmation.metadata if isinstance(confirmation.metadata, dict) else {}
+        expected_target = str(target_id or "").strip()
+        expected_action = normalize_action_kind(action_kind)
+        expected_digest = _reason_digest(reason)
+        if metadata.get("action_kind") != expected_action:
+            return None
+        if metadata.get("target_id", "") != expected_target:
+            return None
+        if metadata.get("reason_digest") != expected_digest:
+            return None
+        return confirmation
+
     def _append_control_outcome(
         self,
         event_type: str,
@@ -872,7 +997,7 @@ class EvolutionControlPlane:
             "action_kind": action,
             "target_type": str(result.get("target_type") or target_type_for_action(action)),
             "target_id": str(result.get("target_id") or ""),
-            "policy_decision": "allowed" if decision.allowed else "denied",
+            "policy_decision": "allowed" if bool(result.get("allowed", decision.allowed)) else "denied",
             "permission": decision.permission,
             "requires_manual_override": decision.requires_manual_override,
             "result_status": "succeeded" if result.get("ok") else "failed",
@@ -916,10 +1041,19 @@ class EvolutionControlPlane:
         }
 
     @staticmethod
-    def _with_policy(result: dict[str, Any], decision: EvolutionPolicyDecision, *, will_execute: bool) -> dict[str, Any]:
+    def _with_policy(
+        result: dict[str, Any],
+        decision: EvolutionPolicyDecision,
+        *,
+        will_execute: bool,
+        config: Any | None = None,
+    ) -> dict[str, Any]:
         merged = dict(result)
         action = normalize_action_kind(str(merged.get("action_kind") or decision.action_kind))
-        merged["policy"] = decision.to_json()
+        merged["policy"] = {
+            **decision.to_json(),
+            "allow_manual_override_warning": _deprecated_manual_override_warning(config),
+        }
         merged["allowed"] = decision.allowed
         merged["schema_version"] = str(merged.get("schema_version") or ACTION_RESULT_SCHEMA_VERSION)
         merged["action"] = build_action_descriptor(
@@ -1119,15 +1253,27 @@ def suggested_my_action(action_kind: str, target_id: str = "") -> str:
 
 
 def permission_summary(config: Any | None) -> dict[str, Any]:
-    manual_override = bool(getattr(config, "allow_manual_override", False) if config is not None else False)
     return {
         "read": True,
         "preview": True,
-        "maintenance": manual_override,
-        "override": manual_override,
-        "rollback": manual_override,
+        "maintenance": True,
+        "override": True,
+        "rollback": True,
         "apply": False,
+        "authorization_mode": "approval_confirmation",
+        "manual_override_warning": _deprecated_manual_override_warning(config),
     }
+
+
+def _deprecated_manual_override_warning(config: Any | None) -> str | None:
+    enabled = bool(getattr(config, "allow_manual_override", False) if config is not None else False)
+    if not enabled:
+        return None
+    return "deprecated_no_effect"
+
+
+def _reason_digest(reason: str) -> str:
+    return hashlib.sha256(str(reason or "").strip().encode("utf-8")).hexdigest()[:16]
 
 
 def safety_boundaries() -> list[str]:

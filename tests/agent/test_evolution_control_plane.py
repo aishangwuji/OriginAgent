@@ -3,8 +3,10 @@ from __future__ import annotations
 from pathlib import Path
 
 import yaml
+from datetime import datetime, timedelta, timezone
 
 from OriginAgent.agent.background_review import ReviewProposal, ReviewProposalStore
+from OriginAgent.agent.confirmation import ConfirmationManager
 from OriginAgent.agent.evolution import (
     AUTO_EVOLUTION_ORIGIN,
     SIGNAL_KIND_WORKFLOW,
@@ -171,7 +173,7 @@ def test_control_plane_write_requires_manual_override(tmp_path: Path) -> None:
     outcome_stats = EvolutionOutcomeStore(tmp_path).stats()
     assert result["ok"] is False
     assert result["allowed"] is False
-    assert result["error"] == "manual_override_disabled"
+    assert result["error"] == "approval_confirmation_required"
     assert result["message"] == EVOLUTION_MANUAL_OVERRIDE_DISABLED
     assert result["will_write"] is False
     assert result["action"]["requires_manual_override"] is True
@@ -185,9 +187,40 @@ def test_control_plane_write_requires_manual_override(tmp_path: Path) -> None:
     assert event["metadata"]["policy_decision"] == "denied"
 
 
-def test_control_plane_executes_write_when_manual_override_enabled(tmp_path: Path) -> None:
+def _confirmed_override(
+    tmp_path: Path,
+    *,
+    action_kind: str,
+    target_id: str,
+    reason: str,
+) -> str:
+    plane = EvolutionControlPlane(tmp_path, EvolutionConfig())
+    requested = plane.request_override_confirmation(
+        action_kind,
+        target_id=target_id,
+        reason=reason,
+        requested_by="operator-a",
+    )
+    confirmation_id = requested["confirmation"]["confirmation_id"]
+    ConfirmationManager(tmp_path).resolve_user_reply(confirmation_id, "yes", now=datetime.now(timezone.utc))
+    return confirmation_id
+
+
+def test_control_plane_executes_write_when_confirmation_matches(tmp_path: Path) -> None:
     _, signal_id = _append_retryable_proposal(tmp_path)
-    plane = EvolutionControlPlane(tmp_path, EvolutionConfig(allow_manual_override=True))
+    plane = EvolutionControlPlane(tmp_path, EvolutionConfig())
+    suppress_confirmation_id = _confirmed_override(
+        tmp_path,
+        action_kind="suppress_signal",
+        target_id=signal_id,
+        reason="not useful",
+    )
+    resume_confirmation_id = _confirmed_override(
+        tmp_path,
+        action_kind="resume_signal",
+        target_id=signal_id,
+        reason="reconsider",
+    )
 
     suppressed = plane.execute_action(
         "suppress_signal",
@@ -195,6 +228,7 @@ def test_control_plane_executes_write_when_manual_override_enabled(tmp_path: Pat
         reason="not useful",
         actor="operator-a",
         source="unit-test",
+        approval_confirmation_id=suppress_confirmation_id,
     )
     resumed = plane.execute_action(
         "resume_signal",
@@ -202,6 +236,7 @@ def test_control_plane_executes_write_when_manual_override_enabled(tmp_path: Pat
         reason="reconsider",
         actor="operator-a",
         source="unit-test",
+        approval_confirmation_id=resume_confirmation_id,
     )
 
     signal = OpportunitySignalStore(tmp_path).read_all()[0]
@@ -222,6 +257,48 @@ def test_control_plane_executes_write_when_manual_override_enabled(tmp_path: Pat
     assert control_events[-1]["metadata"]["actor"] == "operator-a"
     assert control_events[-1]["metadata"]["source"] == "unit-test"
     assert control_events[-1]["metadata"]["policy_decision"] == "allowed"
+
+
+def test_control_plane_rejects_write_when_confirmation_mismatches_digest(tmp_path: Path) -> None:
+    _, signal_id = _append_retryable_proposal(tmp_path)
+    plane = EvolutionControlPlane(tmp_path, EvolutionConfig())
+    confirmation_id = _confirmed_override(
+        tmp_path,
+        action_kind="suppress_signal",
+        target_id=signal_id,
+        reason="reason-a",
+    )
+
+    result = plane.execute_action(
+        "suppress_signal",
+        target_id=signal_id,
+        reason="reason-b",
+        approval_confirmation_id=confirmation_id,
+    )
+
+    assert result["ok"] is False
+    assert result["error"] == "approval_confirmation_required"
+
+
+def test_control_plane_request_override_confirmation_only_allows_write_actions(tmp_path: Path) -> None:
+    plane = EvolutionControlPlane(tmp_path, EvolutionConfig())
+
+    denied = plane.request_override_confirmation(
+        "status",
+        target_id="",
+        reason="inspect only",
+        requested_by="operator-a",
+    )
+    allowed = plane.request_override_confirmation(
+        "clear_config_overlay",
+        target_id="evolution_config",
+        reason="clear stale state",
+        requested_by="operator-a",
+    )
+
+    assert denied["ok"] is False
+    assert allowed["ok"] is True
+    assert allowed["confirmation"]["kind"] == "tool_approval"
 
 
 def test_control_plane_read_execute_and_unknown_policy(tmp_path: Path) -> None:
@@ -299,10 +376,22 @@ def test_control_plane_config_overlay_status_and_clear_policy(tmp_path: Path) ->
     preview = plane.preview_action("clear_config_overlay")
     denied = plane.execute_action("clear_config_overlay", actor="operator-a", source="unit-test")
     overlay_after_denied = EvolutionConfigOverlayStore(tmp_path).status()
+    confirmation_id = _confirmed_override(
+        tmp_path,
+        action_kind="clear_config_overlay",
+        target_id="evolution_config",
+        reason="clear overlay",
+    )
     allowed = EvolutionControlPlane(
         tmp_path,
         EvolutionConfig(mode="curated", dry_run=False, allow_manual_override=True),
-    ).execute_action("clear_config_overlay", actor="operator-a", source="unit-test")
+    ).execute_action(
+        "clear_config_overlay",
+        actor="operator-a",
+        source="unit-test",
+        reason="clear overlay",
+        approval_confirmation_id=confirmation_id,
+    )
 
     assert status["policy"]["dry_run"] is True
     assert status["policy"]["overlay_active"] is True
@@ -314,11 +403,12 @@ def test_control_plane_config_overlay_status_and_clear_policy(tmp_path: Path) ->
     assert preview["will_write"] is False
     assert preview["preview"]["would_clear_overlay"] is True
     assert denied["ok"] is False
-    assert denied["error"] == "manual_override_disabled"
+    assert denied["error"] == "approval_confirmation_required"
     assert overlay_after_denied["active"] is True
     assert allowed["ok"] is True
     assert allowed["will_write"] is True
     assert EvolutionConfigOverlayStore(tmp_path).status()["active"] is False
+    assert allowed["policy"]["allow_manual_override_warning"] == "deprecated_no_effect"
 
 
 def test_control_plane_counts_review_only_evolution_proposals(tmp_path: Path) -> None:

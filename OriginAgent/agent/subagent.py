@@ -2,8 +2,10 @@
 
 import asyncio
 import json
+import os
 import time
 import uuid
+from contextlib import suppress
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -60,10 +62,16 @@ class SubagentStatus:
 class _SubagentHook(AgentHook):
     """Hook for subagent execution — logs tool calls and updates status."""
 
-    def __init__(self, task_id: str, status: SubagentStatus | None = None) -> None:
+    def __init__(
+        self,
+        task_id: str,
+        status: SubagentStatus | None = None,
+        live_writer: Callable[[str, bool], None] | None = None,
+    ) -> None:
         super().__init__()
         self._task_id = task_id
         self._status = status
+        self._live_writer = live_writer
 
     async def before_execute_tools(self, context: AgentHookContext) -> None:
         for tool_call in context.tool_calls:
@@ -72,6 +80,8 @@ class _SubagentHook(AgentHook):
                 "Subagent [{}] executing: {} with arguments: {}",
                 self._task_id, tool_call.name, args_str,
             )
+            if self._live_writer is not None:
+                self._live_writer(tool_call.name, False)
 
     async def after_iteration(self, context: AgentHookContext) -> None:
         if self._status is None:
@@ -133,10 +143,15 @@ class SubagentManager:
         )
         self.runner = AgentRunner(provider)
         self.records = JsonlSubagentRecordStore(workspace)
+        self._live_dir = self.workspace / "memory" / "subagents" / "live"
         self._running_tasks: dict[str, asyncio.Task[None]] = {}
         self._task_statuses: dict[str, SubagentStatus] = {}
         self._session_tasks: dict[str, set[str]] = {}  # session_key -> {task_id, ...}
         self._child_counts: dict[str, int] = {}
+        self._last_live_write_at: dict[str, float] = {}
+        self._lost_since_restart_count = 0
+        self._stale_entries: list[dict[str, Any]] = []
+        self.reconcile_live_state()
 
     def set_provider(self, provider: LLMProvider, model: str) -> None:
         self.provider = provider
@@ -248,6 +263,14 @@ class SubagentManager:
             state="spawned",
             detail=summarize_text(display_label, max_chars=120),
         ))
+        self._write_live_state(
+            task_id=task_id,
+            origin=origin,
+            status=status,
+            task_label=display_label,
+            current_tool_name="",
+            force=True,
+        )
         if parent_subagent_id is not None:
             self._child_counts[parent_subagent_id] = self._child_counts.get(parent_subagent_id, 0) + 1
 
@@ -270,6 +293,7 @@ class SubagentManager:
         def _cleanup(_: asyncio.Task) -> None:
             self._running_tasks.pop(task_id, None)
             self._task_statuses.pop(task_id, None)
+            self._last_live_write_at.pop(task_id, None)
             if session_key and (ids := self._session_tasks.get(session_key)):
                 ids.discard(task_id)
                 if not ids:
@@ -326,6 +350,14 @@ class SubagentManager:
             status.phase = payload.get("phase", status.phase)
             status.iteration = payload.get("iteration", status.iteration)
             phase = str(payload.get("phase") or "").strip()
+            self._write_live_state(
+                task_id=task_id,
+                origin=origin,
+                status=status,
+                task_label=label,
+                current_tool_name="",
+                force=bool(phase and phase != last_phase),
+            )
             if phase and phase != last_phase and phase in {"awaiting_tools", "tools_completed", "final_response"}:
                 self.records.append_lifecycle(SubagentLifecycleRecord(
                     subagent_id=task_id,
@@ -357,6 +389,14 @@ class SubagentManager:
                     parent_subagent_id=status.parent_subagent_id,
                     subagent_depth=status.subagent_depth,
                     parent_session_key=origin.get("session_key"),
+                    live_writer=lambda tool_name, force: self._write_live_state(
+                        task_id=task_id,
+                        origin=origin,
+                        status=status,
+                        task_label=label,
+                        current_tool_name=tool_name,
+                        force=force,
+                    ),
                 ),
             )
             tools.set_audit_context(
@@ -452,7 +492,18 @@ class SubagentManager:
                 model=provider_selection.model,
                 max_iterations=self.max_iterations,
                 max_tool_result_chars=self.max_tool_result_chars,
-                hook=_SubagentHook(task_id, status),
+                hook=_SubagentHook(
+                    task_id,
+                    status,
+                    live_writer=lambda tool_name, force: self._write_live_state(
+                        task_id=task_id,
+                        origin=origin,
+                        status=status,
+                        task_label=label,
+                        current_tool_name=tool_name,
+                        force=force,
+                    ),
+                ),
                 max_iterations_message="Task completed but no final response was generated.",
                 error_message=None,
                 fail_on_tool_error=True,
@@ -567,6 +618,7 @@ class SubagentManager:
                 started_at=self._utcnow(),
                 ended_at=self._utcnow(),
             ))
+            self._delete_live_state(task_id)
             raise
         except Exception as e:
             status.phase = "error"
@@ -604,6 +656,8 @@ class SubagentManager:
             logger.exception("Subagent [{}] failed", task_id)
             await self._announce_result(task_id, label, task, f"Error: {e}", origin, "error", origin_message_id)
         finally:
+            if status.phase in {"done", "error"}:
+                self._delete_live_state(task_id)
             self.runner.provider = self.provider
 
     async def _announce_result(
@@ -715,7 +769,64 @@ class SubagentManager:
     def runtime_status(self) -> dict[str, Any]:
         summary = self.records.recent_task_summary()
         summary["subagent_running_count"] = self.get_running_count()
+        summary["subagent_live_count"] = len(list(self._live_dir.glob("*.json"))) if self._live_dir.exists() else 0
+        summary["subagent_lost_since_restart_count"] = self._lost_since_restart_count
+        summary["subagent_stale_entries"] = list(self._stale_entries)
         return summary
+
+    def reconcile_live_state(self) -> None:
+        self._stale_entries = []
+        if not self._live_dir.exists():
+            return
+        now = self._utcnow()
+        for path in sorted(self._live_dir.glob("*.json")):
+            try:
+                payload = json.loads(path.read_text(encoding="utf-8"))
+            except Exception:
+                continue
+            if not isinstance(payload, dict):
+                continue
+            subagent_id = str(payload.get("subagent_id") or "").strip()
+            if not subagent_id:
+                continue
+            self.records.append_lifecycle(SubagentLifecycleRecord(
+                subagent_id=subagent_id,
+                root_subagent_id=payload.get("root_subagent_id"),
+                parent_subagent_id=payload.get("parent_subagent_id"),
+                subagent_depth=int(payload.get("subagent_depth") or 1),
+                parent_session_key=payload.get("parent_session_key"),
+                state="interrupted",
+                detail="process_restart_or_lost",
+            ))
+            self.records.append_task(SubagentTaskRecord(
+                subagent_id=subagent_id,
+                root_subagent_id=payload.get("root_subagent_id"),
+                parent_subagent_id=payload.get("parent_subagent_id"),
+                subagent_depth=int(payload.get("subagent_depth") or 1),
+                parent_session_key=payload.get("parent_session_key"),
+                origin_channel=None,
+                origin_chat_id=None,
+                origin_message_id=None,
+                task_label=str(payload.get("task_label") or subagent_id),
+                task_summary=summarize_text(payload.get("task_label") or subagent_id),
+                delegated_profile_summary="interrupted",
+                allowed_tools_summary=[],
+                provider_summary="interrupted",
+                isolation_mode=str(payload.get("isolation_mode") or "shared_process"),
+                terminal_status="interrupted",
+                stop_reason="process_restart_or_lost",
+                failure_summary="process_restart_or_lost",
+                started_at=str(payload.get("started_at") or None),
+                ended_at=now,
+            ))
+            self._stale_entries.append({
+                "subagent_id": subagent_id,
+                "task_label": payload.get("task_label"),
+                "last_heartbeat_at": payload.get("last_heartbeat_at"),
+            })
+            self._lost_since_restart_count += 1
+            with suppress(OSError):
+                path.unlink()
 
     @staticmethod
     def _utcnow() -> str:
@@ -770,6 +881,57 @@ class SubagentManager:
             started_at=None,
             ended_at=self._utcnow(),
         ))
+        self._delete_live_state(task_id)
+
+    def _write_live_state(
+        self,
+        *,
+        task_id: str,
+        origin: dict[str, str],
+        status: SubagentStatus,
+        task_label: str,
+        current_tool_name: str,
+        force: bool,
+    ) -> None:
+        now_monotonic = time.monotonic()
+        last_write = self._last_live_write_at.get(task_id, 0.0)
+        if not force and now_monotonic - last_write < 2.0:
+            return
+        payload = {
+            "subagent_id": task_id,
+            "root_subagent_id": status.root_subagent_id,
+            "parent_subagent_id": status.parent_subagent_id,
+            "parent_session_key": origin.get("session_key"),
+            "task_label": task_label,
+            "phase": status.phase,
+            "iteration": status.iteration,
+            "started_at": self._utcnow(),
+            "last_heartbeat_at": self._utcnow(),
+            "current_tool_name": current_tool_name,
+            "grant_ref": "",
+            "isolation_mode": "shared_process",
+            "subagent_depth": status.subagent_depth,
+        }
+        self._live_dir.mkdir(parents=True, exist_ok=True)
+        path = self._live_dir / f"{task_id}.json"
+        tmp = path.with_suffix(".json.tmp")
+        try:
+            with tmp.open("w", encoding="utf-8") as handle:
+                json.dump(payload, handle, ensure_ascii=False, sort_keys=True)
+                handle.write("\n")
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(tmp, path)
+            self._last_live_write_at[task_id] = now_monotonic
+        except BaseException:
+            with suppress(OSError):
+                tmp.unlink()
+            raise
+
+    def _delete_live_state(self, task_id: str) -> None:
+        path = self._live_dir / f"{task_id}.json"
+        with suppress(OSError):
+            path.unlink()
 
     def _configure_spawn_tool(
         self,
@@ -812,6 +974,7 @@ class _SubagentToolObserver:
         parent_subagent_id: str | None,
         subagent_depth: int,
         parent_session_key: str | None,
+        live_writer: Callable[[str, bool], None] | None = None,
     ) -> None:
         self._records = records
         self._subagent_id = subagent_id
@@ -819,6 +982,7 @@ class _SubagentToolObserver:
         self._parent_subagent_id = parent_subagent_id
         self._subagent_depth = subagent_depth
         self._parent_session_key = parent_session_key
+        self._live_writer = live_writer
 
     def on_tool_result(
         self,
@@ -831,6 +995,8 @@ class _SubagentToolObserver:
         policy_rule: str | None = None,
         result: Any = None,
     ) -> None:
+        if self._live_writer is not None:
+            self._live_writer(name, False)
         now = datetime.now(timezone.utc)
         duration_ms = max(0, int((time.monotonic() - start) * 1000))
         started_at = (now - timedelta(milliseconds=duration_ms)).isoformat()

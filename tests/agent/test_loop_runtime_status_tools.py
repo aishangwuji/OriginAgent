@@ -8,6 +8,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from OriginAgent.agent.loop import AgentLoop
+from OriginAgent.agent.domain_packs import DomainPackManager
 from OriginAgent.agent.subagent_records import SubagentTaskRecord
 from OriginAgent.agent.agent_runtime_context import set_tool_context
 from OriginAgent.agent.evolution import (
@@ -26,6 +27,7 @@ from OriginAgent.config.schema import (
     ToolAuditConfig,
 )
 from OriginAgent.cron.types import CronSchedule
+from OriginAgent.agent.meta_cognition_models import MetaTrigger
 
 RUNTIME_TOOL_NAMES = {
     "originagent_plan_action",
@@ -66,7 +68,8 @@ def test_agent_loop_registers_runtime_explain_tools_by_default(tmp_path: Path) -
 async def test_agent_loop_registers_active_domain_tools_and_reports_runtime_status(
     tmp_path: Path,
 ) -> None:
-    pack = tmp_path / "domain_packs" / "research"
+    builtin = tmp_path / "builtin_packs"
+    pack = builtin / "research"
     tools_dir = pack / "tools"
     tools_dir.mkdir(parents=True)
     (pack / "CAPABILITIES.md").write_text("# Research\n", encoding="utf-8")
@@ -98,13 +101,18 @@ async def test_agent_loop_registers_active_domain_tools_and_reports_runtime_stat
         "        return 'ok'\n",
         encoding="utf-8",
     )
+    manager = DomainPackManager(
+        tmp_path,
+        config=DomainPacksConfig(active=["research"]),
+        builtin_dir=builtin,
+    )
 
     loop = AgentLoop(
         bus=MessageBus(),
         provider=_provider(),
         workspace=tmp_path,
         model="test-model",
-        domain_packs_config=DomainPacksConfig(active=["research"]),
+        domain_pack_manager=manager,
     )
 
     assert loop.tools.has("research_search")
@@ -269,6 +277,34 @@ async def test_runtime_status_uses_from_config_nearline_runtime_config(tmp_path:
     assert result["self_model"]["memory"]["nearline"]["profile_shadow_write_enabled"] is True
 
 
+def test_user_correction_fast_path_writes_redacted_preview_and_counts(tmp_path: Path) -> None:
+    loop = AgentLoop(
+        bus=MessageBus(),
+        provider=_provider(),
+        workspace=tmp_path,
+        model="test-model",
+    )
+    session = loop.sessions.get_or_create("cli:direct")
+    trigger = MetaTrigger(
+        trigger_id="mc-fast-path-1",
+        session_key="cli:direct",
+        trigger_type="user_correction",
+        source_type="turn_end_scan",
+        source_reference="user_correction:fastpath",
+        payload={"user_message_preview": "以后请简洁一点"},
+    )
+
+    loop._maybe_apply_meta_fast_path(trigger)
+
+    snapshot = loop.working_memory.load(session, identity=None)
+    assert "user_correction: 以后请简洁一点" in list(snapshot.attention_items or [])
+    assert loop._last_meta_cognition_summary["fast_path_decision_counts"]["fast_path_working_memory_written"] == 1
+
+    loop._maybe_apply_meta_fast_path(trigger)
+
+    assert loop._last_meta_cognition_summary["fast_path_decision_counts"]["fast_path_duplicate_skipped"] == 1
+
+
 @pytest.mark.asyncio
 async def test_evolution_control_tool_is_registered_and_preview_is_read_only(tmp_path: Path) -> None:
     loop = AgentLoop(
@@ -318,7 +354,7 @@ async def test_evolution_control_tool_execute_respects_manual_override(tmp_path:
 
     outcome_stats = EvolutionOutcomeStore(tmp_path).stats()
     assert result["ok"] is False
-    assert result["error"] == "manual_override_disabled"
+    assert result["error"] == "approval_confirmation_required"
     assert result["will_write"] is False
     assert outcome_stats["outcome_type_counts"][CONTROL_EVENT_DENIED] == 1
 
@@ -349,6 +385,17 @@ async def test_evolution_control_tool_execute_records_context_actor(tmp_path: Pa
         actor_id="operator-1",
         trigger="user",
     )
+    approval = await loop.tools.execute(
+        "originagent_evolution_control",
+        {
+            "operation": "request_override_confirmation",
+            "action_kind": "suppress_signal",
+            "target_id": signal.opportunity_id,
+            "reason": "accepted suggestion",
+        },
+    )
+    confirmation_id = approval["confirmation"]["confirmation_id"]
+    loop._confirmation_manager.resolve_user_reply(confirmation_id, "yes")
 
     result = await loop.tools.execute(
         "originagent_evolution_control",
@@ -357,6 +404,7 @@ async def test_evolution_control_tool_execute_records_context_actor(tmp_path: Pa
             "action_kind": "suppress_signal",
             "target_id": signal.opportunity_id,
             "reason": "accepted suggestion",
+            "approval_confirmation_id": confirmation_id,
         },
     )
 
@@ -365,3 +413,26 @@ async def test_evolution_control_tool_execute_records_context_actor(tmp_path: Pa
     assert result["ok"] is True
     assert control_event["metadata"]["actor"] == "operator-1"
     assert control_event["metadata"]["source"] == "originagent_evolution_control:user"
+
+
+@pytest.mark.asyncio
+async def test_evolution_control_tool_can_request_override_confirmation(tmp_path: Path) -> None:
+    loop = AgentLoop(
+        bus=MessageBus(),
+        provider=_provider(),
+        workspace=tmp_path,
+        model="test-model",
+    )
+
+    result = await loop.tools.execute(
+        "originagent_evolution_control",
+        {
+            "operation": "request_override_confirmation",
+            "action_kind": "clear_config_overlay",
+            "target_id": "evolution_config",
+            "reason": "clear stale state",
+        },
+    )
+
+    assert result["ok"] is True
+    assert result["confirmation"]["kind"] == "tool_approval"

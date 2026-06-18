@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 import uuid
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
@@ -52,6 +53,10 @@ _ARTIFACT_RUNTIME_STATUS = {
         "decision_counts": {},
     },
 }
+_TOKEN_RE = re.compile(r"[^a-z0-9]+")
+_PATTERN_RETRIEVAL_LIMIT = 200
+_MAX_SIMILAR_PATTERNS = 3
+_MAX_SIMILAR_REFLECTIONS = 2
 
 
 @dataclass(frozen=True)
@@ -277,6 +282,11 @@ class MetaCognitionReflector:
                 accepted_triggers=reflectable_triggers,
                 turn_snapshot=turn_snapshot,
                 runtime_context=runtime_context,
+                historical_context=self._retrieve_historical_context(
+                    accepted_triggers=reflectable_triggers,
+                    turn_snapshot=turn_snapshot,
+                    owner_id=str(getattr(runtime_context, "user_id", "") or "user").strip() or "user",
+                ),
             )
 
             async def _call(_attempt_count: int):
@@ -438,6 +448,7 @@ class MetaCognitionReflector:
         accepted_triggers: list[MetaTrigger],
         turn_snapshot: dict[str, Any],
         runtime_context: Any | None,
+        historical_context: dict[str, list[dict[str, Any]]] | None = None,
     ) -> str:
         goal = parse_goal_state(goal_state_raw(session.metadata))
         working_summary = self.working_memory.inspect(
@@ -475,6 +486,22 @@ class MetaCognitionReflector:
             "",
             "## Goal State Summary",
             json.dumps(redact_metadata(goal if isinstance(goal, dict) else {}), ensure_ascii=False, sort_keys=True),
+            "",
+            "## Historical Similar Patterns",
+        ])
+        for item in list((historical_context or {}).get("patterns") or []):
+            lines.append(json.dumps(redact_metadata(item), ensure_ascii=False, sort_keys=True))
+        if not list((historical_context or {}).get("patterns") or []):
+            lines.append("(none)")
+        lines.extend([
+            "",
+            "## Historical Similar Reflections",
+        ])
+        for item in list((historical_context or {}).get("reflections") or []):
+            lines.append(json.dumps(redact_metadata(item), ensure_ascii=False, sort_keys=True))
+        if not list((historical_context or {}).get("reflections") or []):
+            lines.append("(none)")
+        lines.extend([
             "",
             "## World Summary Preview",
             redact_meta_text(turn_snapshot.get("world_summary_preview"), max_chars=800) or "(empty)",
@@ -580,6 +607,48 @@ class MetaCognitionReflector:
                     evidence_refs=redact_meta_list(trace_raw.get("evidence_refs"), max_items=6, max_chars=120),
                     summary=redact_meta_text(trace_raw.get("summary") or "", max_chars=240),
                 )
+        if reflection is not None:
+            uncertainty_score, reason_codes = self._compute_uncertainty(
+                reflection=reflection,
+                trace=trace,
+                trigger_count=len(triggers),
+            )
+            reflection_payload = dict(reflection.payload or {})
+            reflection_payload["uncertainty_score"] = uncertainty_score
+            reflection_payload["uncertainty_reason_codes"] = list(reason_codes)
+            reflection = ReflectionRecord(
+                reflection_id=reflection.reflection_id,
+                session_key=reflection.session_key,
+                created_at=reflection.created_at,
+                source_entry_ids=list(reflection.source_entry_ids),
+                reflection_kind=reflection.reflection_kind,
+                outcome_class=reflection.outcome_class,
+                root_cause_hypotheses=list(reflection.root_cause_hypotheses),
+                what_worked=list(reflection.what_worked),
+                what_failed=list(reflection.what_failed),
+                learned_rule_candidate=reflection.learned_rule_candidate,
+                confidence=reflection.confidence,
+                retention_hint=reflection.retention_hint,
+                summary=reflection.summary,
+                payload=reflection_payload,
+            )
+            if trace is not None:
+                trace_payload = dict(trace.payload or {})
+                trace_payload["uncertainty_score"] = uncertainty_score
+                trace_payload["uncertainty_reason_codes"] = list(reason_codes)
+                trace = ConfidenceTrace(
+                    trace_id=trace.trace_id,
+                    session_key=trace.session_key,
+                    created_at=trace.created_at,
+                    subject_type=trace.subject_type,
+                    subject_reference=trace.subject_reference,
+                    initial_confidence=trace.initial_confidence,
+                    final_confidence=trace.final_confidence,
+                    change_reason=trace.change_reason,
+                    evidence_refs=list(trace.evidence_refs),
+                    summary=trace.summary,
+                    payload=trace_payload,
+                )
         return enriched, reflection, trace
 
     def _apply_bridges(self, session: Any, reflection: ReflectionRecord, runtime_context: Any | None) -> None:
@@ -673,13 +742,22 @@ class MetaCognitionReflector:
         if reflection.what_failed:
             caution = redact_meta_text(reflection.what_failed[0], max_chars=160)
             if caution and len(list(snapshot.attention_items or [])) < max_budget:
-                self.working_memory.append_attention_item(
-                    session,
-                    caution,
-                    identity=getattr(runtime_context, "identity", None) if runtime_context is not None else None,
-                )
-                wrote_any = True
-                self._increment(self._working_memory_bridge_counts, "attention_appended")
+                fast_path_refs = set(getattr(runtime_context, "meta_cognition_fast_path_refs", set()) or set()) if runtime_context is not None else set()
+                payload = reflection.payload if isinstance(reflection.payload, dict) else {}
+                source_reference = str(payload.get("source_reference") or "")
+                if source_reference and source_reference in fast_path_refs:
+                    self._increment(self._working_memory_bridge_counts, "fast_path_duplicate_skipped")
+                    caution = ""
+                if not caution:
+                    pass
+                else:
+                    self.working_memory.append_attention_item(
+                        session,
+                        caution,
+                        identity=getattr(runtime_context, "identity", None) if runtime_context is not None else None,
+                    )
+                    wrote_any = True
+                    self._increment(self._working_memory_bridge_counts, "attention_appended")
         if reflection.what_failed and len(list(snapshot.pending_questions or [])) < max_budget:
             question = redact_meta_text(
                 reflection.summary or reflection.what_failed[0],
@@ -765,6 +843,180 @@ class MetaCognitionReflector:
             "recent_patterns": self.audit.recent_patterns(limit=limit),
             "recent_evolution_seeds": self.audit.recent_evolution_seeds(limit=limit),
         }
+
+    def _retrieve_historical_context(
+        self,
+        *,
+        accepted_triggers: list[MetaTrigger],
+        turn_snapshot: dict[str, Any],
+        owner_id: str,
+    ) -> dict[str, list[dict[str, Any]]]:
+        trigger_types = {
+            str(trigger.trigger_type or "").strip().lower()
+            for trigger in accepted_triggers
+            if str(trigger.trigger_type or "").strip()
+        }
+        query_text = " ".join(
+            part
+            for part in [
+                str(turn_snapshot.get("user_message") or "").strip(),
+                str(turn_snapshot.get("assistant_final_content") or "").strip(),
+                str(turn_snapshot.get("previous_assistant_message") or "").strip(),
+                " ".join(str(trigger.source_reference or "").strip() for trigger in accepted_triggers),
+                " ".join(str(trigger.trigger_type or "").strip() for trigger in accepted_triggers),
+            ]
+            if part
+        )
+        pattern_candidates: list[tuple[float, str, dict[str, Any]]] = []
+        for row in self.audit.recent_patterns(limit=_PATTERN_RETRIEVAL_LIMIT):
+            if str(row.get("owner_id") or "").strip() != owner_id:
+                continue
+            row_trigger_types = {
+                str(item or "").strip().lower()
+                for item in list(row.get("trigger_types") or [])
+                if str(item or "").strip()
+            }
+            if not (row_trigger_types & trigger_types):
+                continue
+            similarity = self._jaccard_similarity(
+                query_text,
+                " ".join(
+                    [
+                        str(row.get("summary") or ""),
+                        " ".join(str(item or "") for item in list(row.get("trigger_types") or [])),
+                        str(row.get("capability_domain") or ""),
+                    ]
+                ),
+            )
+            pattern_candidates.append(
+                (
+                    similarity,
+                    str(row.get("updated_at") or ""),
+                    {
+                        "summary": redact_meta_text(row.get("summary"), max_chars=240),
+                        "trigger_types": redact_meta_list(row.get("trigger_types"), max_items=6, max_chars=80),
+                        "severity": redact_meta_text(row.get("severity"), max_chars=40),
+                        "pattern_score": round(float(row.get("pattern_score") or 0.0), 4),
+                        "updated_at": str(row.get("updated_at") or ""),
+                    },
+                )
+            )
+        reflection_candidates: list[tuple[float, str, dict[str, Any]]] = []
+        for row in self.audit.recent_reflections(limit=_PATTERN_RETRIEVAL_LIMIT):
+            payload = dict(row.get("payload") or {}) if isinstance(row.get("payload"), dict) else {}
+            if str(payload.get("owner_id") or "").strip() != owner_id:
+                continue
+            row_trigger_types = {
+                str(item or "").strip().lower()
+                for item in list(payload.get("trigger_types") or [])
+                if str(item or "").strip()
+            }
+            if not (row_trigger_types & trigger_types):
+                continue
+            similarity = self._jaccard_similarity(
+                query_text,
+                " ".join(
+                    [
+                        str(row.get("summary") or ""),
+                        " ".join(str(item or "") for item in list(row.get("root_cause_hypotheses") or [])),
+                        " ".join(str(item or "") for item in list(row.get("what_failed") or [])),
+                    ]
+                ),
+            )
+            reflection_candidates.append(
+                (
+                    similarity,
+                    str(row.get("created_at") or ""),
+                    {
+                        "summary": redact_meta_text(row.get("summary"), max_chars=240),
+                        "outcome_class": redact_meta_text(row.get("outcome_class"), max_chars=80),
+                        "confidence": float(row.get("confidence") or 0.0),
+                        "created_at": str(row.get("created_at") or ""),
+                    },
+                )
+            )
+        pattern_candidates.sort(key=lambda item: (item[0], item[1]), reverse=True)
+        reflection_candidates.sort(key=lambda item: (item[0], item[1]), reverse=True)
+        return {
+            "patterns": [item[2] for item in pattern_candidates[:_MAX_SIMILAR_PATTERNS]],
+            "reflections": [item[2] for item in reflection_candidates[:_MAX_SIMILAR_REFLECTIONS]],
+        }
+
+    @staticmethod
+    def _tokenize_for_similarity(text: Any) -> set[str]:
+        normalized = _TOKEN_RE.sub(" ", str(text or "").strip().lower())
+        return {token for token in normalized.split() if token}
+
+    @classmethod
+    def _jaccard_similarity(cls, left: Any, right: Any) -> float:
+        left_tokens = cls._tokenize_for_similarity(left)
+        right_tokens = cls._tokenize_for_similarity(right)
+        if not left_tokens or not right_tokens:
+            return 0.0
+        return len(left_tokens & right_tokens) / len(left_tokens | right_tokens)
+
+    @staticmethod
+    def _compute_uncertainty(
+        *,
+        reflection: ReflectionRecord,
+        trace: ConfidenceTrace | None,
+        trigger_count: int,
+    ) -> tuple[float, list[str]]:
+        confidence_values = [float(reflection.confidence or 0.0)]
+        if trace is not None:
+            confidence_values.append(float(trace.final_confidence or 0.0))
+        avg_conf = sum(confidence_values) / max(1, len(confidence_values))
+        reason_codes: list[str] = []
+        missing_count = 0
+        if avg_conf < 0.5:
+            reason_codes.append("low_reflection_confidence")
+        if not list(reflection.root_cause_hypotheses or []):
+            missing_count += 1
+            reason_codes.append("missing_root_cause_hypotheses")
+        if not list(reflection.what_failed or []):
+            missing_count += 1
+            reason_codes.append("missing_what_failed")
+        if not isinstance(reflection.learned_rule_candidate, dict):
+            missing_count += 1
+            reason_codes.append("missing_learned_rule_candidate")
+        if not str(reflection.summary or "").strip():
+            missing_count += 1
+            reason_codes.append("missing_summary")
+        evidence_refs = list(reflection.payload.get("evidence_refs") or []) if isinstance(reflection.payload, dict) else []
+        evidence_count = len(
+            {
+                *[str(item or "").strip() for item in list(reflection.source_entry_ids or []) if str(item or "").strip()],
+                *[str(item or "").strip() for item in evidence_refs if str(item or "").strip()],
+            }
+        )
+        if evidence_count < 2:
+            reason_codes.append("sparse_evidence")
+        if trigger_count < 2:
+            reason_codes.append("sparse_triggers")
+        trace_gap = 0.0
+        if trace is not None:
+            trace_gap = min(abs(float(reflection.confidence or 0.0) - float(trace.final_confidence or 0.0)) / 0.5, 1.0)
+            if trace_gap > 0.0:
+                reason_codes.append("trace_reflection_mismatch")
+        uncertainty_score = max(
+            0.0,
+            min(
+                0.40 * (1.0 - avg_conf)
+                + 0.25 * (missing_count / 4.0)
+                + 0.15 * (1.0 if evidence_count < 2 else 0.0)
+                + 0.10 * (1.0 if trigger_count < 2 else 0.0)
+                + 0.10 * trace_gap,
+                1.0,
+            ),
+        )
+        unique_reasons: list[str] = []
+        seen: set[str] = set()
+        for reason in reason_codes:
+            if reason in seen:
+                continue
+            seen.add(reason)
+            unique_reasons.append(reason)
+        return uncertainty_score, unique_reasons
 
     def _bridge_decision_counts(self) -> dict[str, int]:
         merged: dict[str, int] = {}

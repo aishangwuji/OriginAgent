@@ -113,3 +113,44 @@ def test_curator_reads_effective_overlay_config(tmp_path: Path) -> None:
 
     assert service.evolution_config.dry_run is True
     assert config.dry_run is False
+
+
+def test_overlay_store_rejects_candidate_batch_when_canary_health_drops(tmp_path: Path, monkeypatch) -> None:
+    config = EvolutionConfig(mode="curated", dry_run=False, workflow_priority_threshold=0.7)
+    store = EvolutionConfigOverlayStore(tmp_path)
+    scores = iter([
+        {"score": 90.0, "level": "healthy"},
+        {"score": 80.0, "level": "warning"},
+    ])
+    monkeypatch.setattr(store, "_compute_health", lambda _cfg: next(scores))
+
+    result = store.apply_patches(
+        config,
+        [ConfigPatch("dry_run", True, "preview first")],
+        actor="unit-test",
+        source="test",
+    )
+
+    assert result.ok is False
+    assert result.applied == []
+    assert result.rejected[0]["status"] == "canary_rejected"
+    assert result.rejected[0]["error"] == "canary_health_drop"
+    assert store.status()["active"] is False
+
+
+def test_overlay_store_marks_canary_unavailable_when_health_errors(tmp_path: Path, monkeypatch) -> None:
+    config = EvolutionConfig(mode="curated", dry_run=False)
+    store = EvolutionConfigOverlayStore(tmp_path)
+    monkeypatch.setattr(store, "_compute_health", lambda _cfg: (_ for _ in ()).throw(RuntimeError("health unavailable")))
+
+    result = store.apply_patches(
+        config,
+        [ConfigPatch("dry_run", True, "preview first")],
+        actor="unit-test",
+        source="test",
+    )
+
+    assert result.ok is False
+    assert result.rejected[0]["status"] == "canary_rejected"
+    assert result.rejected[0]["error"] == "canary_unavailable"
+    assert "health unavailable" in result.rejected[0]["detail"]

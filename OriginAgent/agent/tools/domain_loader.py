@@ -46,6 +46,9 @@ class DomainToolLoader:
         ctx: Any,
         registry: ToolRegistry,
     ) -> str | None:
+        if not pack.executable_python_allowed:
+            self._skip(pack, declaration, "executable_python_disabled_for_workspace_pack")
+            return None
         if not declaration.available:
             self._skip(pack, declaration, declaration.unavailable_reason or "invalid declaration")
             return None

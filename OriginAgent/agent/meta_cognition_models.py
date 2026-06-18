@@ -343,6 +343,8 @@ class ErrorPattern:
     severity: str = "low"
     frequency: int = 0
     distinct_turn_count: int = 0
+    recency_score: float = 0.0
+    pattern_score: float = 0.0
     example_refs: list[str] = field(default_factory=list)
     candidate_target_type: str | None = None
     summary: str = ""
@@ -377,6 +379,8 @@ class ErrorPattern:
             object.__setattr__(self, "severity", "low")
         object.__setattr__(self, "frequency", _normalize_int(self.frequency, minimum=0))
         object.__setattr__(self, "distinct_turn_count", _normalize_int(self.distinct_turn_count, minimum=0))
+        object.__setattr__(self, "recency_score", _normalize_float(self.recency_score))
+        object.__setattr__(self, "pattern_score", _normalize_float(self.pattern_score))
         object.__setattr__(self, "example_refs", _normalize_str_list(self.example_refs, limit=12, max_chars=160))
         target_type = _normalize_signal_target_type(self.candidate_target_type)
         object.__setattr__(self, "candidate_target_type", target_type or None)
@@ -394,6 +398,8 @@ class ErrorPattern:
         payload.setdefault("owner_id", str(raw.get("session_key") or ""))
         payload.setdefault("created_at", _utcnow_iso())
         payload.setdefault("updated_at", str(payload.get("created_at") or _utcnow_iso()))
+        payload.setdefault("recency_score", 0.0)
+        payload.setdefault("pattern_score", 0.0)
         payload.setdefault("summary", "")
         return cls(**{key: value for key, value in payload.items() if key in allowed})
 

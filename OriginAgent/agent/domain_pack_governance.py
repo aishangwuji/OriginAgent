@@ -979,6 +979,8 @@ class DomainPackGovernanceService:
             "active_requested": pack.active_requested,
             "verification_status": pack.verification_status,
             "overrides_builtin": pack.overrides_builtin,
+            "executable_python_allowed": pack.executable_python_allowed,
+            "override_execution_warning": pack.override_execution_warning,
             "description": pack.description,
             "validation_summary": pack.validation_summary or pack.unavailable_reason or "Domain pack is valid.",
             "unavailable_reason": pack.unavailable_reason,
@@ -1315,6 +1317,8 @@ def _filter_named_declarations(items: tuple[Any, ...], target: str) -> list[Any]
 
 
 def _tool_eval_result(pack: DomainPack, declaration: DomainToolDeclaration) -> tuple[bool, str]:
+    if not pack.executable_python_allowed:
+        return False, "executable_python_disabled_for_workspace_pack"
     if declaration.status != "available" or declaration.module_path is None:
         return False, declaration.unavailable_reason or "Tool declaration is invalid."
     module_name = f"_originagent_domain_pack_eval_{pack.id}_{declaration.id}_{uuid.uuid4().hex}"
