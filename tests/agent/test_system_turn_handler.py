@@ -169,6 +169,37 @@ async def test_system_turn_handler_websocket_outbound_keeps_goal_state(tmp_path:
     assert "goal_state" in outbound.metadata
 
 
+@pytest.mark.asyncio
+async def test_system_turn_handler_propagates_origin_metadata_to_outbound(tmp_path: Path) -> None:
+    loop = _make_loop(tmp_path)
+    loop.consolidator.maybe_consolidate_by_tokens = AsyncMock(return_value=False)  # type: ignore[method-assign]
+    loop._run_agent_loop = AsyncMock(return_value=("done", [], [{"role": "assistant", "content": "done"}], "stop", False))  # type: ignore[method-assign]
+
+    outbound = await _handler(loop).process_message(
+        InboundMessage(
+            channel="system",
+            sender_id="agent",
+            chat_id="cli:test",
+            content="event",
+            metadata={
+                "injected_event": "cognitive_event",
+                "origin_kind": "cognitive_event",
+                "is_inferred": True,
+                "confidence": 0.5,
+                "fresh_until": "2026-06-21T12:00:00+00:00",
+                "trigger_reason": "scheduled_reminder",
+            },
+        )
+    )
+
+    assert outbound is not None
+    assert outbound.metadata["origin_kind"] == "cognitive_event"
+    assert outbound.metadata["is_inferred"] is True
+    assert outbound.metadata["confidence"] == 0.5
+    assert outbound.metadata["fresh_until"] == "2026-06-21T12:00:00+00:00"
+    assert outbound.metadata["trigger_reason"] == "scheduled_reminder"
+
+
 def dataclasses_replace(obj, **changes):
     from dataclasses import replace
 

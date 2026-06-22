@@ -1,9 +1,10 @@
 from __future__ import annotations
 
-import json
 import copy
+import json
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -26,6 +27,8 @@ from OriginAgent.agent.tools.runtime_status import (
 )
 from OriginAgent.agent.tools.context import RequestContext
 from OriginAgent.agent.world_state import WorldStateManager
+from OriginAgent.config.doctor import build_config_doctor_report
+from OriginAgent.config.schema import Config
 from OriginAgent.config.schema import DomainPacksConfig, NearlineMemoryConfig, ToolsConfig
 from OriginAgent.cron.service import CronService
 from OriginAgent.cron.types import CronSchedule
@@ -590,6 +593,8 @@ async def test_inspect_context_reports_phase1_views_and_scope_filter(tmp_path) -
     assert result["scope_filter"]["current_scope"] == "session"
     assert result["scope_filter"]["visibility_matrix"]["device"] is True
     assert result["scope_filter"]["visibility_matrix"]["task"] is False
+    assert result["context_assembly_trace"]["blocks"] == []
+    assert result["context_assembly_trace"]["media"]["requested_count"] == 0
     assert result["views"]["action"]["planner_result"]["planner_sources"] == ["ActionAutomationCoordinator"]
     assert result["views"]["action"]["selected_proposal_digest"] == "proposal-1"
     assert any(
@@ -1044,6 +1049,134 @@ async def test_runtime_status_uses_workspace_basename_not_absolute_path(tmp_path
     assert result["self_model"]["identity"]["workspace_name"] == tmp_path.name
     assert result["self_model"]["runtime"]["registered_tools_count"] == 2
     assert str(tmp_path) not in _serialized(result)
+
+
+@pytest.mark.asyncio
+async def test_runtime_status_reports_runtime_mode_and_config_doctor_from_effective_config(tmp_path) -> None:
+    config = Config.model_validate({
+        "agents": {
+            "defaults": {
+                "workspace": str(tmp_path),
+                "allowAgentInitiatedMessages": False,
+                "enableBackendCognition": False,
+            }
+        },
+    })
+
+    result = await RuntimeStatusTool(
+        workspace=tmp_path,
+        registry=SimpleNamespace(tool_names=["a"]),
+        sessions=object(),
+        pending_queues={},
+        effective_config=config,
+    ).execute()
+
+    assert result["runtime_mode"]["mode"] == "reactive"
+    assert "agent_initiated_messages" not in result["runtime_mode"]["enabled_capabilities"]
+    assert "backend_cognition" not in result["runtime_mode"]["enabled_capabilities"]
+    assert "config_doctor" in result
+    assert result["config_doctor"]["effective_config"]["agents"]["defaults"]["workspace"] == str(tmp_path)
+    assert all(
+        item["path"] != "agents.defaults.workspace"
+        for item in result["config_doctor"]["unknown_fields"]
+    )
+
+
+def test_context_assembly_trace_exposes_blocks_trimmed_blocks_and_media() -> None:
+    service = RuntimeIntrospectionService(
+        loop=SimpleNamespace(
+            context=SimpleNamespace(
+                _last_context_assembly_audit={
+                    "contract_version": "continuity.v1.freeze",
+                    "assembly_order": ["runtime_state", "reference_blocks"],
+                    "block_kinds": ["runtime_context", "reference_context"],
+                    "blocks": [
+                        {
+                            "index": 0,
+                            "kind": "runtime_context",
+                            "source": None,
+                            "trust": "metadata_only",
+                            "token_estimate": 12,
+                            "included_reason": "assembly_included",
+                        },
+                        {
+                            "index": 1,
+                            "kind": "reference_context",
+                            "source": "recent_history",
+                            "trust": "untrusted",
+                            "token_estimate": 28,
+                            "included_reason": "assembly_included",
+                        },
+                    ],
+                    "media": {
+                        "requested_count": 3,
+                        "accepted_count": 1,
+                        "text_included": True,
+                        "accepted": [{"path": "uploads/a.png", "block_type": "image_url"}],
+                        "rejected": [{"path": "uploads/b.png", "reason": "max_media_bytes"}],
+                    },
+                    "budget": {
+                        "trimmed_blocks": [
+                            {
+                                "reason": "recent_history_trim",
+                                "kind": "reference_context",
+                                "source": "recent_history",
+                                "type": "text",
+                            }
+                        ]
+                    },
+                }
+            )
+        ),
+        workspace=Path("."),
+        registry=SimpleNamespace(tool_names=[]),
+        sessions=object(),
+        pending_queues={},
+    )
+
+    trace = service.context_assembly_trace()
+
+    assert trace["blocks"][0]["kind"] == "runtime_context"
+    assert trace["blocks"][1]["source"] == "recent_history"
+    assert trace["trimmed_blocks"][0]["reason"] == "recent_history_trim"
+    assert trace["media"]["requested_count"] == 3
+    assert trace["media"]["accepted_count"] == 1
+    assert trace["media"]["rejected"][0]["reason"] == "max_media_bytes"
+
+
+def test_config_doctor_reports_disabled_voice_settings_as_ignored(tmp_path) -> None:
+    config = Config.model_validate({
+        "agents": {
+            "defaults": {
+                "workspace": str(tmp_path),
+            }
+        },
+        "tools": {
+            "localAwareness": {
+                "enabled": False,
+                "audio": {
+                    "inputEnabled": False,
+                    "outputEnabled": False,
+                    "transcriptionEnabled": True,
+                    "transcriptionProvider": "openai",
+                    "deviceId": "mic-1",
+                    "ttsEnabled": True,
+                    "voice": "alloy",
+                },
+            }
+        },
+        "providers": {
+            "groq": {"apiKey": "groq-test-key"},
+            "openai": {"apiKey": "openai-test-key"},
+        },
+    })
+
+    report = build_config_doctor_report(config=config).to_dict()
+    reasons = {item["reason"] for item in report["ignored_fields"]}
+
+    assert "feature_disabled_but_subfeatures_configured" in reasons
+    assert "voice_input_disabled_but_configured" in reasons
+    assert "voice_output_disabled_but_configured" in reasons
 
 
 @pytest.mark.asyncio

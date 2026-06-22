@@ -17,6 +17,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+import httpx
+
 
 _PNG_1X1_TRANSPARENT = base64.b64decode(
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII="
@@ -369,8 +371,14 @@ class LocalAwarenessBackend:
     config gate is explicitly enabled.
     """
 
-    def __init__(self, *, command_runner: Any | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        command_runner: Any | None = None,
+        tts_config: dict[str, Any] | None = None,
+    ) -> None:
         self._command_runner = command_runner or self._run_command
+        self._tts_config = dict(tts_config or {})
 
     def discover_local_devices(self, *, config: Any) -> dict[str, Any]:
         hardware = _hardware_config(config)
@@ -906,8 +914,22 @@ $out | ConvertTo-Json -Depth 5 -Compress
         dest_dir = self._safe_output_dir(workspace=workspace, save_dir=save_dir)
         filename = f"audio_{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S')}_{uuid.uuid4().hex[:8]}.wav"
         dest = dest_dir / filename
-        # Minimal RIFF/WAVE header with no samples. This is an auditable placeholder,
-        # not a real microphone capture.
+        if os.name == "nt":
+            recorded = self._record_audio_windows(dest=dest, seconds=int(seconds))
+            if recorded is not None:
+                return {
+                    "status": "ok",
+                    "media_path": _workspace_rel(recorded, workspace=workspace),
+                    "absolute_path": str(recorded),
+                    "kind": "audio",
+                    "source": "local_awareness.audio",
+                    "device_id": _safe_text(device_id),
+                    "seconds": int(seconds),
+                    "captured_at": _utcnow_iso(),
+                    "placeholder": False,
+                    "backend_kind": "windows_sound_recorder",
+                }
+        # Fall back to auditable placeholder when recording support is unavailable.
         dest.write_bytes(
             b"RIFF\x24\x00\x00\x00WAVEfmt "
             b"\x10\x00\x00\x00\x01\x00\x01\x00\x40\x1f\x00\x00\x80>\x00\x00\x02\x00\x10\x00data\x00\x00\x00\x00"
@@ -922,17 +944,130 @@ $out | ConvertTo-Json -Depth 5 -Compress
             "seconds": int(seconds),
             "captured_at": _utcnow_iso(),
             "placeholder": True,
+            "backend_kind": "local_awareness_placeholder",
         }
 
     def speak_text(self, *, text: str, voice: str | None = None) -> dict[str, Any]:
-        return {
-            "status": "dry_run",
-            "reason": "audio_output_backend_not_connected",
-            "text_preview": _safe_text(text),
-            "voice": _safe_text(voice),
-            "is_real_output": False,
-            "backend_kind": "local_awareness_placeholder",
+        api_key = str(self._tts_config.get("api_key") or os.environ.get("VOLCENGINE_API_KEY") or "").strip()
+        speaker = _safe_text(voice)
+        if not api_key or not speaker:
+            return {
+                "status": "dry_run",
+                "reason": "audio_output_backend_not_connected" if not api_key else "tts_voice_not_configured",
+                "text_preview": _safe_text(text),
+                "voice": speaker,
+                "is_real_output": False,
+                "backend_kind": "local_awareness_placeholder",
+            }
+        try:
+            result = self._speak_text_volcengine(text=text, voice=speaker)
+        except Exception as exc:
+            return {
+                "status": "failed",
+                "reason": "audio_output_failed",
+                "failure_reason": _safe_text(exc),
+                "text_preview": _safe_text(text),
+                "voice": speaker,
+                "is_real_output": False,
+                "backend_kind": "volcengine_tts",
+            }
+        return result
+
+    def _record_audio_windows(self, *, dest: Path, seconds: int) -> Path | None:
+        if os.name != "nt":
+            return None
+        script = rf"""
+$seconds = {int(seconds)}
+$path = '{str(dest).replace("'", "''")}'
+Add-Type -AssemblyName System.Windows.Forms
+Add-Type -AssemblyName presentationCore
+$recorder = New-Object -ComObject SoundRecorder.SoundRecorder
+$recorder.Start()
+Start-Sleep -Seconds $seconds
+$recorder.Stop()
+$recorder.SaveToFile($path)
+"""
+        try:
+            self._command_runner(
+                [
+                    "powershell",
+                    "-NoProfile",
+                    "-ExecutionPolicy",
+                    "Bypass",
+                    "-Command",
+                    script,
+                ],
+                timeout=max(15, seconds + 10),
+            )
+        except Exception:
+            return None
+        return dest if dest.exists() and dest.stat().st_size > 44 else None
+
+    def _speak_text_volcengine(self, *, text: str, voice: str) -> dict[str, Any]:
+        api_key = str(self._tts_config.get("api_key") or os.environ.get("VOLCENGINE_API_KEY") or "").strip()
+        resource_id = str(
+            self._tts_config.get("resource_id")
+            or os.environ.get("VOLCENGINE_TTS_RESOURCE_ID")
+            or "seed-tts-2.0"
+        ).strip() or "seed-tts-2.0"
+        api_url = str(
+            self._tts_config.get("api_base")
+            or os.environ.get("VOLCENGINE_TTS_BASE_URL")
+            or "https://openspeech.bytedance.com/api/v3/tts/unidirectional"
+        ).strip()
+        sample_rate = int(self._tts_config.get("sample_rate") or 24000)
+        output_dir_raw = self._tts_config.get("output_dir") or os.environ.get("ORIGINAGENT_TTS_OUTPUT_DIR")
+        request_id = str(uuid.uuid4())
+        payload = {
+            "req_params": {"text": text},
+            "speaker": voice,
+            "audio_params": {
+                "format": "wav",
+                "sample_rate": sample_rate,
+            },
         }
+        headers = {
+            "X-Api-Key": api_key,
+            "X-Api-Resource-Id": resource_id,
+            "X-Api-Request-Id": request_id,
+        }
+        response = httpx.post(api_url, headers=headers, json=payload, timeout=120.0)
+        response.raise_for_status()
+        body = response.json()
+        if not isinstance(body, dict):
+            raise ValueError("unexpected_tts_response")
+        if int(body.get("code") or 0) != 0:
+            raise ValueError(str(body.get("message") or "tts_failed"))
+        audio_b64 = body.get("data")
+        if not isinstance(audio_b64, str) or not audio_b64:
+            raise ValueError("tts_audio_missing")
+        audio_bytes = base64.b64decode(audio_b64)
+        output_dir = Path(output_dir_raw or Path.cwd() / "uploads" / "perception")
+        output_dir.mkdir(parents=True, exist_ok=True)
+        dest = output_dir / f"tts_{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S')}_{uuid.uuid4().hex[:8]}.wav"
+        dest.write_bytes(audio_bytes)
+        played = self._play_audio_file(dest)
+        return {
+            "status": "ok" if played else "failed",
+            "reason": None if played else "audio_playback_unavailable",
+            "text_preview": _safe_text(text),
+            "voice": voice,
+            "is_real_output": played,
+            "backend_kind": "volcengine_tts",
+            "audio_path": str(dest),
+            "request_id": request_id,
+        }
+
+    def _play_audio_file(self, path: Path) -> bool:
+        if os.name != "nt":
+            return False
+        try:
+            import winsound
+
+            winsound.PlaySound(str(path), winsound.SND_FILENAME)
+            return True
+        except Exception:
+            return False
 
     def _write_placeholder_image(
         self,

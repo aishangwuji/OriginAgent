@@ -137,6 +137,21 @@ export interface SettingsPayload {
       enabled: boolean;
     };
   };
+  voice?: {
+    input_enabled: boolean;
+    output_enabled: boolean;
+    transcription_enabled: boolean;
+    tts_enabled: boolean;
+    require_confirmation: boolean;
+    save_dir: string;
+    max_record_seconds: number;
+    device_id?: string | null;
+    voice?: string | null;
+    transcription_provider: "groq" | "openai" | "volcengine" | string;
+    transcription_language?: string | null;
+    tts_provider?: string | null;
+    transcription_provider_options?: string[];
+  };
   runtime_controls: {
     channels: {
       send_progress: boolean;
@@ -264,6 +279,20 @@ export interface WebSearchSettingsUpdate {
   provider: string;
   apiKey?: string;
   baseUrl?: string;
+}
+
+export interface VoiceSettingsUpdate {
+  input_enabled?: boolean;
+  output_enabled?: boolean;
+  transcription_enabled?: boolean;
+  tts_enabled?: boolean;
+  require_confirmation?: boolean;
+  save_dir?: string;
+  max_record_seconds?: number;
+  device_id?: string | null;
+  voice?: string | null;
+  transcription_provider?: string;
+  transcription_language?: string | null;
 }
 
 export interface RuntimeSettingsUpdate {

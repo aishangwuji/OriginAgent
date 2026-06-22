@@ -62,6 +62,7 @@ import {
   updateProviderSettings,
   updateRuntimeSettings,
   updateSettings,
+  updateVoiceSettings,
   updateWebSearchSettings,
   upsertHomeAssistantMcpSettings,
   upsertMcpServerSettings,
@@ -81,6 +82,7 @@ import type {
   SelfModel,
   SkillLifecycleStats,
   SkillRecord,
+  VoiceSettingsUpdate,
   WebSearchSettingsUpdate,
 } from "@/lib/types";
 
@@ -103,7 +105,28 @@ type HomeAssistantMcpFormState = {
   token: string;
 };
 type RuntimeSettingsForm = SettingsPayload["runtime_controls"];
+type VoiceSettingsForm = NonNullable<SettingsPayload["voice"]>;
 const SETTINGS_LOAD_RETRY_DELAYS_MS = [350, 900, 1600] as const;
+
+function defaultVoiceSettings(
+  settings?: Partial<SettingsPayload["voice"]> | null,
+): VoiceSettingsForm {
+  return {
+    input_enabled: settings?.input_enabled ?? false,
+    output_enabled: settings?.output_enabled ?? false,
+    transcription_enabled: settings?.transcription_enabled ?? false,
+    tts_enabled: settings?.tts_enabled ?? false,
+    require_confirmation: settings?.require_confirmation ?? true,
+    save_dir: settings?.save_dir ?? "uploads/perception",
+    max_record_seconds: settings?.max_record_seconds ?? 5,
+    device_id: settings?.device_id ?? null,
+    voice: settings?.voice ?? null,
+    transcription_provider: settings?.transcription_provider ?? "groq",
+    transcription_language: settings?.transcription_language ?? null,
+    tts_provider: settings?.tts_provider ?? "volcengine",
+    transcription_provider_options: settings?.transcription_provider_options ?? ["groq", "openai", "volcengine"],
+  };
+}
 
 function mapModelFetchError(
   err: unknown,
@@ -218,7 +241,9 @@ export function SettingsView({
     provider: "",
   });
   const [runtimeForm, setRuntimeForm] = useState<RuntimeSettingsForm | null>(null);
+  const [voiceForm, setVoiceForm] = useState<VoiceSettingsForm | null>(null);
   const [runtimeSaving, setRuntimeSaving] = useState(false);
+  const [voiceSaving, setVoiceSaving] = useState(false);
   const [modelFetchLoadingProvider, setModelFetchLoadingProvider] = useState<string | null>(null);
   const [fetchedModelPayloadsByProvider, setFetchedModelPayloadsByProvider] = useState<Record<string, ProviderModelsResponse>>({});
   const [modelFetchAttemptedProviders, setModelFetchAttemptedProviders] = useState<Record<string, boolean>>({});
@@ -242,6 +267,7 @@ export function SettingsView({
       baseUrl: payload.web_search.base_url ?? "",
     }));
     setRuntimeForm(payload.runtime_controls);
+    setVoiceForm(defaultVoiceSettings(payload.voice));
     setModelFetchError(null);
   }, []);
 
@@ -292,6 +318,11 @@ export function SettingsView({
     if (!settings || !runtimeForm) return false;
     return JSON.stringify(runtimeForm) !== JSON.stringify(settings.runtime_controls);
   }, [runtimeForm, settings]);
+
+  const voiceDirty = useMemo(() => {
+    if (!settings || !voiceForm) return false;
+    return JSON.stringify(voiceForm) !== JSON.stringify(defaultVoiceSettings(settings.voice));
+  }, [settings, voiceForm]);
 
   const save = async () => {
     if (!dirty || saving) return;
@@ -473,6 +504,22 @@ export function SettingsView({
       setModelFetchError(message);
     } finally {
       setModelFetchLoadingProvider(null);
+    }
+  };
+
+  const saveVoiceSettings = async () => {
+    if (!settings || !voiceForm || !voiceDirty || voiceSaving) return;
+    setVoiceSaving(true);
+    try {
+      const payload = await withTokenRefresh(token, refreshToken, (freshToken) =>
+        updateVoiceSettings(freshToken, voiceForm as VoiceSettingsUpdate),
+      );
+      applyPayload(payload);
+      setError(null);
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setVoiceSaving(false);
     }
   };
 
@@ -712,6 +759,7 @@ export function SettingsView({
                   onFetchModels={fetchModelsForSelectedProvider}
                   onRefreshModels={() => fetchModelsForSelectedProvider({ forceRefresh: true })}
                   modelFetchError={modelFetchError}
+                  onClearModelFetchError={() => setModelFetchError(null)}
                   runtimeForm={runtimeForm}
                   setRuntimeForm={setRuntimeForm}
                   settings={settings}
@@ -721,6 +769,11 @@ export function SettingsView({
                   runtimeDirty={runtimeDirty}
                   runtimeSaving={runtimeSaving}
                   onSaveRuntime={saveRuntimeSettings}
+                  voiceForm={voiceForm}
+                  setVoiceForm={setVoiceForm}
+                  voiceDirty={voiceDirty}
+                  voiceSaving={voiceSaving}
+                  onSaveVoice={saveVoiceSettings}
                   onRestart={onRestart}
                   isRestarting={isRestarting}
                   onOpenByok={() => setActiveSection("byok")}
@@ -897,8 +950,11 @@ function GeneralSettings({
   onFetchModels,
   onRefreshModels,
   modelFetchError,
+  onClearModelFetchError,
   runtimeForm,
   setRuntimeForm,
+  voiceForm,
+  setVoiceForm,
   settings,
   dirty,
   saving,
@@ -906,6 +962,9 @@ function GeneralSettings({
   runtimeDirty,
   runtimeSaving,
   onSaveRuntime,
+  voiceDirty,
+  voiceSaving,
+  onSaveVoice,
   onRestart,
   isRestarting,
   onOpenByok,
@@ -929,8 +988,11 @@ function GeneralSettings({
   onFetchModels: (options?: { forceRefresh?: boolean }) => void;
   onRefreshModels: () => void;
   modelFetchError: string | null;
+  onClearModelFetchError: () => void;
   runtimeForm: RuntimeSettingsForm | null;
   setRuntimeForm: Dispatch<SetStateAction<RuntimeSettingsForm | null>>;
+  voiceForm: VoiceSettingsForm | null;
+  setVoiceForm: Dispatch<SetStateAction<VoiceSettingsForm | null>>;
   settings: SettingsPayload;
   dirty: boolean;
   saving: boolean;
@@ -938,6 +1000,9 @@ function GeneralSettings({
   runtimeDirty: boolean;
   runtimeSaving: boolean;
   onSaveRuntime: () => void;
+  voiceDirty: boolean;
+  voiceSaving: boolean;
+  onSaveVoice: () => void;
   onRestart?: () => void;
   isRestarting?: boolean;
   onOpenByok: () => void;
@@ -1003,6 +1068,7 @@ function GeneralSettings({
     ],
   };
   const controls = runtimeForm ?? settings.runtime_controls;
+  const voice = voiceForm ?? defaultVoiceSettings(settings.voice);
   const updateSection = <K extends keyof RuntimeSettingsForm>(
     section: K,
     patch: Partial<RuntimeSettingsForm[K]>,
@@ -1017,6 +1083,12 @@ function GeneralSettings({
         },
       };
     });
+  };
+  const updateVoice = (patch: Partial<VoiceSettingsForm>) => {
+    setVoiceForm((prev) => ({
+      ...(prev ?? defaultVoiceSettings(settings.voice)),
+      ...patch,
+    }));
   };
   return (
     <div className="space-y-8">
@@ -1073,7 +1145,7 @@ function GeneralSettings({
               emptyLabel={t("settings.byok.noConfiguredProviders")}
               onChange={(provider) => {
                 setForm((prev) => ({ ...prev, provider }));
-                setModelFetchError(null);
+                onClearModelFetchError();
               }}
             />
           </SettingsRow>
@@ -1144,6 +1216,106 @@ function GeneralSettings({
               />
             </button>
           </SettingsRow>
+        </SettingsGroup>
+      </section>
+
+      <section>
+        <SettingsSectionTitle>{t("settings.sections.voice")}</SettingsSectionTitle>
+        <SettingsGroup>
+          <SettingsRow title={t("settings.rows.voiceInput")} description={t("settings.help.voiceInput")}>
+            <BooleanSwitch
+              checked={voice.input_enabled}
+              ariaLabel={t("settings.rows.voiceInput")}
+              onChange={(checked) => updateVoice({ input_enabled: checked })}
+            />
+          </SettingsRow>
+          <SettingsRow title={t("settings.rows.voiceOutput")} description={t("settings.help.voiceOutput")}>
+            <BooleanSwitch
+              checked={voice.output_enabled}
+              ariaLabel={t("settings.rows.voiceOutput")}
+              onChange={(checked) => updateVoice({ output_enabled: checked })}
+            />
+          </SettingsRow>
+          <SettingsRow title={t("settings.rows.voiceRequireConfirmation")} description={t("settings.help.voiceRequireConfirmation")}>
+            <BooleanSwitch
+              checked={voice.require_confirmation}
+              ariaLabel={t("settings.rows.voiceRequireConfirmation")}
+              onChange={(checked) => updateVoice({ require_confirmation: checked })}
+            />
+          </SettingsRow>
+          <SettingsRow title={t("settings.rows.voiceTranscription")} description={t("settings.help.voiceTranscription")}>
+            <BooleanSwitch
+              checked={voice.transcription_enabled}
+              ariaLabel={t("settings.rows.voiceTranscription")}
+              onChange={(checked) => updateVoice({ transcription_enabled: checked })}
+            />
+          </SettingsRow>
+          <SettingsRow title={t("settings.rows.voiceTranscriptionProvider")} description={t("settings.help.voiceTranscriptionProvider")}>
+            <SimpleSelect
+              value={voice.transcription_provider}
+              options={(voice.transcription_provider_options ?? ["groq", "openai", "volcengine"]).map((value) => ({
+                value,
+                label: value,
+              }))}
+              onChange={(value) => updateVoice({ transcription_provider: value })}
+            />
+          </SettingsRow>
+          <SettingsRow title={t("settings.rows.voiceTranscriptionLanguage")} description={t("settings.help.voiceTranscriptionLanguage")}>
+            <Input
+              value={voice.transcription_language ?? ""}
+              onChange={(event) => updateVoice({ transcription_language: event.target.value || null })}
+              placeholder="zh"
+              className="h-9 w-[140px] rounded-full text-[13px]"
+            />
+          </SettingsRow>
+          <SettingsRow title={t("settings.rows.voiceMaxRecordSeconds")} description={t("settings.help.voiceMaxRecordSeconds")}>
+            <Input
+              type="number"
+              min={1}
+              max={60}
+              value={String(voice.max_record_seconds)}
+              onChange={(event) => updateVoice({ max_record_seconds: Number(event.target.value || 0) })}
+              className="h-9 w-[140px] rounded-full text-[13px]"
+            />
+          </SettingsRow>
+          <SettingsRow title={t("settings.rows.voiceDeviceId")} description={t("settings.help.voiceDeviceId")}>
+            <Input
+              value={voice.device_id ?? ""}
+              onChange={(event) => updateVoice({ device_id: event.target.value || null })}
+              placeholder={t("settings.values.notAvailable")}
+              className="h-9 w-[220px] rounded-full text-[13px]"
+            />
+          </SettingsRow>
+          <SettingsRow title={t("settings.rows.voiceTts")} description={t("settings.help.voiceTts", { provider: voice.tts_provider ?? "volcengine" })}>
+            <BooleanSwitch
+              checked={voice.tts_enabled}
+              ariaLabel={t("settings.rows.voiceTts")}
+              onChange={(checked) => updateVoice({ tts_enabled: checked })}
+            />
+          </SettingsRow>
+          <SettingsRow title={t("settings.rows.voiceVoice")} description={t("settings.help.voiceVoice")}>
+            <Input
+              value={voice.voice ?? ""}
+              onChange={(event) => updateVoice({ voice: event.target.value || null })}
+              placeholder="zh_female_wanwanxiaohe_moon_bigtts"
+              className="h-9 w-[280px] rounded-full text-[13px]"
+            />
+          </SettingsRow>
+          <SettingsRow title={t("settings.rows.voiceSaveDir")} description={t("settings.help.voiceSaveDir")}>
+            <Input
+              value={voice.save_dir}
+              onChange={(event) => updateVoice({ save_dir: event.target.value })}
+              className="h-9 w-[280px] rounded-full text-[13px]"
+            />
+          </SettingsRow>
+          {(voiceDirty || voiceSaving || settings.requires_restart) ? (
+            <SettingsFooter
+              dirty={voiceDirty}
+              saving={voiceSaving}
+              saved={settings.requires_restart && !voiceDirty}
+              onSave={onSaveVoice}
+            />
+          ) : null}
         </SettingsGroup>
       </section>
 
@@ -3563,16 +3735,19 @@ function BooleanSwitch({
   checked,
   onChange,
   disabled = false,
+  ariaLabel,
 }: {
   checked: boolean;
   onChange: (checked: boolean) => void;
   disabled?: boolean;
+  ariaLabel?: string;
 }) {
   return (
     <button
       type="button"
       role="switch"
       aria-checked={checked}
+      aria-label={ariaLabel}
       disabled={disabled}
       onClick={() => onChange(!checked)}
       className={cn(

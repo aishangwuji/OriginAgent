@@ -136,6 +136,21 @@ function makeSettingsPayload(overrides: Record<string, unknown> = {}) {
     learning: {
       background_review: { enabled: true },
     },
+    voice: {
+      input_enabled: false,
+      output_enabled: false,
+      transcription_enabled: false,
+      tts_enabled: false,
+      require_confirmation: true,
+      save_dir: "uploads/perception",
+      max_record_seconds: 5,
+      device_id: null,
+      voice: null,
+      transcription_provider: "groq",
+      transcription_language: null,
+      tts_provider: "volcengine",
+      transcription_provider_options: ["groq", "openai", "volcengine"],
+    },
     runtime_controls: {
       channels: { send_progress: true, send_tool_hints: false, show_reasoning: true },
       agent: {
@@ -774,6 +789,9 @@ describe("App layout", () => {
     expect(screen.getByRole("button", { name: "Sign out" })).toBeInTheDocument();
     expect(screen.getByText("AI")).toBeInTheDocument();
     expect(screen.getByDisplayValue("openai/gpt-4o")).toBeInTheDocument();
+    expect(screen.getByText("Voice")).toBeInTheDocument();
+    expect(screen.getByText("Voice input")).toBeInTheDocument();
+    expect(screen.getByText("Text-to-speech")).toBeInTheDocument();
     fireEvent.click(within(settingsNav).getByRole("button", { name: "Self" }));
     expect(await screen.findByText("Read-only capability awareness built from the current runtime, governance state, and pending review signals.")).toBeInTheDocument();
     expect(screen.getByText("Known Limitations")).toBeInTheDocument();
@@ -2245,6 +2263,83 @@ describe("App layout", () => {
         "API returned HTML instead of JSON. Refresh the page or restart OriginAgent so the latest backend routes are active.",
       ),
     ).toBeInTheDocument();
+  });
+
+  it("saves local-awareness voice settings from General settings", async () => {
+    const user = userEvent.setup();
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === "/api/settings") {
+        return jsonTextResponse(makeSettingsPayload());
+      }
+      if (url.startsWith("/api/settings/local-awareness/audio/update?")) {
+        return jsonTextResponse(makeSettingsPayload({
+          voice: {
+            input_enabled: true,
+            output_enabled: false,
+            transcription_enabled: true,
+            tts_enabled: false,
+            require_confirmation: true,
+            save_dir: "uploads/perception",
+            max_record_seconds: 7,
+            device_id: null,
+            voice: null,
+            transcription_provider: "volcengine",
+            transcription_language: "zh",
+            tts_provider: "volcengine",
+            transcription_provider_options: ["groq", "openai", "volcengine"],
+          },
+          requires_restart: true,
+        }));
+      }
+      return { ok: false, status: 404, json: async () => ({}) };
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<App />);
+
+    await waitFor(() => expect(connectSpy).toHaveBeenCalled());
+    const sidebar = screen.getByRole("navigation", { name: "Sidebar navigation" });
+    await user.click(within(sidebar).getByRole("button", { name: "Settings" }));
+    await screen.findByRole("heading", { name: "General" });
+
+    await user.click(screen.getByRole("switch", { name: "Voice input" }));
+    await user.click(screen.getByRole("switch", { name: "Speech transcription" }));
+    fireEvent.change(screen.getByDisplayValue("5"), { target: { value: "7" } });
+    fireEvent.change(screen.getByPlaceholderText("zh"), { target: { value: "zh" } });
+    fireEvent.change(screen.getByDisplayValue("groq"), { target: { value: "volcengine" } });
+    const voiceSaveButton = screen.getAllByRole("button", { name: "Save" }).find(
+      (button) => !button.hasAttribute("disabled"),
+    );
+    expect(voiceSaveButton).toBeTruthy();
+    await user.click(voiceSaveButton!);
+
+    let voiceCall:
+      | [RequestInfo | URL, RequestInit | undefined]
+      | undefined;
+    await waitFor(() => {
+      voiceCall = fetchMock.mock.calls.find(([called]) =>
+        String(called).startsWith("/api/settings/local-awareness/audio/update?"),
+      ) as [RequestInfo | URL, RequestInit | undefined] | undefined;
+      expect(voiceCall).toBeTruthy();
+    });
+
+    const [calledUrl, options] = voiceCall!;
+    expect(options).toMatchObject({
+      headers: { Authorization: "Bearer tok" },
+    });
+    const url = String(calledUrl);
+    const query = new URLSearchParams(url.split("?")[1]);
+    expect(JSON.parse(query.get("config") ?? "{}")).toMatchObject({
+      input_enabled: true,
+      transcription_enabled: true,
+      max_record_seconds: 7,
+      transcription_provider: "volcengine",
+      transcription_language: "zh",
+    });
+    expect(
+      (await screen.findAllByText("Saved. Restart OriginAgent to apply.")).length,
+    ).toBeGreaterThan(0);
   });
 
   it("shows MCP save errors from the shared API error parser", async () => {

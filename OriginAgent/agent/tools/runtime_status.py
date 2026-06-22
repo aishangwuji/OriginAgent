@@ -37,6 +37,7 @@ class RuntimeStatusTool(Tool):
         evolution_config: Any | None = None,
         nearline_memory_config: Any | None = None,
         introspection_service: RuntimeIntrospectionService | None = None,
+        effective_config: Any | None = None,
     ) -> None:
         self._workspace = Path(workspace)
         self._registry = registry
@@ -53,6 +54,7 @@ class RuntimeStatusTool(Tool):
         self._evolution_config = evolution_config
         self._nearline_memory_config = nearline_memory_config
         self._introspection_service = introspection_service
+        self._effective_config = effective_config
 
     @property
     def description(self) -> str:
@@ -82,6 +84,7 @@ class RuntimeStatusTool(Tool):
             curator_service=self._curator_service,
             session_search_index_service=self._session_search_index_service,
             evolution_config=self._evolution_config,
+            effective_config=self._effective_config,
         )
         return service.system_status()
 
@@ -159,6 +162,7 @@ class InspectContextTool(Tool):
         evolution_config: Any | None = None,
         nearline_memory_config: Any | None = None,
         introspection_service: RuntimeIntrospectionService | None = None,
+        effective_config: Any | None = None,
     ) -> None:
         self._workspace = Path(workspace)
         self._registry = registry
@@ -175,6 +179,7 @@ class InspectContextTool(Tool):
         self._evolution_config = evolution_config
         self._nearline_memory_config = nearline_memory_config
         self._introspection_service = introspection_service
+        self._effective_config = effective_config
 
     @property
     def description(self) -> str:
@@ -204,6 +209,7 @@ class InspectContextTool(Tool):
             curator_service=self._curator_service,
             session_search_index_service=self._session_search_index_service,
             evolution_config=self._evolution_config,
+            effective_config=self._effective_config,
         )
         return service.inspect_context()
 
@@ -229,6 +235,7 @@ class InspectHomeStateTool(Tool):
         evolution_config: Any | None = None,
         nearline_memory_config: Any | None = None,
         introspection_service: RuntimeIntrospectionService | None = None,
+        effective_config: Any | None = None,
     ) -> None:
         self._workspace = Path(workspace)
         self._registry = registry
@@ -245,6 +252,7 @@ class InspectHomeStateTool(Tool):
         self._evolution_config = evolution_config
         self._nearline_memory_config = nearline_memory_config
         self._introspection_service = introspection_service
+        self._effective_config = effective_config
         self._request_ctx: ContextVar[RequestContext | None] = ContextVar(
             "inspect_home_state_request_ctx",
             default=None,
@@ -281,6 +289,7 @@ class InspectHomeStateTool(Tool):
             curator_service=self._curator_service,
             session_search_index_service=self._session_search_index_service,
             evolution_config=self._evolution_config,
+            effective_config=self._effective_config,
         )
         ctx = self._request_ctx.get()
         if ctx is None or not ctx.session_key:

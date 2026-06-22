@@ -226,6 +226,9 @@ def register_default_tools(
             if introspection_service is not None
             else None,
             introspection_service=introspection_service,
+            effective_config=getattr(introspection_service, "_effective_config", None)
+            if introspection_service is not None
+            else None,
         )
     )
     _register_named(
@@ -248,6 +251,9 @@ def register_default_tools(
             if introspection_service is not None
             else None,
             introspection_service=introspection_service,
+            effective_config=getattr(introspection_service, "_effective_config", None)
+            if introspection_service is not None
+            else None,
         )
     )
     _register_named(
@@ -270,6 +276,9 @@ def register_default_tools(
             if introspection_service is not None
             else None,
             introspection_service=introspection_service,
+            effective_config=getattr(introspection_service, "_effective_config", None)
+            if introspection_service is not None
+            else None,
         ),
     )
     _register_named(

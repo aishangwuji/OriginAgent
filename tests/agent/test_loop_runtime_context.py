@@ -69,7 +69,7 @@ class FakeExecutor:
     def __init__(self) -> None:
         self.actions = []
 
-    def submit_typed(self, action):
+    def submit_typed(self, action, session_key=None):
         self.actions.append(action)
         return ActionExecutionResult(
             status="dry_run",
@@ -273,6 +273,20 @@ def test_loop_from_config_initializes_transcription_provider_when_enabled(tmp_pa
 
     assert loop._transcription_provider is not None
     assert loop._transcription_provider.__class__.__name__ == "GroqTranscriptionProvider"
+
+
+def test_loop_from_config_initializes_volcengine_transcription_provider_when_selected(tmp_path: Path):
+    config = Config()
+    config.agents.defaults.workspace = str(tmp_path)
+    config.providers.volcengine.api_key = "volc-key"
+    config.tools.local_awareness.enabled = True
+    config.tools.local_awareness.audio.transcription_enabled = True
+    config.tools.local_awareness.audio.transcription_provider = "volcengine"
+
+    loop = AgentLoop.from_config(config, provider=_provider())
+
+    assert loop._transcription_provider is not None
+    assert loop._transcription_provider.__class__.__name__ == "VolcengineTranscriptionProvider"
 
 
 def test_loop_runtime_context_triggers_do_not_degrade_to_user_initiated(tmp_path: Path):

@@ -113,6 +113,10 @@ async def test_active_intents_emit_goal_nudge(tmp_path: Path) -> None:
     assert isinstance(msg, InboundMessage)
     assert msg.metadata["injected_event"] == "active_intent"
     assert msg.metadata["active_intent_type"] == "goal_nudge"
+    assert msg.metadata["origin_kind"] == "active_intent"
+    assert msg.metadata["is_inferred"] is True
+    assert msg.metadata["trigger_reason"] == "goal_nudge"
+    assert msg.metadata["confidence"] == 0.7
     assert "unfinished sustained goal" in msg.content
 
 

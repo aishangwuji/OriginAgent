@@ -662,6 +662,21 @@ async def test_settings_api_returns_safe_subset_and_updates_whitelist(
         assert body["web_search"]["provider"] == "brave"
         assert body["web_search"]["api_key_hint"] == "brav••••cret"
         assert body["learning"]["background_review"]["enabled"] is True
+        assert body["voice"] == {
+            "input_enabled": False,
+            "output_enabled": False,
+            "transcription_enabled": False,
+            "tts_enabled": False,
+            "require_confirmation": True,
+            "save_dir": "uploads/perception",
+            "max_record_seconds": 5,
+            "device_id": None,
+            "voice": None,
+            "transcription_provider": "groq",
+            "transcription_language": None,
+            "tts_provider": "volcengine",
+            "transcription_provider_options": ["groq", "openai", "volcengine"],
+        }
         assert body["runtime_controls"]["channels"]["show_reasoning"] is True
         assert body["runtime_controls"]["search"]["web_enabled"] is True
         assert body["runtime_controls"]["execution"]["exec_profile"] == "local_dev"
@@ -731,6 +746,39 @@ async def test_settings_api_returns_safe_subset_and_updates_whitelist(
         assert learning_updated.json()["requires_restart"] is False
         assert learning_updated.json()["learning"]["background_review"]["enabled"] is True
 
+        voice_updated = await _http_get(
+            "http://127.0.0.1:"
+            f"{port}/api/settings/local-awareness/audio/update?config="
+            + quote(json.dumps({
+                "input_enabled": True,
+                "output_enabled": True,
+                "transcription_enabled": True,
+                "tts_enabled": True,
+                "require_confirmation": False,
+                "max_record_seconds": 9,
+                "device_id": "default-mic",
+                "voice": "voice-1",
+                "save_dir": "uploads/voice",
+                "transcription_provider": "volcengine",
+                "transcription_language": "zh",
+            })),
+            headers={"Authorization": "Bearer tok"},
+        )
+        assert voice_updated.status_code == 200
+        voice_body = voice_updated.json()
+        assert voice_body["requires_restart"] is True
+        assert voice_body["voice"]["input_enabled"] is True
+        assert voice_body["voice"]["output_enabled"] is True
+        assert voice_body["voice"]["transcription_enabled"] is True
+        assert voice_body["voice"]["tts_enabled"] is True
+        assert voice_body["voice"]["require_confirmation"] is False
+        assert voice_body["voice"]["max_record_seconds"] == 9
+        assert voice_body["voice"]["device_id"] == "default-mic"
+        assert voice_body["voice"]["voice"] == "voice-1"
+        assert voice_body["voice"]["save_dir"] == "uploads/voice"
+        assert voice_body["voice"]["transcription_provider"] == "volcengine"
+        assert voice_body["voice"]["transcription_language"] == "zh"
+
         runtime_updated = await _http_get(
             "http://127.0.0.1:"
             f"{port}/api/settings/runtime/update?config="
@@ -767,6 +815,17 @@ async def test_settings_api_returns_safe_subset_and_updates_whitelist(
         assert saved.agents.defaults.allow_agent_initiated_messages is True
         assert saved.agents.defaults.enable_backend_cognition is False
         assert saved.runtime.profile == "safe"
+        assert saved.tools.local_awareness.audio.input_enabled is True
+        assert saved.tools.local_awareness.audio.output_enabled is True
+        assert saved.tools.local_awareness.audio.transcription_enabled is True
+        assert saved.tools.local_awareness.audio.tts_enabled is True
+        assert saved.tools.local_awareness.audio.require_confirmation is False
+        assert saved.tools.local_awareness.audio.max_record_seconds == 9
+        assert saved.tools.local_awareness.audio.device_id == "default-mic"
+        assert saved.tools.local_awareness.audio.voice == "voice-1"
+        assert saved.tools.local_awareness.audio.save_dir == "uploads/voice"
+        assert saved.tools.local_awareness.audio.transcription_provider == "volcengine"
+        assert saved.channels.transcription_language == "zh"
         assert saved.channels.show_reasoning is False
         assert saved.providers.openrouter.api_key == "sk-or-test"
         assert saved.providers.openrouter.api_base == "https://openrouter.ai/api/v1"

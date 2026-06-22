@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from contextlib import suppress
 from datetime import datetime, timezone
 from pathlib import Path
@@ -12,6 +13,7 @@ from OriginAgent.agent.cognitive_audit import JsonlCognitiveAuditLedger
 from OriginAgent.agent.cognitive_scheduler import JsonlCognitiveSchedulerLedger
 from OriginAgent.agent.action_summary import action_summary_from_loop
 from OriginAgent.agent.local_awareness import normalize_local_awareness_summary
+from OriginAgent.agent.runtime_mode import build_runtime_mode_summary
 from OriginAgent.agent.domain_pack_governance import summarize_domain_pack_governance
 from OriginAgent.agent.facts import FactStore, summarize_facts
 from OriginAgent.agent.memory import MemoryStore
@@ -20,6 +22,8 @@ from OriginAgent.agent.scope import ScopeResolver
 from OriginAgent.agent.self_model import SelfModelService, _workspace_memory_state
 from OriginAgent.agent.skills import SkillsLoader
 from OriginAgent.agent.workflow_artifacts import summarize_workflow_artifacts
+from OriginAgent.config.doctor import build_config_doctor_report
+from OriginAgent.config.loader import get_config_path
 from OriginAgent.config.schema import AgentDefaults
 from OriginAgent.memory.candidates import GovernedMemoryWriter
 from OriginAgent.memory.policy import nearline_runtime_enabled
@@ -55,6 +59,7 @@ class RuntimeIntrospectionService:
         nearline_memory_service: Any | None = None,
         session_search_index_service: Any | None = None,
         evolution_config: Any | None = None,
+        effective_config: Any | None = None,
     ) -> None:
         self._loop = loop
         self._workspace = Path(workspace)
@@ -72,6 +77,7 @@ class RuntimeIntrospectionService:
         self._nearline_memory_service = nearline_memory_service
         self._session_search_index_service = session_search_index_service
         self._evolution_config = evolution_config
+        self._effective_config = effective_config
 
     def current_loop_summary(self) -> dict[str, Any]:
         """Return the current loop fields used by the task-level self tool."""
@@ -154,6 +160,8 @@ class RuntimeIntrospectionService:
             nearline_memory_config=self._resolve_nearline_memory_config(),
             runtime_snapshot=snapshot,
         ).build()
+        runtime_mode = self.runtime_mode_summary()
+        config_doctor = self.config_doctor_report()
         return {
             "workspace_present": self._workspace.exists(),
             "workspace_name": self._workspace.name,
@@ -179,7 +187,43 @@ class RuntimeIntrospectionService:
             "local_awareness": self.local_awareness_summary(),
             "self_model": self_model,
             "meta_cognition": self.meta_cognition_summary(),
+            "runtime_mode": runtime_mode,
+            "config_doctor": config_doctor,
         }
+
+    def runtime_mode_summary(self) -> dict[str, Any]:
+        """Return the normalized runtime mode summary."""
+
+        return build_runtime_mode_summary(
+            config=self._effective_config,
+            loop=self._loop,
+            enabled_channels=getattr(getattr(self._loop, "channel_manager", None), "enabled_channels", None),
+            model=getattr(self._loop, "model", None),
+            provider_name=(
+                self._effective_config.get_provider_name(getattr(self._loop, "model", None))
+                if self._effective_config is not None
+                else None
+            ),
+        ).to_dict()
+
+    def config_doctor_report(self) -> dict[str, Any]:
+        """Return a sanitized config doctor report."""
+
+        if self._effective_config is None:
+            return {
+                "raw_config_available": False,
+                "effective_config": {},
+                "unknown_fields": [],
+                "ignored_fields": [],
+                "conflicts": [],
+                "capability_warnings": [],
+                "channel_provider_matrix": [],
+                "legacy_channel_sections": [],
+            }
+        return build_config_doctor_report(
+            config=self._effective_config,
+            config_path=get_config_path(),
+        ).to_dict()
 
     def runtime_context_snapshot(
         self,
@@ -510,6 +554,57 @@ class RuntimeIntrospectionService:
                 working_memory=working_memory if isinstance(working_memory, dict) else {},
                 world_view=world_view if isinstance(world_view, dict) else {},
             ),
+            "context_assembly_trace": self.context_assembly_trace(),
+        }
+
+    def context_assembly_trace(self) -> dict[str, Any]:
+        """Return a best-effort context assembly trace."""
+
+        loop = self._loop
+        trace = dict(getattr(getattr(loop, "context", None), "_last_context_assembly_audit", {}) or {})
+        if not trace:
+            trace = dict(getattr(loop, "_last_context_assembly", {}) or {})
+        return {
+            "contract_version": str(trace.get("contract_version") or self.CONTINUITY_CONTRACT_VERSION),
+            "assembly_order": list(trace.get("assembly_order") or []),
+            "block_kinds": list(trace.get("block_kinds") or []),
+            "blocks": [
+                dict(block)
+                for block in list(trace.get("blocks") or [])
+                if isinstance(block, dict)
+            ],
+            "reference_sources": list(trace.get("reference_sources") or []),
+            "retrieval_sources_used": list(trace.get("retrieval_sources_used") or []),
+            "world_selection_reasons": list(trace.get("world_selection_reasons") or []),
+            "budget": dict(trace.get("budget") or {}),
+            "trimmed_blocks": [
+                dict(block)
+                for block in list((trace.get("budget") or {}).get("trimmed_blocks") or [])
+                if isinstance(block, dict)
+            ],
+            "media": {
+                "requested_count": int(((trace.get("media") or {}).get("requested_count") or 0)),
+                "accepted_count": int(((trace.get("media") or {}).get("accepted_count") or 0)),
+                "text_included": bool((trace.get("media") or {}).get("text_included", False)),
+                "accepted": [
+                    dict(item)
+                    for item in list((trace.get("media") or {}).get("accepted") or [])
+                    if isinstance(item, dict)
+                ],
+                "rejected": [
+                    dict(item)
+                    for item in list((trace.get("media") or {}).get("rejected") or [])
+                    if isinstance(item, dict)
+                ],
+            },
+            "prewarm": {
+                "enabled": bool(trace.get("prewarm_enabled", False)),
+                "empty": bool(trace.get("prewarm_empty", False)),
+                "reason": trace.get("prewarm_reason"),
+                "sources": list(trace.get("prewarm_sources") or []),
+                "seed_counts": dict(trace.get("prewarm_seed_counts") or {}),
+            },
+            "raw_trace": json.loads(json.dumps(trace, ensure_ascii=False, default=str)) if trace else {},
         }
 
     def background_task_summary(

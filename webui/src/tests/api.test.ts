@@ -23,6 +23,7 @@ import {
   updateProviderSettings,
   updateRuntimeSettings,
   updateSettings,
+  updateVoiceSettings,
   updateWebSearchSettings,
   upsertHomeAssistantMcpSettings,
   upsertMcpServerSettings,
@@ -252,6 +253,30 @@ describe("webui API helpers", () => {
         headers: { Authorization: "Bearer tok" },
       }),
     );
+  });
+
+  it("serializes voice settings updates as encoded JSON", async () => {
+    await updateVoiceSettings("tok", {
+      input_enabled: true,
+      transcription_provider: "volcengine",
+      transcription_language: "zh",
+      max_record_seconds: 9,
+    });
+
+    expect(fetch).toHaveBeenCalledWith(
+      expect.stringContaining("/api/settings/local-awareness/audio/update?config="),
+      expect.objectContaining({
+        headers: { Authorization: "Bearer tok" },
+      }),
+    );
+    const url = vi.mocked(fetch).mock.calls[0][0] as string;
+    const query = new URLSearchParams(url.split("?")[1]);
+    expect(JSON.parse(query.get("config") ?? "{}")).toMatchObject({
+      input_enabled: true,
+      transcription_provider: "volcengine",
+      transcription_language: "zh",
+      max_record_seconds: 9,
+    });
   });
 
   it("serializes review proposal list filters", async () => {

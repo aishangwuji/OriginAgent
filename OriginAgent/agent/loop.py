@@ -32,6 +32,7 @@ from OriginAgent.agent.agent_tool_setup import (
 )
 from OriginAgent.agent.action_summary import normalize_action_summary
 from OriginAgent.agent.local_awareness import LocalAwarenessBackend, normalize_local_awareness_summary
+from OriginAgent.agent.message_metadata import build_origin_metadata
 from OriginAgent.agent.active_intents import ActiveIntentConfig, ActiveIntentService
 from OriginAgent.agent.agent_cognitive_runtime import AgentCognitiveRuntime, CognitiveRuntimeDeps
 from OriginAgent.agent.agent_loop_components import build_loop_components
@@ -106,7 +107,11 @@ from OriginAgent.bus.queue import MessageBus
 from OriginAgent.command import CommandContext, CommandRouter, register_builtin_commands
 from OriginAgent.config.schema import AgentDefaults
 from OriginAgent.providers.base import LLMProvider
-from OriginAgent.providers.transcription import GroqTranscriptionProvider, OpenAITranscriptionProvider
+from OriginAgent.providers.transcription import (
+    GroqTranscriptionProvider,
+    OpenAITranscriptionProvider,
+    VolcengineTranscriptionProvider,
+)
 from OriginAgent.providers.factory import ProviderSnapshot
 from OriginAgent.security.capabilities import CapabilitySnapshot
 from OriginAgent.security.grants import CapabilityGrantStore, issue_tool_approval_grant
@@ -261,6 +266,7 @@ class AgentLoop:
         active_intent_session_cooldown_seconds: int | None = None,
         active_intent_intent_cooldown_seconds: int | None = None,
         active_intent_max_messages_per_session_per_pass: int | None = None,
+        effective_config: Any | None = None,
     ):
         from OriginAgent.config.schema import ExecToolConfig, ToolsConfig, WebToolsConfig
 
@@ -336,10 +342,13 @@ class AgentLoop:
             active_intent_session_cooldown_seconds=active_intent_session_cooldown_seconds,
             active_intent_intent_cooldown_seconds=active_intent_intent_cooldown_seconds,
             active_intent_max_messages_per_session_per_pass=active_intent_max_messages_per_session_per_pass,
+            effective_config=effective_config,
         )
         for name, value in built.values.items():
             setattr(self, name, value)
-        self._local_awareness_backend = LocalAwarenessBackend()
+        self._local_awareness_backend = LocalAwarenessBackend(
+            tts_config=dict((transcription_provider_config or {}).get("tts_config") or {}),
+        )
         self._transcription_provider = self._build_transcription_provider(transcription_provider_config)
         self._last_local_awareness_summary: dict[str, Any] = normalize_local_awareness_summary(
             self.tools_config.local_awareness,
@@ -408,11 +417,21 @@ class AgentLoop:
         provider_key = str(config.get("api_key") or "").strip()
         provider_base = str(config.get("api_base") or "").strip()
         language = config.get("language")
+        resource_id = config.get("resource_id")
+        user_id = config.get("user_id")
         if not provider_key:
             return None
         try:
             if provider_name == "openai":
                 return OpenAITranscriptionProvider(api_key=provider_key, api_base=provider_base or None, language=language or None)
+            if provider_name == "volcengine":
+                return VolcengineTranscriptionProvider(
+                    api_key=provider_key,
+                    api_base=provider_base or None,
+                    language=language or None,
+                    resource_id=resource_id or None,
+                    user_id=user_id or None,
+                )
             return GroqTranscriptionProvider(api_key=provider_key, api_base=provider_base or None, language=language or None)
         except Exception:
             return None
@@ -481,6 +500,23 @@ class AgentLoop:
 
             return load_config().agents.defaults.learning.evolution
 
+        transcription_provider_name = (
+            config.tools.local_awareness.audio.transcription_provider
+            or config.channels.transcription_provider
+        )
+        if transcription_provider_name == "openai":
+            transcription_api_key = config.providers.openai.api_key
+            transcription_api_base = config.providers.openai.api_base
+            transcription_resource_id = None
+        elif transcription_provider_name == "volcengine":
+            transcription_api_key = config.providers.volcengine.api_key
+            transcription_api_base = config.providers.volcengine.api_base
+            transcription_resource_id = os.environ.get("VOLCENGINE_TRANSCRIPTION_RESOURCE_ID") or "volc.bigasr.auc_turbo"
+        else:
+            transcription_api_key = config.providers.groq.api_key
+            transcription_api_base = config.providers.groq.api_base
+            transcription_resource_id = None
+
         return cls(
             bus=bus,
             provider=provider,
@@ -498,19 +534,19 @@ class AgentLoop:
             mcp_servers=config.tools.mcp_servers,
             channels_config=config.channels,
             transcription_provider_config={
-                "provider": config.tools.local_awareness.audio.transcription_provider
-                or config.channels.transcription_provider,
-                "api_key": (
-                    config.providers.openai.api_key
-                    if (config.tools.local_awareness.audio.transcription_provider or config.channels.transcription_provider) == "openai"
-                    else config.providers.groq.api_key
-                ),
-                "api_base": (
-                    config.providers.openai.api_base
-                    if (config.tools.local_awareness.audio.transcription_provider or config.channels.transcription_provider) == "openai"
-                    else config.providers.groq.api_base
-                ),
+                "provider": transcription_provider_name,
+                "api_key": transcription_api_key,
+                "api_base": transcription_api_base,
                 "language": config.channels.transcription_language,
+                "resource_id": transcription_resource_id,
+                "user_id": "originagent",
+                "tts_config": {
+                    "api_key": config.providers.volcengine.api_key,
+                    "api_base": config.providers.volcengine.api_base,
+                    "resource_id": os.environ.get("VOLCENGINE_TTS_RESOURCE_ID") or "seed-tts-2.0",
+                    "sample_rate": 24000,
+                    "output_dir": str(config.workspace_path / config.tools.local_awareness.audio.save_dir),
+                },
             },
             timezone=defaults.timezone,
             runtime_profile=config.runtime.profile,
@@ -541,6 +577,7 @@ class AgentLoop:
             dream_config=defaults.dream,
             nearline_memory_config=defaults.nearline_memory,
             enable_backend_cognition=defaults.enable_backend_cognition,
+            effective_config=config,
             **extra,
         )
 
@@ -1653,11 +1690,17 @@ class AgentLoop:
             sender_id="agent_cognitive",
             chat_id=session_key,
             content="",
-            metadata={
-                "injected_event": "cognitive_event",
-                "user_id": "agent_cognitive",
-                "scope": "session",
-            },
+            metadata=build_origin_metadata(
+                {
+                    "injected_event": "cognitive_event",
+                    "user_id": "agent_cognitive",
+                    "scope": "session",
+                },
+                origin_kind="cognitive_event",
+                is_inferred=True,
+                confidence=0.6,
+                trigger_reason="runtime_scan",
+            ),
             session_key_override=session_key,
         )
         return self._resolve_runtime_context(
@@ -1701,13 +1744,19 @@ class AgentLoop:
                 chat_id=record.chat_id or session_key,
                 content=content,
                 session_key_override=session_key,
-                metadata={
-                    "injected_event": "cognitive_event",
-                    "_from_active": True,
-                    "cognitive_event_type": "scheduled_reminder",
-                    "cognitive_event_id": f"reminder:{record.reminder_id}",
-                    "reminder_id": record.reminder_id,
-                },
+                metadata=build_origin_metadata(
+                    {
+                        "injected_event": "cognitive_event",
+                        "_from_active": True,
+                        "cognitive_event_type": "scheduled_reminder",
+                        "cognitive_event_id": f"reminder:{record.reminder_id}",
+                        "reminder_id": record.reminder_id,
+                    },
+                    origin_kind="cognitive_event",
+                    is_inferred=True,
+                    confidence=0.8,
+                    trigger_reason="scheduled_reminder",
+                ),
             )
             event = CognitiveEvent(
                 event_id=f"reminder:{record.reminder_id}",

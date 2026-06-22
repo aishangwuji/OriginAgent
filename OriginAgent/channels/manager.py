@@ -13,7 +13,12 @@ from loguru import logger
 
 from OriginAgent.bus.events import OutboundMessage
 from OriginAgent.bus.queue import MessageBus
+from OriginAgent.agent.message_metadata import maybe_prefix_origin_label, origin_label
 from OriginAgent.channels.base import BaseChannel
+from OriginAgent.channels.bootstrap import (
+    DefaultChannelBootstrapAdapter,
+    build_channel_descriptor,
+)
 from OriginAgent.config.schema import Config
 from OriginAgent.utils.restart import consume_restart_notice_from_env, format_restart_completed_message
 
@@ -72,48 +77,35 @@ class ChannelManager:
         """Initialize channels discovered via pkgutil scan + entry_points plugins."""
         from OriginAgent.channels.registry import discover_all
 
-        transcription_provider = self.config.channels.transcription_provider
-        transcription_key = self._resolve_transcription_key(transcription_provider)
-        transcription_base = self._resolve_transcription_base(transcription_provider)
-        transcription_language = self.config.channels.transcription_language
+        adapter = DefaultChannelBootstrapAdapter(
+            session_manager=getattr(self, "_session_manager", None),
+            webui_runtime_model_name=getattr(self, "_webui_runtime_model_name", None),
+            webui_dist_resolver=_default_webui_dist,
+        )
 
         for name, cls in discover_all().items():
             section = getattr(self.config.channels, name, None)
             if section is None:
                 continue
-            enabled = (
-                section.get("enabled", False)
-                if isinstance(section, dict)
-                else getattr(section, "enabled", False)
-            )
-            if not enabled:
+            descriptor = build_channel_descriptor(name, cls, section)
+            if not descriptor.enabled:
                 continue
             try:
-                kwargs: dict[str, Any] = {}
-                # Only the WebSocket channel currently hosts the embedded webui
-                # surface; other channels stay oblivious to these knobs.
-                if cls.name == "websocket":
-                    if self._session_manager is not None:
-                        kwargs["session_manager"] = self._session_manager
-                        static_path = _default_webui_dist()
-                        if static_path is not None:
-                            kwargs["static_dist_path"] = static_path
-                    if self._webui_runtime_model_name is not None:
-                        kwargs["runtime_model_name"] = self._webui_runtime_model_name
-                channel = cls(section, self.bus, **kwargs)
-                channel.transcription_provider = transcription_provider
-                channel.transcription_api_key = transcription_key
-                channel.transcription_api_base = transcription_base
-                channel.transcription_language = transcription_language
-                channel.pairing_config = self.config.security.pairing
-                channel.send_progress = self._resolve_bool_override(
-                    section, "send_progress", self.config.channels.send_progress,
+                adapter.validate(
+                    descriptor=descriptor,
+                    section=section,
+                    core_config=self.config,
                 )
-                channel.send_tool_hints = self._resolve_bool_override(
-                    section, "send_tool_hints", self.config.channels.send_tool_hints,
+                settings = adapter.resolve_runtime_settings(
+                    descriptor=descriptor,
+                    section=section,
+                    core_config=self.config,
                 )
-                channel.show_reasoning = self._resolve_bool_override(
-                    section, "show_reasoning", self.config.channels.show_reasoning,
+                channel = adapter.create_channel(
+                    channel_cls=cls,
+                    section=section,
+                    bus=self.bus,
+                    settings=settings,
                 )
                 self.channels[name] = channel
                 logger.info("{} channel enabled", cls.display_name)
@@ -121,24 +113,6 @@ class ChannelManager:
                 logger.warning("{} channel not available: {}", name, e)
 
         self._validate_allow_from()
-
-    def _resolve_transcription_key(self, provider: str) -> str:
-        """Pick the API key for the configured transcription provider."""
-        try:
-            if provider == "openai":
-                return self.config.providers.openai.api_key
-            return self.config.providers.groq.api_key
-        except AttributeError:
-            return ""
-
-    def _resolve_transcription_base(self, provider: str) -> str:
-        """Pick the API base URL for the configured transcription provider."""
-        try:
-            if provider == "openai":
-                return self.config.providers.openai.api_base or ""
-            return self.config.providers.groq.api_base or ""
-        except AttributeError:
-            return ""
 
     def _validate_allow_from(self) -> None:
         for name, ch in self.channels.items():
@@ -356,6 +330,26 @@ class ChannelManager:
     @staticmethod
     async def _send_once(channel: BaseChannel, msg: OutboundMessage) -> None:
         """Send one outbound message without retry policy."""
+        if (
+            channel.name != "websocket"
+            and not msg.metadata.get("_progress")
+            and not msg.metadata.get("_tool_hint")
+            and not msg.metadata.get("_reasoning")
+            and not msg.metadata.get("_reasoning_delta")
+            and not msg.metadata.get("_reasoning_end")
+        ):
+            msg = OutboundMessage(
+                channel=msg.channel,
+                chat_id=msg.chat_id,
+                content=maybe_prefix_origin_label(msg.content, msg.metadata),
+                reply_to=msg.reply_to,
+                media=list(msg.media),
+                metadata=dict(msg.metadata or {}),
+                buttons=list(msg.buttons),
+            )
+            label = origin_label(msg.metadata)
+            if label:
+                msg.metadata.setdefault("origin_label", label)
         if msg.metadata.get("_reasoning_end"):
             await channel.send_reasoning_end(msg.chat_id, msg.metadata)
         elif msg.metadata.get("_reasoning_delta"):

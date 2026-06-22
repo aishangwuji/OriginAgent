@@ -33,9 +33,12 @@ from websockets.http11 import Response
 
 from OriginAgent.bus.events import OUTBOUND_META_AGENT_UI, OutboundMessage
 from OriginAgent.bus.queue import MessageBus
+from OriginAgent.agent.message_metadata import extract_origin_metadata, origin_label
+from OriginAgent.config.doctor import build_config_doctor_report
 from OriginAgent.channels.base import BaseChannel
 from OriginAgent.command.builtin import builtin_command_palette
 from OriginAgent.config.paths import get_media_dir, get_webui_dir, get_workspace_upload_dir
+from OriginAgent.agent.runtime_mode import build_runtime_mode_summary
 from OriginAgent.config.schema import Base
 from OriginAgent.session.goal_state import goal_state_ws_blob
 from OriginAgent.utils.attachments import describe_attachment
@@ -276,6 +279,7 @@ _EXEC_SHELL_SYNTAX_POLICY_OPTIONS = {"restricted", "shell"}
 _DEVICE_MODE_OPTIONS = {"dry_run", "real"}
 _DEVICE_BACKEND_OPTIONS = {"none", "fake", "lighting_client"}
 _AUDIT_MODE_OPTIONS = {"off", "minimal", "security"}
+_TRANSCRIPTION_PROVIDER_OPTIONS = {"groq", "openai", "volcengine"}
 
 _MCP_SERVER_NAME_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 _MCP_SECRET_HINT = "••••"
@@ -364,6 +368,33 @@ def _settings_runtime_controls_payload(config: Any) -> dict[str, Any]:
         "runtime": {
             "profile": config.runtime.profile,
         },
+    }
+
+
+def _settings_voice_payload(config: Any) -> dict[str, Any]:
+    audio = config.tools.local_awareness.audio
+    resolved_transcription_provider = (
+        str(audio.transcription_provider or config.channels.transcription_provider or "groq")
+        .strip()
+        .lower()
+    )
+    if resolved_transcription_provider not in _TRANSCRIPTION_PROVIDER_OPTIONS:
+        resolved_transcription_provider = "groq"
+    transcription_language = config.channels.transcription_language
+    return {
+        "input_enabled": bool(audio.input_enabled),
+        "output_enabled": bool(audio.output_enabled),
+        "transcription_enabled": bool(audio.transcription_enabled),
+        "tts_enabled": bool(audio.tts_enabled),
+        "require_confirmation": bool(audio.require_confirmation),
+        "save_dir": audio.save_dir,
+        "max_record_seconds": int(audio.max_record_seconds),
+        "device_id": audio.device_id,
+        "voice": audio.voice,
+        "transcription_provider": resolved_transcription_provider,
+        "transcription_language": transcription_language,
+        "tts_provider": "volcengine",
+        "transcription_provider_options": sorted(_TRANSCRIPTION_PROVIDER_OPTIONS),
     }
 
 
@@ -931,6 +962,9 @@ class WebSocketChannel(BaseChannel):
         if got == "/api/settings/runtime/update":
             return self._handle_settings_runtime_update(request)
 
+        if got == "/api/settings/local-awareness/audio/update":
+            return self._handle_settings_local_awareness_audio_update(request)
+
         if got == "/api/settings/mcp/upsert":
             return self._handle_settings_mcp_upsert(request)
 
@@ -1070,6 +1104,8 @@ class WebSocketChannel(BaseChannel):
                 "ws_path": self._expected_path(),
                 "expires_in": self.config.token_ttl_s,
                 "model_name": _resolve_bootstrap_model_name(self._runtime_model_name),
+                "runtime_mode": self._bootstrap_runtime_mode_payload(),
+                "config_doctor": self._bootstrap_config_doctor_payload(),
             }
         )
 
@@ -1244,6 +1280,7 @@ class WebSocketChannel(BaseChannel):
                     "enabled": bool(defaults.learning.curator.enabled),
                 },
             },
+            "voice": _settings_voice_payload(config),
             "runtime_controls": _settings_runtime_controls_payload(config),
             "mcp": {
                 "servers": [
@@ -1255,6 +1292,37 @@ class WebSocketChannel(BaseChannel):
                 "config_path": str(get_config_path().expanduser()),
             },
             "requires_restart": requires_restart,
+        }
+
+    @staticmethod
+    def _bootstrap_runtime_mode_payload() -> dict[str, Any]:
+        from OriginAgent.config.loader import load_config
+
+        config = load_config()
+        summary = build_runtime_mode_summary(config=config).to_dict()
+        return {
+            "mode": summary["mode"],
+            "enabled_capabilities": summary["enabled_capabilities"],
+            "voice": summary["voice"],
+            "channels": summary["channels"],
+            "providers": summary["providers"],
+        }
+
+    @staticmethod
+    def _bootstrap_config_doctor_payload() -> dict[str, Any]:
+        from OriginAgent.config.loader import get_config_path, load_config
+
+        config = load_config()
+        doctor = build_config_doctor_report(
+            config=config,
+            config_path=get_config_path(),
+        ).to_dict()
+        return {
+            "unknown_fields": doctor["unknown_fields"],
+            "conflicts": doctor["conflicts"],
+            "capability_warnings": doctor["capability_warnings"],
+            "ignored_fields": doctor["ignored_fields"],
+            "legacy_channel_sections": doctor["legacy_channel_sections"],
         }
 
     def _handle_settings(self, request: WsRequest) -> Response:
@@ -1933,6 +2001,123 @@ class WebSocketChannel(BaseChannel):
             runtime = data.get("runtime")
             if isinstance(runtime, dict) and "profile" in runtime:
                 set_choice(config.runtime, "profile", runtime["profile"], _RUNTIME_PROFILE_OPTIONS)
+        except ValueError as exc:
+            return _http_error(400, str(exc))
+
+        if changed:
+            save_config(config)
+        return _http_json_response(self._settings_payload(requires_restart=True))
+
+    def _handle_settings_local_awareness_audio_update(self, request: WsRequest) -> Response:
+        if not self._check_api_token(request):
+            return _http_error(401, "Unauthorized")
+        from OriginAgent.config.loader import load_config, save_config
+
+        query = _parse_query(request.path)
+        raw = _query_first(query, "config")
+        if not raw:
+            return _http_error(400, "config is required")
+        try:
+            data = json.loads(raw)
+        except json.JSONDecodeError:
+            return _http_error(400, "config must be valid JSON")
+        if not isinstance(data, dict):
+            return _http_error(400, "config must be an object")
+
+        config = load_config()
+        audio = config.tools.local_awareness.audio
+        changed = False
+
+        def set_bool(target: Any, attr: str, value: Any) -> None:
+            nonlocal changed
+            if not isinstance(value, bool):
+                raise ValueError(f"{attr} must be true or false")
+            if getattr(target, attr) != value:
+                setattr(target, attr, value)
+                changed = True
+
+        def set_int(target: Any, attr: str, value: Any, *, minimum: int, maximum: int) -> None:
+            nonlocal changed
+            if not isinstance(value, int) or isinstance(value, bool):
+                raise ValueError(f"{attr} must be an integer")
+            if value < minimum or value > maximum:
+                raise ValueError(f"{attr} must be between {minimum} and {maximum}")
+            if getattr(target, attr) != value:
+                setattr(target, attr, value)
+                changed = True
+
+        def set_optional_string(target: Any, attr: str, value: Any) -> None:
+            nonlocal changed
+            if value is None:
+                normalized = None
+            elif isinstance(value, str):
+                normalized = value.strip() or None
+            else:
+                raise ValueError(f"{attr} must be a string or null")
+            if getattr(target, attr) != normalized:
+                setattr(target, attr, normalized)
+                changed = True
+
+        def set_required_string(target: Any, attr: str, value: Any) -> None:
+            nonlocal changed
+            if not isinstance(value, str):
+                raise ValueError(f"{attr} must be a string")
+            normalized = value.strip()
+            if not normalized:
+                raise ValueError(f"{attr} is required")
+            if getattr(target, attr) != normalized:
+                setattr(target, attr, normalized)
+                changed = True
+
+        def set_transcription_provider(value: Any) -> None:
+            nonlocal changed
+            if not isinstance(value, str):
+                raise ValueError("transcription_provider must be a string")
+            normalized = value.strip().lower()
+            if normalized not in _TRANSCRIPTION_PROVIDER_OPTIONS:
+                allowed = ", ".join(sorted(_TRANSCRIPTION_PROVIDER_OPTIONS))
+                raise ValueError(f"transcription_provider must be one of: {allowed}")
+            if audio.transcription_provider != normalized:
+                audio.transcription_provider = normalized
+                changed = True
+
+        def set_transcription_language(value: Any) -> None:
+            nonlocal changed
+            if value is None:
+                normalized = None
+            elif isinstance(value, str):
+                normalized = value.strip().lower() or None
+                if normalized is not None and not re.fullmatch(r"[a-z]{2,3}", normalized):
+                    raise ValueError("transcription_language must be a 2-3 letter lowercase ISO code")
+            else:
+                raise ValueError("transcription_language must be a string or null")
+            if config.channels.transcription_language != normalized:
+                config.channels.transcription_language = normalized
+                changed = True
+
+        try:
+            if "input_enabled" in data:
+                set_bool(audio, "input_enabled", data["input_enabled"])
+            if "output_enabled" in data:
+                set_bool(audio, "output_enabled", data["output_enabled"])
+            if "transcription_enabled" in data:
+                set_bool(audio, "transcription_enabled", data["transcription_enabled"])
+            if "tts_enabled" in data:
+                set_bool(audio, "tts_enabled", data["tts_enabled"])
+            if "require_confirmation" in data:
+                set_bool(audio, "require_confirmation", data["require_confirmation"])
+            if "max_record_seconds" in data:
+                set_int(audio, "max_record_seconds", data["max_record_seconds"], minimum=1, maximum=60)
+            if "device_id" in data:
+                set_optional_string(audio, "device_id", data["device_id"])
+            if "voice" in data:
+                set_optional_string(audio, "voice", data["voice"])
+            if "save_dir" in data:
+                set_required_string(audio, "save_dir", data["save_dir"])
+            if "transcription_provider" in data:
+                set_transcription_provider(data["transcription_provider"])
+            if "transcription_language" in data:
+                set_transcription_language(data["transcription_language"])
         except ValueError as exc:
             return _http_error(400, str(exc))
 
@@ -2810,6 +2995,12 @@ class WebSocketChannel(BaseChannel):
         agent_ui = msg.metadata.get(OUTBOUND_META_AGENT_UI)
         if agent_ui is not None:
             payload["agent_ui"] = agent_ui
+        origin_meta = extract_origin_metadata(msg.metadata)
+        if origin_meta:
+            payload["origin"] = origin_meta
+        label = origin_label(msg.metadata)
+        if label:
+            payload["origin_label"] = label
         # Mark intermediate agent breadcrumbs (tool-call hints, generic
         # progress strings) so WS clients can render them as subordinate
         # trace rows rather than conversational replies.

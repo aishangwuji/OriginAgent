@@ -14,6 +14,7 @@ from OriginAgent.agent.confirmation import PendingConfirmationStore
 from OriginAgent.agent.cognitive_audit import JsonlCognitiveAuditLedger
 from OriginAgent.agent.cognitive_events import CognitiveDecision
 from OriginAgent.agent.facts import FactStore
+from OriginAgent.agent.message_metadata import build_origin_metadata
 from OriginAgent.bus.events import InboundMessage
 from OriginAgent.bus.queue import MessageBus
 from OriginAgent.memory.policy import nearline_runtime_enabled
@@ -506,10 +507,16 @@ class ActiveIntentService:
             chat_id=f"{channel}:{chat_id}",
             content=candidate.content,
             session_key_override=session.key,
-            metadata={
-                "injected_event": "active_intent",
-                "_from_active": True,
-                "active_intent_type": candidate.intent_type,
-                "active_intent_id": candidate.intent_id,
-            },
+            metadata=build_origin_metadata(
+                {
+                    "injected_event": "active_intent",
+                    "_from_active": True,
+                    "active_intent_type": candidate.intent_type,
+                    "active_intent_id": candidate.intent_id,
+                },
+                origin_kind="active_intent",
+                is_inferred=True,
+                confidence=0.7,
+                trigger_reason=candidate.intent_type,
+            ),
         )

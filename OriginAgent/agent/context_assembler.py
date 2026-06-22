@@ -5,6 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
+from OriginAgent.utils.helpers import estimate_message_tokens
+
 
 @dataclass(frozen=True)
 class ContextAssemblyResult:
@@ -98,6 +100,7 @@ class ContextAssemblerV2:
             if content:
                 merged.append(self._builder.build_internal_event_block(source, content))
         merged.extend(user_content)
+        media_audit = dict(getattr(self._builder, "_last_media_block_audit", {}) or {})
         audit = {
             "enabled": True,
             "contract_version": self.CONTRACT_VERSION,
@@ -164,6 +167,16 @@ class ContextAssemblerV2:
                 for block in continuity_blocks
                 if isinstance(block, dict)
             ),
+            "media": media_audit,
+            "blocks": [
+                self._block_trace(
+                    block,
+                    index=index,
+                    reason="assembly_included",
+                )
+                for index, block in enumerate(merged)
+                if isinstance(block, dict)
+            ],
         }
         if runtime_context is not None and self._builder.world_state is not None and session_key:
             session = self._builder._sessions.get_or_create(session_key) if self._builder._sessions is not None else None
@@ -180,3 +193,29 @@ class ContextAssemblerV2:
                 audit["world_selection_reasons"] = list(filtered.get("selection_reasons", []))
         self._builder._last_context_assembly_audit = dict(audit)
         return ContextAssemblyResult(blocks=merged, audit=audit)
+
+    @staticmethod
+    def _block_trace(
+        block: dict[str, Any],
+        *,
+        index: int,
+        reason: str,
+    ) -> dict[str, Any]:
+        meta = block.get("_meta") if isinstance(block.get("_meta"), dict) else {}
+        block_type = str(block.get("type") or "")
+        text = str(block.get("text") or "") if isinstance(block.get("text"), str) else ""
+        token_estimate = estimate_message_tokens({"role": "user", "content": [block]})
+        preview = text[:160] if text else None
+        path = meta.get("path")
+        source = meta.get("source")
+        return {
+            "index": index,
+            "type": block_type,
+            "kind": meta.get("kind"),
+            "source": source,
+            "trust": meta.get("trust"),
+            "path": str(path) if path else None,
+            "token_estimate": token_estimate,
+            "included_reason": reason,
+            "preview": preview,
+        }

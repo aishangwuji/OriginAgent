@@ -55,10 +55,12 @@ class ContextBudgetManager:
             "trim_order": list(self.TRIM_ORDER),
             "budget_tokens": budget,
             "initial_tokens": initial_tokens,
+            "initial_user_block_count": self._last_user_block_count(trimmed),
             "trimmed_history_messages": 0,
             "removed_recent_history_blocks": 0,
             "removed_retrieval_blocks": 0,
             "removed_profile_and_archived_summary_blocks": 0,
+            "trimmed_blocks": [],
             "preserved_blocks": [
                 "current_user_message",
                 "working_memory",
@@ -86,19 +88,20 @@ class ContextBudgetManager:
 
         content = trimmed[current_index].get("content")
         if isinstance(content, list):
-            content, recent_removed = self._drop_recent_history_blocks(content, budget, trimmed)
+            content, recent_removed = self._drop_recent_history_blocks(content, budget, trimmed, audit)
             trimmed[current_index]["content"] = content
             audit["removed_recent_history_blocks"] = recent_removed
             if self._estimate_messages(trimmed) > budget:
-                content, retrieval_removed = self._drop_retrieval_blocks(content, budget, trimmed)
+                content, retrieval_removed = self._drop_retrieval_blocks(content, budget, trimmed, audit)
                 trimmed[current_index]["content"] = content
                 audit["removed_retrieval_blocks"] = retrieval_removed
             if self._estimate_messages(trimmed) > budget:
-                content, continuity_removed = self._drop_continuity_reference_blocks(content, budget, trimmed)
+                content, continuity_removed = self._drop_continuity_reference_blocks(content, budget, trimmed, audit)
                 trimmed[current_index]["content"] = content
                 audit["removed_profile_and_archived_summary_blocks"] = continuity_removed
 
         audit["final_tokens"] = self._estimate_messages(trimmed)
+        audit["final_user_block_count"] = self._last_user_block_count(trimmed)
         audit["reason"] = "trimmed" if audit["final_tokens"] < initial_tokens else "unchanged"
         return ContextBudgetResult(messages=trimmed, audit=audit)
 
@@ -159,6 +162,7 @@ class ContextBudgetManager:
         content: list[dict[str, Any]],
         budget: int,
         messages: list[dict[str, Any]],
+        audit: dict[str, Any],
     ) -> tuple[list[dict[str, Any]], int]:
         kept: list[dict[str, Any]] = []
         removed = 0
@@ -168,6 +172,7 @@ class ContextBudgetManager:
                 continue
             source = self._block_source(block)
             if source == "recent_history":
+                self._record_trimmed_block(audit, block, reason="recent_history_trim")
                 removed += 1
                 continue
             kept.append(block)
@@ -178,6 +183,7 @@ class ContextBudgetManager:
         content: list[dict[str, Any]],
         budget: int,
         messages: list[dict[str, Any]],
+        audit: dict[str, Any],
     ) -> tuple[list[dict[str, Any]], int]:
         removable = [
             index
@@ -190,8 +196,9 @@ class ContextBudgetManager:
         for index in reversed(removable):
             if self._estimate_messages(messages) <= budget:
                 break
-            kept.pop(index)
+            removed_block = kept.pop(index)
             messages[-1]["content"] = kept
+            self._record_trimmed_block(audit, removed_block, reason="retrieval_trim")
             removed += 1
         return kept, removed
 
@@ -200,6 +207,7 @@ class ContextBudgetManager:
         content: list[dict[str, Any]],
         budget: int,
         messages: list[dict[str, Any]],
+        audit: dict[str, Any],
     ) -> tuple[list[dict[str, Any]], int]:
         removable = [
             index
@@ -212,10 +220,32 @@ class ContextBudgetManager:
         for index in reversed(removable):
             if self._estimate_messages(messages) <= budget:
                 break
-            kept.pop(index)
+            removed_block = kept.pop(index)
             messages[-1]["content"] = kept
+            self._record_trimmed_block(audit, removed_block, reason="continuity_reference_trim")
             removed += 1
         return kept, removed
+
+    @staticmethod
+    def _last_user_block_count(messages: list[dict[str, Any]]) -> int:
+        index = ContextBudgetManager._last_user_index(messages)
+        if index is None:
+            return 0
+        content = messages[index].get("content")
+        return len(content) if isinstance(content, list) else 0
+
+    @staticmethod
+    def _record_trimmed_block(audit: dict[str, Any], block: Any, *, reason: str) -> None:
+        trimmed = audit.setdefault("trimmed_blocks", [])
+        if not isinstance(trimmed, list):
+            return
+        meta = block.get("_meta") if isinstance(block, dict) and isinstance(block.get("_meta"), dict) else {}
+        trimmed.append({
+            "reason": reason,
+            "kind": meta.get("kind"),
+            "source": meta.get("source"),
+            "type": block.get("type") if isinstance(block, dict) else None,
+        })
 
     @staticmethod
     def _block_kind(block: Any) -> str:

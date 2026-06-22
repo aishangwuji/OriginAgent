@@ -333,6 +333,9 @@ def test_context_builder_freeze_order_matches_runtime_contract(tmp_path: Path):
         ContextBuilder.WORKING_MEMORY_CONTEXT_KIND,
         ContextBuilder.WORLD_STATE_CONTEXT_KIND,
     ]
+    assert audit["blocks"][0]["kind"] == ContextBuilder.RUNTIME_CONTEXT_KIND
+    assert audit["blocks"][0]["included_reason"] == "assembly_included"
+    assert any(block["source"] == "recent_history" for block in audit["blocks"])
 
 
 def test_context_builder_uses_real_world_state_snapshot(tmp_path: Path):
@@ -1767,6 +1770,8 @@ def test_context_budget_keeps_current_turn_and_continuity_core_when_profile_memo
         "working_memory",
         "world_state",
     ]
+    assert budget_audit["initial_user_block_count"] >= budget_audit["final_user_block_count"]
+    assert len(budget_audit["trimmed_blocks"]) >= 1
 
 
 def test_context_budget_freeze_prefers_recent_history_then_retrieval_then_continuity_references():

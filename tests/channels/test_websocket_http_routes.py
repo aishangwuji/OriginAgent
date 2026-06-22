@@ -549,6 +549,10 @@ def test_bootstrap_prefers_runtime_model_name(bus: MagicMock, monkeypatch: pytes
     assert resp.status_code == 200
     body = json.loads(resp.body)
     assert body["model_name"] == "live/model"
+    assert body["runtime_mode"]["mode"] in {"reactive", "autonomous"}
+    assert isinstance(body["runtime_mode"]["enabled_capabilities"], list)
+    assert "config_doctor" in body
+    assert "unknown_fields" in body["config_doctor"]
 
 
 def test_bootstrap_falls_back_when_runtime_returns_empty(

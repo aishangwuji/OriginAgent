@@ -9,6 +9,7 @@ from loguru import logger
 
 from OriginAgent.agent.agent_turn_pipeline import TurnContext, TurnState
 from OriginAgent.agent.identity import RuntimeContext
+from OriginAgent.agent.message_metadata import extract_origin_metadata
 from OriginAgent.agent.services import AgentServiceContainer
 from OriginAgent.agent.tools.ask import ask_user_options_from_messages, ask_user_outbound
 from OriginAgent.bus.events import InboundMessage, OutboundMessage
@@ -243,6 +244,7 @@ class SystemTurnHandler:
             outbound_metadata["origin_message_id"] = origin_message_id
         if channel == "websocket":
             outbound_metadata["goal_state"] = goal_state_ws_blob(session.metadata)
+        outbound_metadata.update(extract_origin_metadata(msg.metadata))
         return OutboundMessage(
             channel=channel,
             chat_id=chat_id,

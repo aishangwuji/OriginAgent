@@ -124,6 +124,7 @@ def build_loop_components(
     active_intent_session_cooldown_seconds: int | None,
     active_intent_intent_cooldown_seconds: int | None,
     active_intent_max_messages_per_session_per_pass: int | None,
+    effective_config: Any | None = None,
 ) -> LoopComponents:
     values: dict[str, Any] = {}
 
@@ -472,6 +473,7 @@ def build_loop_components(
         nearline_memory_config=values["_nearline_memory_config"],
         session_search_index_service=values["session_search_index"],
         evolution_config=values["evolution_config"],
+        effective_config=effective_config,
     )
     max_concurrent_requests = int(os.environ.get("ORIGINAGENT_MAX_CONCURRENT_REQUESTS", "3"))
     values["_concurrency_gate"] = (

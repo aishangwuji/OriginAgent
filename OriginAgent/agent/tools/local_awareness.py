@@ -10,7 +10,11 @@ from pathlib import Path
 from typing import Any
 
 from OriginAgent.agent.local_awareness import LocalAwarenessBackend
-from OriginAgent.providers.transcription import GroqTranscriptionProvider, OpenAITranscriptionProvider
+from OriginAgent.providers.transcription import (
+    GroqTranscriptionProvider,
+    OpenAITranscriptionProvider,
+    VolcengineTranscriptionProvider,
+)
 from OriginAgent.agent.snapshot_inspection import SnapshotInspectionService
 from OriginAgent.agent.tools.base import Tool
 from OriginAgent.agent.tools.context import RequestContext
@@ -568,9 +572,10 @@ class RecordAudioSampleTool(_LocalAwarenessTool):
                 seconds=int(seconds),
                 device_id=device_id or getattr(audio, "device_id", None),
             )
-            snapshot_id = self._ingest_media(result.get("absolute_path") or result.get("media_path"))
-            result["snapshot_id"] = snapshot_id
-            self._refresh_world_summaries(result)
+            if result.get("status") == "ok" and (result.get("absolute_path") or result.get("media_path")):
+                snapshot_id = self._ingest_media(result.get("absolute_path") or result.get("media_path"))
+                result["snapshot_id"] = snapshot_id
+                self._refresh_world_summaries(result)
         _update_summary(self._loop, key="last_audio", value=result)
         return result
 
@@ -831,6 +836,12 @@ class TranscribeAudioSampleTool(_LocalAwarenessTool):
                 }
             if provider_name == "openai":
                 provider = OpenAITranscriptionProvider(api_key=provider_key or "", api_base=provider_base or None, language=language or None)
+            elif provider_name == "volcengine":
+                provider = VolcengineTranscriptionProvider(
+                    api_key=provider_key or "",
+                    api_base=provider_base or None,
+                    language=language or None,
+                )
             else:
                 provider = GroqTranscriptionProvider(api_key=provider_key or "", api_base=provider_base or None, language=language or None)
         path = Path(media_path)

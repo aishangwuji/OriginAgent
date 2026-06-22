@@ -1504,16 +1504,24 @@ def plugins_list():
 @app.command()
 def status():
     """Show OriginAgent status."""
+    from OriginAgent.agent.runtime_mode import build_runtime_mode_summary
+    from OriginAgent.config.doctor import build_config_doctor_report
     from OriginAgent.config.loader import get_config_path, load_config
 
     config_path = get_config_path()
     config = load_config()
     workspace = config.workspace_path
+    runtime_mode = build_runtime_mode_summary(config=config).to_dict()
+    doctor = build_config_doctor_report(config=config, config_path=config_path).to_dict()
 
     console.print(f"{__logo__} OriginAgent Status\n")
 
     console.print(f"Config: {config_path} {'[green]✓[/green]' if config_path.exists() else '[red]✗[/red]'}")
     console.print(f"Workspace: {workspace} {'[green]✓[/green]' if workspace.exists() else '[red]✗[/red]'}")
+    console.print(
+        f"Mode: {runtime_mode['mode']} "
+        f"({'[green]' + ', '.join(runtime_mode['enabled_capabilities']) + '[/green]' if runtime_mode['enabled_capabilities'] else '[dim]no autonomous capabilities[/dim]'})"
+    )
 
     if config_path.exists():
         from OriginAgent.providers.registry import PROVIDERS
@@ -1536,6 +1544,18 @@ def status():
             else:
                 has_key = bool(p.api_key)
                 console.print(f"{spec.label}: {'[green]✓[/green]' if has_key else '[dim]not set[/dim]'}")
+
+    unknown_count = len(doctor["unknown_fields"])
+    conflict_count = len(doctor["conflicts"])
+    warning_count = len(doctor["capability_warnings"]) + len(doctor["ignored_fields"])
+    console.print(
+        "Config Doctor: "
+        f"unknown={unknown_count}, conflicts={conflict_count}, warnings={warning_count}"
+    )
+    if doctor["legacy_channel_sections"]:
+        console.print(
+            f"Legacy channel config: {', '.join(doctor['legacy_channel_sections'])}"
+        )
 
 
 # ============================================================================

@@ -45,6 +45,7 @@ def _loop(config: ToolsConfig.LocalAwarenessConfig):
         _local_awareness_backend=backend,
         _last_local_awareness_summary=normalize_local_awareness_summary(config, backend=backend),
         channels_config=SimpleNamespace(
+            transcription_provider="groq",
             transcription_api_key="",
             transcription_api_base="",
             transcription_language=None,
@@ -580,6 +581,41 @@ async def test_speak_text_is_disabled_by_default_and_dry_run_when_unlocked(tmp_p
 
 
 @pytest.mark.asyncio
+async def test_speak_text_reports_success_when_backend_returns_real_output(tmp_path: Path) -> None:
+    config = _tools_config(
+        enabled=True,
+        audio=ToolsConfig.LocalAwarenessAudioConfig(
+            output_enabled=True,
+            require_confirmation=False,
+            voice="voice-1",
+        ),
+    )
+    loop = _loop(config.local_awareness)
+    backend = SimpleNamespace(
+        speak_text=lambda **kwargs: {
+            "status": "ok",
+            "is_real_output": True,
+            "backend_kind": "volcengine_tts",
+            "audio_path": str(tmp_path / "uploads" / "perception" / "tts.wav"),
+            **kwargs,
+        }
+    )
+    tool = SpeakTextTool(
+        workspace=tmp_path,
+        config=config,
+        backend=backend,
+        introspection_service=_service(loop),
+    )
+
+    result = await tool.execute("hello world")
+
+    assert result["status"] == "ok"
+    assert result["is_real_output"] is True
+    assert result["backend_kind"] == "volcengine_tts"
+    assert result["tts_enabled"] is False
+
+
+@pytest.mark.asyncio
 async def test_inspect_media_records_disabled_result_in_summary(tmp_path: Path) -> None:
     config = _tools_config(enabled=False)
     loop = _loop(config.local_awareness)
@@ -683,6 +719,52 @@ async def test_transcribe_audio_sample_fails_closed_without_provider(tmp_path: P
         "provider": "groq",
         "media_path": "uploads/perception/audio.wav",
     }
+
+
+@pytest.mark.asyncio
+async def test_transcribe_audio_sample_builds_volcengine_provider_from_channel_config(tmp_path: Path) -> None:
+    media_dir = tmp_path / "uploads" / "perception"
+    media_dir.mkdir(parents=True)
+    (media_dir / "audio.wav").write_bytes(b"RIFF\x24\x00\x00\x00WAVEfmt ")
+    config = _tools_config(
+        enabled=True,
+        audio=ToolsConfig.LocalAwarenessAudioConfig(
+            transcriptionEnabled=True,
+            transcriptionProvider="volcengine",
+        ),
+    )
+    loop = _loop_with_world(config.local_awareness, tmp_path)
+    loop.channels_config = SimpleNamespace(
+        transcription_provider="volcengine",
+        transcription_api_key="vk-test",
+        transcription_api_base="https://openspeech.bytedance.com/api/v3/auc/bigmodel/recognize/flash",
+        transcription_language="zh",
+    )
+    tool = TranscribeAudioSampleTool(
+        workspace=tmp_path,
+        config=config,
+        backend=loop._local_awareness_backend,
+        introspection_service=_service(loop),
+    )
+    tool.set_context(_request_context())
+
+    from unittest.mock import patch
+
+    class _StubVolcengine:
+        def __init__(self, api_key=None, api_base=None, language=None):
+            self.api_key = api_key
+            self.api_base = api_base
+            self.language = language
+
+        async def transcribe(self, file_path):
+            return "volc text"
+
+    with patch("OriginAgent.agent.tools.local_awareness.VolcengineTranscriptionProvider", _StubVolcengine):
+        result = await tool.execute("uploads/perception/audio.wav")
+
+    assert result["status"] == "ok"
+    assert result["transcription"] == "volc text"
+    assert result["provider"] == "_StubVolcengine"
 
 
 @pytest.mark.asyncio

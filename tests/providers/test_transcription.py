@@ -8,7 +8,11 @@ from unittest.mock import AsyncMock, patch
 import httpx
 import pytest
 
-from OriginAgent.providers.transcription import GroqTranscriptionProvider, OpenAITranscriptionProvider
+from OriginAgent.providers.transcription import (
+    GroqTranscriptionProvider,
+    OpenAITranscriptionProvider,
+    VolcengineTranscriptionProvider,
+)
 
 
 @pytest.fixture
@@ -222,6 +226,48 @@ async def test_language_survives_retry(audio_file: Path) -> None:
     assert post.await_count == 2
     for call in post.await_args_list:
         assert call.kwargs["files"]["language"] == (None, "ja")
+
+
+@pytest.mark.asyncio
+async def test_volcengine_transcribes_audio_data_payload(audio_file: Path) -> None:
+    provider = VolcengineTranscriptionProvider(api_key="vk-test")
+    post = AsyncMock(
+        return_value=httpx.Response(
+            status_code=200,
+            json={"result": {"text": "ni hao"}},
+            headers={"X-Api-Status-Code": "20000000", "X-Api-Message": "OK"},
+            request=httpx.Request("POST", "https://openspeech.bytedance.com/api/v3/auc/bigmodel/recognize/flash"),
+        )
+    )
+    with patch("httpx.AsyncClient.post", post), patch("asyncio.sleep", AsyncMock()):
+        result = await provider.transcribe(audio_file)
+    assert result == "ni hao"
+    kwargs = post.await_args_list[0].kwargs
+    assert kwargs["headers"]["X-Api-Resource-Id"] == "volc.bigasr.auc_turbo"
+    assert kwargs["json"]["audio"]["format"] == "ogg"
+    assert isinstance(kwargs["json"]["audio"]["data"], str)
+
+
+@pytest.mark.asyncio
+async def test_volcengine_retries_on_busy_header_code(audio_file: Path) -> None:
+    provider = VolcengineTranscriptionProvider(api_key="vk-test")
+    busy = httpx.Response(
+        status_code=200,
+        json={},
+        headers={"X-Api-Status-Code": "55000031", "X-Api-Message": "busy"},
+        request=httpx.Request("POST", "https://openspeech.bytedance.com/api/v3/auc/bigmodel/recognize/flash"),
+    )
+    ok = httpx.Response(
+        status_code=200,
+        json={"result": {"text": "done"}},
+        headers={"X-Api-Status-Code": "20000000", "X-Api-Message": "OK"},
+        request=httpx.Request("POST", "https://openspeech.bytedance.com/api/v3/auc/bigmodel/recognize/flash"),
+    )
+    post = AsyncMock(side_effect=[busy, ok])
+    with patch("httpx.AsyncClient.post", post), patch("asyncio.sleep", AsyncMock()):
+        result = await provider.transcribe(audio_file)
+    assert result == "done"
+    assert post.await_count == 2
 
 
 # ---------------------------------------------------------------------------

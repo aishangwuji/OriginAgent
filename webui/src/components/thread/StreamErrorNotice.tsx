@@ -68,9 +68,9 @@ function resolveCopy(
         body: t(`errors.attachmentRejected.reasons.${error.reason ?? "default"}`),
       };
     default: {
-      // Exhaustiveness guard: if a new StreamError kind is added, TS will
+      // Exhaustiveness guard: if a new StreamError variant is added, TS will
       // complain here until we add a corresponding i18n branch.
-      const _exhaustive: never = error.kind;
+      const _exhaustive: never = error;
       return { title: String(_exhaustive), body: "" };
     }
   }

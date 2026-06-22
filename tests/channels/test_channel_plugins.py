@@ -11,6 +11,7 @@ import pytest
 from OriginAgent.bus.events import OutboundMessage
 from OriginAgent.bus.queue import MessageBus
 from OriginAgent.channels.base import BaseChannel
+from OriginAgent.channels.bootstrap import build_channel_descriptor
 from OriginAgent.channels.manager import ChannelManager
 from OriginAgent.config.schema import ChannelsConfig, PairingConfig
 from OriginAgent.providers.transcription import GroqTranscriptionProvider as _GroqProvider
@@ -95,6 +96,20 @@ def test_channels_config_builtin_fields_removed():
     assert not hasattr(cfg, "telegram")
     assert cfg.send_progress is True
     assert cfg.send_tool_hints is False
+
+
+def test_build_channel_descriptor_marks_legacy_dict_config():
+    descriptor = build_channel_descriptor(
+        "fakeplugin",
+        _FakePlugin,
+        {"enabled": True, "allowFrom": ["*"]},
+    )
+
+    assert descriptor.name == "fakeplugin"
+    assert descriptor.display_name == "Fake Plugin"
+    assert descriptor.enabled is True
+    assert descriptor.legacy_config is True
+    assert descriptor.warnings == ["raw dict channel config accepted via compatibility mode"]
 
 
 # ---------------------------------------------------------------------------

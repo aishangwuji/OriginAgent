@@ -574,6 +574,12 @@ def test_user_content_limits_media_count_and_size(tmp_path) -> None:
     image_blocks = [block for block in blocks if block.get("type") == "image_url"]
     assert len(image_blocks) == builder._MAX_MEDIA_FILES - 1
     assert blocks[-1] == {"type": "text", "text": "look"}
+    audit = builder._last_media_block_audit
+    assert audit["requested_count"] == len([str(oversized), *paths])
+    assert audit["accepted_count"] == builder._MAX_MEDIA_FILES - 1
+    assert audit["text_included"] is True
+    assert any(item["reason"] == "max_media_files" for item in audit["rejected"])
+    assert any(item["reason"] == "max_media_bytes" for item in audit["rejected"])
 
 
 def test_always_skills_excluded_from_skills_index(tmp_path) -> None:

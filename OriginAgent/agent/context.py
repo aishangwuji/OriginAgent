@@ -126,6 +126,7 @@ class ContextBuilder:
         self._last_prewarm_audit: dict[str, Any] = {}
         self._last_governance_audit: dict[str, Any] = {}
         self._last_context_assembly_audit: dict[str, Any] = {}
+        self._last_media_block_audit: dict[str, Any] = {}
         self.retrieval_fusion = RetrievalFusion(
             workspace,
             memory=self.memory,
@@ -776,21 +777,43 @@ class ContextBuilder:
     def _build_user_content(self, text: str | None, media: list[str] | None) -> list[dict[str, Any]]:
         """Build provider-neutral user content with images and attachment refs."""
         blocks: list[dict[str, Any]] = []
-        if media and len(media) > self._context_config.max_media_files:
+        media_items = list(media or [])
+        media_audit: dict[str, Any] = {
+            "requested_count": len(media_items),
+            "accepted_count": 0,
+            "text_included": False,
+            "accepted": [],
+            "rejected": [],
+        }
+
+        if media_items and len(media_items) > self._context_config.max_media_files:
             logger.warning(
                 "Skipping {} media file(s): max {} images per turn",
-                len(media) - self._context_config.max_media_files,
+                len(media_items) - self._context_config.max_media_files,
                 self._context_config.max_media_files,
             )
+            for path in media_items[self._context_config.max_media_files :]:
+                media_audit["rejected"].append({
+                    "path": str(path),
+                    "reason": "max_media_files",
+                })
 
-        for path in (media or [])[:self._context_config.max_media_files]:
+        for path in media_items[:self._context_config.max_media_files]:
             p = Path(path)
             if not p.is_file():
+                media_audit["rejected"].append({
+                    "path": str(path),
+                    "reason": "missing_file",
+                })
                 continue
             try:
                 size = p.stat().st_size
             except OSError:
                 logger.warning("Skipping unreadable media file: {}", p)
+                media_audit["rejected"].append({
+                    "path": str(path),
+                    "reason": "unreadable",
+                })
                 continue
             if size > self._context_config.max_media_bytes:
                 logger.warning(
@@ -799,27 +822,64 @@ class ContextBuilder:
                     size / (1024 * 1024),
                     self._context_config.max_media_bytes // (1024 * 1024),
                 )
+                media_audit["rejected"].append({
+                    "path": str(path),
+                    "reason": "max_media_bytes",
+                    "size_bytes": size,
+                    "max_allowed_bytes": self._context_config.max_media_bytes,
+                })
                 continue
             try:
                 raw = p.read_bytes()
             except OSError:
                 logger.warning("Skipping unreadable media file: {}", p)
+                media_audit["rejected"].append({
+                    "path": str(path),
+                    "reason": "unreadable",
+                })
                 continue
             mime = detect_image_mime(raw) or mimetypes.guess_type(path)[0]
             descriptor = describe_attachment(p)
             if descriptor is None:
+                media_audit["rejected"].append({
+                    "path": str(path),
+                    "reason": "descriptor_unavailable",
+                })
                 continue
             if mime and mime.startswith("image/"):
                 image_block = image_url_block(descriptor)
                 if image_block:
                     blocks.append(image_block)
+                    media_audit["accepted"].append({
+                        "path": str(descriptor.path),
+                        "kind": descriptor.kind,
+                        "mime": descriptor.mime,
+                        "size_bytes": descriptor.size_bytes,
+                        "block_type": "image_url",
+                    })
+                else:
+                    media_audit["rejected"].append({
+                        "path": str(path),
+                        "reason": "image_block_unavailable",
+                        "mime": mime,
+                    })
                 continue
             blocks.append(attachment_block(descriptor))
+            media_audit["accepted"].append({
+                "path": str(descriptor.path),
+                "kind": descriptor.kind,
+                "mime": descriptor.mime,
+                "size_bytes": descriptor.size_bytes,
+                "block_type": "attachment_ref",
+            })
 
         if text is not None:
             text = str(text)
             if text:
                 blocks.append({"type": "text", "text": text})
+                media_audit["text_included"] = True
+        media_audit["accepted_count"] = len(media_audit["accepted"])
+        self._last_media_block_audit = media_audit
         return blocks
 
     def add_tool_result(

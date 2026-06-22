@@ -3,7 +3,6 @@ import type {
   DomainPackGovernanceResult,
   DomainPackGovernanceStats,
   DomainPackRecord,
-  FetchedProviderModel,
   HomeAssistantMcpSettingsUpdate,
   McpServerSettingsUpdate,
   ProviderModelsErrorResponse,
@@ -19,6 +18,7 @@ import type {
   SkillLifecycleResult,
   SkillLifecycleStats,
   SkillRecord,
+  VoiceSettingsUpdate,
   SlashCommand,
   WebSearchSettingsUpdate,
   WebuiThreadPersistedPayload,
@@ -458,6 +458,19 @@ export async function updateRuntimeSettings(
   query.set("config", JSON.stringify(update));
   return request<SettingsPayload>(
     `${base}/api/settings/runtime/update?${query}`,
+    token,
+  );
+}
+
+export async function updateVoiceSettings(
+  token: string,
+  update: VoiceSettingsUpdate,
+  base: string = "",
+): Promise<SettingsPayload> {
+  const query = new URLSearchParams();
+  query.set("config", JSON.stringify(update));
+  return request<SettingsPayload>(
+    `${base}/api/settings/local-awareness/audio/update?${query}`,
     token,
   );
 }
