@@ -196,7 +196,6 @@ class DeliberationResult:
     started_at: str
     finished_at: str
     desires_evaluated: int
-    intentions_formed: int = 0
     intentions: list[DeliberationIntention] = field(default_factory=list)
     desires_updated: list[str] = field(default_factory=list)  # desire_ids
     reasoning: str = ""
@@ -205,9 +204,10 @@ class DeliberationResult:
     token_usage: dict[str, int] = field(default_factory=dict)
     error: str = ""
 
-    def __post_init__(self) -> None:
-        """Derive intentions_formed from the length of intentions list."""
-        object.__setattr__(self, "intentions_formed", len(self.intentions))
+    @property
+    def intentions_formed(self) -> int:
+        """Derived from the length of intentions list."""
+        return len(self.intentions)
 
     @property
     def had_work(self) -> bool:
@@ -216,6 +216,7 @@ class DeliberationResult:
     def to_json(self) -> dict[str, Any]:
         data = asdict(self)
         data["intentions"] = [i.to_json() for i in self.intentions]
+        data["intentions_formed"] = self.intentions_formed
         return data
 
     @classmethod
@@ -224,6 +225,7 @@ class DeliberationResult:
         data["intentions"] = [
             DeliberationIntention.from_json(i) for i in data.get("intentions", [])
         ]
+        data.pop("intentions_formed", None)  # derived from intentions
         return cls(**data)
 
 

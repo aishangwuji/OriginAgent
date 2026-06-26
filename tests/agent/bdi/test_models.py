@@ -132,7 +132,6 @@ class TestDeliberationResult:
             started_at=now_iso(),
             finished_at=now_iso(),
             desires_evaluated=3,
-            intentions_formed=1,
             intentions=[],
             reasoning="No urgent desires found.",
         )
@@ -154,7 +153,6 @@ class TestDeliberationResult:
             started_at=now_iso(),
             finished_at=now_iso(),
             desires_evaluated=1,
-            intentions_formed=1,
             intentions=[intent],
             reasoning="Acting on desire d1.",
         )
