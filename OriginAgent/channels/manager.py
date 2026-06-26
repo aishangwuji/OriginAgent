@@ -62,11 +62,13 @@ class ChannelManager:
         *,
         session_manager: "SessionManager | None" = None,
         webui_runtime_model_name: Callable[[], str | None] | None = None,
+        webui_runtime_introspection: Callable[[], dict | None] | None = None,
     ):
         self.config = config
         self.bus = bus
         self._session_manager = session_manager
         self._webui_runtime_model_name = webui_runtime_model_name
+        self._webui_runtime_introspection = webui_runtime_introspection
         self.channels: dict[str, BaseChannel] = {}
         self._dispatch_task: asyncio.Task | None = None
         self._origin_reply_fingerprints: dict[tuple[str, str, str], str] = {}
@@ -80,6 +82,7 @@ class ChannelManager:
         adapter = DefaultChannelBootstrapAdapter(
             session_manager=getattr(self, "_session_manager", None),
             webui_runtime_model_name=getattr(self, "_webui_runtime_model_name", None),
+            webui_runtime_introspection=getattr(self, "_webui_runtime_introspection", None),
             webui_dist_resolver=_default_webui_dist,
         )
 

@@ -769,6 +769,7 @@ class WebSocketChannel(BaseChannel):
         session_manager: "SessionManager | None" = None,
         static_dist_path: Path | None = None,
         runtime_model_name: Callable[[], str | None] | None = None,
+        runtime_introspection: Callable[[], dict | None] | None = None,
     ):
         if isinstance(config, dict):
             config = WebSocketConfig.model_validate(config)
@@ -791,6 +792,7 @@ class WebSocketChannel(BaseChannel):
             static_dist_path.resolve() if static_dist_path is not None else None
         )
         self._runtime_model_name = runtime_model_name
+        self._runtime_introspection = runtime_introspection
         # Process-local secret used to HMAC-sign media URLs. The signed URL is
         # the capability — anyone who holds a valid URL can fetch that one
         # file, nothing else. The secret regenerates on restart so links
@@ -1022,6 +1024,20 @@ class WebSocketChannel(BaseChannel):
         m = re.match(r"^/api/media/([A-Za-z0-9_-]+)/([A-Za-z0-9_-]+)$", got)
         if m:
             return self._handle_media_fetch(m.group(1), m.group(2))
+
+        # -- Meta-cognition / evolution routes --
+        if got == "/api/cognition/status":
+            return self._handle_meta_cognition_status(request)
+
+        if got == "/api/evolution/status":
+            return self._handle_evolution_status(request)
+
+        if got == "/api/evolution/signals":
+            return self._handle_evolution_signals(request)
+
+        m = re.match(r"^/api/evolution/signals/([^/]+)/(suppress|resume)$", got)
+        if m:
+            return self._handle_signal_action(request, m.group(1), m.group(2))
 
         if got.startswith("/api/"):
             return _http_error(404, "not found")
@@ -2007,6 +2023,103 @@ class WebSocketChannel(BaseChannel):
         if changed:
             save_config(config)
         return _http_json_response(self._settings_payload(requires_restart=True))
+
+    # -- Meta-cognition / evolution HTTP handlers --------------------------------
+
+    def _handle_meta_cognition_status(self, request: WsRequest) -> Response:
+        """GET /api/cognition/status — return meta-cognition summary."""
+        if not self._check_api_token(request):
+            return _http_error(401, "Unauthorized")
+        if self._runtime_introspection is not None:
+            try:
+                summary = self._runtime_introspection()
+                if summary is not None:
+                    return _http_json_response(summary)
+            except Exception as exc:
+                return _http_error(500, f"introspection error: {exc}")
+        # Fallback: return disabled payload
+        return _http_json_response({
+            "contract_version": "meta_cognition.v1.freeze",
+            "enabled": False,
+            "trigger_collection_enabled": False,
+            "structured_reflection_enabled": False,
+            "pattern_consolidation_enabled": False,
+            "evolution_bridge_enabled": False,
+            "runtime_status": {"accepted_total": 0, "suppressed_total": 0},
+            "recent_triggers": [],
+            "recent_decisions": [],
+            "recent_journals": [],
+            "recent_reflections": [],
+            "recent_confidence_traces": [],
+            "recent_patterns": [],
+            "recent_evolution_seeds": [],
+            "decision_counts": {},
+            "suppression_reason_counts": {},
+            "uncertainty_stats": {"avg": 0.0, "max": 0.0, "high_count": 0, "threshold": 0.5},
+            "artifact_status": {},
+            "working_memory_bridge": {"enabled": False, "last_status": "disabled", "decision_counts": {}},
+            "memory_candidate_bridge": {"enabled": False, "last_status": "disabled", "decision_counts": {}},
+            "bridge_decision_counts": {},
+            "pattern_counts": {},
+            "seed_counts": {},
+            "last_signal_upserts": [],
+            "fast_path_decision_counts": {},
+        })
+
+    def _handle_evolution_signals(self, request: WsRequest) -> Response:
+        """GET /api/evolution/signals?status=...&kind=...&limit=..."""
+        if not self._check_api_token(request):
+            return _http_error(401, "Unauthorized")
+        from OriginAgent.agent.evolution_control_plane import EvolutionControlPlane
+        from OriginAgent.config.loader import load_config
+        config = load_config()
+        ctrl = EvolutionControlPlane(config.workspace_path)
+        query = _parse_query(request.path)
+        status = _query_first(query, "status") or None
+        kind = _query_first(query, "kind") or None
+        limit_raw = _query_first(query, "limit")
+        try:
+            limit = int(limit_raw) if limit_raw is not None else 50
+        except ValueError:
+            limit = 50
+        result = ctrl.list_signals(status=status, kind=kind, limit=limit)
+        return _http_json_response(result)
+
+    def _handle_signal_action(self, request: WsRequest, signal_id: str, action: str) -> Response:
+        """POST /api/evolution/signals/{id}/suppress|resume"""
+        if not self._check_api_token(request):
+            return _http_error(401, "Unauthorized")
+        if action not in ("suppress", "resume"):
+            return _http_error(400, "action must be suppress or resume")
+        from OriginAgent.agent.evolution import OpportunitySignalStore
+        from OriginAgent.config.loader import load_config
+        config = load_config()
+        store = OpportunitySignalStore(config.workspace_path)
+        query = _parse_query(request.path)
+        reason = _query_first(query, "reason") or "WebUI action"
+        signal_id = unquote(signal_id)
+        try:
+            if action == "suppress":
+                result = store.suppress_signal(signal_id, reason=reason)
+                ok = result is not None
+                signal = result.to_record() if hasattr(result, "to_record") else None
+            else:
+                result = store.resume_signal(signal_id)
+                ok = result is not None
+                signal = result.to_record() if hasattr(result, "to_record") else None
+        except Exception as exc:
+            return _http_error(500, str(exc))
+        return _http_json_response({"ok": ok, "signal": signal})
+
+    def _handle_evolution_status(self, request: WsRequest) -> Response:
+        """GET /api/evolution/status — return evolution control plane status."""
+        if not self._check_api_token(request):
+            return _http_error(401, "Unauthorized")
+        from OriginAgent.agent.evolution_control_plane import EvolutionControlPlane
+        from OriginAgent.config.loader import load_config
+        config = load_config()
+        ctrl = EvolutionControlPlane(config.workspace_path)
+        return _http_json_response(ctrl.status())
 
     def _handle_settings_local_awareness_audio_update(self, request: WsRequest) -> Response:
         if not self._check_api_token(request):

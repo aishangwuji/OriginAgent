@@ -839,6 +839,13 @@ def _run_gateway(
         except Exception:
             return None
 
+    def _webui_runtime_introspection():
+        """Return the current meta-cognition summary from the running agent loop."""
+        try:
+            return agent.introspection.meta_cognition_summary()
+        except Exception:
+            return None
+
     # Create channel manager (forwards SessionManager so the WebSocket channel
     # can serve the embedded webui's REST surface).
     channels = ChannelManager(
@@ -846,6 +853,7 @@ def _run_gateway(
         bus,
         session_manager=session_manager,
         webui_runtime_model_name=_webui_runtime_model_name,
+        webui_runtime_introspection=_webui_runtime_introspection,
     )
 
     def _pick_heartbeat_target() -> tuple[str, str]:
