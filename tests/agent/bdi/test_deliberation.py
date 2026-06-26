@@ -98,7 +98,7 @@ class TestDeliberationEngineCore:
         with tempfile.TemporaryDirectory() as td:
             yield DesireStore(Path(td))
 
-    def build_engine(self, store, provider=None, enabled=True):
+    def build_engine(self, store, provider=None, enabled=True, on_intention=None):
         return DeliberationEngine(
             workspace=store.workspace,
             store=store,
@@ -107,6 +107,7 @@ class TestDeliberationEngineCore:
             enabled=enabled,
             max_desires_per_cycle=10,
             auto_create_from_foresight=False,
+            on_intention=on_intention,
         )
 
     @pytest.mark.asyncio
@@ -216,3 +217,19 @@ class TestDeliberationEngineCore:
 
         engine.stop()
         assert engine._running is False
+
+    @pytest.mark.asyncio
+    async def test_on_intention_callback_is_invoked(self, store):
+        store.add(make_desire("d1", "Buy groceries", priority=DesirePriority.HIGH))
+
+        received = []
+
+        async def handler(intent):
+            received.append(intent)
+
+        engine = self.build_engine(store, on_intention=handler)
+
+        result = await engine.run_cycle()
+        assert len(received) == result.intentions_formed
+        assert received[0].desire_id == "d1"
+        assert received[0].action == "send_message"

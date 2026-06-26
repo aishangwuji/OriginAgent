@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
+import tempfile
 import uuid
-from dataclasses import dataclass
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -288,23 +288,32 @@ class DeliberationEngine:
             except KeyError:
                 logger.warning("BDI: skipping malformed intention: {}", raw)
 
-        # 8. Apply status transitions
+        # 8. Apply status transitions (per-desire error handling)
         updated_ids: list[str] = []
         for did in args.get("desires_to_satisfy", []):
-            updated = self._store.update(did, status=DesireStatus.SATISFIED,
-                                          reasoning=reasoning)
-            if updated:
-                updated_ids.append(did)
+            try:
+                updated = self._store.update(did, status=DesireStatus.SATISFIED,
+                                              reasoning=reasoning)
+                if updated:
+                    updated_ids.append(did)
+            except ValueError:
+                logger.warning("BDI: invalid transition for desire {} (SATISFIED)", did)
         for did in args.get("desires_to_suspend", []):
-            updated = self._store.update(did, status=DesireStatus.SUSPENDED,
-                                          reasoning=reasoning)
-            if updated:
-                updated_ids.append(did)
+            try:
+                updated = self._store.update(did, status=DesireStatus.SUSPENDED,
+                                              reasoning=reasoning)
+                if updated:
+                    updated_ids.append(did)
+            except ValueError:
+                logger.warning("BDI: invalid transition for desire {} (SUSPENDED)", did)
         for did in args.get("desires_to_cancel", []):
-            updated = self._store.update(did, status=DesireStatus.CANCELLED,
-                                          reasoning=reasoning)
-            if updated:
-                updated_ids.append(did)
+            try:
+                updated = self._store.update(did, status=DesireStatus.CANCELLED,
+                                              reasoning=reasoning)
+                if updated:
+                    updated_ids.append(did)
+            except ValueError:
+                logger.warning("BDI: invalid transition for desire {} (CANCELLED)", did)
 
         # 9. Emit intentions for execution
         if intentions and self._on_intention:
@@ -438,7 +447,11 @@ class DeliberationEngine:
         status: str,
         desires_before: int = 0,
     ) -> None:
-        """Append a BDICycleRecord to the audit log."""
+        """Atomically append a BDICycleRecord to the audit log.
+
+        Uses temp-file + fsync + rename + dir-fsync for crash-safe durability,
+        consistent with the project convention (see desire_store.py, memory.py).
+        """
         active_after = self._store.count_by_status().get(DesireStatus.ACTIVE, 0)
 
         record = BDICycleRecord(
@@ -460,8 +473,36 @@ class DeliberationEngine:
 
         try:
             ensure_dir(self._audit_dir)
-            import os
-            with open(self._audit_path, "a", encoding="utf-8") as f:
-                f.write(json.dumps(record.to_json(), ensure_ascii=False) + "\n")
+            line = json.dumps(record.to_json(), ensure_ascii=False) + "\n"
+
+            # Read existing content
+            existing = self._audit_path.read_text(encoding="utf-8") if self._audit_path.exists() else ""
+
+            # Atomic write: temp-file + fsync + rename + dir-fsync
+            tmp = tempfile.NamedTemporaryFile(
+                mode="w",
+                encoding="utf-8",
+                dir=str(self._audit_dir),
+                delete=False,
+                suffix=".tmp",
+            )
+            try:
+                tmp.write(existing)
+                tmp.write(line)
+                tmp.flush()
+                os.fsync(tmp.fileno())
+                tmp.close()
+                os.replace(tmp.name, str(self._audit_path))
+
+                # Directory fsync for durability
+                try:
+                    dir_fd = os.open(str(self._audit_dir), os.O_RDONLY)
+                    os.fsync(dir_fd)
+                    os.close(dir_fd)
+                except OSError:
+                    pass
+            except Exception:
+                Path(tmp.name).unlink(missing_ok=True)
+                raise
         except Exception:
             logger.exception("BDI: failed to persist cycle audit record")
