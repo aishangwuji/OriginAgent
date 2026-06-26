@@ -14,18 +14,34 @@ from OriginAgent.bdi.models import (
     Desire,
     DesirePriority,
     DesireStatus,
+    IntentionStack,
+    PlanMatch,
+    PlanTemplate,
+    ResumeCandidate,
+    StackFrame,
     now_iso,
 )
+from OriginAgent.bdi.plan_library import PlanLibrary
+from OriginAgent.bdi.world_state_watcher import BeliefChangeSeverity, BeliefChangeEvent, WorldStateWatcher
 
 __all__ = [
     "BDICycleRecord",
     "BDIHeartbeatBridge",
+    "BeliefChangeEvent",
+    "BeliefChangeSeverity",
     "DeliberationEngine",
     "DeliberationIntention",
     "DeliberationResult",
     "Desire",
-    "DesireStore",
     "DesirePriority",
     "DesireStatus",
+    "DesireStore",
+    "IntentionStack",
+    "PlanLibrary",
+    "PlanMatch",
+    "PlanTemplate",
+    "ResumeCandidate",
+    "StackFrame",
+    "WorldStateWatcher",
     "now_iso",
 ]

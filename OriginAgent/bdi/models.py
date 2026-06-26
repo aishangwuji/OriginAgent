@@ -259,3 +259,159 @@ class BDICycleRecord:
     @classmethod
     def from_json(cls, data: dict[str, Any]) -> "BDICycleRecord":
         return cls(**data)
+
+
+# ---------------------------------------------------------------------------
+# IntentionStack — nested suspend/resume (BDI core primitive)
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class StackFrame:
+    """A suspended intention waiting to be resumed."""
+
+    desire_id: str
+    intention: DeliberationIntention
+    suspended_at: str
+    suspend_reason: str
+    original_priority: int = 50
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+    def to_json(self) -> dict[str, Any]:
+        data = asdict(self)
+        data["intention"] = self.intention.to_json()
+        return data
+
+    @classmethod
+    def from_json(cls, data: dict[str, Any]) -> "StackFrame":
+        data = dict(data)
+        data["intention"] = DeliberationIntention.from_json(data["intention"])
+        return cls(**data)
+
+
+@dataclass(frozen=True)
+class ResumeCandidate:
+    """A stack entry eligible for resumption after an interrupt clears."""
+
+    desire_id: str
+    stack_position: int
+    suspend_reason: str
+    suspended_at: str
+    original_priority: int
+
+
+class IntentionStack:
+    """LIFO stack of suspended intentions with bounded depth.
+
+    Persisted to JSONL alongside Desires in the BDI memory directory.
+    """
+
+    def __init__(self, max_depth: int = 10) -> None:
+        self._frames: list[StackFrame] = []
+        self.max_depth = max_depth
+
+    def push(self, frame: StackFrame) -> None:
+        if len(self._frames) >= self.max_depth:
+            raise OverflowError(f"IntentionStack overflow: max depth {self.max_depth} reached")
+        self._frames.append(frame)
+
+    def pop(self) -> StackFrame | None:
+        if not self._frames:
+            return None
+        return self._frames.pop()
+
+    def peek(self) -> StackFrame | None:
+        return self._frames[-1] if self._frames else None
+
+    @property
+    def active_frame(self) -> StackFrame | None:
+        return self.peek()
+
+    @property
+    def depth(self) -> int:
+        return len(self._frames)
+
+    @property
+    def is_empty(self) -> bool:
+        return len(self._frames) == 0
+
+    def list_resumable(self) -> list[ResumeCandidate]:
+        candidates: list[ResumeCandidate] = []
+        for i, frame in enumerate(reversed(self._frames)):
+            candidates.append(ResumeCandidate(
+                desire_id=frame.desire_id,
+                stack_position=len(self._frames) - 1 - i,
+                suspend_reason=frame.suspend_reason,
+                suspended_at=frame.suspended_at,
+                original_priority=frame.original_priority,
+            ))
+        return candidates
+
+    def find_by_desire_id(self, desire_id: str) -> StackFrame | None:
+        for frame in self._frames:
+            if frame.desire_id == desire_id:
+                return frame
+        return None
+
+    def to_json(self) -> dict[str, Any]:
+        return {
+            "max_depth": self.max_depth,
+            "frames": [f.to_json() for f in self._frames],
+        }
+
+    @classmethod
+    def from_json(cls, data: dict[str, Any]) -> "IntentionStack":
+        stack = cls(max_depth=data.get("max_depth", 10))
+        for frame_data in data.get("frames", []):
+            stack._frames.append(StackFrame.from_json(frame_data))
+        return stack
+
+
+# ---------------------------------------------------------------------------
+# PlanLibrary — cached means-ends reasoning (BDI core primitive)
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class PlanTemplate:
+    """A cached plan for responding to a known type of desire."""
+
+    plan_id: str
+    keywords: tuple[str, ...]
+    action: str
+    scope: str
+    payload_template: dict[str, Any] = field(default_factory=dict)
+    description: str = ""
+    hit_count: int = 0
+    last_used_at: str = ""
+    created_at: str = field(default_factory=now_iso)
+    source_desire_id: str | None = None
+    source_agent_case_id: str | None = None
+
+    def increment_hit(self) -> "PlanTemplate":
+        return replace(
+            self,
+            hit_count=self.hit_count + 1,
+            last_used_at=now_iso(),
+        )
+
+    def to_json(self) -> dict[str, Any]:
+        data = asdict(self)
+        data["keywords"] = list(self.keywords)
+        return data
+
+    @classmethod
+    def from_json(cls, data: dict[str, Any]) -> "PlanTemplate":
+        data = dict(data)
+        data["keywords"] = tuple(data.get("keywords", ()))
+        return cls(**data)
+
+
+@dataclass(frozen=True)
+class PlanMatch:
+    """Result of matching a Desire against the PlanLibrary."""
+
+    plan: PlanTemplate
+    confidence: float
+    matched_keywords: list[str] = field(default_factory=list)
+    reasoning: str = ""
