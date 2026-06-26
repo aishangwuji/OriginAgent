@@ -798,6 +798,18 @@ class WebSocketChannel(BaseChannel):
         # file, nothing else. The secret regenerates on restart so links
         # become self-expiring (callers just refresh the session list).
         self._media_secret: bytes = secrets.token_bytes(32)
+        # Cached config to avoid repeated self._load_config() disk I/O (D2).
+        self._cached_config: Any = None
+        self._cached_config_path: str | None = None
+
+    def _load_config(self) -> Any:
+        """Load config once and cache; reload if the config path has changed."""
+        from OriginAgent.config.loader import load_config, get_config_path
+        current_path = str(get_config_path())
+        if self._cached_config is None or self._cached_config_path != current_path:
+            self._cached_config = load_config()
+            self._cached_config_path = current_path
+        return self._cached_config
 
     # -- Subscription bookkeeping -------------------------------------------
 
@@ -1025,19 +1037,44 @@ class WebSocketChannel(BaseChannel):
         if m:
             return self._handle_media_fetch(m.group(1), m.group(2))
 
-        # -- Meta-cognition / evolution routes --
+        # -- Meta-cognition / evolution routes (delegated to channels/routes/cognition.py) --
+        from OriginAgent.channels.routes.cognition import (
+            handle_meta_cognition_status,
+            handle_evolution_signals,
+            handle_evolution_status,
+            handle_signal_action,
+        )
+
         if got == "/api/cognition/status":
-            return self._handle_meta_cognition_status(request)
+            return handle_meta_cognition_status(
+                request,
+                check_token=self._check_api_token,
+                get_introspection=self._runtime_introspection,
+            )
 
         if got == "/api/evolution/status":
-            return self._handle_evolution_status(request)
+            return handle_evolution_status(
+                request,
+                check_token=self._check_api_token,
+                load_config=self._load_config,
+            )
 
         if got == "/api/evolution/signals":
-            return self._handle_evolution_signals(request)
+            return handle_evolution_signals(
+                request,
+                check_token=self._check_api_token,
+                load_config=self._load_config,
+            )
 
         m = re.match(r"^/api/evolution/signals/([^/]+)/(suppress|resume)$", got)
         if m:
-            return self._handle_signal_action(request, m.group(1), m.group(2))
+            return handle_signal_action(
+                request,
+                m.group(1),
+                m.group(2),
+                check_token=self._check_api_token,
+                load_config=self._load_config,
+            )
 
         if got.startswith("/api/"):
             return _http_error(404, "not found")
@@ -1235,7 +1272,7 @@ class WebSocketChannel(BaseChannel):
         from OriginAgent.providers.model_fetch_contract import get_provider_model_catalog_kind
         from OriginAgent.providers.registry import PROVIDERS, find_by_name
 
-        config = load_config()
+        config = self._load_config()
         defaults = config.agents.defaults
         provider_name = config.get_provider_name(defaults.model) or defaults.provider
         provider = config.get_provider(defaults.model)
@@ -1314,7 +1351,7 @@ class WebSocketChannel(BaseChannel):
     def _bootstrap_runtime_mode_payload() -> dict[str, Any]:
         from OriginAgent.config.loader import load_config
 
-        config = load_config()
+        config = self._load_config()
         summary = build_runtime_mode_summary(config=config).to_dict()
         return {
             "mode": summary["mode"],
@@ -1328,7 +1365,7 @@ class WebSocketChannel(BaseChannel):
     def _bootstrap_config_doctor_payload() -> dict[str, Any]:
         from OriginAgent.config.loader import get_config_path, load_config
 
-        config = load_config()
+        config = self._load_config()
         doctor = build_config_doctor_report(
             config=config,
             config_path=get_config_path(),
@@ -1358,7 +1395,7 @@ class WebSocketChannel(BaseChannel):
         from OriginAgent.agent.self_model import SelfModelService
         from OriginAgent.config.loader import load_config
 
-        config = load_config()
+        config = self._load_config()
         manager = DomainPackManager(
             config.workspace_path,
             config=config.agents.defaults.domain_packs,
@@ -1384,7 +1421,7 @@ class WebSocketChannel(BaseChannel):
         from OriginAgent.agent.background_review import ReviewProposalStore
         from OriginAgent.config.loader import load_config
 
-        return ReviewProposalStore(load_config().workspace_path)
+        return ReviewProposalStore(self._load_config().workspace_path)
 
     def _handle_reviews_list(self, request: WsRequest) -> Response:
         if not self._check_api_token(request):
@@ -1452,7 +1489,7 @@ class WebSocketChannel(BaseChannel):
         from OriginAgent.agent.skills import SkillsLoader
         from OriginAgent.config.loader import load_config
 
-        config = load_config()
+        config = self._load_config()
         manager = DomainPackManager(
             config.workspace_path,
             config=config.agents.defaults.domain_packs,
@@ -1464,7 +1501,7 @@ class WebSocketChannel(BaseChannel):
         from OriginAgent.agent.domain_packs import DomainPackManager
         from OriginAgent.config.loader import load_config
 
-        config = load_config()
+        config = self._load_config()
         manager = DomainPackManager(
             config.workspace_path,
             config=config.agents.defaults.domain_packs,
@@ -1637,7 +1674,7 @@ class WebSocketChannel(BaseChannel):
         from OriginAgent.providers.registry import find_by_name
 
         query = _parse_query(request.path)
-        config = load_config()
+        config = self._load_config()
         defaults = config.agents.defaults
         changed = False
 
@@ -1684,7 +1721,7 @@ class WebSocketChannel(BaseChannel):
         if spec is None or spec.is_oauth or spec.is_local:
             return _http_error(400, "unknown provider")
 
-        config = load_config()
+        config = self._load_config()
         provider_config = getattr(config.providers, spec.name, None)
         if provider_config is None:
             return _http_error(400, "unknown provider")
@@ -1736,7 +1773,7 @@ class WebSocketChannel(BaseChannel):
         if force_refresh is None:
             force_refresh = _query_bool(query, "forceRefresh") or False
         if provider_name:
-            provider_config = getattr(load_config().providers, provider_name, None)
+            provider_config = getattr(self._load_config().providers, provider_name, None)
             if provider_config is not None:
                 api_key = api_key or provider_config.api_key
                 api_base = api_base or provider_config.api_base
@@ -1774,7 +1811,7 @@ class WebSocketChannel(BaseChannel):
         if provider_option is None:
             return _http_error(400, "unknown web search provider")
 
-        config = load_config()
+        config = self._load_config()
         search_config = config.tools.web.search
         previous_provider = search_config.provider
         changed = False
@@ -1830,7 +1867,7 @@ class WebSocketChannel(BaseChannel):
         if enabled is None:
             return _http_error(400, "enabled must be true or false")
 
-        config = load_config()
+        config = self._load_config()
         target = config.agents.defaults.learning.background_review
         if target.enabled != enabled:
             target.enabled = enabled
@@ -1853,7 +1890,7 @@ class WebSocketChannel(BaseChannel):
         if not isinstance(data, dict):
             return _http_error(400, "config must be an object")
 
-        config = load_config()
+        config = self._load_config()
         defaults = config.agents.defaults
         evolution = defaults.learning.evolution
         changed = False
@@ -2072,7 +2109,7 @@ class WebSocketChannel(BaseChannel):
             return _http_error(401, "Unauthorized")
         from OriginAgent.agent.evolution_control_plane import EvolutionControlPlane
         from OriginAgent.config.loader import load_config
-        config = load_config()
+        config = self._load_config()
         ctrl = EvolutionControlPlane(config.workspace_path)
         query = _parse_query(request.path)
         status = _query_first(query, "status") or None
@@ -2093,7 +2130,7 @@ class WebSocketChannel(BaseChannel):
             return _http_error(400, "action must be suppress or resume")
         from OriginAgent.agent.evolution import OpportunitySignalStore
         from OriginAgent.config.loader import load_config
-        config = load_config()
+        config = self._load_config()
         store = OpportunitySignalStore(config.workspace_path)
         query = _parse_query(request.path)
         reason = _query_first(query, "reason") or "WebUI action"
@@ -2117,7 +2154,7 @@ class WebSocketChannel(BaseChannel):
             return _http_error(401, "Unauthorized")
         from OriginAgent.agent.evolution_control_plane import EvolutionControlPlane
         from OriginAgent.config.loader import load_config
-        config = load_config()
+        config = self._load_config()
         ctrl = EvolutionControlPlane(config.workspace_path)
         return _http_json_response(ctrl.status())
 
@@ -2137,7 +2174,7 @@ class WebSocketChannel(BaseChannel):
         if not isinstance(data, dict):
             return _http_error(400, "config must be an object")
 
-        config = load_config()
+        config = self._load_config()
         audio = config.tools.local_awareness.audio
         changed = False
 
@@ -2261,7 +2298,7 @@ class WebSocketChannel(BaseChannel):
         if _MCP_SERVER_NAME_RE.fullmatch(name) is None:
             return _http_error(400, "invalid MCP server name")
 
-        config = load_config()
+        config = self._load_config()
         existing = config.tools.mcp_servers.get(name)
         if existing is not None:
             data = _merge_mcp_secret_fields(data, existing)
@@ -2305,7 +2342,7 @@ class WebSocketChannel(BaseChannel):
             return _http_error(400, "Home Assistant URL is missing a hostname")
 
         token = (_query_first(query, "token") or "").strip()
-        config = load_config()
+        config = self._load_config()
         existing = config.tools.mcp_servers.get(name)
         existing_auth = (existing.headers.get("Authorization", "") if existing else "").strip()
         if token:
@@ -2340,7 +2377,7 @@ class WebSocketChannel(BaseChannel):
         if _MCP_SERVER_NAME_RE.fullmatch(name) is None:
             return _http_error(400, "invalid MCP server name")
 
-        config = load_config()
+        config = self._load_config()
         deleted = name in config.tools.mcp_servers
         if deleted:
             config.tools.mcp_servers.pop(name, None)

@@ -36,6 +36,12 @@ def configure_ssrf_whitelist(cidrs: list[str]) -> None:
     _allowed_networks = nets
 
 
+def reset_ssrf_whitelist() -> None:
+    """Reset the SSRF whitelist to empty (for test isolation)."""
+    global _allowed_networks
+    _allowed_networks = []
+
+
 def _is_private(addr: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
     if _allowed_networks and any(addr in net for net in _allowed_networks):
         return False

@@ -330,8 +330,7 @@ async def handle_chat_completions(request: web.Request) -> web.Response:
         return _error_json(400, f"Only configured model '{model_name}' is available")
 
     session_key = f"api:{session_id}" if session_id else API_SESSION_KEY
-    session_locks: dict[str, asyncio.Lock] = request.app["session_locks"]
-    session_lock = session_locks.setdefault(session_key, asyncio.Lock())
+    session_lock = agent_loop.sessions.get_lock(session_key)
 
     logger.info(
         "API request session_key={} media={} text={} stream={}",
@@ -495,7 +494,6 @@ def create_app(
     app["agent_loop"] = agent_loop
     app["model_name"] = model_name
     app["request_timeout"] = request_timeout
-    app["session_locks"] = {}  # per-user locks, keyed by session_key
     app["workspace"] = _coerce_workspace_path(getattr(agent_loop, "workspace", None)) or Path.cwd()
 
     app.router.add_post("/v1/chat/completions", handle_chat_completions)

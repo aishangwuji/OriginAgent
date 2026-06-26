@@ -1,5 +1,6 @@
 """Session management for conversation history."""
 
+import asyncio
 import inspect
 import json
 import os
@@ -350,6 +351,11 @@ class SessionManager:
         self.sessions_dir = ensure_dir(self.workspace / "sessions")
         self.legacy_sessions_dir = get_legacy_sessions_dir()
         self._cache: dict[str, Session] = {}
+        self._locks: dict[str, asyncio.Lock] = {}
+
+    def get_lock(self, session_key: str) -> asyncio.Lock:
+        """Return a per-session asyncio.Lock, creating one if needed."""
+        return self._locks.setdefault(session_key, asyncio.Lock())
 
     @staticmethod
     def safe_key(key: str) -> str:

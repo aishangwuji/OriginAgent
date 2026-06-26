@@ -15,6 +15,7 @@ from pydantic import Field
 from OriginAgent.bus.events import OutboundMessage
 from OriginAgent.bus.queue import MessageBus
 from OriginAgent.channels.base import BaseChannel
+from OriginAgent.channels._stream_buffer import StreamBuffer
 from OriginAgent.command.builtin import build_help_text
 from OriginAgent.config.paths import get_media_dir
 from OriginAgent.config.schema import Base
@@ -37,14 +38,8 @@ MAX_MESSAGE_LEN = 2000  # Discord message character limit
 TYPING_INTERVAL_S = 8
 
 
-@dataclass
-class _StreamBuf:
-    """Per-chat streaming accumulator for progressive Discord message edits."""
-
-    text: str = ""
-    message: Any | None = None
-    last_edit: float = 0.0
-    stream_id: str | None = None
+# Re-exported from channels._stream_buffer (A2)
+_StreamBuf = StreamBuffer[Any]  # Discord uses discord.Message
 
 
 class DiscordConfig(Base):

@@ -24,6 +24,12 @@ def set_config_path(path: Path | None) -> None:
     _current_config_path = path
 
 
+def reset_config_state() -> None:
+    """Reset all module-level config state (for test isolation)."""
+    global _current_config_path
+    _current_config_path = None
+
+
 def _origin_config_path() -> Path:
     return Path.home() / APP_DATA_DIR_NAME / CONFIG_FILE_NAME
 

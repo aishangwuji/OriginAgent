@@ -59,7 +59,31 @@ _COMPACTABLE_TOOLS = frozenset({
     "web_search", "web_fetch", "list_dir",
 })
 _BACKFILL_CONTENT = "[Tool result unavailable — call was interrupted or lost]"
+@dataclass(slots=True, frozen=True)
+class ToolError:
+    """Structured tool error — unified replacement for string/exception/tuple mix (A7)."""
 
+    kind: str  # "policy_denied", "validation", "runtime", "ssrf", "timeout"
+    message: str
+    retryable: bool = False
+
+
+@dataclass(slots=True)
+class ToolResult:
+    """Unified return type for tool execution (A7).
+
+    Replaces the three co-existing error-reporting strategies in _run_tool:
+      (1) returning Error-prefixed strings
+      (2) raising RuntimeError
+      (3) returning (content, event, RuntimeError) tuples.
+
+    Migration path: new tool handlers should return ToolResult; existing
+    code paths continue to work and can be migrated incrementally.
+    """
+
+    content: Any = None
+    event: dict[str, str] | None = None
+    error: ToolError | None = None
 
 
 @dataclass(slots=True)

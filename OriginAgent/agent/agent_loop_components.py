@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import os
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable
 
@@ -51,6 +51,139 @@ from OriginAgent.session.search_index import SessionSearchIndexService
 @dataclass
 class LoopComponents:
     values: dict[str, Any]
+
+
+@dataclass
+class AgentLoopAttributes:
+    """Typed container for all dynamically-injected AgentLoop attributes (D4).
+
+    This mirrors LoopComponents.values but with proper type annotations,
+    enabling progressive migration away from build_loop_components()'s
+    setattr injection pattern.
+    """
+
+    # Step 1 — basic runtime inputs
+    bus: Any = None  # type: ignore[assignment]
+    channels_config: Any = None  # type: ignore[assignment]
+    provider: Any = None  # type: ignore[assignment]
+    _provider_snapshot_loader: Any = None  # type: ignore[assignment]
+    _preset_snapshot_loader: Any = None  # type: ignore[assignment]
+    _runtime_model_publisher: Any = None  # type: ignore[assignment]
+    _provider_signature: Any = None  # type: ignore[assignment]
+    _default_selection_signature: Any = None  # type: ignore[assignment]
+    workspace: str = ""
+    model: str = ""
+    auxiliary_router: Any = None  # type: ignore[assignment]
+    model_presets: Any = None  # type: ignore[assignment]
+    model_preset: str | None = None
+    max_iterations: int = 100
+    context_window_tokens: int | None = None
+    context_block_limit: int | None = None
+    max_tool_result_chars: int = 5000
+    provider_retry_mode: str = "standard"
+    tool_hint_max_length: int = 120
+    web_config: Any = None  # type: ignore[assignment]
+    exec_config: Any = None  # type: ignore[assignment]
+    tools_config: Any = None  # type: ignore[assignment]
+    evolution_config: Any = None  # type: ignore[assignment]
+    _meta_cognition_config: Any = None  # type: ignore[assignment]
+    _dream_config: Any = None  # type: ignore[assignment]
+    _nearline_memory_config: Any = None  # type: ignore[assignment]
+    _memory_feature_flags: Any = None  # type: ignore[assignment]
+    session_search_index: Any = None  # type: ignore[assignment]
+    pairing_config: Any = None  # type: ignore[assignment]
+    _image_generation_provider_configs: Any = None  # type: ignore[assignment]
+    cron_service: Any = None  # type: ignore[assignment]
+    restrict_to_workspace: bool = True
+    _runtime_profile: str = "default"
+    _start_time: float = 0.0
+    _last_usage: float = 0.0
+    _extra_hooks: Any = None  # type: ignore[assignment]
+
+    # Step 2 — storage and persistence
+    domain_packs: Any = None  # type: ignore[assignment]
+    background_review: Any = None  # type: ignore[assignment]
+    curator: Any = None  # type: ignore[assignment]
+    sessions: Any = None  # type: ignore[assignment]
+    session_cold_archive: Any = None  # type: ignore[assignment]
+    _persist: Any = None  # type: ignore[assignment]
+    _tool_audit_config: Any = None  # type: ignore[assignment]
+    _grant_store: Any = None  # type: ignore[assignment]
+    _audit_logger: Any = None  # type: ignore[assignment]
+    _confirmation_store: Any = None  # type: ignore[assignment]
+    _confirmation_manager: Any = None  # type: ignore[assignment]
+    _reminder_store: Any = None  # type: ignore[assignment]
+
+    # Step 3 — registry, subagents, runtime contributions
+    working_memory: Any = None  # type: ignore[assignment]
+    world_state: Any = None  # type: ignore[assignment]
+    action_planner: Any = None  # type: ignore[assignment]
+    tools: Any = None  # type: ignore[assignment]
+    _domain_runtime_overrides: Any = None  # type: ignore[assignment]
+    _domain_runtime_contributions: Any = None  # type: ignore[assignment]
+    actor_resolver: Any = None  # type: ignore[assignment]
+    _file_state_store: Any = None  # type: ignore[assignment]
+    runner: Any = None  # type: ignore[assignment]
+    subagents: Any = None  # type: ignore[assignment]
+
+    # Step 4 — loop runtime scaffolding
+    _unified_session: bool = False
+    _max_messages: int = 200
+    _running: bool = False
+    _mcp_servers: Any = None  # type: ignore[assignment]
+    _mcp_stacks: Any = None  # type: ignore[assignment]
+    _mcp_snapshot: Any = None  # type: ignore[assignment]
+    _mcp_state: str = "disconnected"
+    _mcp_connected: bool = False
+    _mcp_connecting: bool = False
+    _mcp_lifecycle_lock: Any = None  # type: ignore[assignment]
+    _mcp_ready: Any = None  # type: ignore[assignment]
+    _mcp_shutdown_event: Any = None  # type: ignore[assignment]
+    _mcp_runtime_task: Any = None  # type: ignore[assignment]
+    _active_intent_task: Any = None  # type: ignore[assignment]
+    _mcp_startup_error: str | None = None
+    _active_tasks: Any = None  # type: ignore[assignment]
+    _background_tasks: Any = None  # type: ignore[assignment]
+    _session_locks: Any = None  # type: ignore[assignment]
+    _pending_queues: Any = None  # type: ignore[assignment]
+    context: Any = None  # type: ignore[assignment]
+    memory_governance: Any = None  # type: ignore[assignment]
+    roaming_prewarm: Any = None  # type: ignore[assignment]
+
+    # Step 5 — active intent, cognitive, nearline, introspection, memory
+    _active_intent_config: Any = None  # type: ignore[assignment]
+    _cognitive_audit: Any = None  # type: ignore[assignment]
+    active_intents: Any = None  # type: ignore[assignment]
+    _meta_cognition_audit: Any = None  # type: ignore[assignment]
+    _meta_cognition_runtime: Any = None  # type: ignore[assignment]
+    _meta_cognition_reflector: Any = None  # type: ignore[assignment]
+    _cognitive_loop_enabled: bool = False
+    cognitive_scheduler: Any = None  # type: ignore[assignment]
+    cognitive_loop: Any = None  # type: ignore[assignment]
+    nearline_memory: Any = None  # type: ignore[assignment]
+    rolling_episode_compaction: Any = None  # type: ignore[assignment]
+    introspection: Any = None  # type: ignore[assignment]
+    _concurrency_gate: Any = None  # type: ignore[assignment]
+    _tool_concurrency_limit: int | None = None
+    consolidator: Any = None  # type: ignore[assignment]
+    auto_compact: Any = None  # type: ignore[assignment]
+    dream: Any = None  # type: ignore[assignment]
+
+    # Step 6 — runtime snapshots
+    _runtime_vars: dict[str, Any] = field(default_factory=dict)
+    _capability_snapshot: Any = None  # type: ignore[assignment]
+    _current_iteration: int = 0
+    _last_runtime_context: Any = None  # type: ignore[assignment]
+    _last_continuity_session_key: Any = None  # type: ignore[assignment]
+    _last_context_assembly: dict[str, Any] = field(default_factory=dict)
+    _last_recovered_continuity_checkpoint: dict[str, Any] = field(default_factory=dict)
+    _last_governance_audit: dict[str, Any] = field(default_factory=dict)
+    _last_action_continuity_audit: dict[str, Any] = field(default_factory=dict)
+    _cached_action_summary: dict[str, Any] = field(default_factory=dict)
+    _last_cognitive_scan: dict[str, Any] = field(default_factory=dict)
+    _last_meta_cognition_summary: dict[str, Any] = field(default_factory=dict)
+    _last_meta_trigger_scan: list[Any] = field(default_factory=list)
+    _last_meta_artifacts: dict[str, Any] = field(default_factory=dict)
 
 
 def build_loop_components(
@@ -530,4 +663,4 @@ def build_loop_components(
     return LoopComponents(values=values)
 
 
-__all__ = ["LoopComponents", "build_loop_components"]
+__all__ = ["AgentLoopAttributes", "LoopComponents", "build_loop_components"]

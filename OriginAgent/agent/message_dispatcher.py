@@ -3,9 +3,9 @@ from __future__ import annotations
 import asyncio
 import dataclasses
 import time
-from contextlib import nullcontext
+from contextlib import nullcontext, AbstractContextManager
 from dataclasses import dataclass
-from typing import Any, Awaitable, Callable
+from typing import Any, Awaitable, Callable, Protocol, runtime_checkable
 
 from loguru import logger
 
@@ -14,9 +14,37 @@ from OriginAgent.session.goal_state import goal_state_ws_blob
 from OriginAgent.utils.webui_titles import maybe_generate_webui_title_after_turn
 
 
+@runtime_checkable
+class DispatcherAwareLoop(Protocol):
+    """The subset of AgentLoop that MessageDispatcher depends on (D6).
+
+    Turns implicit friend-class coupling into an explicit, type-checked contract.
+    """
+
+    _running: bool
+    bus: Any
+    auto_compact: Any
+    commands: Any
+    _pending_queues: dict[str, asyncio.Queue[InboundMessage]]
+    _active_tasks: dict[str, list[asyncio.Task[Any]]]
+    _session_locks: dict[str, asyncio.Lock]
+    _concurrency_gate: AbstractContextManager[Any] | None
+    sessions: Any
+    provider: Any
+    model: str
+
+    async def _process_message(self, msg: InboundMessage) -> Any: ...
+    async def _dispatch_command_inline(self, msg: InboundMessage, key: str, raw: str, handler: Callable[..., Any]) -> None: ...
+    async def _dispatch(self, msg: InboundMessage) -> None: ...
+    async def _schedule_background(self, coro: Awaitable[Any]) -> None: ...
+    def _effective_session_key(self, msg: InboundMessage) -> str: ...
+    def _restore_runtime_checkpoint(self, session: Any) -> bool: ...
+    def _clear_pending_user_turn(self, session: Any) -> None: ...
+
+
 @dataclass(frozen=True)
 class MessageDispatcherDeps:
-    loop: Any
+    loop: DispatcherAwareLoop
 
 
 class MessageDispatcher:

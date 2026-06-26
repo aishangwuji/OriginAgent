@@ -35,6 +35,9 @@ class TurnState(Enum):
     AUTOMATION = auto()
     RESPOND = auto()
     DONE = auto()
+    # Error / recovery states added for explicit transition modelling (D5).
+    HANDLE_ERROR = auto()
+    HANDLE_TIMEOUT = auto()
 
 
 @dataclass
@@ -86,6 +89,7 @@ class TurnContext:
 
 
 TURN_PIPELINE_TRANSITIONS: dict[tuple[TurnState, str], TurnState] = {
+    # Happy path
     (TurnState.RESTORE, "ok"): TurnState.COMPACT,
     (TurnState.COMPACT, "ok"): TurnState.COMMAND,
     (TurnState.COMMAND, "dispatch"): TurnState.BUILD,
@@ -96,6 +100,20 @@ TURN_PIPELINE_TRANSITIONS: dict[tuple[TurnState, str], TurnState] = {
     (TurnState.AUTOMATION, "ok"): TurnState.RESPOND,
     (TurnState.AUTOMATION, "skip"): TurnState.RESPOND,
     (TurnState.RESPOND, "ok"): TurnState.DONE,
+    # Error / recovery paths (D5)
+    (TurnState.RESTORE, "error"): TurnState.HANDLE_ERROR,
+    (TurnState.COMPACT, "error"): TurnState.HANDLE_ERROR,
+    (TurnState.BUILD, "error"): TurnState.HANDLE_ERROR,
+    (TurnState.RUN, "error"): TurnState.HANDLE_ERROR,
+    (TurnState.RUN, "max_iterations"): TurnState.SAVE,
+    (TurnState.RUN, "fatal_error"): TurnState.HANDLE_ERROR,
+    (TurnState.RUN, "timeout"): TurnState.HANDLE_TIMEOUT,
+    (TurnState.SAVE, "error"): TurnState.HANDLE_ERROR,
+    (TurnState.AUTOMATION, "error"): TurnState.RESPOND,
+    (TurnState.HANDLE_ERROR, "ok"): TurnState.RESPOND,
+    (TurnState.HANDLE_ERROR, "fatal"): TurnState.DONE,
+    (TurnState.HANDLE_TIMEOUT, "ok"): TurnState.RESPOND,
+    (TurnState.HANDLE_TIMEOUT, "fatal"): TurnState.DONE,
 }
 
 

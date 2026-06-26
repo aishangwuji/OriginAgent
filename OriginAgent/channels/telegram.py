@@ -27,6 +27,8 @@ from telegram.request import HTTPXRequest
 from OriginAgent.bus.events import OutboundMessage
 from OriginAgent.bus.queue import MessageBus
 from OriginAgent.channels.base import BaseChannel
+from OriginAgent.channels._text_utils import strip_markdown_block, strip_markdown_inline
+from OriginAgent.channels._stream_buffer import StreamBuffer
 from OriginAgent.command.builtin import build_help_text
 from OriginAgent.config.paths import get_media_dir
 from OriginAgent.config.schema import Base
@@ -52,16 +54,7 @@ def _tool_hint_to_telegram_blockquote(text: str) -> str:
     return f"<blockquote expandable>{_escape_telegram_html(text)}</blockquote>" if text else ""
 
 
-def _strip_md(s: str) -> str:
-    """Strip markdown inline formatting from text."""
-    s = re.sub(r'\*\*(.+?)\*\*', r'\1', s)
-    s = re.sub(r'__(.+?)__', r'\1', s)
-    s = re.sub(r'~~(.+?)~~', r'\1', s)
-    s = re.sub(r'`([^`]+)`', r'\1', s)
-    return s.strip()
-
-
-def _strip_md_block(text: str) -> str:
+def strip_markdown_block(text: str) -> str:
     """Strip block-level and inline markdown for readable plain-text preview.
 
     Used during streaming mid-edits so users see clean text instead of raw
@@ -98,7 +91,7 @@ def _render_table_box(table_lines: list[str]) -> str:
     rows: list[list[str]] = []
     has_sep = False
     for line in table_lines:
-        cells = [_strip_md(c) for c in line.strip().strip('|').split('|')]
+        cells = [strip_markdown_inline(c) for c in line.strip().strip('|').split('|')]
         if all(re.match(r'^:?-+:?$', c) for c in cells if c):
             has_sep = True
             continue
@@ -216,13 +209,8 @@ _SEND_RETRY_BASE_DELAY = 0.5  # seconds, doubled each retry
 _STREAM_EDIT_INTERVAL_DEFAULT = 0.6  # min seconds between edit_message_text calls
 
 
-@dataclass
-class _StreamBuf:
-    """Per-chat streaming accumulator for progressive message editing."""
-    text: str = ""
-    message_id: int | None = None
-    last_edit: float = 0.0
-    stream_id: str | None = None
+# Re-exported from channels._stream_buffer (A2)
+_StreamBuf = StreamBuffer[int]  # Telegram uses int message_id
 
 
 class TelegramConfig(Base):
@@ -720,7 +708,7 @@ class TelegramChannel(BaseChannel):
         if message_thread_id := meta.get("message_thread_id"):
             thread_kwargs["message_thread_id"] = message_thread_id
         if buf.message_id is None:
-            preview = _strip_md_block(buf.text)
+            preview = strip_markdown_block(buf.text)
             try:
                 sent = await self._call_with_retry(
                     self._app.bot.send_message,
@@ -737,7 +725,7 @@ class TelegramChannel(BaseChannel):
                 await self._flush_stream_overflow(int_chat_id, buf, thread_kwargs)
                 buf.last_edit = now
                 return
-            preview = _strip_md_block(buf.text)
+            preview = strip_markdown_block(buf.text)
             try:
                 await self._call_with_retry(
                     self._app.bot.edit_message_text,
