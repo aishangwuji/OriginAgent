@@ -1,19 +1,15 @@
 """Tests for BDI-Heartbeat bridge."""
 
-import asyncio
 import tempfile
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 from OriginAgent.bdi.models import (
-    DeliberationIntention,
-    DeliberationResult,
     Desire,
     DesireStatus,
     DesirePriority,
-    now_iso,
 )
 from OriginAgent.bdi.desire_store import DesireStore
 from OriginAgent.bdi.deliberation import DeliberationEngine
@@ -135,8 +131,9 @@ class TestBDIHeartbeatBridge:
 
         result = await bridge.tick()
 
-        # on_notify should be called with intention details
-        assert on_notify.called or on_execute.called
+        # on_notify should be called once with the summary (not per-intention)
+        on_notify.assert_called_once()
+        assert on_execute.call_count == 0
 
     @pytest.mark.asyncio
     async def test_bridge_no_desires_no_action(self, store, mock_provider):

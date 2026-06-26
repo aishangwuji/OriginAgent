@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, Any, Callable, Coroutine
 from loguru import logger
 
 if TYPE_CHECKING:
+    from OriginAgent.bdi.heartbeat_bridge import BDIHeartbeatBridge
     from OriginAgent.providers.base import LLMProvider
 
 _HEARTBEAT_TOOL = [
@@ -60,6 +61,7 @@ class HeartbeatService:
         interval_s: int = 30 * 60,
         enabled: bool = True,
         timezone: str | None = None,
+        bdi_bridge: BDIHeartbeatBridge | None = None,
     ):
         self.workspace = workspace
         self.provider = provider
@@ -69,6 +71,7 @@ class HeartbeatService:
         self.interval_s = interval_s
         self.enabled = enabled
         self.timezone = timezone
+        self._bdi_bridge = bdi_bridge
         self._running = False
         self._task: asyncio.Task | None = None
 
@@ -183,6 +186,13 @@ class HeartbeatService:
 
     async def _tick(self) -> None:
         """Execute a single heartbeat tick."""
+        # BDI bridge takes priority over HEARTBEAT.md logic
+        if self._bdi_bridge:
+            result = await self._bdi_bridge.tick()
+            if result and result.had_work:
+                return
+            # Fall through to existing HEARTBEAT.md logic
+
         from OriginAgent.utils.evaluator import evaluate_response
 
         content = self._read_heartbeat_file()

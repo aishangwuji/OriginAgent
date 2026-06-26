@@ -7,7 +7,7 @@ keeping the existing HeartbeatService lifecycle (start/stop/interval).
 
 from __future__ import annotations
 
-from typing import Any, Awaitable, Callable
+from typing import Awaitable, Callable
 
 from loguru import logger
 
@@ -72,11 +72,7 @@ class BDIHeartbeatBridge:
 
     async def _execute_intention(self, intent: DeliberationIntention) -> None:
         """Execute a single intention through the action runtime."""
-        if intent.action == "send_message" and self._on_notify:
-            text = intent.payload.get("text", "")
-            if text:
-                await self._on_notify(text)
-        elif intent.action == "exec" and self._on_execute:
+        if intent.action == "exec" and self._on_execute:
             command = intent.payload.get("command", "")
             if command:
                 await self._on_execute(command)
