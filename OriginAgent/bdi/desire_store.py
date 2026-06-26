@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import tempfile
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
@@ -33,63 +34,73 @@ class DesireStore:
     # Atomic I/O
     # ------------------------------------------------------------------
 
-    def _read_all(self) -> dict[str, Desire]:
-        """Read all desires into a dict keyed by desire_id."""
+    def _read_all_unlocked(self) -> dict[str, Desire]:
+        """Read all desires WITHOUT locking (caller must hold the lock)."""
         if not self._path.exists():
             return {}
         result: dict[str, Desire] = {}
-        with FileLock(str(self._lock_path)):
-            with open(self._path, "r", encoding="utf-8") as f:
-                for line in f:
-                    line = line.strip()
-                    if not line:
-                        continue
-                    try:
-                        d = Desire.from_json(json.loads(line))
-                        result[d.desire_id] = d
-                    except Exception:
-                        logger.warning("BDI: skipping corrupt desire line")
+        with open(self._path, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    d = Desire.from_json(json.loads(line))
+                    result[d.desire_id] = d
+                except Exception:
+                    logger.warning("BDI: skipping corrupt desire line")
         return result
 
-    def _write_all(self, desires: dict[str, Desire]) -> None:
-        """Atomically write all desires."""
+    def _write_all_unlocked(self, desires: dict[str, Desire]) -> None:
+        """Atomically write all desires WITHOUT locking (caller must hold the lock)."""
         ensure_dir(self._dir)
-        with FileLock(str(self._lock_path)):
-            tmp = tempfile.NamedTemporaryFile(
-                mode="w",
-                encoding="utf-8",
-                dir=str(self._dir),
-                delete=False,
-                suffix=".tmp",
-            )
+        tmp = tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            dir=str(self._dir),
+            delete=False,
+            suffix=".tmp",
+        )
+        try:
+            for d in desires.values():
+                tmp.write(json.dumps(d.to_json(), ensure_ascii=False) + "\n")
+            tmp.flush()
+            os.fsync(tmp.fileno())
+            tmp.close()
+            os.replace(tmp.name, str(self._path))
+            # Directory fsync for durability
             try:
-                for d in desires.values():
-                    tmp.write(json.dumps(d.to_json(), ensure_ascii=False) + "\n")
-                tmp.flush()
-                os.fsync(tmp.fileno())
-                tmp.close()
-                os.replace(tmp.name, str(self._path))
-                # Directory fsync for durability
-                try:
-                    dir_fd = os.open(str(self._dir), os.O_RDONLY)
-                    os.fsync(dir_fd)
-                    os.close(dir_fd)
-                except OSError:
-                    pass
-            except Exception:
-                Path(tmp.name).unlink(missing_ok=True)
-                raise
+                dir_fd = os.open(str(self._dir), os.O_RDONLY)
+                os.fsync(dir_fd)
+                os.close(dir_fd)
+            except OSError:
+                pass
+        except Exception:
+            Path(tmp.name).unlink(missing_ok=True)
+            raise
+
+    def _read_all(self) -> dict[str, Desire]:
+        """Read all desires into a dict keyed by desire_id (thread-safe)."""
+        with FileLock(str(self._lock_path)):
+            return self._read_all_unlocked()
+
+    @contextmanager
+    def _read_modify_write(self):
+        """Context manager holding the lock across the full read-modify-write cycle."""
+        with FileLock(str(self._lock_path)):
+            desires = self._read_all_unlocked()
+            yield desires
+            self._write_all_unlocked(desires)
 
     # ------------------------------------------------------------------
     # CRUD
     # ------------------------------------------------------------------
 
     def add(self, desire: Desire) -> None:
-        desires = self._read_all()
-        if desire.desire_id in desires:
-            raise ValueError(f"Desire {desire.desire_id} already exists")
-        desires[desire.desire_id] = desire
-        self._write_all(desires)
+        with self._read_modify_write() as desires:
+            if desire.desire_id in desires:
+                raise ValueError(f"Desire {desire.desire_id} already exists")
+            desires[desire.desire_id] = desire
 
     def get(self, desire_id: str) -> Desire | None:
         return self._read_all().get(desire_id)
@@ -103,49 +114,47 @@ class DesireStore:
         reasoning: str = "",
         metadata: dict[str, Any] | None = None,
     ) -> Desire | None:
-        desires = self._read_all()
-        current = desires.get(desire_id)
-        if current is None:
-            return None
+        with self._read_modify_write() as desires:
+            current = desires.get(desire_id)
+            if current is None:
+                return None
 
-        if status is not None:
-            current = current.transition_to(status, reasoning=reasoning)
-        if priority is not None:
-            current = current.__replace__(
-                priority=priority,
-                updated_at=now_iso(),
-                last_reasoning=reasoning or current.last_reasoning,
-            )
-        if metadata is not None:
-            merged = {**current.metadata, **metadata}
-            current = current.__replace__(metadata=merged, updated_at=now_iso())
+            if status is not None:
+                current = current.transition_to(status, reasoning=reasoning)
+            if priority is not None:
+                current = current.__replace__(
+                    priority=priority,
+                    updated_at=now_iso(),
+                    last_reasoning=reasoning or current.last_reasoning,
+                )
+            if metadata is not None:
+                merged = {**current.metadata, **metadata}
+                current = current.__replace__(metadata=merged, updated_at=now_iso())
 
-        if current.evaluation_count == current.__class__(
-            desire_id=current.desire_id,
-            owner_id=current.owner_id,
-            session_key=current.session_key,
-            content=current.content,
-            status=current.status,
-            priority=current.priority,
-        ).evaluation_count:
-            current = current.with_evaluation(reasoning=reasoning)
-        else:
-            current = current.__replace__(
-                updated_at=now_iso(),
-                last_reasoning=reasoning or current.last_reasoning,
-            )
+            if current.evaluation_count == current.__class__(
+                desire_id=current.desire_id,
+                owner_id=current.owner_id,
+                session_key=current.session_key,
+                content=current.content,
+                status=current.status,
+                priority=current.priority,
+            ).evaluation_count:
+                current = current.with_evaluation(reasoning=reasoning)
+            else:
+                current = current.__replace__(
+                    updated_at=now_iso(),
+                    last_reasoning=reasoning or current.last_reasoning,
+                )
 
-        desires[desire_id] = current
-        self._write_all(desires)
-        return current
+            desires[desire_id] = current
+            return current
 
     def update_direct(self, desire: Desire) -> None:
         """Directly replace a desire (after external mutation)."""
-        desires = self._read_all()
-        if desire.desire_id not in desires:
-            raise ValueError(f"Desire {desire.desire_id} does not exist")
-        desires[desire.desire_id] = desire
-        self._write_all(desires)
+        with self._read_modify_write() as desires:
+            if desire.desire_id not in desires:
+                raise ValueError(f"Desire {desire.desire_id} does not exist")
+            desires[desire.desire_id] = desire
 
     # ------------------------------------------------------------------
     # Query
