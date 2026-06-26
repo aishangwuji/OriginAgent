@@ -114,3 +114,4 @@ genesis-agi/
 *.sqlite
 *.sqlite3
 *.db
+nul
