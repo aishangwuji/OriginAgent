@@ -99,6 +99,12 @@ tmp/
 temp/
 *.tmp
 
+# External SDKs / third-party repos
+unitree-sdk2-mcp/
+unitree_sdk2/
+unitree_sdk2_python/
+genesis-agi/
+
 # Runtime state / local data
 /memory/
 /data/
