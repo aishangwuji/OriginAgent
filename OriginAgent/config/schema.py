@@ -1398,6 +1398,47 @@ class HeartbeatConfig(Base):
     keep_recent_messages: int = 8
 
 
+class BDIConfig(Base):
+    """BDI Deliberation Engine configuration."""
+
+    enabled: bool = True
+    interval_s: int = Field(
+        default=120,
+        ge=30,
+        le=86_400,
+        description="Seconds between deliberation cycles (default 2 min)",
+    )
+    model_override: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("modelOverride", "model", "model_override"),
+        description="Optional model override for deliberation (defaults to main agent model)",
+    )
+    max_desires_per_cycle: int = Field(
+        default=10,
+        ge=1,
+        le=50,
+        description="Max desires to evaluate in one cycle",
+    )
+    auto_create_from_foresight: bool = Field(
+        default=True,
+        validation_alias=AliasChoices(
+            "autoCreateFromForesight",
+            "auto_create_from_foresight",
+        ),
+        serialization_alias="autoCreateFromForesight",
+        description="Auto-create Desires from ForesightRecords during deliberation",
+    )
+    notify_on_intention: bool = Field(
+        default=True,
+        validation_alias=AliasChoices(
+            "notifyOnIntention",
+            "notify_on_intention",
+        ),
+        serialization_alias="notifyOnIntention",
+        description="Notify user via their primary channel when intentions are formed",
+    )
+
+
 class ApiConfig(Base):
     """OpenAI-compatible API server configuration."""
 
@@ -1412,6 +1453,7 @@ class GatewayConfig(Base):
     host: str = "127.0.0.1"  # Safer default: local-only bind.
     port: int = 18790
     heartbeat: HeartbeatConfig = Field(default_factory=HeartbeatConfig)
+    bdi: BDIConfig = Field(default_factory=BDIConfig)
 
 
 RuntimeProfile = Literal["default", "safe", "household_safe", "local_dev", "automation"]
