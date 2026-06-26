@@ -40,6 +40,8 @@
     "recent": "最近对话",
     "refreshSessions": "刷新会话",
     "reviews": "学习审核",
+    "cognition": "元认知",
+    "signals": "信号",
     "settings": "设置",
     "language": {
       "label": "语言",
@@ -58,12 +60,16 @@
       "byok": "BYOK",
       "mcp": "MCP",
       "skills": "技能",
+      "learning": "学习",
       "domains": "领域包"
     },
     "sections": {
       "interface": "界面",
       "ai": "AI",
       "learning": "学习",
+      "metaCognition": "元认知",
+      "backgroundReview": "后台审查",
+      "dream": "梦境记忆",
       "voice": "语音",
       "runtimeControls": "运行控制",
       "system": "系统"
@@ -99,6 +105,14 @@
       "auditMode": "审计模式",
       "runtimeProfile": "运行时配置",
       "curator": "策展器",
+      "metaCognition": "元认知",
+      "triggerCollection": "触发收集",
+      "structuredReflection": "结构化反思",
+      "patternConsolidation": "模式整合",
+      "evolutionBridge": "演化桥接",
+      "workingMemoryBridge": "工作记忆桥接",
+      "memoryCandidateBridge": "记忆候选桥接",
+      "dreamAnnotateLineAges": "梦境行龄标注",
       "domainPacks": "领域包",
       "heartbeat": "心跳",
       "pairing": "配对",
@@ -136,6 +150,14 @@
       "auditMode": "选择运行时保留多少工具审计数据。",
       "runtimeProfile": "选择启动时应用的运行时安全配置。",
       "curator": "启用确定性的 curator 提案生成。",
+      "metaCognition": "启用 Agent 的自我反思管线。禁用后不会收集触发也不会生成反思。",
+      "triggerCollection": "收集工具失败、用户纠正和任务完成事件作为反思触发。",
+      "structuredReflection": "使用 LLM 分析触发事件并生成结构化反思，包含根因假设和学习规则。",
+      "patternConsolidation": "将相似的反思分组为错误模式，用于趋势分析和演化目标定位。",
+      "evolutionBridge": "将错误模式桥接到演化引擎，作为工作流/技能候选的机会信号。",
+      "workingMemoryBridge": "将反思洞察注入 Agent 的工作记忆。",
+      "memoryCandidateBridge": "将高置信度的学习规则写入记忆候选，实现长期保留。",
+      "dreamAnnotateLineAges": "在梦境整理时为内容附带新旧提示。",
       "domainPacks": "启用领域包发现以及 prompt/tool 注入。",
       "heartbeat": "启用网关心跳服务。",
       "pairing": "要求通道访问前先完成发送者配对/审批。",
@@ -822,6 +844,55 @@
         "decode": "其中一个附件无法被安全解码。",
         "malformed": "其中一个附件格式不正确。"
       }
+    }
+  },
+  "cognition": {
+    "title": "元认知",
+    "active": "已启用",
+    "disabled": "已禁用",
+    "refresh": "刷新",
+    "backToChat": "返回聊天",
+    "acceptedTriggers": "已接受",
+    "suppressedTriggers": "已抑制",
+    "reflections": "反思",
+    "patterns": "模式",
+    "uncertaintyStats": "不确定性统计",
+    "avgUncertainty": "平均",
+    "maxUncertainty": "最大",
+    "highUncertainty": "高不确定性",
+    "suppressionBreakdown": "抑制原因分布",
+    "recentTriggers": "最近触发",
+    "recentReflections": "最近反思",
+    "errorPatterns": "错误模式",
+    "bridgeStats": "桥接统计",
+    "noTriggers": "暂无触发记录。",
+    "noReflections": "暂无反思记录。",
+    "noPatterns": "暂无模式记录。",
+    "confidence": "置信度",
+    "uncertainty": "不确定性",
+    "noSummary": "无摘要",
+    "rootCause": "根因假设",
+    "workingMemoryBridge": "工作记忆桥接",
+    "memoryCandidateBridge": "记忆候选桥接",
+    "fastPath": "快速路径"
+  },
+  "signals": {
+    "title": "机会信号",
+    "refresh": "刷新",
+    "backToChat": "返回聊天",
+    "workflow": "工作流",
+    "skill": "技能",
+    "seenCount": "出现 {{count}} 次",
+    "priority": "优先级",
+    "evidenceCount": "证据",
+    "converted": "已转化",
+    "suppress": "抑制",
+    "resume": "恢复",
+    "empty": "没有符合当前筛选条件的机会信号。"
+  },
+  "reviews": {
+    "origins": {
+      "auto_evolution": "自动演化"
     }
   }
 }

@@ -1,10 +1,12 @@
 import { useMemo, useState, type ReactNode } from "react";
 import { Input as IslandInput } from "animal-island-ui";
 import {
+  Activity,
   ListChecks,
   Menu,
   Search,
   Settings,
+  Signal,
   SquarePen,
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
@@ -24,6 +26,8 @@ interface SidebarProps {
   onRequestDelete: (key: string, label: string) => void;
   onOpenSettings: () => void;
   onOpenReviews: () => void;
+  onOpenCognition: () => void;
+  onOpenSignals: () => void;
   onCollapse: () => void;
 }
 
@@ -143,6 +147,18 @@ export function Sidebar(props: SidebarProps) {
       </div>
       <Separator className="bg-sidebar-border/50" />
       <div className="space-y-1 px-2.5 py-2.5 text-xs">
+        <SidebarActionButton
+          onClick={props.onOpenCognition}
+          icon={<Activity className="h-3.5 w-3.5" aria-hidden />}
+        >
+          {t("sidebar.cognition")}
+        </SidebarActionButton>
+        <SidebarActionButton
+          onClick={props.onOpenSignals}
+          icon={<Signal className="h-3.5 w-3.5" aria-hidden />}
+        >
+          {t("sidebar.signals")}
+        </SidebarActionButton>
         <SidebarActionButton
           onClick={props.onOpenReviews}
           icon={<ListChecks className="h-3.5 w-3.5" aria-hidden />}

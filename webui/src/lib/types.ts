@@ -298,7 +298,17 @@ export interface VoiceSettingsUpdate {
 export interface RuntimeSettingsUpdate {
   channels?: Partial<SettingsPayload["runtime_controls"]["channels"]>;
   agent?: Partial<SettingsPayload["runtime_controls"]["agent"]>;
-  learning?: Partial<SettingsPayload["runtime_controls"]["learning"]>;
+  learning?: Partial<
+    SettingsPayload["runtime_controls"]["learning"] & {
+      meta_cognition_enabled?: boolean;
+      meta_trigger_collection_enabled?: boolean;
+      meta_structured_reflection_enabled?: boolean;
+      meta_pattern_consolidation_enabled?: boolean;
+      meta_evolution_bridge_enabled?: boolean;
+      meta_working_memory_bridge_enabled?: boolean;
+      meta_memory_candidate_bridge_enabled?: boolean;
+    }
+  >;
   evolution?: Partial<SettingsPayload["runtime_controls"]["evolution"]>;
   gateway?: Partial<SettingsPayload["runtime_controls"]["gateway"]>;
   security?: Partial<SettingsPayload["runtime_controls"]["security"]>;
@@ -353,7 +363,163 @@ export interface SlashCommand {
 
 export type ReviewProposalStatus = "pending" | "applied" | "rejected" | "deferred" | "failed";
 export type ReviewProposalType = "memory" | "fact" | "skill" | "workflow" | string;
-export type ReviewProposalOrigin = "background_review" | "curator" | string;
+export type ReviewProposalOrigin = "background_review" | "curator" | "auto_evolution" | string;
+
+// ── Meta-Cognition Types ──────────────────────────────────────────
+
+export interface MetaTriggerRecord {
+  trigger_id: string;
+  session_key: string;
+  trigger_type: "tool_failure" | "user_correction" | "task_completion";
+  source_type: string;
+  source_reference: string;
+  severity: "low" | "medium" | "high";
+  created_at: string;
+  cooldown_key?: string;
+  evidence_refs?: string[];
+  payload: Record<string, unknown>;
+}
+
+export interface ReflectionRecord {
+  reflection_id: string;
+  session_key: string;
+  summary: string;
+  reflection_kind: string;
+  outcome_class: string;
+  root_cause_hypotheses?: string[];
+  what_worked?: string[];
+  what_failed?: string[];
+  learned_rule_candidate?: Record<string, unknown> | null;
+  confidence: number;
+  retention_hint: string;
+  created_at?: string;
+  payload?: Record<string, unknown>;
+}
+
+export interface PatternRecord {
+  pattern_id: string;
+  pattern_key: string;
+  owner_id: string;
+  trigger_types: string[];
+  capability_domain: string;
+  severity: "low" | "medium" | "high";
+  frequency: number;
+  distinct_turn_count: number;
+  pattern_score: number;
+  candidate_target_type: string | null;
+  summary: string;
+  created_at?: string;
+  updated_at?: string;
+  recency_score?: number;
+  example_refs?: string[];
+}
+
+export interface BridgeDecisionCounts {
+  [key: string]: number;
+}
+
+export interface BridgeStatus {
+  enabled: boolean;
+  last_status: string;
+  decision_counts: BridgeDecisionCounts;
+}
+
+export interface UncertaintyStats {
+  avg: number;
+  max: number;
+  high_count: number;
+  threshold: number;
+}
+
+export interface RuntimeStatus {
+  accepted_total: number;
+  suppressed_total: number;
+}
+
+export interface ArtifactStatus {
+  journals_written?: number;
+  reflections_written?: number;
+  confidence_traces_written?: number;
+  patterns_written?: number;
+  evolution_seeds_written?: number;
+  working_memory_bridge?: BridgeStatus;
+  memory_candidate_bridge?: BridgeStatus;
+}
+
+export interface MetaCognitionSummary {
+  contract_version: string;
+  enabled: boolean;
+  trigger_collection_enabled: boolean;
+  structured_reflection_enabled: boolean;
+  pattern_consolidation_enabled: boolean;
+  evolution_bridge_enabled: boolean;
+  runtime_status: RuntimeStatus;
+  recent_triggers: MetaTriggerRecord[];
+  recent_decisions: Record<string, unknown>[];
+  recent_journals: Record<string, unknown>[];
+  recent_reflections: ReflectionRecord[];
+  recent_confidence_traces: Record<string, unknown>[];
+  recent_patterns: PatternRecord[];
+  recent_evolution_seeds: Record<string, unknown>[];
+  decision_counts: Record<string, number>;
+  suppression_reason_counts: Record<string, number>;
+  uncertainty_stats: UncertaintyStats;
+  artifact_status: ArtifactStatus;
+  working_memory_bridge: BridgeStatus;
+  memory_candidate_bridge: BridgeStatus;
+  bridge_decision_counts: BridgeDecisionCounts;
+  pattern_counts: Record<string, number>;
+  seed_counts: Record<string, number>;
+  last_signal_upserts: Record<string, unknown>[];
+  fast_path_decision_counts: BridgeDecisionCounts;
+}
+
+export interface EvidenceSource {
+  cursor: string | null;
+  session_key: string;
+  timestamp: string;
+  preview: string;
+}
+
+export interface OpportunitySignal {
+  opportunity_id: string;
+  kind: "workflow_candidate" | "skill_candidate";
+  target_key: string;
+  title: string;
+  summary: string;
+  source_pattern_id: string;
+  evidence_sources: EvidenceSource[];
+  first_seen_at: string;
+  last_seen_at: string;
+  seen_count: number;
+  priority_score: number;
+  risk_level: string;
+  status: "open" | "converted" | "suppressed";
+  converted_proposal_id: string | null;
+  verification_status?: string;
+  feedback_multiplier?: number;
+  feedback_negative_count?: number;
+  feedback_positive_count?: number;
+  suppression_reason?: string;
+}
+
+export interface EvolutionStatus {
+  mode: string;
+  dry_run: boolean;
+  opportunity_signals_count: number;
+  eligible_workflow_signals: number;
+  eligible_skill_signals: number;
+  converted_signals_count: number;
+  suppressed_signals_count: number;
+  feedback_adjusted_signals_count: number;
+  high_score_signals: Array<{
+    kind: string;
+    target: string;
+    priority_score: number;
+  }>;
+  skill_candidates_enabled: boolean;
+  pending_proposals_from_evolution: number;
+}
 
 export interface ReviewProposalEvent {
   event_id?: string;

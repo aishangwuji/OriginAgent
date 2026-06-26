@@ -52,6 +52,8 @@
     "recent": "Recent",
     "refreshSessions": "Refresh sessions",
     "reviews": "Reviews",
+    "cognition": "Cognition",
+    "signals": "Signals",
     "settings": "Settings",
     "language": {
       "label": "Language",
@@ -70,12 +72,16 @@
       "byok": "BYOK",
       "mcp": "MCP",
       "skills": "Skills",
+      "learning": "Learning",
       "domains": "Domains"
     },
     "sections": {
       "interface": "Interface",
       "ai": "AI",
       "learning": "Learning",
+      "metaCognition": "Meta-Cognition",
+      "backgroundReview": "Background Review",
+      "dream": "Dream Memory",
       "voice": "Voice",
       "runtimeControls": "Runtime Controls",
       "system": "System"
@@ -111,6 +117,14 @@
       "auditMode": "Audit mode",
       "runtimeProfile": "Runtime profile",
       "curator": "Curator",
+      "metaCognition": "Meta-Cognition",
+      "triggerCollection": "Trigger Collection",
+      "structuredReflection": "Structured Reflection",
+      "patternConsolidation": "Pattern Consolidation",
+      "evolutionBridge": "Evolution Bridge",
+      "workingMemoryBridge": "Working Memory Bridge",
+      "memoryCandidateBridge": "Memory Candidate Bridge",
+      "dreamAnnotateLineAges": "Dream Line-Age Annotation",
       "domainPacks": "Domain packs",
       "heartbeat": "Heartbeat",
       "pairing": "Pairing",
@@ -148,6 +162,14 @@
       "auditMode": "Choose how much tool audit data the runtime retains.",
       "runtimeProfile": "Select the runtime safety profile applied at startup.",
       "curator": "Enable deterministic curator proposal generation.",
+      "metaCognition": "Enable the agent's self-reflection pipeline. When disabled, no triggers are collected and no reflections are generated.",
+      "triggerCollection": "Collect tool failures, user corrections, and task completions as reflection triggers.",
+      "structuredReflection": "Use an LLM to analyze triggers and generate structured reflections with root cause hypotheses and learned rules.",
+      "patternConsolidation": "Group similar reflections into error patterns for trend analysis and evolution targeting.",
+      "evolutionBridge": "Bridge error patterns to the evolution engine as opportunity signals for workflow/skill candidates.",
+      "workingMemoryBridge": "Inject reflection insights into the agent's working memory.",
+      "memoryCandidateBridge": "Write high-confidence learned rules as memory candidates for long-term retention.",
+      "dreamAnnotateLineAges": "Annotate content with age hints during Dream consolidation.",
       "domainPacks": "Enable domain pack discovery and prompt/tool injection.",
       "heartbeat": "Enable the gateway heartbeat service.",
       "pairing": "Require sender pairing/approval for channel access.",
@@ -834,6 +856,55 @@
         "decode": "One of the attachments couldn't be decoded safely.",
         "malformed": "One of the attachments was malformed."
       }
+    }
+  },
+  "cognition": {
+    "title": "Meta-Cognition",
+    "active": "Active",
+    "disabled": "Disabled",
+    "refresh": "Refresh",
+    "backToChat": "Back to chat",
+    "acceptedTriggers": "Accepted",
+    "suppressedTriggers": "Suppressed",
+    "reflections": "Reflections",
+    "patterns": "Patterns",
+    "uncertaintyStats": "Uncertainty Stats",
+    "avgUncertainty": "Avg",
+    "maxUncertainty": "Max",
+    "highUncertainty": "High",
+    "suppressionBreakdown": "Suppression Breakdown",
+    "recentTriggers": "Recent Triggers",
+    "recentReflections": "Recent Reflections",
+    "errorPatterns": "Error Patterns",
+    "bridgeStats": "Bridge Stats",
+    "noTriggers": "No triggers recorded yet.",
+    "noReflections": "No reflections yet.",
+    "noPatterns": "No patterns consolidated yet.",
+    "confidence": "Confidence",
+    "uncertainty": "Uncertainty",
+    "noSummary": "No summary",
+    "rootCause": "Root Cause Hypotheses",
+    "workingMemoryBridge": "Working Memory Bridge",
+    "memoryCandidateBridge": "Memory Candidate Bridge",
+    "fastPath": "Fast Path"
+  },
+  "signals": {
+    "title": "Opportunity Signals",
+    "refresh": "Refresh",
+    "backToChat": "Back to chat",
+    "workflow": "Workflow",
+    "skill": "Skill",
+    "seenCount": "Seen {{count}} times",
+    "priority": "Priority",
+    "evidenceCount": "Evidence",
+    "converted": "Converted",
+    "suppress": "Suppress",
+    "resume": "Resume",
+    "empty": "No opportunity signals match the current filters."
+  },
+  "reviews": {
+    "origins": {
+      "auto_evolution": "Auto Evolution"
     }
   }
 }

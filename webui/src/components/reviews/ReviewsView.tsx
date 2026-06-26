@@ -68,7 +68,7 @@ const TYPE_FILTERS: ReviewTypeFilter[] = [
   "move_to_domain",
   "fact_conflict",
 ];
-const ORIGIN_FILTERS: ReviewOriginFilter[] = ["", "background_review", "curator"];
+const ORIGIN_FILTERS: ReviewOriginFilter[] = ["", "background_review", "curator", "auto_evolution"];
 const APPLICABLE_TYPES = new Set([
   "memory",
   "fact",

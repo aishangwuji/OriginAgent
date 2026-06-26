@@ -3,6 +3,8 @@ import { Button as IslandButton, Card as IslandCard, Input as IslandInput, Typew
 import { useTranslation } from "react-i18next";
 import { DeleteConfirm } from "@/components/DeleteConfirm";
 import { ReviewsView } from "@/components/reviews/ReviewsView";
+import { MetaCognitionView } from "@/components/cognition/MetaCognitionView";
+import { SignalsView } from "@/components/signals/SignalsView";
 import { Sidebar } from "@/components/Sidebar";
 import { SettingsView } from "@/components/settings/SettingsView";
 import { ThreadShell } from "@/components/thread/ThreadShell";
@@ -37,7 +39,7 @@ type BootState =
 const SIDEBAR_STORAGE_KEY = "OriginAgent-webui.sidebar";
 const RESTART_STARTED_KEY = "OriginAgent-webui.restartStartedAt";
 const SIDEBAR_WIDTH = 272;
-type ShellView = "chat" | "settings" | "reviews";
+type ShellView = "chat" | "settings" | "reviews" | "cognition" | "signals";
 
 function pendingSessionFromKey(key: string): ChatSummary | null {
   const separator = key.indexOf(":");
@@ -371,6 +373,16 @@ function Shell({ onModelNameChange, onLogout }: { onModelNameChange: (modelName:
     setMobileSidebarOpen(false);
   }, []);
 
+  const onOpenCognition = useCallback(() => {
+    setView("cognition");
+    setMobileSidebarOpen(false);
+  }, []);
+
+  const onOpenSignals = useCallback(() => {
+    setView("signals");
+    setMobileSidebarOpen(false);
+  }, []);
+
   const onBackToChat = useCallback(() => {
     setView("chat");
     setMobileSidebarOpen(false);
@@ -468,6 +480,18 @@ function Shell({ onModelNameChange, onLogout }: { onModelNameChange: (modelName:
       });
       return;
     }
+    if (view === "cognition") {
+      document.title = t("app.documentTitle.chat", {
+        title: t("cognition.title"),
+      });
+      return;
+    }
+    if (view === "signals") {
+      document.title = t("app.documentTitle.chat", {
+        title: t("signals.title"),
+      });
+      return;
+    }
     document.title = activeSession
       ? t("app.documentTitle.chat", { title: headerTitle })
       : t("app.documentTitle.base");
@@ -483,6 +507,8 @@ function Shell({ onModelNameChange, onLogout }: { onModelNameChange: (modelName:
       setPendingDelete({ key, label }),
     onOpenSettings,
     onOpenReviews,
+    onOpenCognition,
+    onOpenSignals,
   };
   const showMainSidebar = view !== "settings";
 
@@ -560,6 +586,16 @@ function Shell({ onModelNameChange, onLogout }: { onModelNameChange: (modelName:
         {view === "reviews" && (
           <div className="absolute inset-0 flex flex-col">
             <ReviewsView onBackToChat={onBackToChat} />
+          </div>
+        )}
+        {view === "cognition" && (
+          <div className="absolute inset-0 flex flex-col">
+            <MetaCognitionView onBackToChat={onBackToChat} />
+          </div>
+        )}
+        {view === "signals" && (
+          <div className="absolute inset-0 flex flex-col">
+            <SignalsView onBackToChat={onBackToChat} />
           </div>
         )}
       </main>

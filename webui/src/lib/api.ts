@@ -22,6 +22,9 @@ import type {
   SlashCommand,
   WebSearchSettingsUpdate,
   WebuiThreadPersistedPayload,
+  MetaCognitionSummary,
+  OpportunitySignal,
+  EvolutionStatus,
 } from "./types";
 
 export class ApiError extends Error {
@@ -512,6 +515,58 @@ export async function deleteMcpServerSettings(
   query.set("name", name);
   return request<SettingsPayload>(
     `${base}/api/settings/mcp/delete?${query}`,
+    token,
+  );
+}
+
+export async function fetchMetaCognitionSummary(
+  token: string,
+  base: string = "",
+): Promise<MetaCognitionSummary> {
+  return request<MetaCognitionSummary>(
+    `${base}/api/cognition/status`,
+    token,
+  );
+}
+
+export async function listSignals(
+  token: string,
+  filters: { status?: string; kind?: string; limit?: number } = {},
+  base: string = "",
+): Promise<{ signals: OpportunitySignal[]; count: number }> {
+  const query = new URLSearchParams();
+  if (filters.status) query.set("status", filters.status);
+  if (filters.kind) query.set("kind", filters.kind);
+  if (filters.limit !== undefined) query.set("limit", String(filters.limit));
+  const suffix = query.toString() ? `?${query}` : "";
+  return request<{ signals: OpportunitySignal[]; count: number }>(
+    `${base}/api/evolution/signals${suffix}`,
+    token,
+  );
+}
+
+export async function updateSignal(
+  token: string,
+  signalId: string,
+  action: "suppress" | "resume",
+  options: { reason?: string } = {},
+  base: string = "",
+): Promise<{ ok: boolean; signal: OpportunitySignal | null }> {
+  const query = new URLSearchParams();
+  if (options.reason?.trim()) query.set("reason", options.reason.trim());
+  const suffix = query.toString() ? `?${query}` : "";
+  return request<{ ok: boolean; signal: OpportunitySignal | null }>(
+    `${base}/api/evolution/signals/${encodeURIComponent(signalId)}/${action}${suffix}`,
+    token,
+  );
+}
+
+export async function fetchEvolutionStatus(
+  token: string,
+  base: string = "",
+): Promise<EvolutionStatus> {
+  return request<EvolutionStatus>(
+    `${base}/api/evolution/status`,
     token,
   );
 }

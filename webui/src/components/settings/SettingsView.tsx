@@ -38,6 +38,7 @@ import { useTranslation } from "react-i18next";
 import { LanguageSwitcher } from "@/components/LanguageSwitcher";
 import { ModelInputWithFetch } from "@/components/settings/ModelInputWithFetch";
 import { Button } from "@/components/ui/button";
+import { LearningSettings } from "@/components/settings/LearningSettings";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -86,7 +87,7 @@ import type {
   WebSearchSettingsUpdate,
 } from "@/lib/types";
 
-type SettingsSectionKey = "general" | "self" | "byok" | "skills" | "domains" | "mcp";
+type SettingsSectionKey = "general" | "self" | "byok" | "skills" | "learning" | "domains" | "mcp";
 type ByokPaneKey = "llm" | "web-search";
 type McpFormState = {
   name: string;
@@ -780,6 +781,30 @@ export function SettingsView({
                   backgroundReviewSaving={backgroundReviewSaving}
                   onToggleBackgroundReview={toggleBackgroundReview}
                 />
+              ) : activeSection === "learning" ? (
+                <LearningSettings
+                  enabled={settings.runtime_controls?.learning?.meta_cognition_enabled ?? false}
+                  triggerCollectionEnabled={settings.runtime_controls?.learning?.meta_trigger_collection_enabled ?? false}
+                  structuredReflectionEnabled={settings.runtime_controls?.learning?.meta_structured_reflection_enabled ?? false}
+                  patternConsolidationEnabled={settings.runtime_controls?.learning?.meta_pattern_consolidation_enabled ?? false}
+                  evolutionBridgeEnabled={settings.runtime_controls?.learning?.meta_evolution_bridge_enabled ?? false}
+                  workingMemoryBridgeEnabled={settings.runtime_controls?.learning?.meta_working_memory_bridge_enabled ?? false}
+                  memoryCandidateBridgeEnabled={settings.runtime_controls?.learning?.meta_memory_candidate_bridge_enabled ?? false}
+                  onToggleMetaCognition={(checked) => updateSection("learning", { meta_cognition_enabled: checked } as any)}
+                  onToggleTriggerCollection={(checked) => updateSection("learning", { meta_trigger_collection_enabled: checked } as any)}
+                  onToggleStructuredReflection={(checked) => updateSection("learning", { meta_structured_reflection_enabled: checked } as any)}
+                  onTogglePatternConsolidation={(checked) => updateSection("learning", { meta_pattern_consolidation_enabled: checked } as any)}
+                  onToggleEvolutionBridge={(checked) => updateSection("learning", { meta_evolution_bridge_enabled: checked } as any)}
+                  onToggleWorkingMemoryBridge={(checked) => updateSection("learning", { meta_working_memory_bridge_enabled: checked } as any)}
+                  onToggleMemoryCandidateBridge={(checked) => updateSection("learning", { meta_memory_candidate_bridge_enabled: checked } as any)}
+                  backgroundReviewEnabled={settings.learning?.background_review?.enabled ?? false}
+                  backgroundReviewSaving={backgroundReviewSaving}
+                  onToggleBackgroundReview={toggleBackgroundReview}
+                  curatorEnabled={settings.runtime_controls?.learning?.curator_enabled ?? false}
+                  onToggleCurator={(checked) => updateSection("learning", { curator_enabled: checked })}
+                  dreamAnnotateLineAges={settings.runtime_controls?.agent?.dream_annotate_line_ages ?? false}
+                  onToggleDreamAnnotateLineAges={(checked) => updateSection("agent", { dream_annotate_line_ages: checked })}
+                />
               ) : activeSection === "self" ? (
                 <SelfSettings />
               ) : activeSection === "skills" ? (
@@ -866,6 +891,7 @@ const SETTINGS_NAV_ITEMS = [
   { key: "self", icon: Brain },
   { key: "byok", icon: KeyRound },
   { key: "skills", icon: GraduationCap },
+  { key: "learning", icon: Zap },
   { key: "domains", icon: Boxes },
   { key: "mcp", icon: Server },
 ] as const;
