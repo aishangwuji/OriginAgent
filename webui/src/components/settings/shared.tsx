@@ -19,7 +19,8 @@ import { cn } from "@/lib/utils";
 
 // -- provider icon -----------------------------------------------------------
 
-const PROVIDER_ICONS: Record<string, React.ComponentType<{ className?: string; strokeWidth?: number; "aria-hidden"?: boolean }>> = {
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const PROVIDER_ICONS: Record<string, any> = {
   openai: Brain,
   anthropic: Brain,
   openrouter: Layers,

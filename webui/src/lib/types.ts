@@ -949,6 +949,12 @@ export type Outbound =
       /** Current UI language code (e.g. "zh-CN", "ja") so the server
        * can localise slash-command responses. */
       lang?: string;
+    }
+  | {
+      type: "voice_message";
+      chat_id: string;
+      audio_data_url: string;
+      webui?: true;
     };
 
 

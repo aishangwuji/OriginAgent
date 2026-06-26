@@ -2,10 +2,13 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { ArrowUp } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
+import { VoiceInputButton } from "@/components/voice/VoiceInputButton";
+import { useVoiceRecorder } from "@/hooks/useVoiceRecorder";
 import { cn } from "@/lib/utils";
 
 interface ComposerProps {
   onSend: (content: string) => void;
+  onVoiceSend?: (audioDataUrl: string) => void;
   disabled?: boolean;
   placeholder?: string;
   /** Visually collapse the outer padding when embedded inside a welcome screen. */
@@ -19,12 +22,21 @@ interface ComposerProps {
  */
 export function Composer({
   onSend,
+  onVoiceSend,
   disabled,
   placeholder = "Type your message…",
   compact = false,
 }: ComposerProps) {
   const [value, setValue] = useState("");
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const voice = useVoiceRecorder();
+
+  const handleVoiceStop = useCallback(async () => {
+    const dataUrl = await voice.stop();
+    if (dataUrl && onVoiceSend) {
+      onVoiceSend(dataUrl);
+    }
+  }, [voice, onVoiceSend]);
 
   // Autofocus on mount — coming back to a chat, switching sessions, or
   // opening the welcome screen should always land the caret in the box.
@@ -105,18 +117,30 @@ export function Composer({
             Enter to send · Shift+Enter for newline
           </span>
           <span className="sm:hidden" aria-hidden />
-          <Button
-            type="submit"
-            size="icon"
-            disabled={disabled || !value.trim()}
-            aria-label="Send message"
-            className={cn(
-              "h-9 w-9 rounded-full shadow-sm transition-transform",
-              value.trim() && !disabled && "hover:scale-[1.03] active:scale-95",
-            )}
-          >
-            <ArrowUp className="h-4 w-4" />
-          </Button>
+          <div className="flex items-center gap-1">
+            <VoiceInputButton
+              state={voice.state}
+              elapsed={voice.elapsed}
+              error={voice.error}
+              supported={voice.supported}
+              onStart={voice.start}
+              onStop={handleVoiceStop}
+              onCancel={voice.cancel}
+              disabled={disabled}
+            />
+            <Button
+              type="submit"
+              size="icon"
+              disabled={disabled || !value.trim()}
+              aria-label="Send message"
+              className={cn(
+                "h-9 w-9 rounded-full shadow-sm transition-transform",
+                value.trim() && !disabled && "hover:scale-[1.03] active:scale-95",
+              )}
+            >
+              <ArrowUp className="h-4 w-4" />
+            </Button>
+          </div>
         </div>
       </div>
     </form>

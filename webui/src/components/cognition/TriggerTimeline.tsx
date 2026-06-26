@@ -66,10 +66,10 @@ export function TriggerTimeline({ triggers }: { triggers: MetaTriggerRecord[] })
             <p className="mt-0.5 truncate text-muted-foreground">
               {trigger.source_reference}
             </p>
-            {trigger.payload?.tool_name && (
+            {typeof trigger.payload?.tool_name === "string" && (
               <p className="text-xs text-muted-foreground">
-                tool: {String(trigger.payload.tool_name)}
-                {trigger.payload.status ? ` \u00B7 ${String(trigger.payload.status)}` : ""}
+                tool: {trigger.payload.tool_name}
+                {typeof trigger.payload.status === "string" ? ` \u00B7 ${trigger.payload.status}` : ""}
               </p>
             )}
           </div>

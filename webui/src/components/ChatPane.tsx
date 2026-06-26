@@ -59,6 +59,14 @@ export function ChatPane({ session, onNewChat }: ChatPaneProps) {
     setBooting(false);
   }, [chatId, client, setMessages]);
 
+  const handleVoiceSend = useCallback(
+    (audioDataUrl: string) => {
+      if (!chatId) return;
+      client.sendVoiceMessage(chatId, audioDataUrl);
+    },
+    [chatId, client],
+  );
+
   const handleWelcomeSend = useCallback(
     async (content: string) => {
       if (booting) return;
@@ -92,6 +100,7 @@ export function ChatPane({ session, onNewChat }: ChatPaneProps) {
               compact
               disabled={booting}
               onSend={handleWelcomeSend}
+              onVoiceSend={handleVoiceSend}
               placeholder={
                 booting ? "Opening a new chat…" : "Ask anything..."
               }
@@ -107,6 +116,7 @@ export function ChatPane({ session, onNewChat }: ChatPaneProps) {
       <MessageList messages={messages} isStreaming={isStreaming} />
       <Composer
         onSend={send}
+        onVoiceSend={handleVoiceSend}
         disabled={!chatId}
         placeholder="Type your message…"
       />

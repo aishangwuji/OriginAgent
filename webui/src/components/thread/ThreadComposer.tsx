@@ -39,6 +39,8 @@ import {
 import { useTranslation } from "react-i18next";
 
 import { Button } from "@/components/ui/button";
+import { VoiceInputButton } from "@/components/voice/VoiceInputButton";
+import { useVoiceRecorder } from "@/hooks/useVoiceRecorder";
 import {
   useAttachedImages,
   type AttachedAttachment,
@@ -89,6 +91,7 @@ function previewKind(kind: AttachedAttachment["kind"]): UIMediaKind {
 
 interface ThreadComposerProps {
   onSend: (content: string, attachments?: SendAttachment[], options?: SendOptions) => void;
+  onVoiceSend?: (audioDataUrl: string) => void;
   disabled?: boolean;
   placeholder?: string;
   isStreaming?: boolean;
@@ -431,6 +434,7 @@ function RunElapsedStrip({
 
 export function ThreadComposer({
   onSend,
+  onVoiceSend,
   disabled,
   placeholder,
   isStreaming = false,
@@ -446,6 +450,14 @@ export function ThreadComposer({
   const { t } = useTranslation();
   const [value, setValue] = useState("");
   const [inlineError, setInlineError] = useState<string | null>(null);
+  const voice = useVoiceRecorder();
+
+  const handleVoiceStop = useCallback(async () => {
+    const dataUrl = await voice.stop();
+    if (dataUrl && onVoiceSend) {
+      onVoiceSend(dataUrl);
+    }
+  }, [voice, onVoiceSend]);
   const [slashMenuDismissed, setSlashMenuDismissed] = useState(false);
   const [selectedCommandIndex, setSelectedCommandIndex] = useState(0);
   const [uncontrolledImageMode, setUncontrolledImageMode] = useState(false);
@@ -1008,6 +1020,16 @@ export function ThreadComposer({
             ) : null}
           </div>
           <span className={cn(isHero ? "hidden" : "sm:hidden")} aria-hidden />
+          <VoiceInputButton
+            state={voice.state}
+            elapsed={voice.elapsed}
+            error={voice.error}
+            supported={voice.supported}
+            onStart={voice.start}
+            onStop={handleVoiceStop}
+            onCancel={voice.cancel}
+            disabled={disabled}
+          />
           <Button
             type={showStopButton ? "button" : "submit"}
             size="icon"

@@ -304,6 +304,17 @@ export class OriginAgentClient {
     this.queueSend(frame);
   }
 
+  sendVoiceMessage(chatId: string, audioDataUrl: string): void {
+    this.knownChats.add(chatId);
+    const frame: Outbound = {
+      type: "voice_message",
+      chat_id: chatId,
+      audio_data_url: audioDataUrl,
+      webui: true,
+    };
+    this.queueSend(frame);
+  }
+
   // -- internals ---------------------------------------------------------
 
   private setStatus(status: ConnectionStatus): void {
