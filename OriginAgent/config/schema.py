@@ -1711,6 +1711,22 @@ class ToolsConfig(Base):
             serialization_alias="ttsEnabled",
         )
 
+    class VoicePipelineConfig(Base):
+        """Voice pipeline runtime configuration.
+
+        Separate from LocalAwarenessAudioConfig (which feeds the WebUI
+        settings panel). This controls the voice processing behavior:
+        provider selection, audio parameters, and response mode.
+        """
+        enabled: bool = False
+        stt_provider: str = "volcengine"
+        tts_provider: str = "volcengine"
+        tts_voice: str = "zh_female_santong"
+        tts_sample_rate: int = Field(default=24000, ge=8000, le=48000)
+        auto_play_response: bool = True
+        voice_activity_timeout_ms: int = Field(default=1500, ge=100, le=10000)
+        max_record_seconds: int = Field(default=60, ge=1, le=300)
+
     class LocalAwarenessMediaInspectionConfig(Base):
         enabled: bool = True
 
@@ -1798,6 +1814,9 @@ class ToolsConfig(Base):
         default_factory=lambda: ToolsConfig.LocalAwarenessConfig(),
         validation_alias=AliasChoices("localAwareness", "local_awareness"),
         serialization_alias="localAwareness",
+    )
+    voice: "ToolsConfig.VoicePipelineConfig" = Field(
+        default_factory=lambda: ToolsConfig.VoicePipelineConfig()
     )
     restrict_to_workspace: bool = False  # restrict all tool access to workspace directory
     mcp_servers: dict[str, MCPServerConfig] = Field(default_factory=dict)
