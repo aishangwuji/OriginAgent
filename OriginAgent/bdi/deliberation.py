@@ -19,9 +19,13 @@ from OriginAgent.bdi.models import (
     Desire,
     DesirePriority,
     DesireStatus,
+    IntentionStack,
+    StackFrame,
     now_iso,
 )
 from OriginAgent.bdi.desire_store import DesireStore
+from OriginAgent.bdi.plan_library import PlanLibrary
+from OriginAgent.bdi.world_state_watcher import WorldStateWatcher
 from OriginAgent.utils.helpers import ensure_dir
 
 
@@ -31,11 +35,12 @@ Your job is to evaluate the agent's active desires and decide what to do next.
 You have access to:
 - **Desires**: active goals/commitments the agent has made to its user
 - **Beliefs**: current facts, world state, user profile, recent episodes
+- **Suspended Intentions**: previously interrupted tasks that may be resumable
 
 For each desire, decide one of:
 1. **Form an intention** — create a concrete action to advance the desire
 2. **Mark satisfied** — the desire is done
-3. **Suspend** — the desire is blocked (e.g., waiting for a dependency)
+3. **Suspend** — the desire is blocked (e.g., waiting for a dependency, interrupted by higher priority)
 4. **Cancel** — the desire is no longer relevant
 5. **Skip** — no action needed right now
 
@@ -89,7 +94,7 @@ _DELIBERATION_TOOL = [
                     "desires_to_suspend": {
                         "type": "array",
                         "items": {"type": "string"},
-                        "description": "Desire IDs to pause",
+                        "description": "Desire IDs to pause (will be pushed onto IntentionStack)",
                     },
                     "desires_to_cancel": {
                         "type": "array",
@@ -110,7 +115,21 @@ _DELIBERATION_TOOL = [
 
 
 class DeliberationEngine:
-    """Continuous BDI deliberation loop.
+    """Continuous BDI deliberation loop with full BDI-native primitives.
+
+    Integrates three BDI core mechanisms:
+
+    1. **IntentionStack** — nested suspend/resume. When a desire is suspended,
+       the current intention is pushed onto the stack. When the interrupt
+       clears, the stack pops and the desire resumes as ACTIVE.
+
+    2. **WorldStateWatcher** — event-driven reactivity. Subscribes to the
+       event bus for critical belief changes (smoke alarm, door open) and
+       triggers immediate reconsideration via ``trigger_now()``.
+
+    3. **PlanLibrary** — cached means-ends reasoning. Desires matching known
+       plans skip the LLM call entirely. Plans are auto-learned from
+       successful LLM deliberations.
 
     Usage::
 
@@ -137,6 +156,7 @@ class DeliberationEngine:
         max_desires_per_cycle: int = 10,
         auto_create_from_foresight: bool = True,
         on_intention: Any | None = None,   # Callable[[DeliberationIntention], Awaitable[None]]
+        event_bus: Any | None = None,      # MessageBus for WorldStateWatcher
     ) -> None:
         self.workspace = Path(workspace)
         self._store = store
@@ -154,6 +174,16 @@ class DeliberationEngine:
         self._audit_path = self._audit_dir / "cycles.jsonl"
         ensure_dir(self._audit_dir)
 
+        # ── BDI-native primitives ──────────────────────────────────────
+        self._intention_stack = IntentionStack(max_depth=10)
+        self._plan_library = PlanLibrary(self.workspace)
+        self._watcher = WorldStateWatcher(
+            engine=self,
+            event_bus=event_bus,
+            cooldown_s=5.0,
+            enabled=enabled,
+        )
+
     # ------------------------------------------------------------------
     # Lifecycle
     # ------------------------------------------------------------------
@@ -168,9 +198,12 @@ class DeliberationEngine:
 
         self._running = True
         self._task = asyncio.create_task(self._run_loop())
-        logger.info("BDI: DeliberationEngine started (every {}s)", self._interval_s)
+        await self._watcher.start()
+        logger.info("BDI: DeliberationEngine started (every {}s, watcher={})",
+                     self._interval_s, self._watcher._enabled)
 
     def stop(self) -> None:
+        self._watcher.stop()
         self._running = False
         if self._task:
             self._task.cancel()
@@ -193,7 +226,18 @@ class DeliberationEngine:
     # ------------------------------------------------------------------
 
     async def run_cycle(self) -> DeliberationResult:
-        """Execute one full BDI deliberation cycle."""
+        """Execute one full BDI deliberation cycle.
+
+        0. Check IntentionStack for resumable suspended desires
+        1. Collect active desires
+        2. Auto-sync foresights → desires
+        3. Prioritize
+        4. Split: PlanLibrary cache hits vs LLM-needed
+        5. LLM deliberation for unmatched desires
+        6. Apply status transitions (with IntentionStack push/pop)
+        7. Learn new plans from LLM results
+        8. Emit intentions for execution
+        """
         cycle_id = f"bdi_{uuid.uuid4().hex[:12]}"
         started_at = now_iso()
 
@@ -207,6 +251,9 @@ class DeliberationEngine:
             )
             self._persist_cycle(cycle_id, started_at, result, "skipped")
             return result
+
+        # 0. Check for resumable suspended intentions
+        await self._check_resumptions()
 
         # 1. Collect active desires
         desires = self._store.list_deliberable()
@@ -226,98 +273,163 @@ class DeliberationEngine:
         # 2. Optionally auto-create desires from foresight records
         if self._auto_create_from_foresight:
             await self._sync_foresights(desires)
+            desires = self._store.list_deliberable()
 
         # 3. Cap to max per cycle, prioritize by priority and deadline
         desires = self._prioritize(desires)[:self._max_desires_per_cycle]
 
-        # 4. Build prompt with Belief context
-        beliefs = self._gather_beliefs()
-        user_prompt = self._build_prompt(desires, beliefs)
+        # ── 4. PlanLibrary: split cache hits from LLM-needed ──────────
+        cached_intentions: list[DeliberationIntention] = []
+        llm_desires: list[Desire] = []
 
-        # 5. Call LLM for deliberation
-        try:
-            response = await self._provider.chat_with_retry(
-                messages=[
-                    {"role": "system", "content": _DELIBERATION_SYSTEM_PROMPT},
-                    {"role": "user", "content": user_prompt},
-                ],
-                tools=_DELIBERATION_TOOL,
-                model=self._model,
-            )
-        except Exception as exc:
-            result = DeliberationResult(
-                cycle_id=cycle_id,
-                started_at=started_at,
-                finished_at=now_iso(),
-                desires_evaluated=len(desires),
-                reasoning="",
-                error=str(exc),
-            )
-            self._persist_cycle(cycle_id, started_at, result, "error")
-            return result
-
-        # 6. Parse LLM output
-        if not response.should_execute_tools or not response.has_tool_calls:
-            result = DeliberationResult(
-                cycle_id=cycle_id,
-                started_at=started_at,
-                finished_at=now_iso(),
-                desires_evaluated=len(desires),
-                reasoning="LLM did not produce tool calls.",
-            )
-            self._persist_cycle(cycle_id, started_at, result, "completed")
-            return result
-
-        args = response.tool_calls[0].arguments
-        reasoning = args.get("reasoning", "")
-
-        # 7. Parse intentions
-        intentions = []
-        for raw in args.get("intentions", []):
-            try:
+        for desire in desires:
+            match = self._plan_library.match(desire)
+            if match is not None:
                 intent = DeliberationIntention(
-                    desire_id=raw["desire_id"],
-                    action=raw["action"],
-                    scope=raw.get("scope", "system"),
-                    trigger="deliberation",
-                    risk=raw.get("risk", "low"),
-                    reasoning=raw.get("reasoning", ""),
-                    payload=raw.get("payload", {}),
+                    desire_id=desire.desire_id,
+                    action=match.plan.action,
+                    scope=match.plan.scope,
+                    trigger="deliberation:plan_cache",
+                    risk="low",
+                    reasoning=f"Plan cache: {match.reasoning}",
+                    payload=dict(match.plan.payload_template),
                 )
-                intentions.append(intent)
-            except KeyError:
-                logger.warning("BDI: skipping malformed intention: {}", raw)
+                cached_intentions.append(intent)
+                logger.debug("BDI: plan cache hit — desire={} plan={} confidence={:.2f}",
+                             desire.desire_id, match.plan.plan_id, match.confidence)
+            else:
+                llm_desires.append(desire)
 
-        # 8. Apply status transitions (per-desire error handling)
+        # ── 5. LLM deliberation for unmatched desires ──────────────────
+        llm_intentions: list[DeliberationIntention] = []
+        reasoning = ""
         updated_ids: list[str] = []
-        for did in args.get("desires_to_satisfy", []):
-            try:
-                updated = self._store.update(did, status=DesireStatus.SATISFIED,
-                                              reasoning=reasoning)
-                if updated:
-                    updated_ids.append(did)
-            except ValueError:
-                logger.warning("BDI: invalid transition for desire {} (SATISFIED)", did)
-        for did in args.get("desires_to_suspend", []):
-            try:
-                updated = self._store.update(did, status=DesireStatus.SUSPENDED,
-                                              reasoning=reasoning)
-                if updated:
-                    updated_ids.append(did)
-            except ValueError:
-                logger.warning("BDI: invalid transition for desire {} (SUSPENDED)", did)
-        for did in args.get("desires_to_cancel", []):
-            try:
-                updated = self._store.update(did, status=DesireStatus.CANCELLED,
-                                              reasoning=reasoning)
-                if updated:
-                    updated_ids.append(did)
-            except ValueError:
-                logger.warning("BDI: invalid transition for desire {} (CANCELLED)", did)
 
-        # 9. Emit intentions for execution
-        if intentions and self._on_intention:
-            for intent in intentions:
+        if llm_desires:
+            beliefs = self._gather_beliefs()
+            # Include suspended stack state in the prompt
+            if not self._intention_stack.is_empty:
+                beliefs["suspended_intentions"] = [
+                    c.desire_id for c in self._intention_stack.list_resumable()
+                ]
+            user_prompt = self._build_prompt(llm_desires, beliefs)
+
+            try:
+                response = await self._provider.chat_with_retry(
+                    messages=[
+                        {"role": "system", "content": _DELIBERATION_SYSTEM_PROMPT},
+                        {"role": "user", "content": user_prompt},
+                    ],
+                    tools=_DELIBERATION_TOOL,
+                    model=self._model,
+                )
+            except Exception as exc:
+                result = DeliberationResult(
+                    cycle_id=cycle_id,
+                    started_at=started_at,
+                    finished_at=now_iso(),
+                    desires_evaluated=len(llm_desires) + len(cached_intentions),
+                    reasoning="",
+                    error=str(exc),
+                )
+                self._persist_cycle(cycle_id, started_at, result, "error")
+                return result
+
+            if not response.should_execute_tools or not response.has_tool_calls:
+                result = DeliberationResult(
+                    cycle_id=cycle_id,
+                    started_at=started_at,
+                    finished_at=now_iso(),
+                    desires_evaluated=len(llm_desires) + len(cached_intentions),
+                    reasoning="LLM did not produce tool calls.",
+                )
+                self._persist_cycle(cycle_id, started_at, result, "completed")
+                return result
+
+            args = response.tool_calls[0].arguments
+            reasoning = args.get("reasoning", "")
+
+            # Parse LLM intentions
+            for raw in args.get("intentions", []):
+                try:
+                    intent = DeliberationIntention(
+                        desire_id=raw["desire_id"],
+                        action=raw["action"],
+                        scope=raw.get("scope", "system"),
+                        trigger="deliberation",
+                        risk=raw.get("risk", "low"),
+                        reasoning=raw.get("reasoning", ""),
+                        payload=raw.get("payload", {}),
+                    )
+                    llm_intentions.append(intent)
+                except KeyError:
+                    logger.warning("BDI: skipping malformed intention: {}", raw)
+
+            # ── 6. Apply status transitions ────────────────────────────
+            for did in args.get("desires_to_satisfy", []):
+                try:
+                    updated = self._store.update(did, status=DesireStatus.SATISFIED,
+                                                  reasoning=reasoning)
+                    if updated:
+                        updated_ids.append(did)
+                        # Pop from intention stack if it was suspended
+                        self._intention_stack.pop()
+                except ValueError:
+                    logger.warning("BDI: invalid transition for desire {} (SATISFIED)", did)
+
+            for did in args.get("desires_to_suspend", []):
+                try:
+                    # Find the matching intention to push onto stack
+                    matching = next((i for i in llm_intentions if i.desire_id == did), None)
+                    updated = self._store.update(did, status=DesireStatus.SUSPENDED,
+                                                  reasoning=reasoning)
+                    if updated:
+                        updated_ids.append(did)
+                        if matching:
+                            frame = StackFrame(
+                                desire_id=did,
+                                intention=matching,
+                                suspended_at=now_iso(),
+                                suspend_reason=reasoning[:200],
+                                original_priority=updated.priority.value,
+                            )
+                            self._intention_stack.push(frame)
+                            logger.info("BDI: pushed desire {} to intention stack (depth={})",
+                                        did, self._intention_stack.depth)
+                except (ValueError, OverflowError) as e:
+                    logger.warning("BDI: suspend failed for desire {} — {}", did, e)
+
+            for did in args.get("desires_to_cancel", []):
+                try:
+                    updated = self._store.update(did, status=DesireStatus.CANCELLED,
+                                                  reasoning=reasoning)
+                    if updated:
+                        updated_ids.append(did)
+                except ValueError:
+                    logger.warning("BDI: invalid transition for desire {} (CANCELLED)", did)
+
+            # ── 7. Learn new plans from LLM-generated intentions ───────
+            for desire in llm_desires:
+                for intent in llm_intentions:
+                    if intent.desire_id == desire.desire_id:
+                        try:
+                            self._plan_library.learn(desire=desire, intention=intent)
+                        except Exception:
+                            logger.debug("BDI: plan library learn skipped for {}", desire.desire_id)
+
+        # ── 8. Merge cached + LLM intentions, emit ─────────────────────
+        all_intentions = cached_intentions + llm_intentions
+
+        # Also handle cache-hit desires: mark them as having been acted on
+        for intent in cached_intentions:
+            try:
+                self._store.update(intent.desire_id, status=DesireStatus.ACTIVE,
+                                    reasoning="Plan cache execution")
+            except ValueError:
+                pass
+
+        if all_intentions and self._on_intention:
+            for intent in all_intentions:
                 try:
                     await self._on_intention(intent)
                 except Exception:
@@ -329,10 +441,10 @@ class DeliberationEngine:
             started_at=started_at,
             finished_at=finished_at,
             desires_evaluated=len(desires),
-            intentions=intentions,
+            intentions=all_intentions,
             desires_updated=updated_ids,
             reasoning=reasoning,
-            next_check_at=args.get("next_check_at"),
+            next_check_at=None,
             model_used=self._model,
         )
         self._persist_cycle(cycle_id, started_at, result, "completed",
@@ -342,6 +454,49 @@ class DeliberationEngine:
     async def trigger_now(self) -> DeliberationResult:
         """Manually trigger a deliberation cycle from outside the loop."""
         return await self.run_cycle()
+
+    # ------------------------------------------------------------------
+    # IntentionStack — resume check
+    # ------------------------------------------------------------------
+
+    async def _check_resumptions(self) -> None:
+        """Check the IntentionStack for desires that can be resumed.
+
+        When the interrupt that caused a suspend clears (e.g., user returns
+        home, door closes, higher-priority task completes), pop the stack
+        and transition the desire back to ACTIVE.
+        """
+        if self._intention_stack.is_empty:
+            return
+
+        candidates = self._intention_stack.list_resumable()
+        for candidate in candidates:
+            desire = self._store.get(candidate.desire_id)
+            if desire is None:
+                # Orphaned stack entry — remove it
+                self._intention_stack.pop()
+                logger.info("BDI: removed orphaned stack entry for desire {}", candidate.desire_id)
+                continue
+
+            if desire.status == DesireStatus.SUSPENDED:
+                # Check if dependencies are now satisfied
+                deps_satisfied = True
+                for dep_id in desire.dependencies:
+                    dep = self._store.get(dep_id)
+                    if dep and not dep.is_terminal:
+                        deps_satisfied = False
+                        break
+
+                if deps_satisfied:
+                    try:
+                        self._store.update(candidate.desire_id,
+                                            status=DesireStatus.ACTIVE,
+                                            reasoning="Resumed from IntentionStack")
+                        self._intention_stack.pop()
+                        logger.info("BDI: resumed desire {} from IntentionStack (depth={})",
+                                    candidate.desire_id, self._intention_stack.depth)
+                    except ValueError:
+                        logger.warning("BDI: could not resume desire {}", candidate.desire_id)
 
     # ------------------------------------------------------------------
     # Belief gathering
@@ -358,8 +513,8 @@ class DeliberationEngine:
             "foresight_count": 0,
             "episode_count": 0,
             "profile_count": 0,
+            "intention_stack_depth": self._intention_stack.depth,
         }
-        # Try to read from the nearline memory store
         try:
             from OriginAgent.memory.store import NearlineMemoryStore
             ms = NearlineMemoryStore(self.workspace)
@@ -414,6 +569,7 @@ class DeliberationEngine:
             f"Current Time: {beliefs.get('current_time', now_iso())}",
             f"Memory Status: foresights={beliefs.get('foresight_count', '?')}, "
             f"episodes={beliefs.get('episode_count', '?')}",
+            f"IntentionStack depth: {beliefs.get('intention_stack_depth', 0)}",
             "",
             "## Active Desires (sorted by priority)",
             "",
@@ -429,6 +585,16 @@ class DeliberationEngine:
                 lines.append(f"   Constraints: {', '.join(d.constraints)}")
             if d.dependencies:
                 lines.append(f"   Dependencies: {', '.join(d.dependencies)}")
+
+        # Show suspended intentions from stack
+        if not self._intention_stack.is_empty:
+            lines.append("")
+            lines.append("## Suspended Intentions (IntentionStack)")
+            for candidate in self._intention_stack.list_resumable():
+                lines.append(
+                    f"- {candidate.desire_id}: {candidate.suspend_reason[:80]} "
+                    f"(suspended at {candidate.suspended_at})"
+                )
 
         if not desires:
             lines.append("(no active desires)")
@@ -475,10 +641,8 @@ class DeliberationEngine:
             ensure_dir(self._audit_dir)
             line = json.dumps(record.to_json(), ensure_ascii=False) + "\n"
 
-            # Read existing content
             existing = self._audit_path.read_text(encoding="utf-8") if self._audit_path.exists() else ""
 
-            # Atomic write: temp-file + fsync + rename + dir-fsync
             tmp = tempfile.NamedTemporaryFile(
                 mode="w",
                 encoding="utf-8",
@@ -494,7 +658,6 @@ class DeliberationEngine:
                 tmp.close()
                 os.replace(tmp.name, str(self._audit_path))
 
-                # Directory fsync for durability
                 try:
                     dir_fd = os.open(str(self._audit_dir), os.O_RDONLY)
                     os.fsync(dir_fd)
