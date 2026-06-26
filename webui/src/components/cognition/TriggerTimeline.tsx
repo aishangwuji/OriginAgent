@@ -28,9 +28,14 @@ export function TriggerTimeline({ triggers }: { triggers: MetaTriggerRecord[] })
   const { t } = useTranslation();
   if (triggers.length === 0) {
     return (
-      <p className="px-2 py-8 text-center text-sm text-muted-foreground">
-        {t("cognition.noTriggers", "No triggers recorded yet.")}
-      </p>
+      <div className="px-2 py-8 text-center">
+        <p className="text-sm text-muted-foreground">
+          {t("cognition.noTriggers", "No triggers recorded yet.")}
+        </p>
+        <p className="mt-1 text-xs text-muted-foreground/70">
+          {t("cognition.noTriggersHint", "Triggers are collected when meta-cognition is enabled in Learning settings. Tool failures, user corrections, and task completions will appear here.")}
+        </p>
+      </div>
     );
   }
   return (

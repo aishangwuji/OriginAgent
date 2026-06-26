@@ -401,7 +401,7 @@ describe("webui API helpers", () => {
     });
 
     expect(fetch).toHaveBeenCalledWith(
-      "/api/skills/lighting-troubleshooting/always?reason=trusted&enabled=true",
+      expect.stringMatching(/\/api\/skills\/lighting-troubleshooting\/always\?.*enabled=true.*reason=trusted/),
       expect.objectContaining({
         headers: { Authorization: "Bearer tok" },
       }),

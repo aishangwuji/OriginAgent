@@ -1,4 +1,5 @@
 import { useTranslation } from "react-i18next";
+import { BooleanSwitch } from "./shared";
 
 interface LearningSettingsProps {
   // Meta-cognition toggles
@@ -26,38 +27,6 @@ interface LearningSettingsProps {
   // Dream
   dreamAnnotateLineAges: boolean;
   onToggleDreamAnnotateLineAges: (checked: boolean) => void;
-}
-
-function BooleanSwitch({
-  checked,
-  ariaLabel,
-  disabled,
-  onChange,
-}: {
-  checked: boolean;
-  ariaLabel: string;
-  disabled?: boolean;
-  onChange: (checked: boolean) => void;
-}) {
-  return (
-    <button
-      type="button"
-      role="switch"
-      aria-label={ariaLabel}
-      aria-checked={checked}
-      disabled={disabled}
-      onClick={() => onChange(!checked)}
-      className={`inline-flex h-7 w-12 items-center rounded-full p-0.5 transition-colors ${
-        checked ? "bg-primary" : "bg-muted"
-      } ${disabled ? "opacity-60" : ""}`}
-    >
-      <span
-        className={`h-6 w-6 rounded-full bg-background shadow-sm transition-transform ${
-          checked ? "translate-x-5" : ""
-        }`}
-      />
-    </button>
-  );
 }
 
 function SettingsGroup({ children }: { children: React.ReactNode }) {

@@ -11,9 +11,14 @@ export function PatternTable({ patterns }: { patterns: PatternRecord[] }) {
   const { t } = useTranslation();
   if (patterns.length === 0) {
     return (
-      <p className="px-2 py-8 text-center text-sm text-muted-foreground">
-        {t("cognition.noPatterns", "No patterns consolidated yet.")}
-      </p>
+      <div className="px-2 py-8 text-center">
+        <p className="text-sm text-muted-foreground">
+          {t("cognition.noPatterns", "No patterns consolidated yet.")}
+        </p>
+        <p className="mt-1 text-xs text-muted-foreground/70">
+          {t("cognition.noPatternsHint", "Error patterns emerge when similar reflections are grouped by the consolidation engine. Enable Pattern Consolidation in Learning settings to start detecting patterns.")}
+        </p>
+      </div>
     );
   }
   return (

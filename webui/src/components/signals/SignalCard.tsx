@@ -1,5 +1,16 @@
+import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { OpportunitySignal } from "@/lib/types";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
 
 interface SignalCardProps {
@@ -10,6 +21,7 @@ interface SignalCardProps {
 }
 
 export function SignalCard({ signal, onSuppress, onResume, disabled }: SignalCardProps) {
+  const [confirmOpen, setConfirmOpen] = useState(false);
   const { t } = useTranslation();
 
   const kindLabel = signal.kind === "workflow_candidate"
@@ -69,15 +81,40 @@ export function SignalCard({ signal, onSuppress, onResume, disabled }: SignalCar
         </div>
         <div className="flex shrink-0 gap-1.5">
           {signal.status === "open" && (
-            <Button
-              size="sm"
-              variant="outline"
-              onClick={() => onSuppress(signal.opportunity_id)}
-              disabled={disabled}
-              className="rounded-full text-xs"
-            >
-              {t("signals.suppress", "Suppress")}
-            </Button>
+            <>
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => setConfirmOpen(true)}
+                disabled={disabled}
+                className="rounded-full text-xs"
+              >
+                {t("signals.suppress", "Suppress")}
+              </Button>
+              <AlertDialog open={confirmOpen} onOpenChange={setConfirmOpen}>
+                <AlertDialogContent>
+                  <AlertDialogHeader>
+                    <AlertDialogTitle>
+                      {t("signals.confirmSuppressTitle", "Suppress this signal?")}
+                    </AlertDialogTitle>
+                    <AlertDialogDescription>
+                      {t("signals.confirmSuppressDesc", "This will prevent the evolution engine from acting on this opportunity. You can resume it later from the suppressed filter.")}
+                    </AlertDialogDescription>
+                  </AlertDialogHeader>
+                  <AlertDialogFooter>
+                    <AlertDialogCancel>{t("signals.cancel", "Cancel")}</AlertDialogCancel>
+                    <AlertDialogAction
+                      onClick={() => {
+                        setConfirmOpen(false);
+                        onSuppress(signal.opportunity_id);
+                      }}
+                    >
+                      {t("signals.suppress", "Suppress")}
+                    </AlertDialogAction>
+                  </AlertDialogFooter>
+                </AlertDialogContent>
+              </AlertDialog>
+            </>
           )}
           {signal.status === "suppressed" && (
             <Button

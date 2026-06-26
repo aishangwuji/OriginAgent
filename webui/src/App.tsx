@@ -343,7 +343,7 @@ function Shell({ onModelNameChange, onLogout }: { onModelNameChange: (modelName:
       setMobileSidebarOpen(false);
       return chatId;
     } catch (e) {
-      console.error("Failed to create chat", e);
+      console.warn("Failed to create chat", e);
       return null;
     }
   }, [createChat]);
@@ -457,7 +457,7 @@ function Shell({ onModelNameChange, onLogout }: { onModelNameChange: (modelName:
       await deleteChat(key);
     } catch (e) {
       if (deletingActive) setActiveKey(key);
-      console.error("Failed to delete session", e);
+      console.warn("Failed to delete session", e);
     }
   }, [pendingDelete, deleteChat, activeKey, sessions]);
 

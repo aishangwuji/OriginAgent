@@ -40,6 +40,27 @@ export class ApiError extends Error {
   }
 }
 
+/** Maps technical API errors to actionable user-facing messages (U6). */
+export function userFriendlyError(err: unknown): string {
+  if (err instanceof ApiError) {
+    const map: Record<number, string> = {
+      400: "The request was invalid. Check your input and try again.",
+      401: "Authentication failed. Your session may have expired — try refreshing the page.",
+      403: "Access denied. You don't have permission for this action.",
+      404: "The requested resource was not found. It may have been removed.",
+      413: "The uploaded file is too large. Try a smaller file.",
+      429: "Too many requests. Please wait a moment and try again.",
+      500: "The server encountered an error. Check the gateway logs for details.",
+      502: "The server is temporarily unavailable. Try again in a few seconds.",
+      503: "Service unavailable. The gateway may be starting up.",
+      504: "The request timed out. Try again with a simpler query.",
+    };
+    return map[err.status] ?? `Unexpected error (${err.status}). Please try again.`;
+  }
+  if (err instanceof Error) return err.message;
+  return "An unexpected error occurred. Please try again.";
+}
+
 export async function withTokenRefresh<T>(
   token: string,
   refreshToken: () => Promise<string | null>,
@@ -55,6 +76,28 @@ export async function withTokenRefresh<T>(
     throw err;
   }
 }
+
+// -- URL helpers ----------------------------------------------------------------
+
+type QueryValue = string | number | boolean | undefined | null;
+
+/** Build a URL with query parameters, skipping undefined / null / empty values. */
+function buildUrl(base: string, params: Record<string, QueryValue> = {}): string {
+  const q = new URLSearchParams();
+  for (const [k, v] of Object.entries(params)) {
+    if (v === undefined || v === null || v === "") continue;
+    q.set(k, String(v));
+  }
+  const suffix = q.toString();
+  return suffix ? `${base}?${suffix}` : base;
+}
+
+/** Prepend the gateway base path (empty string in production) to an API path. */
+function apiUrl(path: string, base: string = ""): string {
+  return `${base}${path}`;
+}
+
+// -- response parsing ----------------------------------------------------------
 
 async function parseJsonResponse<T>(res: Response): Promise<T> {
   if (typeof res.text !== "function") {
@@ -138,7 +181,7 @@ export async function listSessions(
     preview?: string;
   };
   const body = await request<{ sessions: Row[] }>(
-    `${base}/api/sessions`,
+    apiUrl("/api/sessions", base),
     token,
   );
   return body.sessions.map((s) => ({
@@ -157,7 +200,7 @@ export async function fetchWebuiThread(
   key: string,
   base: string = "",
 ): Promise<WebuiThreadPersistedPayload | null> {
-  const url = `${base}/api/sessions/${encodeURIComponent(key)}/webui-thread`;
+  const url = apiUrl(`/api/sessions/${encodeURIComponent(key)}/webui-thread`, base);
   const res = await fetch(url, {
     headers: { Authorization: `Bearer ${token}` },
     credentials: "same-origin",
@@ -173,7 +216,7 @@ export async function deleteSession(
   base: string = "",
 ): Promise<boolean> {
   const body = await request<{ deleted: boolean }>(
-    `${base}/api/sessions/${encodeURIComponent(key)}/delete`,
+    apiUrl(`/api/sessions/${encodeURIComponent(key)}/delete`, base),
     token,
   );
   return body.deleted;
@@ -183,14 +226,14 @@ export async function fetchSettings(
   token: string,
   base: string = "",
 ): Promise<SettingsPayload> {
-  return request<SettingsPayload>(`${base}/api/settings`, token);
+  return request<SettingsPayload>(apiUrl("/api/settings", base), token);
 }
 
 export async function fetchSelfModel(
   token: string,
   base: string = "",
 ): Promise<SelfModel> {
-  const body = await request<{ self_model: SelfModel }>(`${base}/api/self`, token);
+  const body = await request<{ self_model: SelfModel }>(apiUrl("/api/self", base), token);
   return body.self_model;
 }
 
@@ -206,8 +249,10 @@ export async function listSlashCommands(
     icon: string;
     arg_hint?: string;
   };
-  const suffix = lang ? `?lang=${encodeURIComponent(lang)}` : "";
-  const body = await request<{ commands: Row[] }>(`${base}/api/commands${suffix}`, token);
+  const body = await request<{ commands: Row[] }>(
+    buildUrl(apiUrl("/api/commands", base), { lang: lang || undefined }),
+    token,
+  );
   const commands: SlashCommand[] = body.commands
     .map((command) => ({
       command: command.command,
@@ -224,14 +269,8 @@ export async function listReviewProposals(
   filters: { status?: string; type?: string; origin?: string; limit?: number } = {},
   base: string = "",
 ): Promise<{ proposals: ReviewProposal[]; stats: ReviewProposalStats }> {
-  const query = new URLSearchParams();
-  if (filters.status) query.set("status", filters.status);
-  if (filters.type) query.set("type", filters.type);
-  if (filters.origin) query.set("origin", filters.origin);
-  if (filters.limit !== undefined) query.set("limit", String(filters.limit));
-  const suffix = query.toString() ? `?${query}` : "";
   return request<{ proposals: ReviewProposal[]; stats: ReviewProposalStats }>(
-    `${base}/api/reviews${suffix}`,
+    buildUrl(apiUrl("/api/reviews", base), filters),
     token,
   );
 }
@@ -242,7 +281,7 @@ export async function fetchReviewProposal(
   base: string = "",
 ): Promise<{ proposal: ReviewProposal; stats: ReviewProposalStats }> {
   return request<{ proposal: ReviewProposal; stats: ReviewProposalStats }>(
-    `${base}/api/reviews/${encodeURIComponent(proposalId)}`,
+    apiUrl(`/api/reviews/${encodeURIComponent(proposalId)}`, base),
     token,
   );
 }
@@ -258,15 +297,12 @@ export async function reviewProposalAction(
   proposal: ReviewProposal | null;
   stats: ReviewProposalStats;
 }> {
-  const query = new URLSearchParams();
-  if (reason.trim()) query.set("reason", reason.trim());
-  const suffix = query.toString() ? `?${query}` : "";
   return request<{
     result: ReviewDecisionResult;
     proposal: ReviewProposal | null;
     stats: ReviewProposalStats;
   }>(
-    `${base}/api/reviews/${encodeURIComponent(proposalId)}/${action}${suffix}`,
+    buildUrl(apiUrl(`/api/reviews/${encodeURIComponent(proposalId)}/${action}`, base), { reason }),
     token,
   );
 }
@@ -276,13 +312,8 @@ export async function listDomains(
   filters: { source?: string; status?: string; limit?: number } = {},
   base: string = "",
 ): Promise<{ domains: DomainPackRecord[]; stats: DomainPackGovernanceStats }> {
-  const query = new URLSearchParams();
-  if (filters.source) query.set("source", filters.source);
-  if (filters.status) query.set("status", filters.status);
-  if (filters.limit !== undefined) query.set("limit", String(filters.limit));
-  const suffix = query.toString() ? `?${query}` : "";
   return request<{ domains: DomainPackRecord[]; stats: DomainPackGovernanceStats }>(
-    `${base}/api/domains${suffix}`,
+    buildUrl(apiUrl("/api/domains", base), filters),
     token,
   );
 }
@@ -293,7 +324,7 @@ export async function fetchDomain(
   base: string = "",
 ): Promise<{ domain: DomainPackRecord; stats: DomainPackGovernanceStats }> {
   return request<{ domain: DomainPackRecord; stats: DomainPackGovernanceStats }>(
-    `${base}/api/domains/${encodeURIComponent(packId)}`,
+    apiUrl(`/api/domains/${encodeURIComponent(packId)}`, base),
     token,
   );
 }
@@ -304,11 +335,8 @@ export async function installDomainPack(
   reason = "",
   base: string = "",
 ): Promise<{ result: DomainPackGovernanceResult; domain: DomainPackRecord | null; stats: DomainPackGovernanceStats }> {
-  const query = new URLSearchParams();
-  query.set("source", source);
-  if (reason.trim()) query.set("reason", reason.trim());
   return request<{ result: DomainPackGovernanceResult; domain: DomainPackRecord | null; stats: DomainPackGovernanceStats }>(
-    `${base}/api/domains/install?${query}`,
+    buildUrl(apiUrl("/api/domains/install", base), { source, reason }),
     token,
   );
 }
@@ -320,12 +348,8 @@ export async function domainPackAction(
   options: { source?: string; reason?: string } = {},
   base: string = "",
 ): Promise<{ result: DomainPackGovernanceResult; domain: DomainPackRecord | null; stats: DomainPackGovernanceStats }> {
-  const query = new URLSearchParams();
-  if (options.source?.trim()) query.set("source", options.source.trim());
-  if (options.reason?.trim()) query.set("reason", options.reason.trim());
-  const suffix = query.toString() ? `?${query}` : "";
   return request<{ result: DomainPackGovernanceResult; domain: DomainPackRecord | null; stats: DomainPackGovernanceStats }>(
-    `${base}/api/domains/${encodeURIComponent(packId)}/${action}${suffix}`,
+    buildUrl(apiUrl(`/api/domains/${encodeURIComponent(packId)}/${action}`, base), options),
     token,
   );
 }
@@ -335,13 +359,8 @@ export async function listSkills(
   filters: { source?: string; status?: string; limit?: number } = {},
   base: string = "",
 ): Promise<{ skills: SkillRecord[]; stats: SkillLifecycleStats }> {
-  const query = new URLSearchParams();
-  if (filters.source) query.set("source", filters.source);
-  if (filters.status) query.set("status", filters.status);
-  if (filters.limit !== undefined) query.set("limit", String(filters.limit));
-  const suffix = query.toString() ? `?${query}` : "";
   return request<{ skills: SkillRecord[]; stats: SkillLifecycleStats }>(
-    `${base}/api/skills${suffix}`,
+    buildUrl(apiUrl("/api/skills", base), filters),
     token,
   );
 }
@@ -352,7 +371,7 @@ export async function fetchSkill(
   base: string = "",
 ): Promise<{ skill: SkillRecord; stats: SkillLifecycleStats }> {
   return request<{ skill: SkillRecord; stats: SkillLifecycleStats }>(
-    `${base}/api/skills/${encodeURIComponent(skillName)}`,
+    apiUrl(`/api/skills/${encodeURIComponent(skillName)}`, base),
     token,
   );
 }
@@ -368,16 +387,15 @@ export async function skillLifecycleAction(
   skill: SkillRecord | null;
   stats: SkillLifecycleStats;
 }> {
-  const query = new URLSearchParams();
-  if (options.reason?.trim()) query.set("reason", options.reason.trim());
-  if (options.enabled !== undefined) query.set("enabled", options.enabled ? "true" : "false");
-  const suffix = query.toString() ? `?${query}` : "";
   return request<{
     result: SkillLifecycleResult;
     skill: SkillRecord | null;
     stats: SkillLifecycleStats;
   }>(
-    `${base}/api/skills/${encodeURIComponent(skillName)}/${action}${suffix}`,
+    buildUrl(
+      apiUrl(`/api/skills/${encodeURIComponent(skillName)}/${action}`, base),
+      options as Record<string, QueryValue>,
+    ),
     token,
   );
 }
@@ -387,10 +405,10 @@ export async function updateSettings(
   update: SettingsUpdate,
   base: string = "",
 ): Promise<SettingsPayload> {
-  const query = new URLSearchParams();
-  if (update.model !== undefined) query.set("model", update.model);
-  if (update.provider !== undefined) query.set("provider", update.provider);
-  return request<SettingsPayload>(`${base}/api/settings/update?${query}`, token);
+  return request<SettingsPayload>(
+    buildUrl(apiUrl("/api/settings/update", base), update as Record<string, QueryValue>),
+    token,
+  );
 }
 
 export async function updateProviderSettings(
@@ -398,12 +416,12 @@ export async function updateProviderSettings(
   update: ProviderSettingsUpdate,
   base: string = "",
 ): Promise<SettingsPayload> {
-  const query = new URLSearchParams();
-  query.set("provider", update.provider);
-  if (update.apiKey !== undefined) query.set("api_key", update.apiKey);
-  if (update.apiBase !== undefined) query.set("api_base", update.apiBase);
   return request<SettingsPayload>(
-    `${base}/api/settings/provider/update?${query}`,
+    buildUrl(apiUrl("/api/settings/provider/update", base), {
+      provider: update.provider,
+      api_key: update.apiKey,
+      api_base: update.apiBase,
+    }),
     token,
   );
 }
@@ -413,13 +431,13 @@ export async function fetchProviderModels(
   update: ProviderSettingsUpdate,
   base: string = "",
 ): Promise<ProviderModelsResponse> {
-  const query = new URLSearchParams();
-  query.set("provider", update.provider);
-  if (update.apiKey !== undefined) query.set("api_key", update.apiKey);
-  if (update.apiBase !== undefined) query.set("api_base", update.apiBase);
-  if (update.forceRefresh !== undefined) query.set("force_refresh", update.forceRefresh ? "true" : "false");
   return request<ProviderModelsResponse>(
-    `${base}/api/settings/provider/models?${query}`,
+    buildUrl(apiUrl("/api/settings/provider/models", base), {
+      provider: update.provider,
+      api_key: update.apiKey,
+      api_base: update.apiBase,
+      force_refresh: update.forceRefresh,
+    }),
     token,
   );
 }
@@ -429,12 +447,12 @@ export async function updateWebSearchSettings(
   update: WebSearchSettingsUpdate,
   base: string = "",
 ): Promise<SettingsPayload> {
-  const query = new URLSearchParams();
-  query.set("provider", update.provider);
-  if (update.apiKey !== undefined) query.set("api_key", update.apiKey);
-  if (update.baseUrl !== undefined) query.set("base_url", update.baseUrl);
   return request<SettingsPayload>(
-    `${base}/api/settings/web-search/update?${query}`,
+    buildUrl(apiUrl("/api/settings/web-search/update", base), {
+      provider: update.provider,
+      api_key: update.apiKey,
+      base_url: update.baseUrl,
+    }),
     token,
   );
 }
@@ -444,10 +462,8 @@ export async function updateBackgroundReviewSettings(
   enabled: boolean,
   base: string = "",
 ): Promise<SettingsPayload> {
-  const query = new URLSearchParams();
-  query.set("enabled", enabled ? "true" : "false");
   return request<SettingsPayload>(
-    `${base}/api/settings/learning/background-review/update?${query}`,
+    buildUrl(apiUrl("/api/settings/learning/background-review/update", base), { enabled }),
     token,
   );
 }
@@ -457,10 +473,8 @@ export async function updateRuntimeSettings(
   update: RuntimeSettingsUpdate,
   base: string = "",
 ): Promise<SettingsPayload> {
-  const query = new URLSearchParams();
-  query.set("config", JSON.stringify(update));
   return request<SettingsPayload>(
-    `${base}/api/settings/runtime/update?${query}`,
+    buildUrl(apiUrl("/api/settings/runtime/update", base), { config: JSON.stringify(update) }),
     token,
   );
 }
@@ -470,10 +484,8 @@ export async function updateVoiceSettings(
   update: VoiceSettingsUpdate,
   base: string = "",
 ): Promise<SettingsPayload> {
-  const query = new URLSearchParams();
-  query.set("config", JSON.stringify(update));
   return request<SettingsPayload>(
-    `${base}/api/settings/local-awareness/audio/update?${query}`,
+    buildUrl(apiUrl("/api/settings/local-awareness/audio/update", base), { config: JSON.stringify(update) }),
     token,
   );
 }
@@ -483,10 +495,8 @@ export async function upsertMcpServerSettings(
   update: McpServerSettingsUpdate,
   base: string = "",
 ): Promise<SettingsPayload> {
-  const query = new URLSearchParams();
-  query.set("config", JSON.stringify(update));
   return request<SettingsPayload>(
-    `${base}/api/settings/mcp/upsert?${query}`,
+    buildUrl(apiUrl("/api/settings/mcp/upsert", base), { config: JSON.stringify(update) }),
     token,
   );
 }
@@ -496,12 +506,12 @@ export async function upsertHomeAssistantMcpSettings(
   update: HomeAssistantMcpSettingsUpdate,
   base: string = "",
 ): Promise<SettingsPayload> {
-  const query = new URLSearchParams();
-  query.set("name", update.name);
-  query.set("address", update.address);
-  if (update.token !== undefined) query.set("token", update.token);
   return request<SettingsPayload>(
-    `${base}/api/settings/mcp/home-assistant/upsert?${query}`,
+    buildUrl(apiUrl("/api/settings/mcp/home-assistant/upsert", base), {
+      name: update.name,
+      address: update.address,
+      token: update.token,
+    }),
     token,
   );
 }
@@ -511,10 +521,8 @@ export async function deleteMcpServerSettings(
   name: string,
   base: string = "",
 ): Promise<SettingsPayload> {
-  const query = new URLSearchParams();
-  query.set("name", name);
   return request<SettingsPayload>(
-    `${base}/api/settings/mcp/delete?${query}`,
+    buildUrl(apiUrl("/api/settings/mcp/delete", base), { name }),
     token,
   );
 }
@@ -524,7 +532,7 @@ export async function fetchMetaCognitionSummary(
   base: string = "",
 ): Promise<MetaCognitionSummary> {
   return request<MetaCognitionSummary>(
-    `${base}/api/cognition/status`,
+    apiUrl("/api/cognition/status", base),
     token,
   );
 }
@@ -534,13 +542,8 @@ export async function listSignals(
   filters: { status?: string; kind?: string; limit?: number } = {},
   base: string = "",
 ): Promise<{ signals: OpportunitySignal[]; count: number }> {
-  const query = new URLSearchParams();
-  if (filters.status) query.set("status", filters.status);
-  if (filters.kind) query.set("kind", filters.kind);
-  if (filters.limit !== undefined) query.set("limit", String(filters.limit));
-  const suffix = query.toString() ? `?${query}` : "";
   return request<{ signals: OpportunitySignal[]; count: number }>(
-    `${base}/api/evolution/signals${suffix}`,
+    buildUrl(apiUrl("/api/evolution/signals", base), filters),
     token,
   );
 }
@@ -552,11 +555,8 @@ export async function updateSignal(
   options: { reason?: string } = {},
   base: string = "",
 ): Promise<{ ok: boolean; signal: OpportunitySignal | null }> {
-  const query = new URLSearchParams();
-  if (options.reason?.trim()) query.set("reason", options.reason.trim());
-  const suffix = query.toString() ? `?${query}` : "";
   return request<{ ok: boolean; signal: OpportunitySignal | null }>(
-    `${base}/api/evolution/signals/${encodeURIComponent(signalId)}/${action}${suffix}`,
+    buildUrl(apiUrl(`/api/evolution/signals/${encodeURIComponent(signalId)}/${action}`, base), options),
     token,
   );
 }
@@ -566,7 +566,7 @@ export async function fetchEvolutionStatus(
   base: string = "",
 ): Promise<EvolutionStatus> {
   return request<EvolutionStatus>(
-    `${base}/api/evolution/status`,
+    apiUrl("/api/evolution/status", base),
     token,
   );
 }

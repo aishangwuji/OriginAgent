@@ -3,6 +3,7 @@ import { useTranslation } from "react-i18next";
 import {
   Activity,
   AlertTriangle,
+  ArrowLeft,
   Brain,
   ChevronDown,
   ChevronRight,
@@ -12,7 +13,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
-import { fetchMetaCognitionSummary } from "@/lib/api";
+import { fetchMetaCognitionSummary, userFriendlyError } from "@/lib/api";
 import { useClient } from "@/providers/ClientProvider";
 import type { MetaCognitionSummary } from "@/lib/types";
 import { cn } from "@/lib/utils";
@@ -40,7 +41,7 @@ export function MetaCognitionView({ onBackToChat }: MetaCognitionViewProps) {
       const data = await fetchMetaCognitionSummary(token);
       setSummary(data);
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      setError(userFriendlyError(err));
     } finally {
       setLoading(false);
     }
@@ -113,7 +114,7 @@ export function MetaCognitionView({ onBackToChat }: MetaCognitionViewProps) {
             onClick={onBackToChat}
             aria-label={t("cognition.backToChat", "Back to chat")}
           >
-            <ChevronRight className="h-4 w-4 rotate-180" aria-hidden />
+            <ArrowLeft className="h-4 w-4" aria-hidden />
           </Button>
           <div>
             <h1 className="text-lg font-black leading-tight text-foreground">

@@ -170,6 +170,13 @@ export interface SettingsPayload {
     learning: {
       background_review_enabled: boolean;
       curator_enabled: boolean;
+      meta_cognition_enabled: boolean;
+      meta_trigger_collection_enabled: boolean;
+      meta_structured_reflection_enabled: boolean;
+      meta_pattern_consolidation_enabled: boolean;
+      meta_evolution_bridge_enabled: boolean;
+      meta_working_memory_bridge_enabled: boolean;
+      meta_memory_candidate_bridge_enabled: boolean;
     };
     evolution: {
       mode: string;
