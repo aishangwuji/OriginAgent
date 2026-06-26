@@ -4,7 +4,9 @@ Provides the DeliberationEngine — a continuous reasoning loop that evaluates
 active Desires against current Beliefs and produces executable Intentions.
 """
 
-# DesireStore and DeliberationEngine will be re-exported once created (Tasks 2, 4)
+from OriginAgent.bdi.desire_store import DesireStore
+from OriginAgent.bdi.deliberation import DeliberationEngine
+from OriginAgent.bdi.heartbeat_bridge import BDIHeartbeatBridge
 from OriginAgent.bdi.models import (
     BDICycleRecord,
     DeliberationIntention,
@@ -17,9 +19,12 @@ from OriginAgent.bdi.models import (
 
 __all__ = [
     "BDICycleRecord",
+    "BDIHeartbeatBridge",
+    "DeliberationEngine",
     "DeliberationIntention",
     "DeliberationResult",
     "Desire",
+    "DesireStore",
     "DesirePriority",
     "DesireStatus",
     "now_iso",

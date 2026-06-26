@@ -411,6 +411,49 @@ class AgentLoop:
         self._message_dispatcher = MessageDispatcher(MessageDispatcherDeps(loop=self))
         self._install_meta_cognition_observer()
 
+        # ── BDI Deliberation Engine ────────────────────────────────────────
+        self._desire_store: DesireStore | None = None
+        self._bdi_engine: DeliberationEngine | None = None
+
+        gw = getattr(effective_config, "gateway", None) if effective_config else None
+        bdi_config: "BDIConfig | None" = getattr(gw, "bdi", None) if gw is not None else None
+
+        if bdi_config and bdi_config.enabled:
+            from OriginAgent.bdi import DesireStore, DeliberationEngine
+
+            self._desire_store = DesireStore(self.workspace)
+
+            async def _on_bdi_intention(intent: "DeliberationIntention") -> None:
+                """Handle an intention formed by the BDI engine."""
+                logger.info(
+                    "BDI: executing intention — desire={} action={} scope={}",
+                    intent.desire_id, intent.action, intent.scope,
+                )
+                if intent.action == "send_message":
+                    from OriginAgent.bus.events import OutboundMessage
+
+                    channel = intent.scope if intent.scope != "system" else "cli"
+                    msg = OutboundMessage(
+                        channel=channel,
+                        content=intent.payload.get("text", ""),
+                        chat_id="",
+                        session_key="bdi:deliberation",
+                    )
+                    self.bus.publish_outbound(msg)
+
+            self._bdi_engine = DeliberationEngine(
+                workspace=self.workspace,
+                store=self._desire_store,
+                provider=self.provider,
+                model=bdi_config.model_override or self.model,
+                enabled=bdi_config.enabled,
+                interval_s=bdi_config.interval_s,
+                max_desires_per_cycle=bdi_config.max_desires_per_cycle,
+                auto_create_from_foresight=bdi_config.auto_create_from_foresight,
+                on_intention=_on_bdi_intention,
+            )
+            logger.info("BDI: DeliberationEngine initialized")
+
     def _build_transcription_provider(self, config: dict[str, Any] | None = None) -> Any | None:
         config = dict(config or {})
         provider_name = str(config.get("provider") or "groq").strip()
@@ -1608,6 +1651,8 @@ class AgentLoop:
         await self._connect_mcp()
         self._schedule_session_search_refresh(force=self.session_search_index.rebuild_on_start)
         self._start_active_intent_loop()
+        if self._bdi_engine:
+            await self._bdi_engine.start()
         logger.info("Agent loop started")
         await self._get_message_dispatcher().run_forever()
 
@@ -1837,6 +1882,8 @@ class AgentLoop:
 
     def stop(self) -> None:
         """Stop the agent loop."""
+        if self._bdi_engine:
+            self._bdi_engine.stop()
         self._running = False
         logger.info("Agent loop stopping")
 
