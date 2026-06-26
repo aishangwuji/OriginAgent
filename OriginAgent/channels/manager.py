@@ -116,6 +116,44 @@ class ChannelManager:
                 logger.warning("{} channel not available: {}", name, e)
 
         self._validate_allow_from()
+        self._init_voice_pipeline()
+
+    def _init_voice_pipeline(self) -> None:
+        """Initialize VoicePipeline if voice features are enabled."""
+        tools_cfg = self.config.tools
+        voice_cfg = getattr(tools_cfg, "voice", None)
+        if voice_cfg is None or not getattr(voice_cfg, "enabled", False):
+            return
+
+        from OriginAgent.voice.pipeline import VoicePipeline
+        from OriginAgent.voice.stt import VolcengineStreamSTT
+        from OriginAgent.voice.tts import VolcengineStreamTTS
+
+        stt = VolcengineStreamSTT()
+        tts = VolcengineStreamTTS()
+
+        pipeline = VoicePipeline(stt=stt, tts=tts, bus=self.bus)
+
+        # Inject into WebSocket channel
+        ws = self.channels.get("websocket")
+        if ws is not None and hasattr(ws, "_voice_pipeline"):
+            ws._voice_pipeline = pipeline
+
+        # Create VoiceChannel and wire pipeline
+        voice_channel = self.channels.get("voice")
+        if voice_channel is not None and hasattr(voice_channel, "set_pipeline"):
+            voice_channel.set_pipeline(pipeline)
+
+        # Inject into other channels that support voice
+        for ch_name in ("telegram", "qq", "weixin", "wechat", "discord"):
+            ch = self.channels.get(ch_name)
+            if ch is not None and hasattr(ch, "_voice_pipeline"):
+                ch._voice_pipeline = pipeline
+
+        logger.info(
+            "VoicePipeline initialized (stt=VolcengineStreamSTT, "
+            "tts=VolcengineStreamTTS)"
+        )
 
     def _validate_allow_from(self) -> None:
         for name, ch in self.channels.items():

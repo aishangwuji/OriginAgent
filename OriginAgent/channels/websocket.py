@@ -801,6 +801,7 @@ class WebSocketChannel(BaseChannel):
         # Cached config to avoid repeated self._load_config() disk I/O (D2).
         self._cached_config: Any = None
         self._cached_config_path: str | None = None
+        self._voice_pipeline = None  # set by ChannelManager
 
     def _load_config(self) -> Any:
         """Load config once and cache; reload if the config path has changed."""
@@ -1347,10 +1348,7 @@ class WebSocketChannel(BaseChannel):
             "requires_restart": requires_restart,
         }
 
-    @staticmethod
-    def _bootstrap_runtime_mode_payload() -> dict[str, Any]:
-        from OriginAgent.config.loader import load_config
-
+    def _bootstrap_runtime_mode_payload(self) -> dict[str, Any]:
         config = self._load_config()
         summary = build_runtime_mode_summary(config=config).to_dict()
         return {
@@ -1361,9 +1359,8 @@ class WebSocketChannel(BaseChannel):
             "providers": summary["providers"],
         }
 
-    @staticmethod
-    def _bootstrap_config_doctor_payload() -> dict[str, Any]:
-        from OriginAgent.config.loader import get_config_path, load_config
+    def _bootstrap_config_doctor_payload(self) -> dict[str, Any]:
+        from OriginAgent.config.loader import get_config_path
 
         config = self._load_config()
         doctor = build_config_doctor_report(
@@ -2950,6 +2947,9 @@ class WebSocketChannel(BaseChannel):
             await self._send_event(connection, "attached", chat_id=cid)
             await self._maybe_push_active_goal_state(cid)
             return
+        if t == "voice_message":
+            await self._handle_voice_message_envelope(connection, envelope)
+            return
         if t == "message":
             cid = envelope.get("chat_id")
             content = envelope.get("content")
@@ -3006,6 +3006,64 @@ class WebSocketChannel(BaseChannel):
             )
             return
         await self._send_event(connection, "error", detail=f"unknown type: {t!r}")
+
+    async def _handle_voice_message_envelope(
+        self, connection, envelope: dict
+    ) -> None:
+        """Handle a 'voice_message' envelope — transcribe and inject into agent loop."""
+        chat_id = str(envelope.get("chat_id") or "")
+        if not chat_id:
+            await self._send_event(
+                connection, "error", message="voice_message requires chat_id"
+            )
+            return
+
+        audio_data_url = (
+            envelope.get("audio_data_url")
+            or envelope.get("data_url")
+            or ""
+        )
+        if not audio_data_url:
+            await self._send_event(
+                connection, "error", message="voice_message requires audio_data_url"
+            )
+            return
+
+        # Save audio data to a file in uploads/perception
+        from OriginAgent.config.paths import get_workspace_upload_dir
+        from OriginAgent.voice.audio import save_audio_data_url
+
+        uploads_dir = get_workspace_upload_dir() / "perception"
+        uploads_dir.mkdir(parents=True, exist_ok=True)
+        saved_path = save_audio_data_url(audio_data_url, uploads_dir, prefix="voice_ws_")
+        if saved_path is None:
+            await self._send_event(
+                connection, "error", message="could not decode audio data"
+            )
+            return
+
+        # Use the voice pipeline if available
+        voice_pipeline = getattr(self, "_voice_pipeline", None)
+        if voice_pipeline is None:
+            await self._send_event(
+                connection, "error", message="voice pipeline not available"
+            )
+            return
+
+        result = await voice_pipeline.process_voice_message(
+            audio_path=saved_path,
+            chat_id=chat_id,
+            channel_name="websocket",
+            sender_id=getattr(connection, "id", "ws-client"),
+            metadata={"_voice_source": "websocket"},
+        )
+
+        await self._send_event(
+            connection,
+            "voice_processed",
+            transcribed_text=result.transcribed_text,
+            status=result.status,
+        )
 
     async def _handle_message(
         self,
