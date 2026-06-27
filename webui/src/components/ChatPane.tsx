@@ -4,7 +4,6 @@ import { Composer } from "@/components/Composer";
 import { MessageList } from "@/components/MessageList";
 import { useClient } from "@/providers/ClientProvider";
 import { useOriginAgentStream } from "@/hooks/useOriginAgentStream";
-import { VoiceOutputPlayer } from "@/components/voice/VoiceOutputPlayer";
 import { useSessionHistory } from "@/hooks/useSessions";
 import type { ChatSummary } from "@/lib/types";
 
@@ -27,15 +26,12 @@ export function ChatPane({ session, onNewChat }: ChatPaneProps) {
   const { client } = useClient();
   const [booting, setBooting] = useState(false);
   const pendingFirstRef = useRef<string | null>(null);
-  const [voiceAudioUrl, setVoiceAudioUrl] = useState<string | null>(null);
 
   const initial = useMemo(() => historical, [historical]);
   const { messages, isStreaming, send, setMessages } = useOriginAgentStream(
     chatId,
     initial,
     hasPendingToolCalls,
-    undefined,
-    (audioUrl: string) => setVoiceAudioUrl(audioUrl),
   );
 
   useEffect(() => {
@@ -62,14 +58,6 @@ export function ChatPane({ session, onNewChat }: ChatPaneProps) {
     ]);
     setBooting(false);
   }, [chatId, client, setMessages]);
-
-  const handleVoiceSend = useCallback(
-    (audioDataUrl: string) => {
-      if (!chatId) return;
-      client.sendVoiceMessage(chatId, audioDataUrl);
-    },
-    [chatId, client],
-  );
 
   const handleWelcomeSend = useCallback(
     async (content: string) => {
@@ -104,7 +92,6 @@ export function ChatPane({ session, onNewChat }: ChatPaneProps) {
               compact
               disabled={booting}
               onSend={handleWelcomeSend}
-              onVoiceSend={handleVoiceSend}
               placeholder={
                 booting ? "Opening a new chat…" : "Ask anything..."
               }
@@ -118,17 +105,8 @@ export function ChatPane({ session, onNewChat }: ChatPaneProps) {
   return (
     <section className="relative flex min-h-0 flex-1 flex-col">
       <MessageList messages={messages} isStreaming={isStreaming} />
-      {voiceAudioUrl && (
-        <div className="flex justify-center px-4 pb-1">
-          <VoiceOutputPlayer
-            audioUrl={voiceAudioUrl}
-            onEnded={() => setVoiceAudioUrl(null)}
-          />
-        </div>
-      )}
       <Composer
         onSend={send}
-        onVoiceSend={handleVoiceSend}
         disabled={!chatId}
         placeholder="Type your message…"
       />

@@ -1,185 +1,116 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useRef, useState } from "react";
 
-export type VoiceRecorderState = "idle" | "requesting" | "recording" | "processing";
+export type VoiceRecorderState = "idle" | "listening" | "processing" | "error";
 
 export interface VoiceRecorderResult {
-  /** Current recorder lifecycle state. */
   state: VoiceRecorderState;
-  /** Elapsed recording seconds (approximate). */
-  elapsed: number;
-  /** Latest error message, or null. */
+  /** Latest partial transcript (updates in real time while listening). */
+  interim: string;
+  /** Latest final transcript (set when speech ends). */
+  transcript: string;
   error: string | null;
-  /** Start recording (requests mic permission on first call). */
-  start: () => Promise<void>;
-  /** Stop recording and return the audio as a base64 data URL. */
-  stop: () => Promise<string | null>;
-  /** Cancel recording without producing a result. */
+  /** Start listening (requests mic permission on first call). */
+  start: () => void;
+  /** Stop listening and return the final transcript. */
+  stop: () => string | null;
+  /** Cancel listening without producing a result. */
   cancel: () => void;
-  /** True when the browser supports MediaRecorder. */
+  /** True when the browser supports SpeechRecognition. */
   supported: boolean;
 }
 
-const MAX_RECORD_MS = 60_000; // 60 seconds max
-
-function mimeType(): string {
-  const preferred = ["audio/webm", "audio/ogg", "audio/wav", "audio/mp4"];
-  if (typeof MediaRecorder === "undefined") return "";
-  for (const m of preferred) {
-    if (MediaRecorder.isTypeSupported?.(m)) return m;
-  }
-  return "";
-}
+// Web Speech API — only available in Chromium-based browsers. Access it
+// through the window object since TypeScript's dom lib doesn't include it.
+const SpeechCtor: { new(): { start: () => void; stop: () => void; abort: () => void; continuous: boolean; interimResults: boolean; lang: string; onresult: ((ev: any) => void) | null; onerror: ((ev: any) => void) | null; onend: (() => void) | null } } | undefined =
+  typeof window !== "undefined"
+    ? (window as any).SpeechRecognition ?? (window as any).webkitSpeechRecognition
+    : undefined;
 
 export function useVoiceRecorder(): VoiceRecorderResult {
   const [state, setState] = useState<VoiceRecorderState>("idle");
-  const [elapsed, setElapsed] = useState(0);
+  const [interim, setInterim] = useState("");
+  const [transcript, setTranscript] = useState("");
   const [error, setError] = useState<string | null>(null);
-  const streamRef = useRef<MediaStream | null>(null);
-  const recorderRef = useRef<MediaRecorder | null>(null);
-  const chunksRef = useRef<Blob[]>([]);
-  const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const supported = typeof MediaRecorder !== "undefined" && mimeType() !== "";
+  const recognitionRef = useRef<any>(null);
+  const finalTranscriptRef = useRef("");
 
-  const cleanup = useCallback(() => {
-    if (timerRef.current) {
-      clearInterval(timerRef.current);
-      timerRef.current = null;
-    }
-    if (recorderRef.current && recorderRef.current.state !== "inactive") {
-      try { recorderRef.current.stop(); } catch { /* already stopped */ }
-    }
-    recorderRef.current = null;
-    if (streamRef.current) {
-      for (const track of streamRef.current.getTracks()) track.stop();
-      streamRef.current = null;
-    }
-  }, []);
+  const supported = !!SpeechCtor;
 
-  useEffect(() => {
-    return cleanup;
-  }, [cleanup]);
-
-  const start = useCallback(async () => {
-    if (!supported) {
-      setError("MediaRecorder not supported in this browser");
+  const start = useCallback(() => {
+    if (!SpeechCtor) {
+      setError("Speech recognition not supported in this browser");
       return;
     }
+
     setError(null);
-    setState("requesting");
+    setInterim("");
+    setTranscript("");
+    finalTranscriptRef.current = "";
+    setState("listening");
 
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      streamRef.current = stream;
+    const recognition = new SpeechCtor();
+    recognition.continuous = true;
+    recognition.interimResults = true;
+    recognition.lang = "zh-CN";
 
-      const recorder = new MediaRecorder(stream, {
-        mimeType: mimeType(),
-      });
-      recorderRef.current = recorder;
-      chunksRef.current = [];
+    recognition.onresult = (event: any) => {
+      let final = "";
+      let interimText = "";
 
-      recorder.ondataavailable = (e: BlobEvent) => {
-        if (e.data.size > 0) chunksRef.current.push(e.data);
-      };
-
-      recorder.onerror = () => {
-        setError("Recording error");
-        setState("idle");
-        cleanup();
-      };
-
-      recorder.onstop = () => {
-        setState("processing");
-      };
-
-      recorder.start(250); // emit data every 250ms
-      setState("recording");
-      setElapsed(0);
-
-      timerRef.current = setInterval(() => {
-        setElapsed((prev) => {
-          if (prev >= MAX_RECORD_MS / 1000) {
-            // Auto-stop at max duration
-            if (recorderRef.current?.state === "recording") {
-              recorderRef.current.stop();
-            }
-            return prev;
-          }
-          return prev + 0.25;
-        });
-      }, 250);
-    } catch (err: unknown) {
-      const message =
-        err instanceof DOMException && err.name === "NotAllowedError"
-          ? "Microphone permission denied"
-          : err instanceof Error
-            ? err.message
-            : "Failed to start recording";
-      setError(message);
-      setState("idle");
-    }
-  }, [supported, cleanup]);
-
-  const stopRecording = useCallback(
-    async (shouldProduce: boolean): Promise<string | null> => {
-      if (!recorderRef.current || recorderRef.current.state !== "recording") {
-        setState("idle");
-        return null;
+      for (let i = event.resultIndex; i < event.results.length; i++) {
+        const result = event.results[i];
+        if (result.isFinal) {
+          final += result[0].transcript;
+        } else {
+          interimText += result[0].transcript;
+        }
       }
 
-      return new Promise<string | null>((resolve) => {
-        const recorder = recorderRef.current!;
-        recorder.onstop = async () => {
-          if (timerRef.current) {
-            clearInterval(timerRef.current);
-            timerRef.current = null;
-          }
+      if (final) {
+        finalTranscriptRef.current += final;
+        setTranscript(finalTranscriptRef.current);
+      }
+      setInterim(interimText);
+    };
 
-          // Stop the mic stream
-          if (streamRef.current) {
-            for (const track of streamRef.current.getTracks()) track.stop();
-            streamRef.current = null;
-          }
+    recognition.onerror = () => {
+      setError("Recognition error");
+      setState("error");
+      recognitionRef.current = null;
+    };
 
-          if (!shouldProduce || chunksRef.current.length === 0) {
-            setState("idle");
-            resolve(null);
-            return;
-          }
+    recognition.onend = () => {
+      if (recognitionRef.current !== null) {
+        setState("processing");
+        recognitionRef.current = null;
+      }
+    };
 
-          const mime = mimeType();
-          const blob = new Blob(chunksRef.current, { type: mime });
-          chunksRef.current = [];
+    recognition.start();
+    recognitionRef.current = recognition;
+  }, []);
 
-          try {
-            const dataUrl = await blobToDataURL(blob);
-            setState("idle");
-            resolve(dataUrl);
-          } catch {
-            setError("Failed to encode audio");
-            setState("idle");
-            resolve(null);
-          }
-        };
+  const stop = useCallback((): string | null => {
+    if (recognitionRef.current) {
+      recognitionRef.current.stop();
+      recognitionRef.current = null;
+    }
+    const text = finalTranscriptRef.current;
+    setTranscript(text);
+    setState("idle");
+    return text || null;
+  }, []);
 
-        recorder.stop();
-      });
-    },
-    [],
-  );
-
-  const stop = useCallback(() => stopRecording(true), [stopRecording]);
   const cancel = useCallback(() => {
-    stopRecording(false);
-  }, [stopRecording]);
+    if (recognitionRef.current) {
+      recognitionRef.current.abort();
+      recognitionRef.current = null;
+    }
+    finalTranscriptRef.current = "";
+    setInterim("");
+    setTranscript("");
+    setState("idle");
+  }, []);
 
-  return { state, elapsed, error, start, stop, cancel, supported };
-}
-
-function blobToDataURL(blob: Blob): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onloadend = () => resolve(reader.result as string);
-    reader.onerror = () => reject(new Error("FileReader error"));
-    reader.readAsDataURL(blob);
-  });
+  return { state, interim, transcript, error, start, stop, cancel, supported };
 }

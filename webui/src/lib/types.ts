@@ -57,6 +57,8 @@ export interface UIMessage {
   latencyMs?: number;
   /** Optional answer choices for a pending OriginAgent confirmation/question. */
   buttons?: string[][];
+  /** TTS audio URL for playing the assistant response as speech. */
+  ttsAudioUrl?: string;
 }
 
 /** Structured UI blob on ``progress`` WS frames; channels may add more ``kind`` values later. */

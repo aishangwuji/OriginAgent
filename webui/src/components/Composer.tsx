@@ -8,7 +8,6 @@ import { cn } from "@/lib/utils";
 
 interface ComposerProps {
   onSend: (content: string) => void;
-  onVoiceSend?: (audioDataUrl: string) => void;
   disabled?: boolean;
   placeholder?: string;
   /** Visually collapse the outer padding when embedded inside a welcome screen. */
@@ -22,7 +21,6 @@ interface ComposerProps {
  */
 export function Composer({
   onSend,
-  onVoiceSend,
   disabled,
   placeholder = "Type your message…",
   compact = false,
@@ -31,12 +29,15 @@ export function Composer({
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const voice = useVoiceRecorder();
 
-  const handleVoiceStop = useCallback(async () => {
-    const dataUrl = await voice.stop();
-    if (dataUrl && onVoiceSend) {
-      onVoiceSend(dataUrl);
+  const handleVoiceStop = useCallback(() => {
+    const text = voice.stop();
+    if (text) {
+      setValue((prev) => {
+        const sep = prev.trim() ? " " : "";
+        return prev + sep + text;
+      });
     }
-  }, [voice, onVoiceSend]);
+  }, [voice]);
 
   // Autofocus on mount — coming back to a chat, switching sessions, or
   // opening the welcome screen should always land the caret in the box.
@@ -120,7 +121,7 @@ export function Composer({
           <div className="flex items-center gap-1">
             <VoiceInputButton
               state={voice.state}
-              elapsed={voice.elapsed}
+              interim={voice.interim}
               error={voice.error}
               supported={voice.supported}
               onStart={voice.start}

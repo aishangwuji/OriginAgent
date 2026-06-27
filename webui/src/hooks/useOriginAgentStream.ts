@@ -435,6 +435,15 @@ export function useOriginAgentStream(
 
       if (ev.event === "voice_audio") {
         onVoiceAudio?.(ev.audio_url);
+        // Tag the last assistant message with the TTS audio URL so the
+        // MessageBubble can show a play button.
+        setMessages((prev) => {
+          const idx = prev.length - 1;
+          if (idx < 0 || prev[idx].role !== "assistant") return prev;
+          const updated = [...prev];
+          updated[idx] = { ...updated[idx], ttsAudioUrl: ev.audio_url };
+          return updated;
+        });
         return;
       }
 

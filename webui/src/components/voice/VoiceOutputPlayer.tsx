@@ -1,72 +1,66 @@
-import { useEffect, useRef, useState } from "react";
-import { Volume2, Loader2 } from "lucide-react";
+import { useCallback, useRef, useState } from "react";
+import { Volume2, Loader2, Square } from "lucide-react";
 
 export interface VoiceOutputPlayerProps {
-  /** URL or data URL of the TTS audio to play. */
-  audioUrl: string | null;
-  /** Called when the audio finishes playing. */
-  onEnded?: () => void;
+  /** URL of the TTS audio to play (signed media URL). */
+  audioUrl: string;
 }
 
-export function VoiceOutputPlayer({ audioUrl, onEnded }: VoiceOutputPlayerProps) {
+export function VoiceOutputPlayer({ audioUrl }: VoiceOutputPlayerProps) {
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const [playing, setPlaying] = useState(false);
   const [loading, setLoading] = useState(false);
 
-  useEffect(() => {
-    if (!audioUrl) return;
-    setLoading(true);
+  const handleClick = useCallback(() => {
+    if (playing) {
+      // Stop playback
+      audioRef.current?.pause();
+      audioRef.current = null;
+      setPlaying(false);
+      return;
+    }
 
+    setLoading(true);
     const audio = new Audio(audioUrl);
     audioRef.current = audio;
     audio.preload = "auto";
 
-    const onCanPlay = () => setLoading(false);
-    const onPlay = () => setPlaying(true);
-    const onEnd = () => {
+    audio.addEventListener("canplaythrough", () => setLoading(false));
+    audio.addEventListener("play", () => setPlaying(true));
+    audio.addEventListener("ended", () => {
       setPlaying(false);
-      onEnded?.();
-    };
-    const onErr = () => {
+      audioRef.current = null;
+    });
+    audio.addEventListener("error", () => {
       setLoading(false);
       setPlaying(false);
-    };
-
-    audio.addEventListener("canplaythrough", onCanPlay);
-    audio.addEventListener("play", onPlay);
-    audio.addEventListener("ended", onEnd);
-    audio.addEventListener("error", onErr);
-
-    audio.play().catch(() => {
-      // Autoplay may be blocked — still show the player
-      setLoading(false);
+      audioRef.current = null;
     });
 
-    return () => {
-      audio.removeEventListener("canplaythrough", onCanPlay);
-      audio.removeEventListener("play", onPlay);
-      audio.removeEventListener("ended", onEnd);
-      audio.removeEventListener("error", onErr);
-      audio.pause();
-      audio.src = "";
-      audioRef.current = null;
-    };
-  }, [audioUrl, onEnded]);
-
-  if (!audioUrl) return null;
+    audio.play().catch(() => {
+      setLoading(false);
+    });
+  }, [audioUrl, playing]);
 
   return (
-    <div className="inline-flex items-center gap-1.5 px-2 py-1 rounded-full bg-muted/50">
+    <button
+      type="button"
+      onClick={handleClick}
+      disabled={loading}
+      className="inline-flex items-center gap-1 px-2 py-1 rounded-full
+                 bg-muted/50 hover:bg-muted/80 text-muted-foreground
+                 hover:text-foreground transition-colors text-xs"
+      title={playing ? "Stop" : "Play voice reply"}
+      aria-label={playing ? "Stop voice" : "Play voice reply"}
+    >
       {loading ? (
-        <Loader2 className="w-3.5 h-3.5 animate-spin text-muted-foreground" />
+        <Loader2 className="w-3.5 h-3.5 animate-spin" />
       ) : playing ? (
-        <Volume2 className="w-3.5 h-3.5 text-primary animate-pulse" />
+        <Square className="w-3 h-3 fill-current" />
       ) : (
-        <Volume2 className="w-3.5 h-3.5 text-muted-foreground" />
+        <Volume2 className="w-3.5 h-3.5" />
       )}
-      <span className="text-xs text-muted-foreground">
-        {loading ? "Loading..." : playing ? "Playing..." : "Voice reply"}
-      </span>
-    </div>
+      <span>{playing ? "Stop" : loading ? "Loading..." : "Voice"}</span>
+    </button>
   );
 }

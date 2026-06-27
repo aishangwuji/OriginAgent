@@ -3,7 +3,7 @@ import type { VoiceRecorderState } from "@/hooks/useVoiceRecorder";
 
 export interface VoiceInputButtonProps {
   state: VoiceRecorderState;
-  elapsed: number;
+  interim: string;
   error: string | null;
   supported: boolean;
   onStart: () => void;
@@ -12,15 +12,9 @@ export interface VoiceInputButtonProps {
   disabled?: boolean;
 }
 
-function formatElapsed(seconds: number): string {
-  const m = Math.floor(seconds / 60);
-  const s = Math.floor(seconds % 60);
-  return `${m}:${s.toString().padStart(2, "0")}`;
-}
-
 export function VoiceInputButton({
   state,
-  elapsed,
+  interim,
   error,
   supported,
   onStart,
@@ -30,8 +24,8 @@ export function VoiceInputButton({
 }: VoiceInputButtonProps) {
   if (!supported) return null;
 
-  const isRecording = state === "recording";
-  const isProcessing = state === "processing" || state === "requesting";
+  const isListening = state === "listening";
+  const isProcessing = state === "processing" || state === "error";
 
   if (isProcessing) {
     return (
@@ -64,11 +58,11 @@ export function VoiceInputButton({
     );
   }
 
-  if (isRecording) {
+  if (isListening) {
     return (
       <div className="inline-flex items-center gap-1.5">
-        <span className="text-xs tabular-nums text-red-500 animate-pulse font-mono min-w-[2.5rem]">
-          {formatElapsed(elapsed)}
+        <span className="max-w-[120px] truncate text-xs text-red-500 animate-pulse">
+          {interim || "Listening..."}
         </span>
         <button
           type="button"
@@ -105,7 +99,7 @@ export function VoiceInputButton({
                  bg-muted text-muted-foreground hover:bg-primary/10
                  hover:text-primary transition-colors"
       aria-label="Start voice recording"
-      title="Hold to talk"
+      title="Click to speak"
     >
       <Mic className="w-4 h-4" />
     </button>

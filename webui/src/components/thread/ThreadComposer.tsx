@@ -91,7 +91,6 @@ function previewKind(kind: AttachedAttachment["kind"]): UIMediaKind {
 
 interface ThreadComposerProps {
   onSend: (content: string, attachments?: SendAttachment[], options?: SendOptions) => void;
-  onVoiceSend?: (audioDataUrl: string) => void;
   disabled?: boolean;
   placeholder?: string;
   isStreaming?: boolean;
@@ -434,7 +433,6 @@ function RunElapsedStrip({
 
 export function ThreadComposer({
   onSend,
-  onVoiceSend,
   disabled,
   placeholder,
   isStreaming = false,
@@ -452,12 +450,15 @@ export function ThreadComposer({
   const [inlineError, setInlineError] = useState<string | null>(null);
   const voice = useVoiceRecorder();
 
-  const handleVoiceStop = useCallback(async () => {
-    const dataUrl = await voice.stop();
-    if (dataUrl && onVoiceSend) {
-      onVoiceSend(dataUrl);
+  const handleVoiceStop = useCallback(() => {
+    const text = voice.stop();
+    if (text) {
+      setValue((prev) => {
+        const sep = prev.trim() ? " " : "";
+        return prev + sep + text;
+      });
     }
-  }, [voice, onVoiceSend]);
+  }, [voice]);
   const [slashMenuDismissed, setSlashMenuDismissed] = useState(false);
   const [selectedCommandIndex, setSelectedCommandIndex] = useState(0);
   const [uncontrolledImageMode, setUncontrolledImageMode] = useState(false);
@@ -1022,7 +1023,7 @@ export function ThreadComposer({
           <span className={cn(isHero ? "hidden" : "sm:hidden")} aria-hidden />
           <VoiceInputButton
             state={voice.state}
-            elapsed={voice.elapsed}
+            interim={voice.interim}
             error={voice.error}
             supported={voice.supported}
             onStart={voice.start}

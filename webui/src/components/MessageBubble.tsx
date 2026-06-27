@@ -10,6 +10,7 @@ import { AudioLines, Check, ChevronRight, Copy, FileIcon, ImageIcon, PlaySquare,
 import { useTranslation } from "react-i18next";
 
 import { ImageLightbox } from "@/components/ImageLightbox";
+import { VoiceOutputPlayer } from "@/components/voice/VoiceOutputPlayer";
 import { MarkdownText, preloadMarkdownText } from "@/components/MarkdownText";
 import { cn } from "@/lib/utils";
 import { formatTurnLatency } from "@/lib/format";
@@ -124,6 +125,9 @@ export function MessageBubble({
           {media.length > 0 ? <MessageMedia media={media} align="left" /> : null}
           {showAssistantFooterRow ? (
             <div className="mt-2 flex min-h-8 flex-wrap items-center gap-x-2 gap-y-1 text-muted-foreground">
+              {message.ttsAudioUrl ? (
+                <VoiceOutputPlayer audioUrl={message.ttsAudioUrl} />
+              ) : null}
               {showCopyButton ? (
                 <button
                   type="button"
