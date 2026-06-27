@@ -8,17 +8,20 @@ import uuid
 import wave
 from pathlib import Path
 
-import webrtcvad
 from loguru import logger
 
 try:
     import sounddevice as sd
     import numpy as np
+    import webrtcvad
 
     _HAS_SOUNDDEVICE = True
 except ImportError:
     _HAS_SOUNDDEVICE = False
-    logger.warning("sounddevice not available — desktop capture disabled")
+    webrtcvad = None
+    logger.warning(
+        "sounddevice/webrtcvad not available — desktop capture disabled"
+    )
 
 
 class AudioCapture:
@@ -39,6 +42,8 @@ class AudioCapture:
     ):
         if not _HAS_SOUNDDEVICE:
             raise RuntimeError("sounddevice not installed")
+        if webrtcvad is None:
+            raise RuntimeError("webrtcvad not installed")
 
         self.sample_rate = sample_rate
         self.frame_ms = frame_ms
