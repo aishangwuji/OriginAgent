@@ -2363,7 +2363,7 @@ class AgentLoop:
             "runtime_context": self._meta_runtime_context_summary(ctx.runtime_context),
         }
         if ctx.runtime_context is not None:
-            setattr(ctx.runtime_context, "meta_cognition_fast_path_refs", set(self._meta_cognition_fast_path_refs))
+            object.__setattr__(ctx.runtime_context, "meta_cognition_fast_path_refs", set(self._meta_cognition_fast_path_refs))
         self._schedule_background(
             self._reflect_meta_cognition_turn(
                 session_key=ctx.session_key,
