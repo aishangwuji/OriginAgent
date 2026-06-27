@@ -907,7 +907,12 @@ export type InboundEvent =
       goal_state: GoalStateWsPayload;
     }
   | { event: "session_updated"; chat_id: string }
-  | { event: "error"; chat_id?: string; detail?: string; reason?: string };
+  | { event: "error"; chat_id?: string; detail?: string; reason?: string }
+  | {
+      event: "voice_audio";
+      chat_id: string;
+      audio_url: string;
+    };
 
 /** Base64-encoded attachment attached to an outbound ``message`` envelope.
  *

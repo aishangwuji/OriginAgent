@@ -240,6 +240,7 @@ export function useOriginAgentStream(
   initialMessages: UIMessage[] = [],
   hasPendingToolCalls = false,
   onTurnEnd?: () => void,
+  onVoiceAudio?: (audioUrl: string) => void,
 ): {
   messages: UIMessage[];
   isStreaming: boolean;
@@ -429,6 +430,11 @@ export function useOriginAgentStream(
         });
         suppressStreamUntilTurnEndRef.current = false;
         onTurnEnd?.();
+        return;
+      }
+
+      if (ev.event === "voice_audio") {
+        onVoiceAudio?.(ev.audio_url);
         return;
       }
 

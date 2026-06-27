@@ -802,6 +802,7 @@ class WebSocketChannel(BaseChannel):
         self._cached_config: Any = None
         self._cached_config_path: str | None = None
         self._voice_pipeline = None  # set by ChannelManager
+        self._voice_tts_pending: set[str] = set()  # chat_ids awaiting TTS
 
     def _load_config(self) -> Any:
         """Load config once and cache; reload if the config path has changed."""
@@ -3058,6 +3059,9 @@ class WebSocketChannel(BaseChannel):
             metadata={"_voice_source": "websocket"},
         )
 
+        # Mark for auto-TTS when the agent responds
+        self._voice_tts_pending.add(chat_id)
+
         await self._send_event(
             connection,
             "voice_processed",
@@ -3221,6 +3225,33 @@ class WebSocketChannel(BaseChannel):
         raw = json.dumps(payload, ensure_ascii=False)
         for connection in conns:
             await self._safe_send_to(connection, raw, label=" ")
+
+        # Auto-TTS for voice messages: if the sender used a voice_message
+        # input, synthesize the response and push a voice_audio event.
+        if (
+            msg.chat_id in self._voice_tts_pending
+            and self._voice_pipeline is not None
+            and self._voice_pipeline._tts is not None
+        ):
+            self._voice_tts_pending.discard(msg.chat_id)
+            tts = self._voice_pipeline._tts
+            try:
+                tts_path = await tts.synthesize(msg.content)
+                if tts_path is not None:
+                    audio_url = self._sign_media_path(tts_path)
+                    if audio_url is not None:
+                        audio_payload: dict[str, Any] = {
+                            "event": "voice_audio",
+                            "chat_id": msg.chat_id,
+                            "audio_url": audio_url,
+                        }
+                        audio_raw = json.dumps(audio_payload, ensure_ascii=False)
+                        for connection in conns:
+                            await self._safe_send_to(
+                                connection, audio_raw, label="voice_audio"
+                            )
+            except Exception:
+                self.logger.exception("Auto-TTS failed for {}", msg.chat_id)
 
     async def send_reasoning_delta(
         self,
