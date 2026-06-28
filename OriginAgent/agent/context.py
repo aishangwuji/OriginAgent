@@ -11,7 +11,7 @@ from typing import Any, Mapping
 
 from loguru import logger
 
-from OriginAgent.agent.context_assembler import ContextAssemblerV2
+from OriginAgent.agent.context_assembler import ContextAssemblerV2, ContextAssemblyResult
 from OriginAgent.agent.context_budget import ContextBudgetManager
 from OriginAgent.agent.action_continuity import ActionContinuityInputs, ActionWorldView
 from OriginAgent.agent.domain_packs import DomainPackManager
@@ -60,6 +60,7 @@ class ContextBuilder:
     WORKING_MEMORY_CONTEXT_KIND = "working_memory_context"
     WORLD_STATE_CONTEXT_KIND = "world_state_context"
     RECOVERED_CONTINUITY_CONTEXT_KIND = "recovered_continuity_context"
+    CLOSED_EPISODE_SUMMARIES_KIND = "closed_episode_summaries"
 
     def __init__(
         self,
@@ -254,7 +255,53 @@ class ContextBuilder:
                 )
             )
 
+        # Episode context: closed episode summaries (Phase 5: always on)
+        episode_blocks = self.build_closed_episode_summaries_block(
+            session_key,
+        )
+        blocks.extend(episode_blocks)
+
         return blocks
+
+    def build_closed_episode_summaries_block(
+        self,
+        session_key: str | None,
+    ) -> list[dict[str, Any]]:
+        """Build a context block with summaries of closed episodes.
+        Returns a list with zero or one block.
+        """
+        if not self._sessions or not session_key:
+            return []
+        session = self._sessions.get_or_create(session_key)
+        summaries: list[dict[str, Any]] = list(
+            session.metadata.get("_episode_summaries", [])
+        )
+        if not summaries:
+            return []
+
+        # Render the most recent closed episode summaries.
+        lines: list[str] = [
+            "The following episodes were discussed earlier in this conversation.",
+            "Summaries are listed most recent first.",
+        ]
+        for entry in summaries[:3]:  # max 3 most recent
+            label = entry.get("label") or "(untitled)"
+            preview = entry.get("preview", "")
+            tone = entry.get("tone", "")
+            quotes = entry.get("key_quotes", [])
+            started = entry.get("started_at", "")[:16] if entry.get("started_at") else ""
+            count = entry.get("message_count", 0)
+            parts = [f"- Episode \"{label}\" ({started}, {count} messages): {preview}"]
+            if tone:
+                parts.append(f"  Tone: {tone}")
+            for q in quotes[:2]:  # max 2 quotes per episode
+                parts.append(f"  User: \"{q[:120]}\"")
+            lines.append("\n".join(parts))
+
+        text = "\n".join(lines)
+        return [
+            self.build_reference_context_block("closed_episode_summaries", text)
+        ]
 
     def _nearline_memory_enabled(self) -> bool:
         return nearline_runtime_enabled(self._nearline_memory_config)
@@ -660,6 +707,43 @@ class ContextBuilder:
                 return content.strip() == tpl.read_text(encoding="utf-8").strip()
         return False
 
+    def assemble_user_content(
+        self,
+        *,
+        current_message: str | None,
+        media: list[str] | None = None,
+        channel: str | None = None,
+        chat_id: str | None = None,
+        sender_id: str | None = None,
+        session_summary: str | None = None,
+        session_metadata: Mapping[str, Any] | None = None,
+        internal_event: tuple[str, str] | None = None,
+        runtime_context: Any | None = None,
+        session_key: str | None = None,
+        recovered_continuity_block: dict[str, Any] | None = None,
+        include_current_message: bool = True,
+    ) -> ContextAssemblyResult:
+        """Assemble user-turn content blocks for an LLM call.
+
+        Public entry point that wraps ``ContextAssemblerV2``, making it
+        accessible to callers (e.g. ``loop.py``) without reaching through
+        the internal ``assembler_v2`` attribute.
+        """
+        return self.assembler_v2.assemble(
+            current_message=current_message,
+            media=media,
+            channel=channel,
+            chat_id=chat_id,
+            sender_id=sender_id,
+            session_summary=session_summary,
+            session_metadata=dict(session_metadata or {}),
+            internal_event=internal_event,
+            runtime_context=runtime_context,
+            session_key=session_key,
+            recovered_continuity_block=recovered_continuity_block,
+            include_current_message=include_current_message,
+        )
+
     def build_messages(
         self,
         history: list[dict[str, Any]],
@@ -696,14 +780,14 @@ class ContextBuilder:
         user_content = self._build_user_content(current_message, media)
         if current_role == "user":
             if self._context_config.enable_phase1_continuity:
-                assembled = self.assembler_v2.assemble(
+                assembled = self.assemble_user_content(
                     current_message=current_message,
                     media=media,
                     channel=channel,
                     chat_id=chat_id,
                     sender_id=sender_id,
                     session_summary=session_summary,
-                    session_metadata=dict(session_metadata or {}),
+                    session_metadata=session_metadata,
                     internal_event=internal_event,
                     runtime_context=runtime_context,
                     session_key=session_key,

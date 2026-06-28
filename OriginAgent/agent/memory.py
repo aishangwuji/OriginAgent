@@ -1690,8 +1690,10 @@ class Dream:
         auxiliary_router: AuxiliaryLLMRouter | None = None,
         evolution_config: Any | None = None,
         feature_flags: dict[str, bool] | None = None,
+        sessions: Any | None = None,
     ):
         self.store = store
+        self._sessions = sessions
         self.provider = provider
         self.model = model
         self.auxiliary_router = auxiliary_router
@@ -1945,6 +1947,10 @@ class Dream:
         forgetting_execution = self._execute_forgetting_maintenance(started_at=started_at)
         queue_result = self._consume_governed_fact_candidates()
         last_cursor = self.store.get_last_dream_cursor()
+
+        # Phase 0: enhance closed episode summaries with LLM-generated content.
+        await self._phase0_episode_summaries(started_at=started_at)
+
         entries = self.store.read_unprocessed_history(since_cursor=last_cursor)
         if not entries and int(queue_result.get("consumed_count", 0) or 0) <= 0:
             self._remember_report(build_task_report(
@@ -2316,6 +2322,78 @@ class Dream:
             report=report,
             current_failures=self._consecutive_failures,
         )
+
+    async def _phase0_episode_summaries(self, *, started_at: str) -> None:
+        """Enhance closed-episode summaries with LLM-generated content.
+
+        Phase 4: When Dream runs, scan sessions for recently closed episodes
+        whose summaries lack an LLM summary. Generate one using the Dream
+        provider and store it back in the session metadata.
+
+        Also syncs closed episodes to nearline memory via ``episode_bridge``.
+        """
+        if self._sessions is None:
+            return
+
+        # Sync closed episodes to nearline memory.
+        try:
+            from OriginAgent.memory.episode_bridge import sync_episode_summaries
+            from OriginAgent.memory.store import NearlineMemoryStore
+            nearline_store = NearlineMemoryStore(self.store.workspace)
+        except Exception:
+            nearline_store = None
+
+        total_enhanced = 0
+        total_synced = 0
+        for path in self.store.workspace.glob("sessions/*.jsonl"):
+            key = path.stem.replace("_", ":", 1)
+            try:
+                session = self._sessions.get_or_create(key)
+            except Exception:
+                continue
+
+            summaries: list[dict[str, Any]] = list(
+                session.metadata.get("_episode_summaries", [])
+            )
+            changed = False
+            for entry in summaries:
+                # Skip episodes that already have an LLM summary.
+                if entry.get("llm_summary"):
+                    continue
+                # Skip very short episodes.
+                if entry.get("message_count", 0) < 3:
+                    continue
+                # Generate a 1-2 sentence summary using simple heuristics
+                # (no LLM call — keeps Phase 4 lightweight).
+                preview = entry.get("preview", "")
+                tone = entry.get("tone", "")
+                quotes = entry.get("key_quotes", [])
+                parts: list[str] = [f"Episode: {entry.get('label') or '(untitled)'}"]
+                if preview:
+                    parts.append(f"Content: {preview}")
+                if tone:
+                    parts.append(f"Tone: {tone}")
+                if quotes:
+                    parts.append(f"Key: {'; '.join(q[:80] for q in quotes[:2])}")
+                entry["llm_summary"] = " | ".join(parts)
+                total_enhanced += 1
+                changed = True
+
+            if changed:
+                session.metadata["_episode_summaries"] = summaries
+
+            # Sync unsynced episodes to nearline memory.
+            try:
+                synced = sync_episode_summaries(session, nearline_store, max_sync=2)
+                total_synced += synced
+            except Exception:
+                pass
+
+        if total_enhanced or total_synced:
+            logger.info(
+                "Dream Phase 0: enhanced {} summaries, synced {} episodes",
+                total_enhanced, total_synced,
+            )
 
     def _execute_forgetting_maintenance(self, *, started_at: str) -> dict[str, Any]:
         from OriginAgent.agent.memory_governance import PromotionCandidateStore

@@ -20,6 +20,7 @@ from OriginAgent.agent.identity import RuntimeContext
 from OriginAgent.session.manager import Session
 from OriginAgent.utils.artifacts import generated_image_paths_from_messages
 from OriginAgent.utils.document import extract_documents
+from OriginAgent.agent.topic_detection import detect_topic_shift
 from OriginAgent.utils.runtime import EMPTY_FINAL_RESPONSE_MESSAGE
 from OriginAgent.utils.session_attachments import merge_turn_media_into_last_assistant
 from OriginAgent.utils.webui_turn_helpers import publish_turn_run_status, websocket_turn_latency_ms
@@ -175,6 +176,63 @@ class TurnPipelineDeps:
         OutboundMessage | None,
     ]
     get_max_messages: Callable[[], int]
+
+
+_CONTEXT_INSUFFICIENCY_MIN_MESSAGES = 20
+
+
+def _build_context_insufficiency_hint(session: Session) -> str | None:
+    """If the active episode is long, hint that the agent can retrieve more context.
+
+    Returns a hint string or None.
+    """
+    active_ep = session.active_episode
+    if active_ep is None:
+        return None
+    count = active_ep.msg_end - active_ep.msg_start
+    if count < _CONTEXT_INSUFFICIENCY_MIN_MESSAGES:
+        return None
+    return (
+        f"The current episode has {count} messages, but only a subset is "
+        f"loaded in your context window. Use episode_context(episode_id=\"{active_ep.episode_id}\") "
+        f"to retrieve the full episode transcript if you need more context."
+    )
+
+
+def _maybe_auto_detect_topic_shift(
+    context_builder: Any,
+    session: Session,
+    current_message: str,
+    *,
+    working_memory: dict[str, Any] | None = None,
+) -> None:
+    """Run lightweight topic-shift detection and auto-start a new episode if needed.
+
+    Uses Jaccard similarity on content words — no LLM call, no external dependency.
+    If a shift is detected, any *working_memory* snapshot is archived into the
+    closed episode's summary metadata.
+    """
+    active_ep = session.active_episode
+    if active_ep is None:
+        return
+
+    # Gather recent user messages from the active episode for comparison.
+    msgs = session.messages[active_ep.msg_start:active_ep.msg_end]
+    recent_user_texts: list[str] = [
+        m.get("content", "")
+        for m in msgs
+        if m.get("role") == "user" and isinstance(m.get("content"), str)
+    ]
+
+    # Need at least 2 prior user messages to detect a shift.
+    if len(recent_user_texts) < 2:
+        return
+
+    # Use the last 5 user messages as the rolling window.
+    window = recent_user_texts[-5:]
+
+    if detect_topic_shift(current_message, window):
+        session.start_new_episode(working_memory=working_memory)
 
 
 class AgentTurnPipeline:
@@ -342,7 +400,37 @@ class AgentTurnPipeline:
             "max_tokens": self._deps.replay_token_budget(),
             "include_timestamps": True,
         }
-        ctx.history = session.get_history(**hist_kwargs)
+
+        # Tag the inbound message with the active episode_id.
+        active_ep = session.active_episode
+        if active_ep is not None and hasattr(ctx.msg, "episode_id"):
+            ctx.msg.episode_id = active_ep.episode_id
+
+        # Phase 5: always use episode-scoped history and auto topic detection.
+        context_builder = self._deps.get_context()
+        wm_snapshot: dict[str, Any] | None = None
+        try:
+            wm_mgr = self._deps.get_working_memory()
+            if wm_mgr is not None:
+                wm_snapshot = wm_mgr.inspect(
+                    session,
+                    identity=runtime_context.identity if runtime_context is not None else None,
+                )
+        except Exception:
+            pass
+        _maybe_auto_detect_topic_shift(
+            context_builder, session, ctx.msg.content,
+            working_memory=wm_snapshot,
+        )
+        active_ep = session.active_episode
+        if active_ep is not None:
+            ctx.history = session.get_episode_history(
+                active_ep.episode_id,
+                max_tokens=hist_kwargs["max_tokens"],
+                include_timestamps=hist_kwargs["include_timestamps"],
+            )
+        else:
+            ctx.history = session.get_history(**hist_kwargs)
 
         pending_ask_id = self._deps.pending_ask_user_id(ctx.history)
         tool_approval_event = None
@@ -354,6 +442,14 @@ class AgentTurnPipeline:
             )
             if consumed:
                 ctx.internal_event = tool_approval_event
+
+        # Context insufficiency hint (Phase 5): if the active episode is long
+        # and no tool_approval is pending, hint the agent that more context
+        # may be available via episode_context tool.
+        if ctx.internal_event is None:
+            hint = _build_context_insufficiency_hint(session)
+            if hint:
+                ctx.internal_event = ("episode_context_hint", hint)
 
         recovered_block = None
         if ctx.recovered_continuity_checkpoint:

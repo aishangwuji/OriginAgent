@@ -6,6 +6,7 @@ import json
 import os
 import re
 import shutil
+import uuid
 from contextlib import suppress
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -30,6 +31,53 @@ _LOCAL_IMAGE_BREADCRUMB_RE = re.compile(r"^\[image: (?:/|~)[^\]]+\]\s*$")
 _TOOL_CALL_ECHO_RE = re.compile(r'^\s*(?:generate_image|message)\([^)]*\)\s*$')
 _SESSION_PREVIEW_MAX_CHARS = 120
 _CONTINUITY_RUNTIME_IDENTITY_KEY = "continuity_runtime_identity_v1"
+
+
+def _serialize_episodes(episodes: list["Episode"]) -> list[dict[str, Any]]:
+    """Serialize episode list for JSON persistence."""
+    result: list[dict[str, Any]] = []
+    for ep in episodes:
+        d: dict[str, Any] = {
+            "episode_id": ep.episode_id,
+            "label": ep.label,
+            "msg_start": ep.msg_start,
+            "msg_end": ep.msg_end,
+            "status": ep.status,
+        }
+        if ep.started_at is not None:
+            d["started_at"] = ep.started_at.isoformat()
+        if ep.ended_at is not None:
+            d["ended_at"] = ep.ended_at.isoformat()
+        result.append(d)
+    return result
+
+
+def _deserialize_episodes(data: list[dict[str, Any]]) -> list["Episode"]:
+    """Deserialize episode list from JSON data."""
+    episodes: list[Episode] = []
+    for d in data:
+        started_at = None
+        ended_at = None
+        if d.get("started_at"):
+            try:
+                started_at = datetime.fromisoformat(d["started_at"])
+            except (ValueError, TypeError):
+                pass
+        if d.get("ended_at"):
+            try:
+                ended_at = datetime.fromisoformat(d["ended_at"])
+            except (ValueError, TypeError):
+                pass
+        episodes.append(Episode(
+            episode_id=str(d.get("episode_id", "")),
+            label=str(d.get("label", "")),
+            started_at=started_at,
+            ended_at=ended_at,
+            msg_start=int(d.get("msg_start", 0)),
+            msg_end=int(d.get("msg_end", 0)),
+            status=str(d.get("status", "active")),
+        ))
+    return episodes
 
 
 def _call_archive_callback(
@@ -112,15 +160,416 @@ def _continuity_identity_summary(metadata: Any) -> tuple[str | None, str | None,
 
 
 @dataclass
+class Episode:
+    """A contiguous topic-block within a session."""
+
+    episode_id: str
+    label: str = ""
+    started_at: datetime | None = None
+    ended_at: datetime | None = None
+    msg_start: int = 0   # index into session.messages (inclusive)
+    msg_end: int = 0     # index into session.messages (exclusive)
+    status: str = "active"  # "active" | "closed"
+
+
+@dataclass
 class Session:
     """A conversation session."""
 
     key: str  # channel:chat_id
     messages: list[dict[str, Any]] = field(default_factory=list)
+    episodes: list[Episode] = field(default_factory=list)
+    active_episode_index: int = 0
     created_at: datetime = field(default_factory=datetime.now)
     updated_at: datetime = field(default_factory=datetime.now)
     metadata: dict[str, Any] = field(default_factory=dict)
     last_consolidated: int = 0  # Number of messages already consolidated to files
+
+    def __post_init__(self) -> None:
+        """Backfill: create a catch-all episode if messages exist but no episodes."""
+        if self.messages and not self.episodes:
+            episode_id = str(uuid.uuid4())
+            end = len(self.messages)
+            episode = Episode(
+                episode_id=episode_id,
+                label="",
+                started_at=self._first_message_timestamp(),
+                msg_start=0,
+                msg_end=end,
+                status="active",
+            )
+            self.episodes.append(episode)
+            self.active_episode_index = 0
+            for msg in self.messages:
+                msg.setdefault("episode_id", episode_id)
+
+    def _first_message_timestamp(self) -> datetime | None:
+        """Return the timestamp of the first user message, or None."""
+        for msg in self.messages:
+            ts = msg.get("timestamp")
+            if ts:
+                try:
+                    return datetime.fromisoformat(ts)
+                except (ValueError, TypeError):
+                    continue
+        return None
+
+    @property
+    def active_episode(self) -> Episode | None:
+        """Return the current active episode, or None if no episodes exist."""
+        if not self.episodes:
+            return None
+        idx = self.active_episode_index
+        if idx < 0 or idx >= len(self.episodes):
+            return None
+        ep = self.episodes[idx]
+        return ep if ep.status == "active" else None
+
+    def ensure_active_episode(self) -> Episode:
+        """Ensure there is an open episode, creating one if needed.
+
+        Returns the active episode.
+        """
+        if not self.episodes:
+            episode_id = str(uuid.uuid4())
+            episode = Episode(
+                episode_id=episode_id,
+                started_at=datetime.now(),
+                msg_start=len(self.messages),
+                msg_end=len(self.messages),
+                status="active",
+            )
+            self.episodes.append(episode)
+            self.active_episode_index = 0
+            return episode
+
+        active = self.episodes[self.active_episode_index]
+        if active.status == "active":
+            return active
+
+        # The current active episode is closed; start a new one.
+        episode_id = str(uuid.uuid4())
+        episode = Episode(
+            episode_id=episode_id,
+            started_at=datetime.now(),
+            msg_start=len(self.messages),
+            msg_end=len(self.messages),
+            status="active",
+        )
+        self.metadata["_active_episode_label"] = ""
+        self.metadata["_episode_count"] = len(self.episodes)
+        self.episodes.append(episode)
+        self.active_episode_index = len(self.episodes) - 1
+        return episode
+
+    @staticmethod
+    def _analyze_episode_tone(messages: list[dict[str, Any]]) -> str:
+        """Analyze the tone of an episode using simple heuristics.
+
+        No LLM call — uses message-level signals (questions, exclamation,
+        length, emoji) to classify tone.
+        """
+        user_texts: list[str] = [
+            m.get("content", "")
+            for m in messages
+            if m.get("role") == "user" and isinstance(m.get("content"), str)
+        ]
+        if not user_texts:
+            return "neutral"
+        total = len(user_texts)
+        questions = sum(1 for t in user_texts if "?" in t or "？" in t)
+        exclamations = sum(1 for t in user_texts if "!" in t or "！" in t)
+        long_msgs = sum(1 for t in user_texts if len(t) > 150)
+        short_msgs = sum(1 for t in user_texts if len(t) < 30)
+        has_emoji = any("\U0001F000" <= c <= "\U0001FFFF" or "✀" <= c <= "➿" for t in user_texts for c in t)
+
+        if total >= 3 and all(len(t) < 20 for t in user_texts):
+            return "terse"
+        if questions / total > 0.5:
+            return "inquisitive / asking questions"
+        if exclamations / total > 0.3:
+            return "emphatic / excited"
+        if long_msgs / total > 0.4:
+            return "detailed / explanatory"
+        if has_emoji:
+            return "casual / playful"
+        if short_msgs / total > 0.7 and total >= 3:
+            return "brief / direct"
+        return "neutral / conversational"
+
+    @staticmethod
+    def _extract_key_quotes(
+        messages: list[dict[str, Any]],
+        max_quotes: int = 3,
+    ) -> list[str]:
+        """Extract notable verbatim user quotes from an episode.
+
+        Picks the most semantically dense user messages (longest ones
+        that aren't purely procedural).
+        """
+        procedural_prefixes = ("ok", "okay", "yes", "no", "thanks", "ty", "thx",
+                               "好的", "嗯", "对", "是", "不", "谢谢", "明白了")
+        candidates: list[str] = []
+        for m in messages:
+            if m.get("role") != "user":
+                continue
+            text = str(m.get("content", "")).strip()
+            if not text or len(text) < 10:
+                continue
+            is_procedural = any(text.lower().startswith(p) for p in procedural_prefixes)
+            if is_procedural and len(text) < 30:
+                continue
+            candidates.append(text)
+        # Return the longest (most content-rich) quotes, limited.
+        candidates.sort(key=len, reverse=True)
+        return candidates[:max_quotes]
+
+    def _build_episode_preview(self, episode: Episode) -> str:
+        """Build a compact text preview of an episode for summary metadata.
+
+        For Phase 2 this is a simple first/last-message preview; Phase 4
+        adds tone notes and verbatim quotes.
+        """
+        msgs = self.messages[episode.msg_start:episode.msg_end]
+        user_msgs = [m.get("content", "") for m in msgs if m.get("role") == "user"]
+        if not user_msgs:
+            return f"{len(msgs)} messages, no user text"
+        first = str(user_msgs[0])[:100]
+        if len(user_msgs) > 1:
+            last = str(user_msgs[-1])[:100]
+            return f"{len(msgs)} msgs: \"{first}\" ... \"{last}\""
+        return f"{len(msgs)} msgs: \"{first}\""
+
+    def _store_episode_summary(
+        self, episode: Episode, *, working_memory: dict[str, Any] | None = None
+    ) -> None:
+        """Store a summary of a closed episode in session metadata.
+
+        Phase 4: includes tone analysis and key verbatim quotes alongside
+        the text preview.
+
+        Phase 6 (coupling fix B): optionally archives a snapshot of the
+        working memory (current_goal, current_plan, open_loops, etc.) at
+        the time the episode was closed, bridging the gap between the
+        working memory system and the episode system.
+        """
+        msgs = self.messages[episode.msg_start:episode.msg_end]
+        tone = self._analyze_episode_tone(msgs)
+        quotes = self._extract_key_quotes(msgs)
+
+        summaries: list[dict[str, Any]] = list(self.metadata.get("_episode_summaries", []))
+        entry: dict[str, Any] = {
+            "episode_id": episode.episode_id,
+            "label": episode.label,
+            "preview": self._build_episode_preview(episode),
+            "message_count": episode.msg_end - episode.msg_start,
+            "tone": tone,
+            "key_quotes": quotes,
+            "status": episode.status,
+        }
+        if episode.started_at is not None:
+            entry["started_at"] = episode.started_at.isoformat()
+        if episode.ended_at is not None:
+            entry["ended_at"] = episode.ended_at.isoformat()
+        if working_memory:
+            wm_snapshot: dict[str, Any] = {}
+            for key in ("current_goal", "current_plan", "open_loops", "active_constraints"):
+                val = working_memory.get(key)
+                if val:
+                    wm_snapshot[key] = val
+            if wm_snapshot:
+                entry["working_memory_snapshot"] = wm_snapshot
+        # Keep most recent summaries at the front, limit to 5.
+        summaries.insert(0, entry)
+        self.metadata["_episode_summaries"] = summaries[:5]
+
+    def start_new_episode(
+        self, label: str = "", *, working_memory: dict[str, Any] | None = None
+    ) -> Episode:
+        """Close the current active episode and start a new one.
+
+        Args:
+            label: Optional human-readable label for the new episode.
+            working_memory: Optional snapshot of working memory state
+                (goal, plan, open_loops, constraints) to archive.
+
+        Returns:
+            The new active episode.
+        """
+        if self.episodes:
+            active = self.episodes[self.active_episode_index]
+            if active.status == "active":
+                active.status = "closed"
+                active.ended_at = datetime.now()
+                self._store_episode_summary(active, working_memory=working_memory)
+
+        episode_id = str(uuid.uuid4())
+        episode = Episode(
+            episode_id=episode_id,
+            label=label,
+            started_at=datetime.now(),
+            msg_start=len(self.messages),
+            msg_end=len(self.messages),
+            status="active",
+        )
+        self.metadata["_active_episode_label"] = label or ""
+        self.metadata["_episode_count"] = len(self.episodes)
+        self.episodes.append(episode)
+        self.active_episode_index = len(self.episodes) - 1
+        return episode
+
+    def close_active_episode(
+        self, *, working_memory: dict[str, Any] | None = None
+    ) -> None:
+        """Close the current active episode without opening a new one.
+
+        Args:
+            working_memory: Optional snapshot of working memory state
+                to archive in the episode's summary.
+
+        The next ``add_message()`` call will automatically create a new episode.
+        """
+        if self.episodes:
+            active = self.episodes[self.active_episode_index]
+            if active.status == "active":
+                active.status = "closed"
+                active.ended_at = datetime.now()
+                self._store_episode_summary(active, working_memory=working_memory)
+
+    def get_episode_history(
+        self,
+        episode_id: str,
+        *,
+        max_tokens: int = 0,
+        include_timestamps: bool = False,
+    ) -> list[dict[str, Any]]:
+        """Return raw messages for a specific episode.
+
+        Args:
+            episode_id: The episode to retrieve messages for.
+            max_tokens: Maximum token budget (0 = unlimited).
+            include_timestamps: Whether to annotate user turns with timestamps.
+
+        Returns:
+            List of message dicts scoped to the episode.
+        """
+        episode = next(
+            (ep for ep in self.episodes if ep.episode_id == episode_id),
+            None,
+        )
+        if episode is None:
+            return []
+
+        raw = self.messages[episode.msg_start:episode.msg_end]
+
+        out: list[dict[str, Any]] = []
+        for message in raw:
+            if message.get("_command"):
+                continue
+            content = message.get("content", "")
+            role = message.get("role")
+            if role == "assistant" and isinstance(content, str):
+                content = _sanitize_assistant_replay_text(content)
+            media = message.get("media")
+            if role == "user" and isinstance(media, list) and media and isinstance(content, str):
+                breadcrumbs = "\n".join(
+                    image_placeholder_text(p) for p in media if isinstance(p, str) and p
+                )
+                content = f"{content}\n{breadcrumbs}" if content else breadcrumbs
+            if include_timestamps:
+                content = self._annotate_message_time(message, content)
+            if role == "assistant" and isinstance(content, str) and not content.strip():
+                if not any(key in message for key in ("tool_calls", "reasoning_content", "thinking_blocks")):
+                    continue
+            entry: dict[str, Any] = {"role": message["role"], "content": content}
+            for key in ("tool_calls", "tool_call_id", "name", "reasoning_content", "thinking_blocks"):
+                if key in message:
+                    entry[key] = message[key]
+            out.append(entry)
+
+        if max_tokens > 0 and out:
+            kept: list[dict[str, Any]] = []
+            used = 0
+            for message in reversed(out):
+                tokens = estimate_message_tokens(message)
+                if kept and used + tokens > max_tokens:
+                    break
+                kept.append(message)
+                used += tokens
+            kept.reverse()
+
+            # Keep history aligned to the first visible user turn.
+            first_user = next((i for i, m in enumerate(kept) if m.get("role") == "user"), None)
+            if first_user is not None:
+                kept = kept[first_user:]
+            else:
+                # If no user turn in the token-budget tail, recover the
+                # nearest user turn from the full unscoped output.
+                recovered_user = next(
+                    (i for i in range(len(out) - 1, -1, -1) if out[i].get("role") == "user"),
+                    None,
+                )
+                if recovered_user is not None:
+                    kept = out[recovered_user:]
+
+            out = kept
+
+        return out
+
+    def _rebuild_episode_indices(self) -> None:
+        """Reconcile episode indices after messages have been trimmed.
+
+        Removes episodes whose messages have been entirely trimmed away,
+        and adjusts ``msg_start`` / ``msg_end`` for remaining episodes
+        to stay within the bounds of ``self.messages``.
+        """
+        total = len(self.messages)
+        surviving: list[Episode] = []
+        index_map: dict[str, int] = {}
+
+        for ep in self.episodes:
+            clamped_start = min(ep.msg_start, total)
+            clamped_end = min(ep.msg_end, total)
+            if clamped_start >= clamped_end or clamped_start >= total:
+                # This episode has been fully trimmed away.
+                continue
+            new_ep = Episode(
+                episode_id=ep.episode_id,
+                label=ep.label,
+                started_at=ep.started_at,
+                ended_at=ep.ended_at,
+                msg_start=clamped_start,
+                msg_end=clamped_end,
+                status=ep.status,
+            )
+            index_map[ep.episode_id] = len(surviving)
+            surviving.append(new_ep)
+
+        self.episodes = surviving
+
+        # Adjust active_episode_index if the active episode was removed.
+        active_id = (
+            self.episodes[self.active_episode_index].episode_id
+            if self.episodes and self.active_episode_index < len(self.episodes)
+            else None
+        )
+        if active_id and active_id in index_map:
+            self.active_episode_index = index_map[active_id]
+        else:
+            self.active_episode_index = 0
+
+        # Ensure at least one episode exists if there are messages.
+        if self.messages and not self.episodes:
+            episode_id = str(uuid.uuid4())
+            self.episodes.append(Episode(
+                episode_id=episode_id,
+                label="",
+                started_at=self._first_message_timestamp(),
+                msg_start=0,
+                msg_end=total,
+                status="active",
+            ))
+            self.active_episode_index = 0
 
     @staticmethod
     def _annotate_message_time(message: dict[str, Any], content: Any) -> Any:
@@ -142,14 +591,17 @@ class Session:
         return f"[Message Time: {timestamp}]\n{content}"
 
     def add_message(self, role: str, content: str, **kwargs: Any) -> None:
-        """Add a message to the session."""
+        """Add a message to the session, tagging it with the active episode."""
+        episode = self.ensure_active_episode()
         msg = {
             "role": role,
             "content": content,
             "timestamp": datetime.now().isoformat(),
+            "episode_id": episode.episode_id,
             **kwargs
         }
         self.messages.append(msg)
+        episode.msg_end = len(self.messages)
         self.updated_at = datetime.now()
 
     def get_history(
@@ -247,12 +699,15 @@ class Session:
         return out
 
     def clear(self) -> None:
-        """Clear all messages and reset session to initial state."""
+        """Clear all messages, episodes, and reset session to initial state."""
         self.messages = []
+        self.episodes = []
+        self.active_episode_index = 0
         self.last_consolidated = 0
         self.updated_at = datetime.now()
         self.metadata.pop("_recent_summaries", None)
         self.metadata.pop("_last_summary", None)
+        self.metadata.pop("_episode_summaries", None)
 
     def retain_recent_legal_suffix(self, max_messages: int) -> None:
         """Keep a legal recent suffix constrained by a hard message cap."""
@@ -267,6 +722,7 @@ class Session:
         self.messages = retained
         self.last_consolidated = max(0, self.last_consolidated - dropped)
         self.updated_at = datetime.now()
+        self._rebuild_episode_indices()
 
     def _recent_legal_suffix(self, max_messages: int) -> list[dict[str, Any]]:
         if max_messages <= 0:
@@ -330,6 +786,7 @@ class Session:
         self.messages = retained
         self.last_consolidated = max(0, before_last_consolidated - dropped_count)
         self.updated_at = datetime.now()
+        self._rebuild_episode_indices()
         logger.info(
             "Session file cap hit for {}: dropped {}, raw-archived {}, kept {}",
             self.key,
@@ -411,6 +868,8 @@ class SessionManager:
             created_at = None
             updated_at = None
             last_consolidated = 0
+            episodes_raw = None
+            active_episode_index = 0
 
             with open(path, encoding="utf-8") as f:
                 for line in f:
@@ -425,12 +884,18 @@ class SessionManager:
                         created_at = datetime.fromisoformat(data["created_at"]) if data.get("created_at") else None
                         updated_at = datetime.fromisoformat(data["updated_at"]) if data.get("updated_at") else None
                         last_consolidated = data.get("last_consolidated", 0)
+                        episodes_raw = data.get("episodes")
+                        active_episode_index = int(data.get("active_episode_index", 0))
                     else:
                         messages.append(data)
+
+            episodes = _deserialize_episodes(episodes_raw) if episodes_raw else []
 
             return Session(
                 key=key,
                 messages=messages,
+                episodes=episodes,
+                active_episode_index=active_episode_index,
                 created_at=created_at or datetime.now(),
                 updated_at=updated_at or datetime.now(),
                 metadata=metadata,
@@ -455,6 +920,8 @@ class SessionManager:
             created_at: datetime | None = None
             updated_at: datetime | None = None
             last_consolidated = 0
+            episodes_raw = None
+            active_episode_index = 0
             skipped = 0
 
             with open(path, encoding="utf-8") as f:
@@ -477,6 +944,8 @@ class SessionManager:
                             with suppress(ValueError, TypeError):
                                 updated_at = datetime.fromisoformat(data["updated_at"])
                         last_consolidated = data.get("last_consolidated", 0)
+                        episodes_raw = data.get("episodes")
+                        active_episode_index = int(data.get("active_episode_index", 0))
                     else:
                         messages.append(data)
 
@@ -486,9 +955,13 @@ class SessionManager:
             if not messages and not metadata:
                 return None
 
+            episodes = _deserialize_episodes(episodes_raw) if episodes_raw else []
+
             return Session(
                 key=key,
                 messages=messages,
+                episodes=episodes,
+                active_episode_index=active_episode_index,
                 created_at=created_at or datetime.now(),
                 updated_at=updated_at or datetime.now(),
                 metadata=metadata,
@@ -529,7 +1002,9 @@ class SessionManager:
                     "created_at": session.created_at.isoformat(),
                     "updated_at": session.updated_at.isoformat(),
                     "metadata": session.metadata,
-                    "last_consolidated": session.last_consolidated
+                    "last_consolidated": session.last_consolidated,
+                    "episodes": _serialize_episodes(session.episodes),
+                    "active_episode_index": session.active_episode_index,
                 }
                 f.write(json.dumps(metadata_line, ensure_ascii=False) + "\n")
                 for msg in session.messages:
@@ -608,6 +1083,8 @@ class SessionManager:
             created_at: str | None = None
             updated_at: str | None = None
             stored_key: str | None = None
+            episodes_raw = None
+            active_episode_index = 0
             with open(path, encoding="utf-8") as f:
                 for line in f:
                     line = line.strip()
@@ -619,14 +1096,19 @@ class SessionManager:
                         created_at = data.get("created_at")
                         updated_at = data.get("updated_at")
                         stored_key = data.get("key")
+                        episodes_raw = data.get("episodes")
+                        active_episode_index = int(data.get("active_episode_index", 0))
                     else:
                         messages.append(data)
+            episodes = _deserialize_episodes(episodes_raw) if episodes_raw else []
             return {
                 "key": stored_key or key,
                 "created_at": created_at,
                 "updated_at": updated_at,
                 "metadata": metadata,
                 "messages": messages,
+                "episodes": episodes,
+                "active_episode_index": active_episode_index,
             }
         except Exception as e:
             logger.warning("Failed to read session {}: {}", key, e)
@@ -675,6 +1157,9 @@ class SessionManager:
                                 if not fallback_preview and item.get("role") == "assistant":
                                     fallback_preview = text
                             preview = preview or fallback_preview
+                            # Derive episode info from metadata.
+                            episode_count = int(metadata.get("_episode_count", 0)) if isinstance(metadata, dict) else 0
+                            active_label = str(metadata.get("_active_episode_label", "")) if isinstance(metadata, dict) else ""
                             sessions.append({
                                 "key": key,
                                 "created_at": data.get("created_at"),
@@ -685,11 +1170,15 @@ class SessionManager:
                                 "user_id": user_id,
                                 "device_id": device_id,
                                 "continuity_identity_updated_at": identity_updated_at,
+                                "episode_count": episode_count,
+                                "active_episode_label": active_label,
                             })
             except Exception:
                 repaired = self._repair(fallback_key)
                 if repaired is not None:
                     user_id, device_id, identity_updated_at = _continuity_identity_summary(repaired.metadata)
+                    ep_count = int(repaired.metadata.get("_episode_count", 0))
+                    active_label = str(repaired.metadata.get("_active_episode_label", ""))
                     sessions.append({
                         "key": repaired.key,
                         "created_at": repaired.created_at.isoformat(),
@@ -711,6 +1200,8 @@ class SessionManager:
                         "user_id": user_id,
                         "device_id": device_id,
                         "continuity_identity_updated_at": identity_updated_at,
+                        "episode_count": ep_count,
+                        "active_episode_label": active_label,
                     })
                 continue
 

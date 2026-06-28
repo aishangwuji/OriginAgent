@@ -52,6 +52,8 @@ from OriginAgent.agent.tools.search import GlobTool, GrepTool
 from OriginAgent.agent.tools.session_search import SessionSearchTool
 from OriginAgent.agent.tools.shell import ExecTool
 from OriginAgent.agent.tools.spawn import SpawnTool
+from OriginAgent.agent.tools.close_episode import CloseEpisodeTool
+from OriginAgent.agent.tools.episode_context import EpisodeContextTool
 from OriginAgent.agent.tools.web import WebFetchTool, WebSearchTool
 from OriginAgent.security.grants import CapabilityGrantStore
 
@@ -446,6 +448,14 @@ def register_default_tools(
                 ),
             ),
         )
+    _register_named(
+        "close_episode",
+        lambda: CloseEpisodeTool(sessions=sessions),
+    )
+    _register_named(
+        "episode_context",
+        lambda: EpisodeContextTool(sessions=sessions),
+    )
     _register_named(
         "notebook_edit",
         lambda: NotebookEditTool(workspace=workspace, allowed_dir=allowed_dir),

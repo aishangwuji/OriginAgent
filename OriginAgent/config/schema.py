@@ -473,6 +473,12 @@ class ContextConfig(Base):
         serialization_alias="enablePhase1Continuity",
     )
 
+    enable_episode_context: bool = Field(
+        default=True,
+        validation_alias=AliasChoices("enableEpisodeContext", "enable_episode_context"),
+        serialization_alias="enableEpisodeContext",
+    )
+
     max_recent_history: int = Field(
         default=50,
         ge=1,

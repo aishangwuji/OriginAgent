@@ -48,23 +48,40 @@ class AutoCompact:
     def _split_unconsolidated(
         self, session: Session,
     ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-        """Split live session tail into archiveable prefix and retained recent suffix."""
+        """Split live session tail into archiveable prefix and retained recent suffix.
+
+        Phase 5: episode-aware splitting. Instead of arbitrarily keeping
+        8 recent messages, preserves at least one complete episode boundary.
+        Falls back to the legacy 8-message suffix when no episodes exist.
+        """
         tail = list(session.messages[session.last_consolidated:])
         if not tail:
             return [], []
 
-        probe = Session(
-            key=session.key,
-            messages=tail.copy(),
-            created_at=session.created_at,
-            updated_at=session.updated_at,
-            metadata={},
-            last_consolidated=0,
-        )
-        probe.retain_recent_legal_suffix(self._RECENT_SUFFIX_MESSAGES)
-        kept = probe.messages
-        cut = len(tail) - len(kept)
-        return tail[:cut], kept
+        # Episode-aware: find the last closed episode boundary in the tail.
+        kept_start = len(tail)
+        if session.episodes:
+            # Iterate episodes in reverse, looking for the last closed episode
+            # that starts within the tail region.
+            for ep in reversed(session.episodes):
+                ep_start_in_tail = max(0, ep.msg_start - session.last_consolidated)
+                if ep_start_in_tail < len(tail) and ep.status == "closed":
+                    # Keep from this episode's start.
+                    kept_start = ep_start_in_tail
+                    break
+            else:
+                # No closed episode found in tail; keep the active episode or fall back.
+                active = session.active_episode
+                if active is not None:
+                    kept_start = max(0, active.msg_start - session.last_consolidated)
+
+        # Ensure we keep at least RECENT_SUFFIX_MESSAGES.
+        min_keep = min(self._RECENT_SUFFIX_MESSAGES, len(tail))
+        kept_start = min(kept_start, len(tail) - min_keep)
+
+        kept = tail[kept_start:]
+        archive = tail[:kept_start]
+        return archive, kept
 
     def check_expired(self, schedule_background: Callable[[Coroutine], None],
                       active_session_keys: Collection[str] = ()) -> None:
@@ -117,6 +134,7 @@ class AutoCompact:
                         self._summaries[key] = summary
             session.messages = kept_msgs
             session.last_consolidated = 0
+            session._rebuild_episode_indices()
             session.updated_at = datetime.now()
             self.sessions.save(session)
             if archive_msgs:

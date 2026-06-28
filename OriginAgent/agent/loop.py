@@ -1194,14 +1194,14 @@ class AgentLoop:
                 image_generation_prompt(msg.content, msg.metadata),
             )
             if self.context._context_config.enable_phase1_continuity:
-                assembled = self.context.assembler_v2.assemble(
+                assembled = self.context.assemble_user_content(
                     current_message=None,
                     media=None,
                     channel=msg.channel,
                     chat_id=self._runtime_chat_id(msg),
                     sender_id=msg.sender_id,
                     session_summary=pending_summary,
-                    session_metadata=dict(session.metadata or {}),
+                    session_metadata=session.metadata,
                     internal_event=None,
                     runtime_context=self._last_runtime_context,
                     session_key=session.key,
@@ -2033,24 +2033,8 @@ class AgentLoop:
                 }
         except Exception:
             profile_ref = None
-        episode_refs: list[dict[str, Any]] = []
-        try:
-            for episode in self.nearline_memory.store.read_episodes(limit=3):
-                if episode.session_key != session.key:
-                    continue
-                episode_refs.append(
-                    {
-                        "episode_id": episode.episode_id,
-                        "timestamp": episode.timestamp,
-                    }
-                )
-        except Exception:
-            episode_refs = []
-        fact_refs: list[str] = []
-        for item in list(working.priority_facts or [])[:5]:
-            text = str(item or "").strip()
-            if text:
-                fact_refs.append(text)
+        # Phase 5: simplified checkpoint — episode summaries, tone notes, and
+        # key quotes are handled by the episode system, not the checkpoint.
         checkpoint = {
             "session_key": session.key,
             "current_goal": working.current_goal,
@@ -2058,10 +2042,6 @@ class AgentLoop:
             "open_loops": list(working.open_loops or []),
             "active_constraints": list(working.active_constraints or []),
             "pending_confirmation_refs": self._collect_pending_confirmation_refs(session),
-            "recent_summary_text": session_summary_text(session),
-            "episode_refs": episode_refs,
-            "profile_ref": profile_ref,
-            "fact_refs": fact_refs,
             "updated_at": _utcnow_iso(),
         }
         session.metadata[CONTINUITY_CHECKPOINT_KEY] = checkpoint
@@ -2083,10 +2063,6 @@ class AgentLoop:
             "pending_confirmation_refs": [
                 dict(item) for item in raw.get("pending_confirmation_refs", []) if isinstance(item, dict)
             ][:8],
-            "recent_summary_text": _trim_text(raw.get("recent_summary_text"), max_chars=4000),
-            "episode_refs": [dict(item) for item in raw.get("episode_refs", []) if isinstance(item, dict)][:8],
-            "profile_ref": dict(raw.get("profile_ref") or {}) if isinstance(raw.get("profile_ref"), dict) else None,
-            "fact_refs": [str(item).strip() for item in raw.get("fact_refs", []) if str(item).strip()][:8],
             "updated_at": str(raw.get("updated_at") or "").strip(),
         }
 

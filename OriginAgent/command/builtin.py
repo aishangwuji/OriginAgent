@@ -150,6 +150,19 @@ BUILTIN_COMMAND_SPECS: tuple[BuiltinCommandSpec, ...] = (
         "undo-2",
     ),
     BuiltinCommandSpec(
+        "/topic",
+        "Switch topic",
+        "Start a new conversation topic episode, optionally with a label.",
+        "pencil-line",
+        "[label]",
+    ),
+    BuiltinCommandSpec(
+        "/episodes",
+        "List episodes",
+        "Show all conversation topic episodes in the current session.",
+        "list",
+    ),
+    BuiltinCommandSpec(
         "/help",
         "Show help",
         "List available slash commands.",
@@ -1450,6 +1463,58 @@ async def cmd_reviews(ctx: CommandContext) -> OutboundMessage:
     )
 
 
+async def cmd_topic(ctx: CommandContext) -> OutboundMessage:
+    """Switch to a new conversation topic episode."""
+    label = ctx.args.strip() if ctx.args else ""
+    session = ctx.session
+    if session is not None:
+        session.start_new_episode(label)
+    content = "Topic switched."
+    if label:
+        content += f" New episode: \"{label}\"."
+    return OutboundMessage(
+        channel=ctx.msg.channel,
+        chat_id=ctx.msg.chat_id,
+        content=content,
+        metadata={**dict(ctx.msg.metadata or {}), "render_as": "text"},
+    )
+
+
+async def cmd_episodes(ctx: CommandContext) -> OutboundMessage:
+    """List conversation episodes in the current session."""
+    session = ctx.session
+    if session is None:
+        content = "No active session."
+    elif not session.episodes:
+        content = "No episodes in this session."
+    else:
+        lines: list[str] = [f"Episodes in this session ({len(session.episodes)} total):", ""]
+        for i, ep in enumerate(session.episodes):
+            label = ep.label or f"Episode {i}"
+            status = ep.status
+            count = ep.msg_end - ep.msg_start
+            prefix = "▶ " if status == "active" else "  "
+            lines.append(f"{prefix}#{i}: \"{label}\" ({count} msgs, {status})")
+            # Show summary from metadata if available
+            summaries = session.metadata.get("_episode_summaries", [])
+            for s in summaries:
+                if s.get("episode_id") == ep.episode_id:
+                    tone = s.get("tone", "")
+                    if tone:
+                        lines.append(f"     Tone: {tone}")
+                    preview = s.get("preview", "")
+                    if preview:
+                        lines.append(f"     {preview}")
+                    break
+        content = "\n".join(lines)
+    return OutboundMessage(
+        channel=ctx.msg.channel,
+        chat_id=ctx.msg.chat_id,
+        content=content,
+        metadata={**dict(ctx.msg.metadata or {}), "render_as": "text"},
+    )
+
+
 async def cmd_help(ctx: CommandContext) -> OutboundMessage:
     """Return available slash commands."""
     return OutboundMessage(
@@ -1507,4 +1572,7 @@ def register_builtin_commands(router: CommandRouter) -> None:
     router.prefix("/dream-log ", cmd_dream_log)
     router.exact("/dream-restore", cmd_dream_restore)
     router.prefix("/dream-restore ", cmd_dream_restore)
+    router.exact("/topic", cmd_topic)
+    router.prefix("/topic ", cmd_topic)
+    router.exact("/episodes", cmd_episodes)
     router.exact("/help", cmd_help)
