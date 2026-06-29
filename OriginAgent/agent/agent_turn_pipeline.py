@@ -89,32 +89,48 @@ class TurnContext:
     trace: list[StateTraceEntry] = field(default_factory=list)
 
 
-TURN_PIPELINE_TRANSITIONS: dict[tuple[TurnState, str], TurnState] = {
+class TurnEvent(Enum):
+    """Typed events driving the Turn state machine.
+
+    Replaces plain-string events for compile-time safety.
+    """
+    OK = auto()
+    DISPATCH = auto()
+    SHORTCUT = auto()
+    SKIP = auto()
+    ERROR = auto()
+    TIMEOUT = auto()
+    FATAL_ERROR = auto()
+    MAX_ITERATIONS = auto()
+    FATAL = auto()
+
+
+TURN_PIPELINE_TRANSITIONS: dict[tuple[TurnState, TurnEvent], TurnState] = {
     # Happy path
-    (TurnState.RESTORE, "ok"): TurnState.COMPACT,
-    (TurnState.COMPACT, "ok"): TurnState.COMMAND,
-    (TurnState.COMMAND, "dispatch"): TurnState.BUILD,
-    (TurnState.COMMAND, "shortcut"): TurnState.DONE,
-    (TurnState.BUILD, "ok"): TurnState.RUN,
-    (TurnState.RUN, "ok"): TurnState.SAVE,
-    (TurnState.SAVE, "ok"): TurnState.AUTOMATION,
-    (TurnState.AUTOMATION, "ok"): TurnState.RESPOND,
-    (TurnState.AUTOMATION, "skip"): TurnState.RESPOND,
-    (TurnState.RESPOND, "ok"): TurnState.DONE,
+    (TurnState.RESTORE, TurnEvent.OK): TurnState.COMPACT,
+    (TurnState.COMPACT, TurnEvent.OK): TurnState.COMMAND,
+    (TurnState.COMMAND, TurnEvent.DISPATCH): TurnState.BUILD,
+    (TurnState.COMMAND, TurnEvent.SHORTCUT): TurnState.DONE,
+    (TurnState.BUILD, TurnEvent.OK): TurnState.RUN,
+    (TurnState.RUN, TurnEvent.OK): TurnState.SAVE,
+    (TurnState.SAVE, TurnEvent.OK): TurnState.AUTOMATION,
+    (TurnState.AUTOMATION, TurnEvent.OK): TurnState.RESPOND,
+    (TurnState.AUTOMATION, TurnEvent.SKIP): TurnState.RESPOND,
+    (TurnState.RESPOND, TurnEvent.OK): TurnState.DONE,
     # Error / recovery paths (D5)
-    (TurnState.RESTORE, "error"): TurnState.HANDLE_ERROR,
-    (TurnState.COMPACT, "error"): TurnState.HANDLE_ERROR,
-    (TurnState.BUILD, "error"): TurnState.HANDLE_ERROR,
-    (TurnState.RUN, "error"): TurnState.HANDLE_ERROR,
-    (TurnState.RUN, "max_iterations"): TurnState.SAVE,
-    (TurnState.RUN, "fatal_error"): TurnState.HANDLE_ERROR,
-    (TurnState.RUN, "timeout"): TurnState.HANDLE_TIMEOUT,
-    (TurnState.SAVE, "error"): TurnState.HANDLE_ERROR,
-    (TurnState.AUTOMATION, "error"): TurnState.RESPOND,
-    (TurnState.HANDLE_ERROR, "ok"): TurnState.RESPOND,
-    (TurnState.HANDLE_ERROR, "fatal"): TurnState.DONE,
-    (TurnState.HANDLE_TIMEOUT, "ok"): TurnState.RESPOND,
-    (TurnState.HANDLE_TIMEOUT, "fatal"): TurnState.DONE,
+    (TurnState.RESTORE, TurnEvent.ERROR): TurnState.HANDLE_ERROR,
+    (TurnState.COMPACT, TurnEvent.ERROR): TurnState.HANDLE_ERROR,
+    (TurnState.BUILD, TurnEvent.ERROR): TurnState.HANDLE_ERROR,
+    (TurnState.RUN, TurnEvent.ERROR): TurnState.HANDLE_ERROR,
+    (TurnState.RUN, TurnEvent.MAX_ITERATIONS): TurnState.SAVE,
+    (TurnState.RUN, TurnEvent.FATAL_ERROR): TurnState.HANDLE_ERROR,
+    (TurnState.RUN, TurnEvent.TIMEOUT): TurnState.HANDLE_TIMEOUT,
+    (TurnState.SAVE, TurnEvent.ERROR): TurnState.HANDLE_ERROR,
+    (TurnState.AUTOMATION, TurnEvent.ERROR): TurnState.RESPOND,
+    (TurnState.HANDLE_ERROR, TurnEvent.OK): TurnState.RESPOND,
+    (TurnState.HANDLE_ERROR, TurnEvent.FATAL): TurnState.DONE,
+    (TurnState.HANDLE_TIMEOUT, TurnEvent.OK): TurnState.RESPOND,
+    (TurnState.HANDLE_TIMEOUT, TurnEvent.FATAL): TurnState.DONE,
 }
 
 
@@ -311,7 +327,7 @@ class AgentTurnPipeline:
                 return getattr(contribution, "action_continuity_writeback_adapter", None)
         return None
 
-    async def state_restore(self, ctx: TurnContext) -> str:
+    async def state_restore(self, ctx: TurnContext) -> TurnEvent:
         """Restore checkpoint / pending user turn; extract documents."""
         msg = ctx.msg
 
@@ -335,14 +351,14 @@ class AgentTurnPipeline:
         ctx.recovered_continuity_checkpoint = self._deps.load_continuity_checkpoint(session)
         self._deps.record_recovered_continuity_checkpoint(ctx.recovered_continuity_checkpoint)
 
-        return "ok"
+        return TurnEvent.OK
 
-    async def state_compact(self, ctx: TurnContext) -> str:
+    async def state_compact(self, ctx: TurnContext) -> TurnEvent:
         ctx.session, pending = self._deps.auto_compact.prepare_session(ctx.session, ctx.session_key)
         ctx.pending_summary = pending
-        return "ok"
+        return TurnEvent.OK
 
-    async def state_command(self, ctx: TurnContext) -> str:
+    async def state_command(self, ctx: TurnContext) -> TurnEvent:
         raw = ctx.msg.content.strip()
         lang = (ctx.msg.metadata or {}).get("lang", "") or os.environ.get("ORIGINAGENT_LANG", "")
         cmd_ctx = CommandContext(
@@ -359,10 +375,10 @@ class AgentTurnPipeline:
             self._deps.persist_shortcut_command_turn(ctx.msg, ctx.session_key, result)
             if self._deps.is_webui_message(ctx.msg):
                 result.metadata["_webui_transcript_recorded"] = True
-            return "shortcut"
-        return "dispatch"
+            return TurnEvent.SHORTCUT
+        return TurnEvent.DISPATCH
 
-    async def state_build(self, ctx: TurnContext) -> str:
+    async def state_build(self, ctx: TurnContext) -> TurnEvent:
         consolidator = self._deps.get_consolidator()
         tools = self._deps.get_tools()
         context = self._deps.get_context()
@@ -476,9 +492,9 @@ class AgentTurnPipeline:
         if ctx.on_retry_wait is None:
             ctx.on_retry_wait = await self._deps.build_retry_wait_callback(ctx.msg)
 
-        return "ok"
+        return TurnEvent.OK
 
-    async def state_run(self, ctx: TurnContext) -> str:
+    async def state_run(self, ctx: TurnContext) -> TurnEvent:
         runtime_context = ctx.runtime_context or self._deps.resolve_runtime_context(
             ctx.msg,
             session_key=ctx.session_key,
@@ -516,9 +532,9 @@ class AgentTurnPipeline:
         ctx.all_messages = all_msgs
         ctx.stop_reason = stop_reason
         ctx.had_injections = had_injections
-        return "ok"
+        return TurnEvent.OK
 
-    async def state_save(self, ctx: TurnContext) -> str:
+    async def state_save(self, ctx: TurnContext) -> TurnEvent:
         if ctx.final_content is None or not ctx.final_content.strip():
             ctx.final_content = EMPTY_FINAL_RESPONSE_MESSAGE
 
@@ -592,15 +608,15 @@ class AgentTurnPipeline:
         self._deps.schedule_nearline_memory(ctx)
         self._deps.schedule_background_review(ctx)
         self._deps.schedule_curator_review(ctx)
-        return "ok"
+        return TurnEvent.OK
 
-    async def state_automation(self, ctx: TurnContext) -> str:
+    async def state_automation(self, ctx: TurnContext) -> TurnEvent:
         if ctx.session is None or ctx.runtime_context is None:
             self._deps.record_action_continuity_audit({"status": "skipped", "reason": "missing_context"})
-            return "skip"
+            return TurnEvent.SKIP
         if not self._deps.automation_enabled():
             self._deps.record_action_continuity_audit({"status": "skipped", "reason": "automation_disabled"})
-            return "skip"
+            return TurnEvent.SKIP
         context = self._deps.get_context()
         working_memory = self._deps.get_working_memory()
         automation_runtime_context = dataclasses.replace(
@@ -637,7 +653,7 @@ class AgentTurnPipeline:
                 "selected_proposal_digest": None,
                 "skipped_reasons": list(planner_result.skipped_reasons),
             })
-            return "skip"
+            return TurnEvent.SKIP
         executor = self._resolve_executor_for_origin(
             proposal.automation_origin,
             self._deps.domain_runtime_contributions,
@@ -653,7 +669,7 @@ class AgentTurnPipeline:
                 "selected_proposal_digest": proposal.proposal_digest,
                 "skipped_reasons": list(planner_result.skipped_reasons),
             })
-            return "skip"
+            return TurnEvent.SKIP
         adapter = self._resolve_adapter_for_origin(
             proposal.automation_origin,
             self._deps.domain_runtime_contributions,
@@ -669,7 +685,7 @@ class AgentTurnPipeline:
                 "selected_proposal_digest": proposal.proposal_digest,
                 "skipped_reasons": list(planner_result.skipped_reasons),
             })
-            return "skip"
+            return TurnEvent.SKIP
         typed_action = proposal.typed_action
         if getattr(getattr(self._deps.tools_config, "device", None), "automation_dry_run_only", True):
             typed_action = dataclasses.replace(
@@ -732,9 +748,9 @@ class AgentTurnPipeline:
             },
             "continuity_writeback": dict(writeback),
         })
-        return "ok"
+        return TurnEvent.OK
 
-    async def state_respond(self, ctx: TurnContext) -> str:
+    async def state_respond(self, ctx: TurnContext) -> TurnEvent:
         if ctx.automation_appendix:
             appendix = "\n\n".join(str(item).strip() for item in ctx.automation_appendix if str(item).strip())
             if appendix:
@@ -748,7 +764,7 @@ class AgentTurnPipeline:
             ctx.generated_media,
             ctx.on_stream,
         )
-        return "ok"
+        return TurnEvent.OK
 
 
 __all__ = [

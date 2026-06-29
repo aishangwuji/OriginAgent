@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING, Any
 from OriginAgent.agent.subagent_policy import SubagentPolicy
 from OriginAgent.agent.tools.base import Tool, tool_parameters
 from OriginAgent.agent.tools.schema import StringSchema, tool_parameters_schema
+from OriginAgent.agent.tools.security import ToolSecurityClass
 from OriginAgent.security.capabilities import CapabilitySnapshot
 from OriginAgent.security.policy import PolicyDeniedError
 
@@ -22,6 +23,8 @@ if TYPE_CHECKING:
 )
 class SpawnTool(Tool):
     """Tool to spawn a subagent for background task execution."""
+
+    security_class = ToolSecurityClass.SENSITIVE_ALL
 
     def __init__(self, manager: "SubagentManager"):
         self._manager = manager

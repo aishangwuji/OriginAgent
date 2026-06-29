@@ -7,6 +7,7 @@ from typing import Any, Awaitable, Callable
 
 from OriginAgent.agent.tools.base import Tool, tool_parameters
 from OriginAgent.agent.tools.schema import ArraySchema, StringSchema, tool_parameters_schema
+from OriginAgent.agent.tools.security import ToolSecurityClass
 from OriginAgent.bus.events import OutboundMessage
 from OriginAgent.config.paths import get_media_dir, get_workspace_path
 from OriginAgent.security.policy import PolicyDeniedError
@@ -87,6 +88,8 @@ def _detect_allowed_attachment_type(path: Path) -> str | None:
 )
 class MessageTool(Tool):
     """Tool to send messages to users on chat channels."""
+
+    security_class = ToolSecurityClass.SENSITIVE_ALL
 
     def __init__(
         self,

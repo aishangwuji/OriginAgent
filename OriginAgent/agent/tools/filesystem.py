@@ -13,6 +13,7 @@ from typing import Any, Callable
 from OriginAgent.agent.tools.base import Tool, tool_parameters
 from OriginAgent.agent.tools.limits import ToolLimits
 from OriginAgent.agent.tools.schema import BooleanSchema, IntegerSchema, StringSchema, tool_parameters_schema
+from OriginAgent.agent.tools.security import ToolSecurityClass
 from OriginAgent.agent.tools.file_state import FileStates, current_file_states
 from OriginAgent.utils.helpers import build_image_content_blocks, detect_image_mime
 from OriginAgent.config.paths import get_media_dir
@@ -380,6 +381,7 @@ def _format_char_limit(value: int) -> str:
 class ReadFileTool(_FsTool):
     """Read file contents with optional line-based pagination."""
 
+    security_class = ToolSecurityClass.SENSITIVE_CAPABILITY
     _MAX_CHARS = 128_000
     _DEFAULT_LIMIT = 2000
     _MAX_PDF_PAGES = 20
@@ -594,6 +596,8 @@ class ReadFileTool(_FsTool):
 )
 class WriteFileTool(_FsTool):
     """Write content to a file."""
+
+    security_class = ToolSecurityClass.SENSITIVE_ALL
 
     @property
     def name(self) -> str:
@@ -913,6 +917,7 @@ def _find_match(content: str, old_text: str) -> tuple[str | None, int]:
 class EditFileTool(_FsTool):
     """Edit a file by replacing text with fallback matching."""
 
+    security_class = ToolSecurityClass.SENSITIVE_ALL
     _MAX_EDIT_FILE_SIZE = 1024 * 1024 * 1024  # 1 GiB
     _MARKDOWN_EXTS = frozenset({".md", ".mdx", ".markdown"})
 
@@ -1115,6 +1120,7 @@ class EditFileTool(_FsTool):
 class ListDirTool(_FsTool):
     """List directory contents with optional recursion."""
 
+    security_class = ToolSecurityClass.SENSITIVE_CAPABILITY
     _DEFAULT_MAX = 200
     _IGNORE_DIRS = {
         ".git", "node_modules", "__pycache__", ".venv", "venv",

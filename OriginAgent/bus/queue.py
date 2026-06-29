@@ -12,6 +12,7 @@ from OriginAgent.bus.events import InboundMessage, OutboundMessage
 
 # Default maximum queue depth before backpressure is applied.
 _DEFAULT_MAX_QUEUE_SIZE = 500
+_DEFAULT_OVERFLOW_TIMEOUT = 5.0
 
 
 class MessageBusSubscriber(Protocol):
@@ -29,15 +30,16 @@ class PersistedMessageSink(Protocol):
 
 
 class MessageBus:
-    """
-    Async message bus that decouples chat channels from the agent core.
+    """Async message bus that decouples chat channels from the agent core.
 
-    Channels push messages to the inbound queue, and the agent processes
-    them and pushes responses to the outbound queue.
+    Overflow behavior (when queues are full):
 
-    The bus supports bounded queues (with backpressure), subscriber-based
-    observability middleware, and an optional persistence sink for crash
-    recovery.
+    1. Tries ``put_nowait`` (non-blocking fast path).
+    2. On ``QueueFull``, blocks up to ``overflow_timeout`` seconds with
+       ``put()``, so a slow consumer can catch up.
+    3. If the timeout expires, spills to the *persistence sink* if one is
+       configured, so the message is not lost.
+    4. Only as a last resort increments the drop counter and logs a warning.
     """
 
     def __init__(
@@ -45,14 +47,19 @@ class MessageBus:
         maxsize: int = _DEFAULT_MAX_QUEUE_SIZE,
         *,
         persistence: PersistedMessageSink | None = None,
+        overflow_timeout: float = _DEFAULT_OVERFLOW_TIMEOUT,
     ):
         self.inbound: asyncio.Queue[InboundMessage] = asyncio.Queue(maxsize=maxsize)
         self.outbound: asyncio.Queue[OutboundMessage] = asyncio.Queue(maxsize=maxsize)
         self._subscribers: list[MessageBusSubscriber] = []
         self._persistence = persistence
+        self._overflow_timeout = overflow_timeout
         self._published_inbound: int = 0
         self._published_outbound: int = 0
         self._dropped_inbound: int = 0
+        self._dropped_outbound: int = 0
+        self._persisted_inbound: int = 0
+        self._persisted_outbound: int = 0
         self._started_at: float = time.monotonic()
 
     # -- subscriber management -------------------------------------------------
@@ -66,24 +73,49 @@ class MessageBus:
     async def publish_inbound(self, msg: InboundMessage) -> None:
         """Publish a message from a channel to the agent.
 
-        If the queue is full, the message is dropped and logged as a warning.
+        Never silently drops — blocks up to ``overflow_timeout``, then
+        spills to the persistence sink if one is configured.
         """
         self._published_inbound += 1
         for sub in self._subscribers:
             with _suppress_log("subscriber on_inbound failed"):
                 await sub.on_inbound(msg)
+
+        # Phase 1: non-blocking fast path
+        try:
+            self.inbound.put_nowait(msg)
+            return
+        except asyncio.QueueFull:
+            pass
+
+        # Phase 2: block with timeout
+        try:
+            await asyncio.wait_for(
+                self.inbound.put(msg),
+                timeout=self._overflow_timeout,
+            )
+            return
+        except asyncio.TimeoutError:
+            pass
+
+        # Phase 3: spill to persistence sink
         if self._persistence is not None:
             with _suppress_log("persist_inbound failed"):
                 await self._persistence.persist_inbound(msg)
-        try:
-            self.inbound.put_nowait(msg)
-        except asyncio.QueueFull:
-            self._dropped_inbound += 1
-            logger.warning(
-                "MessageBus inbound queue full ({}/{}); dropping message",
-                self.inbound.qsize(),
-                self.inbound.maxsize,
-            )
+                self._persisted_inbound += 1
+                return
+
+        # Last resort: count the drop (but still log it)
+        self._dropped_inbound += 1
+        logger.warning(
+            "MessageBus inbound queue full ({} items, max {}); "
+            "message dropped after {}s timeout. "
+            "In total {} message(s) dropped this session.",
+            self.inbound.qsize(),
+            self.inbound.maxsize,
+            self._overflow_timeout,
+            self._dropped_inbound,
+        )
 
     async def consume_inbound(self) -> InboundMessage:
         """Consume the next inbound message (blocks until available)."""
@@ -92,22 +124,51 @@ class MessageBus:
     # -- outbound --------------------------------------------------------------
 
     async def publish_outbound(self, msg: OutboundMessage) -> None:
-        """Publish a response from the agent to channels."""
+        """Publish a response from the agent to channels.
+
+        Never silently drops — blocks up to ``overflow_timeout``, then
+        spills to the persistence sink if one is configured.
+        """
         self._published_outbound += 1
         for sub in self._subscribers:
             with _suppress_log("subscriber on_outbound failed"):
                 await sub.on_outbound(msg)
+
+        # Phase 1: non-blocking fast path
+        try:
+            self.outbound.put_nowait(msg)
+            return
+        except asyncio.QueueFull:
+            pass
+
+        # Phase 2: block with timeout
+        try:
+            await asyncio.wait_for(
+                self.outbound.put(msg),
+                timeout=self._overflow_timeout,
+            )
+            return
+        except asyncio.TimeoutError:
+            pass
+
+        # Phase 3: spill to persistence sink
         if self._persistence is not None:
             with _suppress_log("persist_outbound failed"):
                 await self._persistence.persist_outbound(msg)
-        try:
-            self.outbound.put_nowait(msg)
-        except asyncio.QueueFull:
-            logger.warning(
-                "MessageBus outbound queue full ({}/{}); dropping message",
-                self.outbound.qsize(),
-                self.outbound.maxsize,
-            )
+                self._persisted_outbound += 1
+                return
+
+        # Last resort: count the drop (but still log it)
+        self._dropped_outbound += 1
+        logger.warning(
+            "MessageBus outbound queue full ({} items, max {}); "
+            "message dropped after {}s timeout. "
+            "In total {} message(s) dropped this session.",
+            self.outbound.qsize(),
+            self.outbound.maxsize,
+            self._overflow_timeout,
+            self._dropped_outbound,
+        )
 
     async def consume_outbound(self) -> OutboundMessage:
         """Consume the next outbound message (blocks until available)."""
@@ -132,10 +193,14 @@ class MessageBus:
             "published_inbound": self._published_inbound,
             "published_outbound": self._published_outbound,
             "dropped_inbound": self._dropped_inbound,
+            "dropped_outbound": self._dropped_outbound,
+            "persisted_inbound": self._persisted_inbound,
+            "persisted_outbound": self._persisted_outbound,
             "inbound_queue_depth": self.inbound.qsize(),
             "inbound_queue_max": self.inbound.maxsize,
             "outbound_queue_depth": self.outbound.qsize(),
             "outbound_queue_max": self.outbound.maxsize,
+            "overflow_timeout": self._overflow_timeout,
             "uptime_s": round(time.monotonic() - self._started_at, 1),
         }
 

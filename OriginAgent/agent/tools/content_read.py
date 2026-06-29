@@ -9,6 +9,7 @@ from loguru import logger
 
 from OriginAgent.agent.tools.base import Tool
 from OriginAgent.agent.tools.limits import ToolLimits
+from OriginAgent.agent.tools.security import ToolSecurityClass
 from OriginAgent.agent.tools.schema import IntegerSchema, StringSchema, tool_parameters_schema
 from OriginAgent.integrations.content_read.reader import (
     CONTENT_READ_PROVIDERS,
@@ -19,6 +20,7 @@ from OriginAgent.security.policy import PolicyDeniedError
 class ContentReadTool(Tool):
     """Read a URL through a platform-specific provider and return structured content."""
 
+    security_class = ToolSecurityClass.SENSITIVE_AUDIT
     name = "content_read"
     description = (
         "Deprecated compatibility wrapper for structured URL reads. "

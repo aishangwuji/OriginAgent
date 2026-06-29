@@ -779,26 +779,9 @@ class AgentRunner:
         tool_results: list[tuple[Any, dict[str, str], BaseException | None]] = []
         for batch in batches:
             if spec.concurrent_tools and len(batch) > 1:
-                limit = spec.tool_concurrency_limit
-                if limit is not None and limit > 0 and limit < len(batch):
-                    semaphore = asyncio.Semaphore(limit)
-
-                    async def _run_limited(tool_call: ToolCallRequest):
-                        async with semaphore:
-                            return await self._run_tool(
-                                spec, tool_call, external_lookup_counts, workspace_violation_counts,
-                            )
-
-                    batch_results = await asyncio.gather(*(
-                        _run_limited(tool_call) for tool_call in batch
-                    ))
-                else:
-                    batch_results = await asyncio.gather(*(
-                        self._run_tool(
-                            spec, tool_call, external_lookup_counts, workspace_violation_counts,
-                        )
-                        for tool_call in batch
-                    ))
+                batch_results = await self._execute_parallel_batch(
+                    spec, batch, external_lookup_counts, workspace_violation_counts,
+                )
                 tool_results.extend(batch_results)
             else:
                 batch_results = []
@@ -822,6 +805,75 @@ class AgentRunner:
             if error is not None and fatal_error is None:
                 fatal_error = error
         return results, events, fatal_error
+
+    async def _execute_parallel_batch(
+        self,
+        spec: AgentRunSpec,
+        batch: list[ToolCallRequest],
+        external_lookup_counts: dict[str, int],
+        workspace_violation_counts: dict[str, int],
+    ) -> list[tuple[Any, dict[str, str], BaseException | None]]:
+        """Execute a batch of concurrent-safe tools with interrupt propagation.
+
+        When one tool raises ``AskUserInterrupt``, sibling tasks in the same
+        batch are cancelled via ``Task.cancel()`` instead of being orphaned.
+        """
+        limit = spec.tool_concurrency_limit
+        semaphore = asyncio.Semaphore(limit) if (limit and limit > 0 and limit < len(batch)) else None
+
+        async def _run_one(tc: ToolCallRequest):
+            if semaphore:
+                async with semaphore:
+                    return await self._run_tool(
+                        spec, tc, external_lookup_counts, workspace_violation_counts,
+                    )
+            return await self._run_tool(
+                spec, tc, external_lookup_counts, workspace_violation_counts,
+            )
+
+        tasks = {asyncio.create_task(_run_one(tc)): tc for tc in batch}
+        batch_results: list[tuple[Any, dict[str, str], BaseException | None]] = []
+        interrupt_raised = False
+
+        while tasks and not interrupt_raised:
+            done, pending = await asyncio.wait(
+                tasks.keys(),
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+            for task in done:
+                tc = tasks.pop(task)
+                try:
+                    result = task.result()
+                except AskUserInterrupt as exc:
+                    result = ("", {"name": tc.name, "status": "interrupted"}, exc)
+                    interrupt_raised = True
+                except asyncio.CancelledError:
+                    result = ("", {"name": tc.name, "status": "cancelled"}, None)
+                except BaseException as exc:
+                    result = ("", {"name": tc.name, "status": "error", "detail": str(exc)}, exc)
+                batch_results.append(result)
+
+            if interrupt_raised and pending:
+                for pt in pending:
+                    pt.cancel()
+                cancelled_results = await asyncio.gather(*pending, return_exceptions=True)
+                for pt in pending:
+                    tc = tasks.pop(pt)
+                    result = ("", {"name": tc.name, "status": "cancelled"}, None)
+                    batch_results.append(result)
+                tasks.clear()
+
+        # Collect any remaining tasks that finished after the interrupt loop
+        for task in list(tasks.keys()):
+            if task.done() and not task.cancelled():
+                tc = tasks.pop(task)
+                try:
+                    result = task.result()
+                except BaseException as exc:
+                    result = ("", {"name": tc.name, "status": "error", "detail": str(exc)}, exc)
+                batch_results.append(result)
+
+        return batch_results
 
     async def _run_tool(
         self,
@@ -856,7 +908,7 @@ class AgentRunner:
         if (
             prep_error is None
             and tool is not None
-            and _requires_capability_snapshot(tool_call.name)
+            and _requires_capability_snapshot(tool_call.name, spec.tools)
             and getattr(spec.tools, "_capability_snapshot", None) is None
         ):
             prep_error = f"Error: Tool '{tool_call.name}' requires an explicit capability snapshot"

@@ -14,6 +14,7 @@ from loguru import logger
 
 from OriginAgent.agent.tools.base import Tool
 from OriginAgent.agent.tools.limits import ToolLimits
+from OriginAgent.agent.tools.security import ToolSecurityClass
 from OriginAgent.agent.tools.sandbox import wrap_command
 from OriginAgent.agent.tools.schema import IntegerSchema, StringSchema, tool_parameters_schema
 from OriginAgent.config.paths import get_media_dir
@@ -39,6 +40,8 @@ _UNSAFE_EXEC_MARKER = (
 
 class ExecTool(Tool):
     """Tool to execute shell commands."""
+
+    security_class = ToolSecurityClass.SENSITIVE_ALL
 
     def __init__(
         self,

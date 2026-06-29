@@ -42,6 +42,7 @@ from OriginAgent.agent.agent_turn_pipeline import (
     StateTraceEntry,
     TURN_PIPELINE_TRANSITIONS,
     TurnContext,
+    TurnEvent,
     TurnPipelineDeps,
     TurnState,
 )
@@ -143,14 +144,12 @@ if TYPE_CHECKING:
 
 
 UNIFIED_SESSION_KEY = "unified:default"
-_SENSITIVE_TOOL_LOG_PREFIXES = (
+_SENSITIVE_TOOL_LOG_FALLBACK_NAMES: frozenset[str] = frozenset({
+    "exec", "message", "web_fetch",
+})
+_SENSITIVE_TOOL_LOG_FALLBACK_PREFIXES: tuple[str, ...] = (
     "originagent_device_",
 )
-_SENSITIVE_TOOL_LOG_NAMES = {
-    "exec",
-    "message",
-    "web_fetch",
-}
 
 
 def _utcnow_iso() -> str:
@@ -171,8 +170,8 @@ CONTINUITY_CHECKPOINT_KEY = "continuity_checkpoint_v1"
 
 
 def _is_sensitive_tool_log(name: str) -> bool:
-    return name in _SENSITIVE_TOOL_LOG_NAMES or any(
-        name.startswith(prefix) for prefix in _SENSITIVE_TOOL_LOG_PREFIXES
+    return name in _SENSITIVE_TOOL_LOG_FALLBACK_NAMES or any(
+        name.startswith(prefix) for prefix in _SENSITIVE_TOOL_LOG_FALLBACK_PREFIXES
     )
 
 
@@ -197,7 +196,7 @@ class AgentLoop:
 
     # Event-driven state transition table.
     # Handlers return an event string; the driver looks up the next state here.
-    _TRANSITIONS: dict[tuple[TurnState, str], TurnState] = TURN_PIPELINE_TRANSITIONS
+    _TRANSITIONS: dict[tuple[TurnState, TurnEvent], TurnState] = TURN_PIPELINE_TRANSITIONS
 
     def __init__(
         self,
@@ -267,6 +266,7 @@ class AgentLoop:
         active_intent_intent_cooldown_seconds: int | None = None,
         active_intent_max_messages_per_session_per_pass: int | None = None,
         effective_config: Any | None = None,
+        tiered_config: Any | None = None,
     ):
         from OriginAgent.config.schema import ExecToolConfig, ToolsConfig, WebToolsConfig
 
@@ -343,6 +343,7 @@ class AgentLoop:
             active_intent_intent_cooldown_seconds=active_intent_intent_cooldown_seconds,
             active_intent_max_messages_per_session_per_pass=active_intent_max_messages_per_session_per_pass,
             effective_config=effective_config,
+            tiered_config=tiered_config,
         )
         for name, value in built.values.items():
             setattr(self, name, value)
@@ -621,6 +622,102 @@ class AgentLoop:
             nearline_memory_config=defaults.nearline_memory,
             enable_backend_cognition=defaults.enable_backend_cognition,
             effective_config=config,
+            tiered_config=config.gateway.tiered_router,
+            **extra,
+        )
+
+    @classmethod
+    def from_options(
+        cls,
+        options: LoopOptions,
+        provider: Any,
+        **extra: Any,
+    ) -> AgentLoop:
+        """Create ``AgentLoop`` from a grouped ``LoopOptions`` object.
+
+        This is the preferred construction path for new code.  The options
+        object groups 60+ flat parameters into concern-specific dataclasses
+        (``ProviderOptions``, ``ToolOptions``, ``ChannelOptions``,
+        ``LearningOptions``, ``RuntimeOptions``).
+
+        Extra keyword arguments are forwarded to ``AgentLoop.__init__``,
+        allowing callers to override or extend derived options.
+        """
+        from OriginAgent.agent.loop_options import LoopOptions, ProviderOptions
+
+        if not isinstance(options, LoopOptions):
+            raise TypeError(f"expected LoopOptions, got {type(options).__name__}")
+
+        return cls(
+            bus=options.bus,
+            provider=provider,
+            workspace=options.workspace,
+            model=options.provider.model,
+            max_iterations=options.provider.max_iterations,
+            context_window_tokens=options.provider.context_window_tokens,
+            context_block_limit=options.provider.context_block_limit,
+            max_tool_result_chars=options.provider.max_tool_result_chars,
+            provider_retry_mode=options.provider.provider_retry_mode,
+            tool_hint_max_length=options.tools.tool_hint_max_length,
+            web_config=options.tools.web_config,
+            exec_config=options.tools.exec_config,
+            cron_service=options.runtime.cron_service,
+            restrict_to_workspace=options.tools.restrict_to_workspace,
+            session_manager=options.channels.session_manager,
+            mcp_servers=options.tools.mcp_servers,
+            channels_config=options.channels.channels_config,
+            transcription_provider_config=options.channels.transcription_provider_config,
+            timezone=options.channels.timezone,
+            runtime_profile=options.runtime.runtime_profile,
+            session_ttl_minutes=options.channels.session_ttl_minutes,
+            consolidation_ratio=options.learning.consolidation_ratio,
+            max_messages=options.channels.max_messages,
+            hooks=options.runtime.hooks,
+            unified_session=options.channels.unified_session,
+            disabled_skills=options.runtime.disabled_skills,
+            tools_config=options.tools.tools_config,
+            image_generation_provider_config=options.tools.image_generation_provider_config,
+            image_generation_provider_configs=options.tools.image_generation_provider_configs,
+            provider_snapshot_loader=options.provider.provider_snapshot_loader,
+            provider_signature=options.provider.provider_signature,
+            model_presets=options.provider.model_presets,
+            model_preset=options.provider.model_preset,
+            preset_snapshot_loader=options.provider.preset_snapshot_loader,
+            runtime_model_publisher=options.provider.runtime_model_publisher,
+            device_action_executor=options.tools.device_action_executor,
+            device_tools_real_mode=options.tools.device_tools_real_mode,
+            device_registry=options.tools.device_registry,
+            domain_runtime_overrides=options.runtime.domain_runtime_overrides,
+            actor_resolver=options.runtime.actor_resolver,
+            tool_audit_config=options.tools.tool_audit_config,
+            pairing_config=options.runtime.pairing_config,
+            auxiliary_config=options.provider.auxiliary_config,
+            auxiliary_source_config=options.provider.auxiliary_source_config,
+            auxiliary_provider_factory=options.provider.auxiliary_provider_factory,
+            primary_provider_name=options.provider.primary_provider_name,
+            domain_packs_config=options.runtime.domain_packs_config,
+            domain_pack_manager=options.runtime.domain_pack_manager,
+            learning_config=options.learning.learning_config,
+            learning_config_loader=options.learning.learning_config_loader,
+            meta_cognition_config=options.learning.meta_cognition_config,
+            curator_config=options.learning.curator_config,
+            curator_config_loader=options.learning.curator_config_loader,
+            evolution_config=options.learning.evolution_config,
+            evolution_config_loader=options.learning.evolution_config_loader,
+            dream_config=options.learning.dream_config,
+            nearline_memory_config=options.learning.nearline_memory_config,
+            cold_archive_enabled=options.channels.cold_archive_enabled,
+            tool_concurrency_limit=options.tools.tool_concurrency_limit,
+            allow_agent_initiated_messages=options.learning.allow_agent_initiated_messages,
+            enable_backend_cognition=options.learning.enable_backend_cognition,
+            active_intent_interval_seconds=options.learning.active_intent_interval_seconds,
+            active_intent_session_cooldown_seconds=options.learning.active_intent_session_cooldown_seconds,
+            active_intent_intent_cooldown_seconds=options.learning.active_intent_intent_cooldown_seconds,
+            active_intent_max_messages_per_session_per_pass=(
+                options.learning.active_intent_max_messages_per_session_per_pass
+            ),
+            effective_config=options.runtime.effective_config,
+            tiered_config=options.runtime.tiered_config,
             **extra,
         )
 
@@ -629,74 +726,81 @@ class AgentLoop:
             auto_compact=self.auto_compact,
             commands=self.commands,
             command_loop=self,
-            get_consolidator=lambda: self.consolidator,
-            get_tools=lambda: self.tools,
-            get_context=lambda: self.context,
+            get_consolidator=self._get_consolidator,
+            get_tools=self._get_tools,
+            get_context=self._get_context,
             sessions=self.sessions,
             bus=self.bus,
-            get_working_memory=lambda: self.working_memory,
-            get_memory_governance=lambda: self.memory_governance,
-            get_rolling_episode_compaction=lambda: self.rolling_episode_compaction,
+            get_working_memory=self._get_working_memory,
+            get_memory_governance=self._get_memory_governance,
+            get_rolling_episode_compaction=self._get_rolling_episode_compaction,
             workspace=self.workspace,
             tools_config=self.tools_config,
             domain_runtime_contributions=self._domain_runtime_contributions,
             domain_runtime_overrides=self._domain_runtime_overrides,
             archive_session_file_cap=self._archive_session_file_cap,
-            restore_runtime_checkpoint=lambda session: self._restore_runtime_checkpoint(session),
-            restore_pending_user_turn=lambda session: self._restore_pending_user_turn(session),
-            load_continuity_checkpoint=lambda session: self._load_continuity_checkpoint(session),
-            record_recovered_continuity_checkpoint=(
-                lambda checkpoint: self._record_recovered_continuity_checkpoint(checkpoint)
-            ),
+            restore_runtime_checkpoint=self._restore_runtime_checkpoint,
+            restore_pending_user_turn=self._restore_pending_user_turn,
+            load_continuity_checkpoint=self._load_continuity_checkpoint,
+            record_recovered_continuity_checkpoint=self._record_recovered_continuity_checkpoint,
             mark_webui_session=mark_webui_session,
-            persist_shortcut_command_turn=(
-                lambda msg, session_key, result: self._persist_shortcut_command_turn(msg, session_key, result)
-            ),
-            is_webui_message=lambda msg: self._is_webui_message(msg),
-            resolve_runtime_context=lambda *args, **kwargs: self._resolve_runtime_context(*args, **kwargs),
-            record_runtime_context=lambda session_key, runtime_context: self._record_runtime_context(
-                session_key,
-                runtime_context,
-            ),
-            write_continuity_runtime_identity=(
-                lambda session, runtime_context: self._write_continuity_runtime_identity(session, runtime_context)
-            ),
-            snapshot_for_trigger=lambda trigger: self._snapshot_for_trigger(trigger),
-            update_working_memory_from_turn=lambda *args, **kwargs: self._update_working_memory_from_turn(
-                *args,
-                **kwargs,
-            ),
-            set_tool_context=lambda *args, **kwargs: self._set_tool_context(*args, **kwargs),
-            replay_token_budget=lambda: self._replay_token_budget(),
-            build_initial_messages=lambda *args, **kwargs: self._build_initial_messages(*args, **kwargs),
-            persist_user_message_early=lambda *args, **kwargs: self._persist_user_message_early(*args, **kwargs),
-            schedule_session_search_refresh=lambda *args, **kwargs: self._schedule_session_search_refresh(
-                *args,
-                **kwargs,
-            ),
-            build_progress_callback=lambda msg: self._build_bus_progress_callback(msg),
-            build_retry_wait_callback=lambda msg: self._build_retry_wait_callback(msg),
+            persist_shortcut_command_turn=self._persist_shortcut_command_turn,
+            is_webui_message=self._is_webui_message,
+            resolve_runtime_context=self._resolve_runtime_context,
+            record_runtime_context=self._record_runtime_context,
+            write_continuity_runtime_identity=self._write_continuity_runtime_identity,
+            snapshot_for_trigger=self._snapshot_for_trigger,
+            update_working_memory_from_turn=self._update_working_memory_from_turn,
+            set_tool_context=self._set_tool_context,
+            replay_token_budget=self._replay_token_budget,
+            build_initial_messages=self._build_initial_messages,
+            persist_user_message_early=self._persist_user_message_early,
+            schedule_session_search_refresh=self._schedule_session_search_refresh,
+            build_progress_callback=self._build_bus_progress_callback,
+            build_retry_wait_callback=self._build_retry_wait_callback,
             pending_ask_user_id=pending_ask_user_id,
-            consume_tool_approval_reply=lambda *args, **kwargs: self._consume_tool_approval_reply(*args, **kwargs),
-            build_recovered_continuity_context=(
-                lambda checkpoint: self.context.build_recovered_continuity_context(checkpoint)
-            ),
-            run_agent_loop=lambda *args, **kwargs: self._run_agent_loop(*args, **kwargs),
-            clear_pending_user_turn=lambda session: self._clear_pending_user_turn(session),
-            clear_runtime_checkpoint=lambda session: self._clear_runtime_checkpoint(session),
-            save_turn=lambda session, messages, skip: self._save_turn(session, messages, skip),
-            record_governance_audit=lambda audit: self._record_governance_audit(audit),
-            save_continuity_checkpoint=lambda *args, **kwargs: self._save_continuity_checkpoint(*args, **kwargs),
-            schedule_background=lambda coro: self._schedule_background(coro),
-            schedule_nearline_memory=lambda ctx: self._schedule_nearline_memory(ctx),
-            schedule_background_review=lambda ctx: self._schedule_background_review(ctx),
-            schedule_curator_review=lambda ctx: self._schedule_curator_review(ctx),
-            automation_enabled=lambda: self._automation_enabled(),
+            consume_tool_approval_reply=self._consume_tool_approval_reply,
+            build_recovered_continuity_context=self.context.build_recovered_continuity_context,
+            run_agent_loop=self._run_agent_loop,
+            clear_pending_user_turn=self._clear_pending_user_turn,
+            clear_runtime_checkpoint=self._clear_runtime_checkpoint,
+            save_turn=self._save_turn,
+            record_governance_audit=self._record_governance_audit,
+            save_continuity_checkpoint=self._save_continuity_checkpoint,
+            schedule_background=self._schedule_background,
+            schedule_nearline_memory=self._schedule_nearline_memory,
+            schedule_background_review=self._schedule_background_review,
+            schedule_curator_review=self._schedule_curator_review,
+            automation_enabled=self._automation_enabled,
             action_planner=self.action_planner,
-            record_action_continuity_audit=lambda audit: self._record_action_continuity_audit(audit),
-            assemble_outbound=lambda *args, **kwargs: self._assemble_outbound(*args, **kwargs),
-            get_max_messages=lambda: self._max_messages,
+            record_action_continuity_audit=self._record_action_continuity_audit,
+            assemble_outbound=self._assemble_outbound,
+            get_max_messages=self._get_max_messages,
         )
+
+    # ── Lazy getters for TurnPipelineDeps ────────────────────────────────
+    # These replace anonymous lambdas so stack traces show meaningful names.
+
+    def _get_consolidator(self):
+        return self.consolidator
+
+    def _get_tools(self):
+        return self.tools
+
+    def _get_context(self):
+        return self.context
+
+    def _get_working_memory(self):
+        return self.working_memory
+
+    def _get_memory_governance(self):
+        return self.memory_governance
+
+    def _get_rolling_episode_compaction(self):
+        return self.rolling_episode_compaction
+
+    def _get_max_messages(self):
+        return self._max_messages
 
     def _record_runtime_context(self, session_key: str, runtime_context: RuntimeContext) -> None:
         self._last_runtime_context = runtime_context
@@ -1517,8 +1621,8 @@ class AgentLoop:
             actor_id=actor_id,
             trigger=trigger,
             capability_snapshot=self._capability_snapshot,
-            sensitive_tool_log_names=_SENSITIVE_TOOL_LOG_NAMES,
-            sensitive_tool_log_prefixes=_SENSITIVE_TOOL_LOG_PREFIXES,
+            sensitive_tool_log_names=_SENSITIVE_TOOL_LOG_FALLBACK_NAMES,
+            sensitive_tool_log_prefixes=_SENSITIVE_TOOL_LOG_FALLBACK_PREFIXES,
         )
         hook: AgentHook = (
             CompositeHook([loop_hook] + self._extra_hooks) if self._extra_hooks else loop_hook

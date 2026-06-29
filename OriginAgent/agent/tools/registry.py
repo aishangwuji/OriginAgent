@@ -11,6 +11,11 @@ from urllib.parse import urlparse
 from OriginAgent.agent.confirmation import ConfirmationManager
 from OriginAgent.agent.tools.audit import ToolAuditConfig, ToolAuditSink, ToolCallAuditEvent
 from OriginAgent.agent.tools.base import Tool
+from OriginAgent.agent.tools.security import (
+    CAPABILITY_REQUIRED_CLASSES,
+    SECURITY_AUDIT_CLASSES,
+    ToolSecurityClass,
+)
 from OriginAgent.security.capabilities import CapabilitySnapshot, intersect_capability_snapshots
 from OriginAgent.security.grants import CapabilityGrant, CapabilityGrantStore
 from OriginAgent.security.policy import PolicyDeniedError
@@ -71,23 +76,6 @@ class ToolExecutionObserver(Protocol):
         ...
 
 
-# This list is intentionally narrow. Do not add ordinary helper tools here.
-# Capability snapshots are for tools that cross filesystem, network,
-# persistence, delegation, messaging, device, or external-provider boundaries.
-_CAPABILITY_REQUIRED_TOOL_NAMES = {
-    "exec",
-    "read_file",
-    "list_dir",
-    "glob",
-    "grep",
-    "notebook_read",
-    "write_file",
-    "edit_file",
-    "notebook_edit",
-    "message",
-    "cron",
-    "spawn",
-}
 
 _DOMAIN_PERMISSION_POLICY_RULES = {
     "read_files": ("can_read_files", "capability_domain_read_files_denied"),
@@ -356,7 +344,7 @@ class ToolRegistry:
         snapshot = self._capability_snapshot
         name = tool.name
         if snapshot is None:
-            if _requires_capability_snapshot(name) or tuple(
+            if _requires_capability_snapshot(name, self) or tuple(
                 getattr(tool, "_domain_tool_permissions", ()) or ()
             ):
                 raise PolicyDeniedError(
@@ -761,12 +749,33 @@ def _safe_hash(value: Any) -> str | None:
     return hashlib.sha256(text.encode("utf-8", errors="replace")).hexdigest()
 
 
-def _requires_capability_snapshot(name: str) -> bool:
+def _requires_capability_snapshot(name: str, tools: "ToolRegistry | None" = None) -> bool:
+    """Check if a tool requires a capability snapshot.
+
+    Uses the tool's declared ``security_class`` if the tool is registered,
+    falls back to name-based matching for dynamic/prepare-call scenarios.
+    """
+    if tools is not None:
+        tool = tools.get(name)
+        if tool is not None:
+            cls = getattr(tool, "security_class", None)
+            if cls is not None:
+                return cls in CAPABILITY_REQUIRED_CLASSES
+    # Fallback: name-based matching for tools not yet registered or unclassified.
     return (
-        name in _CAPABILITY_REQUIRED_TOOL_NAMES
+        name in _CAPABILITY_REQUIRED_TOOL_NAME_FALLBACK
         or name.startswith("originagent_device_")
         or name.startswith("mcp_")
     )
+
+
+# Minimal name-based fallback set for the prepare_call path
+# where the tool may not be registered yet.
+_CAPABILITY_REQUIRED_TOOL_NAME_FALLBACK: set[str] = {
+    "exec", "read_file", "list_dir", "glob", "grep",
+    "notebook_read", "write_file", "edit_file", "notebook_edit",
+    "message", "cron", "spawn",
+}
 
 
 def _assert_domain_tool_capability(tool: Tool, snapshot: CapabilitySnapshot) -> None:

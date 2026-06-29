@@ -11,6 +11,7 @@ from typing import Any, Iterable, TypeVar
 
 from OriginAgent.agent.tools.filesystem import ListDirTool, _FsTool
 from OriginAgent.agent.tools.limits import ToolLimits
+from OriginAgent.agent.tools.security import ToolSecurityClass
 
 _DEFAULT_HEAD_LIMIT = 250
 T = TypeVar("T")
@@ -150,6 +151,8 @@ class _SearchTool(_FsTool):
 class GlobTool(_SearchTool):
     """Find files matching a glob pattern."""
 
+    security_class = ToolSecurityClass.SENSITIVE_CAPABILITY
+
     @property
     def name(self) -> str:
         return "glob"
@@ -268,6 +271,8 @@ class GlobTool(_SearchTool):
 
 class GrepTool(_SearchTool):
     """Search file contents using a regex-like pattern."""
+
+    security_class = ToolSecurityClass.SENSITIVE_CAPABILITY
     _MAX_RESULT_CHARS = 128_000
     _MAX_FILE_BYTES = 2_000_000
 

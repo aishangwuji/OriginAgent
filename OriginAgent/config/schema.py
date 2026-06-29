@@ -274,6 +274,43 @@ class AuxiliaryConfig(Base):
     tasks: dict[str, AuxiliaryTaskConfig] = Field(default_factory=dict)
 
 
+class ModelTierConfig(Base):
+    """A named tier representing one cost/capability level for tiered routing.
+
+    Each tier maps to a specific (provider, model) pair with optional token
+    and generation limits.  Used by :class:`TieredRouterConfig` to assign
+    background tasks to the cheapest adequate model.
+    """
+
+    provider: str
+    model: str
+    max_tokens: int = 4096
+    context_window_tokens: int | None = None
+    temperature: float | None = None
+    reasoning_effort: str | None = None
+
+
+class TieredRouterConfig(Base):
+    """Tier-based LLM routing configuration.
+
+    When *enabled*, background tasks are assigned to a model *tier*
+    (e.g. ``economy`` → DeepSeek, ``standard`` → Sonnet) instead of
+    always using the primary agent model.  This decouples capability from
+    cost: high-volume / low-cognitive-load tasks (search, consolidation,
+    title generation) run on cheap models while the main agent loop keeps
+    the expensive flagship model for reasoning and decisions.
+
+    The config is **off by default** — setting ``enabled: true`` is an
+    explicit opt-in.  All fields have safe defaults so a minimal config
+    just needs ``tiers`` and ``task_tier_mapping``.
+    """
+
+    enabled: bool = False
+    default_tier: str = Field(default="economy")
+    tiers: dict[str, ModelTierConfig] = Field(default_factory=dict)
+    task_tier_mapping: dict[str, str] = Field(default_factory=dict)
+
+
 class DomainPacksConfig(Base):
     """Domain pack discovery and prompt injection configuration."""
 
@@ -1460,6 +1497,7 @@ class GatewayConfig(Base):
     port: int = 18790
     heartbeat: HeartbeatConfig = Field(default_factory=HeartbeatConfig)
     bdi: BDIConfig = Field(default_factory=BDIConfig)
+    tiered_router: TieredRouterConfig = Field(default_factory=TieredRouterConfig)
 
 
 RuntimeProfile = Literal["default", "safe", "household_safe", "local_dev", "automation"]
@@ -1508,6 +1546,38 @@ class WebSearchConfig(Base):
     base_url: str = ""  # SearXNG base URL
     max_results: int = 5
     timeout: int = 30  # Wall-clock timeout (seconds) for search operations
+
+    # ── Intelligent search features ──────────────────────────────────────
+    # All are enabled by default; set to False to disable individual features.
+
+    # Query Reformulation: LLM generates 3-5 query variants for higher recall.
+    query_reformulation_enabled: bool = True
+    reformulation_variants: int = Field(default=3, ge=2, le=5)
+
+    # Relevance Filtering: removes low-quality / irrelevant results.
+    relevance_filtering_enabled: bool = True
+    # Minimum RRF score fraction (0.0-1.0) to keep a result.
+    # Lower = more results kept; higher = stricter filter.
+    relevance_min_score: float = Field(default=0.05, ge=0.0, le=1.0)
+
+    # Multi-Source Fusion: search through multiple providers in parallel.
+    multi_source_enabled: bool = True
+    # Provider names to use in multi-source mode. Empty = use primary only.
+    # e.g. ["brave", "tavily", "jina"] — each falls back to duckduckgo if
+    # its API key is missing, just like the single-provider path.
+    search_providers: list[str] = Field(default_factory=list)
+
+    # Search Planning: LLM decomposes complex queries into sub-queries.
+    search_planning_enabled: bool = True
+
+    # Context-Aware Search: LLM enriches queries with session context.
+    context_aware_enabled: bool = True
+
+    # Execution limits
+    parallel_search_limit: int = Field(default=4, ge=1, le=10)
+    max_merged_results: int = Field(default=10, ge=1, le=20)
+    # RRF constant (k). Standard value is 60.
+    rrf_k: int = Field(default=60, ge=1)
 
 
 class WebFetchConfig(Base):
@@ -1899,6 +1969,7 @@ class Config(BaseSettings):
         self, model: str | None = None
     ) -> tuple["ProviderConfig | None", str | None]:
         """Match provider config and its registry name. Returns (config, spec_name)."""
+        from OriginAgent.providers.match import best_provider_match
         from OriginAgent.providers.registry import PROVIDERS, find_by_name
 
         forced = self.agents.defaults.provider
@@ -1908,52 +1979,19 @@ class Config(BaseSettings):
                 p = getattr(self.providers, spec.name, None)
                 if p and (spec.is_oauth or spec.is_local or spec.is_direct or p.api_key):
                     return p, spec.name
-            else:
-                return None, None
+            return None, None
 
-        model_lower = (model or self.agents.defaults.model).lower()
-        model_normalized = model_lower.replace("-", "_")
-        model_prefix = model_lower.split("/", 1)[0] if "/" in model_lower else ""
-        normalized_prefix = model_prefix.replace("-", "_")
+        model_to_match = model or self.agents.defaults.model
 
-        def _kw_matches(kw: str) -> bool:
-            kw = kw.lower()
-            return kw in model_lower or kw.replace("-", "_") in model_normalized
+        def _get_provider_config(name: str):
+            return getattr(self.providers, name, None)
 
-        # Explicit provider prefix wins — prevents `github-copilot/...codex` matching openai_codex.
-        for spec in PROVIDERS:
-            p = getattr(self.providers, spec.name, None)
-            if p and model_prefix and normalized_prefix == spec.name:
-                if spec.is_oauth or spec.is_local or spec.is_direct or p.api_key:
-                    return p, spec.name
+        result = best_provider_match(model_to_match, _get_provider_config, PROVIDERS)
+        if result is not None:
+            config, spec, name = result
+            return config, name
 
-        # Match by keyword (order follows PROVIDERS registry)
-        for spec in PROVIDERS:
-            p = getattr(self.providers, spec.name, None)
-            if p and any(_kw_matches(kw) for kw in spec.keywords):
-                if spec.is_oauth or spec.is_local or spec.is_direct or p.api_key:
-                    return p, spec.name
-
-        # Fallback: configured local providers can route models without
-        # provider-specific keywords (for example plain "llama3.2" on Ollama).
-        # Prefer providers whose detect_by_base_keyword matches the configured api_base
-        # (e.g. Ollama's "11434" in "http://localhost:11434") over plain registry order.
-        local_fallback: tuple[ProviderConfig, str] | None = None
-        for spec in PROVIDERS:
-            if not spec.is_local:
-                continue
-            p = getattr(self.providers, spec.name, None)
-            if not (p and p.api_base):
-                continue
-            if spec.detect_by_base_keyword and spec.detect_by_base_keyword in p.api_base:
-                return p, spec.name
-            if local_fallback is None:
-                local_fallback = (p, spec.name)
-        if local_fallback:
-            return local_fallback
-
-        # Fallback: gateways first, then others (follows registry order)
-        # OAuth providers are NOT valid fallbacks — they require explicit model selection
+        # Final fallback: any configured (non-OAuth) provider
         for spec in PROVIDERS:
             if spec.is_oauth:
                 continue

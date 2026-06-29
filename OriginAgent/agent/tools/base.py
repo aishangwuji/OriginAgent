@@ -12,6 +12,7 @@ if typing.TYPE_CHECKING:
     from pydantic import BaseModel
 
     from OriginAgent.agent.tools.context import ToolContext
+    from OriginAgent.agent.tools.security import ToolSecurityClass
 
 # Matches :meth:`Tool._cast_value` / :meth:`Schema.validate_json_schema_value` behavior
 _JSON_TYPE_MAP: dict[str, type | tuple[type, ...]] = {
@@ -184,6 +185,11 @@ class Tool(ABC):
     config_key: str = ""
     _plugin_discoverable: bool = True
     _scopes: set[str] = {"core"}
+
+    # Security classification — set on subclasses as a class attribute.
+    # The default ``STANDARD`` preserves backward compatibility for all
+    # existing tool registrations that do not explicitly set this.
+    security_class: Any = None
 
     @classmethod
     def config_cls(cls) -> "type[BaseModel] | None":
