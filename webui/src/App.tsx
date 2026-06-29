@@ -618,7 +618,7 @@ function Shell({ onModelNameChange, onLogout }: { onModelNameChange: (modelName:
             side="left"
             showCloseButton={false}
             className="p-0 lg:hidden"
-            style={{ width: SIDEBAR_WIDTH, maxWidth: SIDEBAR_WIDTH }}
+            style={{ width: sidebarWidth, maxWidth: SIDEBAR_MAX_WIDTH }}
           >
             <Sidebar {...sidebarProps} onCollapse={closeMobileSidebar} />
           </SheetContent>
