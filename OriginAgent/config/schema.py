@@ -1979,7 +1979,8 @@ class Config(BaseSettings):
                 p = getattr(self.providers, spec.name, None)
                 if p and (spec.is_oauth or spec.is_local or spec.is_direct or p.api_key):
                     return p, spec.name
-            return None, None
+            # Forced provider not available; fall through to auto-detection
+            # rather than returning None (preserves backward compat).
 
         model_to_match = model or self.agents.defaults.model
 

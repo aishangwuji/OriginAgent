@@ -28,8 +28,13 @@ def score_provider_match(
     model_normalized: str,
     model_prefix: str,
     normalized_prefix: str,
+    *,
+    api_base: str | None = None,
 ) -> ProviderMatch | None:
     """Score how well *spec* matches *model*.
+
+    *api_base* is the provider's configured base URL, used for Level 3
+    (``detect_by_base_keyword`` match).
 
     Returns ``None`` if the spec does not match at all.
     Higher scores = better match.
@@ -43,9 +48,10 @@ def score_provider_match(
         if kw in model_lower or kw in model_normalized:
             return ProviderMatch(spec, 60, f"keyword match: {kw} in {model}")
 
-    # Level 3: detect_by_base_keyword (for local providers with distinctive base URLs)
-    if spec.detect_by_base_keyword:
-        return ProviderMatch(spec, 40, f"base keyword: {spec.detect_by_base_keyword}")
+    # Level 3: detect_by_base_keyword — matches when the keyword appears in the
+    # provider's API base URL (e.g. ollama's "11434" in "http://localhost:11434").
+    if spec.detect_by_base_keyword and api_base and spec.detect_by_base_keyword in api_base:
+        return ProviderMatch(spec, 40, f"base keyword {spec.detect_by_base_keyword} in {api_base}")
 
     return None
 
@@ -80,9 +86,11 @@ def best_provider_match(
         if not spec.is_local and not spec.is_direct and not (config and config.api_key):
             continue
 
+        api_base = getattr(config, "api_base", None) if config else None
         match = score_provider_match(
             spec, model, model_lower, model_normalized,
             model_prefix, normalized_prefix,
+            api_base=api_base,
         )
         if match is not None:
             candidates.append(match)
