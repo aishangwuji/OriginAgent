@@ -325,6 +325,10 @@ def _settings_runtime_controls_payload(config: Any) -> dict[str, Any]:
         },
         "gateway": {
             "heartbeat_enabled": bool(config.gateway.heartbeat.enabled),
+            "tiered_router": {
+                "enabled": bool(config.gateway.tiered_router.enabled),
+                "default_tier": config.gateway.tiered_router.default_tier,
+            },
         },
         "security": {
             "pairing_enabled": bool(config.security.pairing.enabled),
@@ -1979,6 +1983,18 @@ class WebSocketChannel(BaseChannel):
             gateway = data.get("gateway")
             if isinstance(gateway, dict) and "heartbeat_enabled" in gateway:
                 set_bool(config.gateway.heartbeat, "enabled", gateway["heartbeat_enabled"])
+
+            tiered_router_data = data.get("tiered_router")
+            if isinstance(tiered_router_data, dict):
+                tr = config.gateway.tiered_router
+                if "enabled" in tiered_router_data:
+                    set_bool(tr, "enabled", tiered_router_data["enabled"])
+                if "default_tier" in tiered_router_data:
+                    val = str(tiered_router_data["default_tier"]).strip()
+                    if val:
+                        if getattr(tr, "default_tier") != val:
+                            setattr(tr, "default_tier", val)
+                            changed = True
 
             security = data.get("security")
             if isinstance(security, dict):

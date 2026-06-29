@@ -494,6 +494,9 @@ def register_default_tools(
                 proxy=web_config.proxy,
                 user_agent=web_config.user_agent,
                 config_loader=web_search_config_loader,
+                auxiliary_router=getattr(introspection_service._loop, "auxiliary_router", None)
+                if introspection_service is not None and getattr(introspection_service, "_loop", None) is not None
+                else None,
             ),
         )
         _register_named(

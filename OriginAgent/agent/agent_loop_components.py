@@ -258,13 +258,35 @@ def build_loop_components(
     active_intent_intent_cooldown_seconds: int | None,
     active_intent_max_messages_per_session_per_pass: int | None,
     effective_config: Any | None = None,
+    tiered_config: Any | None = None,
 ) -> LoopComponents:
     values: dict[str, Any] = {}
 
     # Step 1: basic runtime inputs and provider/router.
     values["bus"] = bus
     values["channels_config"] = channels_config
-    values["provider"] = provider
+
+    # If tiered routing is enabled, upgrade the primary provider to the
+    # "premium" tier — the flagship model handles reasoning and decisions
+    # while the auxiliary router dispatches background tasks to cheaper tiers.
+    _tiered = tiered_config if tiered_config and getattr(tiered_config, "enabled", False) else None
+    if _tiered:
+        premium_cfg = _tiered.tiers.get("premium")
+        if premium_cfg and auxiliary_provider_factory is not None:
+            from OriginAgent.config.schema import ModelPresetConfig as _Preset
+
+            premium_preset = _Preset(
+                model=premium_cfg.model,
+                provider=premium_cfg.provider,
+                max_tokens=premium_cfg.max_tokens,
+                context_window_tokens=premium_cfg.context_window_tokens,
+            )
+            premium_provider = auxiliary_provider_factory(premium_preset)
+            values["provider"] = premium_provider
+            values["model"] = premium_cfg.model
+        else:
+            _tiered = None  # downgrade: premium tier not available
+
     values["_provider_snapshot_loader"] = provider_snapshot_loader
     values["_preset_snapshot_loader"] = preset_snapshot_loader
     values["_runtime_model_publisher"] = runtime_model_publisher
@@ -273,14 +295,16 @@ def build_loop_components(
         provider_signature
     )
     values["workspace"] = workspace
-    values["model"] = model or provider.get_default_model()
+    values.setdefault("provider", provider)
+    values.setdefault("model", model or provider.get_default_model())
     values["auxiliary_router"] = AuxiliaryLLMRouter(
-        primary_provider=provider,
+        primary_provider=values["provider"],
         primary_model=values["model"],
         auxiliary_config=auxiliary_config or defaults.auxiliary,
         config=auxiliary_source_config,
         provider_factory=auxiliary_provider_factory,
         primary_provider_name=primary_provider_name,
+        tiered_config=_tiered,
     )
     values["model_presets"] = model_presets or {}
     values["model_preset"] = model_preset or ("default" if values["model_presets"] else None)

@@ -197,6 +197,10 @@ export interface SettingsPayload {
     gateway: {
       heartbeat_enabled: boolean;
     };
+    tiered_router: {
+      enabled: boolean;
+      default_tier: string;
+    };
     security: {
       pairing_enabled: boolean;
       pairing_allow_self_approve: boolean;
@@ -320,6 +324,7 @@ export interface RuntimeSettingsUpdate {
   >;
   evolution?: Partial<SettingsPayload["runtime_controls"]["evolution"]>;
   gateway?: Partial<SettingsPayload["runtime_controls"]["gateway"]>;
+  tiered_router?: Partial<SettingsPayload["runtime_controls"]["tiered_router"]>;
   security?: Partial<SettingsPayload["runtime_controls"]["security"]>;
   search?: Partial<SettingsPayload["runtime_controls"]["search"]>;
   execution?: Partial<SettingsPayload["runtime_controls"]["execution"]>;

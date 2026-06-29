@@ -22,6 +22,7 @@ from OriginAgent.config.schema import (
     FallbackCandidate,
     InlineFallbackConfig,
     ModelPresetConfig,
+    TieredRouterConfig,
 )
 from OriginAgent.providers.base import GenerationSettings, LLMProvider, LLMResponse
 
@@ -97,6 +98,7 @@ class AuxiliaryLLMRouter:
         provider_factory: ProviderFactory | None = None,
         primary_provider_name: str | None = None,
         clock: Callable[[], float] = time.monotonic,
+        tiered_config: TieredRouterConfig | None = None,
     ):
         self.primary_provider = primary_provider
         self.primary_model = primary_model
@@ -106,6 +108,7 @@ class AuxiliaryLLMRouter:
         self._provider_factory = provider_factory
         self._clock = clock
         self._unhealthy_until: dict[str, float] = {}
+        self._tiered_config = tiered_config
 
     def set_primary(
         self,
@@ -229,13 +232,40 @@ class AuxiliaryLLMRouter:
                 presets.append(ModelPresetConfig(model=model, provider=spec.name))
         return presets
 
+    def _resolve_model_from_tier(
+        self,
+        task: str | None,
+        requested_model: str | None,
+    ) -> str | None:
+        """Resolve the model for *task* via tiered routing, if enabled.
+
+        Priority:
+          1. ``requested_model`` — explicit per-call override (highest priority)
+          2. Tiered config — if enabled, map *task* → *tier* → *model*
+          3. ``None`` — caller falls back to primary model
+        """
+        if requested_model:
+            return requested_model
+        if self._tiered_config and self._tiered_config.enabled and task:
+            tier_name = self._tiered_config.task_tier_mapping.get(
+                task,
+                self._tiered_config.default_tier,
+            )
+            tier = self._tiered_config.tiers.get(tier_name)
+            if tier:
+                return tier.model
+        return None
+
     def _candidates(
         self,
         task: str | None,
         requested_model: str | None,
     ) -> list[_Candidate]:
         task_cfg = self._task_config(task)
-        primary_model = self._candidate_model(task_cfg, requested_model)
+        # Resolve model: tiered config → per-task override → primary model
+        tier_model = self._resolve_model_from_tier(task, requested_model)
+        effective_requested = tier_model or requested_model
+        primary_model = self._candidate_model(task_cfg, effective_requested)
         candidates = [
             _Candidate(
                 key="primary",

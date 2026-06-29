@@ -187,7 +187,7 @@ class Tool(ABC):
     _scopes: set[str] = {"core"}
 
     # Security classification — set on subclasses as a class attribute.
-    # The default ``STANDARD`` preserves backward compatibility for all
+    # The default STANDARD preserves backward compatibility for all
     # existing tool registrations that do not explicitly set this.
     security_class: Any = None
 

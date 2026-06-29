@@ -39,6 +39,7 @@ import { LanguageSwitcher } from "@/components/LanguageSwitcher";
 import { ModelInputWithFetch } from "@/components/settings/ModelInputWithFetch";
 import { Button } from "@/components/ui/button";
 import { LearningSettings } from "@/components/settings/LearningSettings";
+import { TieredRoutingSettings } from "@/components/settings/TieredRoutingSettings";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -88,7 +89,7 @@ import type {
   WebSearchSettingsUpdate,
 } from "@/lib/types";
 
-type SettingsSectionKey = "general" | "self" | "byok" | "skills" | "learning" | "domains" | "mcp";
+type SettingsSectionKey = "general" | "self" | "byok" | "skills" | "learning" | "domains" | "mcp" | "routing";
 type ByokPaneKey = "llm" | "web-search";
 type McpFormState = {
   name: string;
@@ -891,6 +892,12 @@ export function SettingsView({
                   onResetWebSearchDraft={resetWebSearchDraft}
                   onSaveWebSearch={saveWebSearch}
                 />
+              ) : activeSection === "routing" ? (
+                <TieredRoutingSettings
+                  enabled={settings?.runtime_controls?.tiered_router?.enabled ?? false}
+                  defaultTier={settings?.runtime_controls?.tiered_router?.default_tier ?? "economy"}
+                  onChange={(patch) => updateSection("tiered_router", patch)}
+                />
               ) : (
                 <McpSettings
                   settings={settings}
@@ -936,6 +943,7 @@ const SETTINGS_NAV_ITEMS = [
   { key: "learning", icon: Zap },
   { key: "domains", icon: Boxes },
   { key: "mcp", icon: Server },
+  { key: "routing", icon: Layers },
 ] as const;
 
 function SettingsSidebar({
