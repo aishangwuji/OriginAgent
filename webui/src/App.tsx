@@ -37,8 +37,11 @@ type BootState =
     };
 
 const SIDEBAR_STORAGE_KEY = "OriginAgent-webui.sidebar";
+const SIDEBAR_WIDTH_STORAGE_KEY = "OriginAgent-webui.sidebarWidth";
 const RESTART_STARTED_KEY = "OriginAgent-webui.restartStartedAt";
-const SIDEBAR_WIDTH = 272;
+const SIDEBAR_MIN_WIDTH = 200;
+const SIDEBAR_MAX_WIDTH = 480;
+const SIDEBAR_DEFAULT_WIDTH = 272;
 type ShellView = "chat" | "settings" | "reviews" | "cognition" | "signals";
 
 function pendingSessionFromKey(key: string): ChatSummary | null {
@@ -130,6 +133,19 @@ function readSidebarOpen(): boolean {
     return raw === "1";
   } catch {
     return true;
+  }
+}
+
+function readSidebarWidth(): number {
+  if (typeof window === "undefined") return SIDEBAR_DEFAULT_WIDTH;
+  try {
+    const raw = window.localStorage.getItem(SIDEBAR_WIDTH_STORAGE_KEY);
+    if (raw === null) return SIDEBAR_DEFAULT_WIDTH;
+    const w = parseInt(raw, 10);
+    if (isNaN(w)) return SIDEBAR_DEFAULT_WIDTH;
+    return Math.max(SIDEBAR_MIN_WIDTH, Math.min(SIDEBAR_MAX_WIDTH, w));
+  } catch {
+    return SIDEBAR_DEFAULT_WIDTH;
   }
 }
 
@@ -287,7 +303,12 @@ function Shell({ onModelNameChange, onLogout }: { onModelNameChange: (modelName:
   const [view, setView] = useState<ShellView>("chat");
   const [desktopSidebarOpen, setDesktopSidebarOpen] =
     useState<boolean>(readSidebarOpen);
+  const [sidebarWidth, setSidebarWidth] = useState<number>(readSidebarWidth);
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
+  const sidebarDragRef = useRef<{
+    startX: number;
+    startWidth: number;
+  } | null>(null);
   const [pendingDelete, setPendingDelete] = useState<{
     key: string;
     label: string;
@@ -334,6 +355,47 @@ function Shell({ onModelNameChange, onLogout }: { onModelNameChange: (modelName:
       setMobileSidebarOpen((v) => !v);
     }
   }, []);
+
+  const onSidebarDragStart = useCallback(
+    (e: React.MouseEvent) => {
+      e.preventDefault();
+      sidebarDragRef.current = { startX: e.clientX, startWidth: sidebarWidth };
+    },
+    [sidebarWidth],
+  );
+
+  useEffect(() => {
+    const handleMouseMove = (e: MouseEvent) => {
+      const drag = sidebarDragRef.current;
+      if (!drag) return;
+      const delta = e.clientX - drag.startX;
+      const newWidth = Math.max(
+        SIDEBAR_MIN_WIDTH,
+        Math.min(SIDEBAR_MAX_WIDTH, drag.startWidth + delta),
+      );
+      setSidebarWidth(newWidth);
+    };
+    const handleMouseUp = () => {
+      if (!sidebarDragRef.current) return;
+      sidebarDragRef.current = null;
+      document.body.style.cursor = "";
+      document.body.style.userSelect = "";
+      try {
+        window.localStorage.setItem(
+          SIDEBAR_WIDTH_STORAGE_KEY,
+          String(sidebarWidth),
+        );
+      } catch {
+        // ignore storage errors
+      }
+    };
+    window.addEventListener("mousemove", handleMouseMove);
+    window.addEventListener("mouseup", handleMouseUp);
+    return () => {
+      window.removeEventListener("mousemove", handleMouseMove);
+      window.removeEventListener("mouseup", handleMouseUp);
+    };
+  }, [sidebarWidth]);
 
   const onCreateChat = useCallback(async () => {
     try {
@@ -518,10 +580,9 @@ function Shell({ onModelNameChange, onLogout }: { onModelNameChange: (modelName:
       {showMainSidebar ? (
         <aside
           className={cn(
-            "relative z-20 hidden shrink-0 overflow-hidden lg:block",
-            "transition-[width] duration-300 ease-out",
+            "relative z-20 hidden shrink-0 overflow-visible lg:block",
           )}
-          style={{ width: desktopSidebarOpen ? SIDEBAR_WIDTH : 0 }}
+          style={{ width: desktopSidebarOpen ? sidebarWidth : 0 }}
         >
           <div
             className={cn(
@@ -532,6 +593,19 @@ function Shell({ onModelNameChange, onLogout }: { onModelNameChange: (modelName:
           >
             <Sidebar {...sidebarProps} onCollapse={closeDesktopSidebar} />
           </div>
+          {/* Drag handle for resizing */}
+          {desktopSidebarOpen && (
+            <div
+              onMouseDown={onSidebarDragStart}
+              className={cn(
+                "absolute right-0 top-0 z-30 h-full w-1.5 cursor-col-resize",
+                "hover:bg-accent/40 active:bg-accent/60",
+                "transition-colors duration-150",
+              )}
+              role="separator"
+              aria-label="Resize sidebar"
+            />
+          )}
         </aside>
       ) : null}
 

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ArrowUp } from "lucide-react";
+import { useTranslation } from "react-i18next";
 
 import { Button } from "@/components/ui/button";
 import { VoiceInputButton } from "@/components/voice/VoiceInputButton";
@@ -22,9 +23,11 @@ interface ComposerProps {
 export function Composer({
   onSend,
   disabled,
-  placeholder = "Type your message…",
+  placeholder,
   compact = false,
 }: ComposerProps) {
+  const { t } = useTranslation();
+  const resolvedPlaceholder = placeholder ?? t("chat.inputPlaceholder");
   const [value, setValue] = useState("");
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const voice = useVoiceRecorder();
@@ -103,7 +106,7 @@ export function Composer({
           onInput={onInput}
           onKeyDown={onKeyDown}
           rows={1}
-          placeholder={placeholder}
+          placeholder={resolvedPlaceholder}
           disabled={disabled}
           aria-label="Message input"
           className={cn(

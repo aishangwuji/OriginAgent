@@ -61,7 +61,16 @@
       "mcp": "MCP",
       "skills": "技能",
       "learning": "学习",
-      "domains": "领域包"
+      "domains": "领域包",
+      "routing": "路由配置"
+    },
+    "tieredRouter": {
+      "overview": "分层 LLM 路由",
+      "enable": "启用分层路由",
+      "enableHelp": "将后台任务路由到廉价模型，同时保留旗舰模型用于推理和决策。",
+      "tiers": "可用层级",
+      "mapping": "任务 → 层级映射",
+      "default": "默认"
     },
     "sections": {
       "interface": "界面",
@@ -499,86 +508,8 @@
     }
   },
   "reviews": {
-    "title": "学习提案审核",
-    "backToChat": "返回对话",
-    "loading": "正在加载审核提案...",
-    "empty": "没有匹配的审核提案。",
-    "noSelection": "选择一个提案进行审核。",
-    "untitled": "未命名提案",
-    "confidence": "置信度 {{value}}",
-    "appliedFact": "事实 {{id}}",
-    "appliedSkill": "技能 {{path}}",
-    "appliedWorkflow": "Workflow {{path}}",
-    "unsupportedApply": "这个提案在 P10 中仅供审核，或已经进入终态，不能再直接应用。",
-    "reasonLabel": "审核备注",
-    "reasonPlaceholder": "可选：说明为什么应用、拒绝或延期这个提案。",
-    "noEvidence": "这个提案没有保存证据片段。",
-    "stats": {
-      "total": "共 {{count}} 条",
-      "pending": "{{count}} 条待审核"
-    },
-    "filters": {
-      "status": "按状态筛选",
-      "type": "按类型筛选",
-      "origin": "按来源筛选",
-      "all": "全部",
-      "allTypes": "全部类型",
-      "allOrigins": "全部来源"
-    },
     "origins": {
-      "background_review": "背景审核",
-      "curator": "整理器"
-    },
-    "status": {
-      "pending": "待审核",
-      "applied": "已应用",
-      "rejected": "已拒绝",
-      "deferred": "已延期",
-      "failed": "失败",
-      "saved": "已保存"
-    },
-    "types": {
-      "memory": "记忆",
-      "fact": "事实",
-      "skill": "Skill",
-      "workflow": "Workflow",
-      "promote_skill": "提升 Skill",
-      "deprecate_skill": "废弃 Skill",
-      "merge_skill": "合并 Skill",
-      "archive_workflow": "归档 Workflow",
-      "move_to_domain": "迁移到领域包",
-      "fact_conflict": "事实冲突"
-    },
-    "sections": {
-      "context": "上下文",
-      "evidence": "证据"
-    },
-    "fields": {
-      "origin": "来源",
-      "subject": "对象",
-      "suggestedAction": "建议动作",
-      "session": "会话",
-      "created": "创建时间",
-      "rationale": "理由",
-      "reviewReason": "审核备注"
-    },
-    "actions": {
-      "refresh": "刷新",
-      "apply": "应用",
-      "reject": "拒绝",
-      "defer": "延期"
-    },
-    "confirmApply": {
-      "title": "应用这个提案？",
-      "description": "OriginAgent 会把已批准的记忆或事实写入受控 facts store，并重新生成 MEMORY.md。",
-      "skillDescription": "OriginAgent 会把 {{name}} 写成 proposed/unverified workspace skill，位置是 {{path}}。它会被发现，但不会 always 自动加载。",
-      "promoteSkillDescription": "OriginAgent 会提升 {{name}}：如有需要先完成 verify，再把位于 {{path}} 的 workspace skill 激活。",
-      "deprecateSkillDescription": "OriginAgent 会把位于 {{path}} 的 workspace skill {{name}} 标记为 deprecated，它将不再出现在正常的 skill 发现结果中。",
-      "skillPathPending": "workspace/skills/<safe-name>/SKILL.md",
-      "workflowDescription": "OriginAgent 会把 {{name}} 写成 proposed/unverified 手动 workflow，位置是 {{path}}。它不会创建自动化、运行工具或创建计划任务。",
-      "workflowPathPending": "workspace/workflows/<safe-name>/workflow.yaml",
-      "cancel": "取消",
-      "confirm": "应用"
+      "auto_evolution": "自动演化"
     }
   },
   "chat": {
@@ -593,7 +524,8 @@
       "today": "今天",
       "yesterday": "昨天",
       "earlier": "更早"
-    }
+    },
+    "inputPlaceholder": "输入消息…"
   },
   "deleteConfirm": {
     "title": "删除这个对话？",
@@ -889,10 +821,5 @@
     "suppress": "抑制",
     "resume": "恢复",
     "empty": "没有符合当前筛选条件的机会信号。"
-  },
-  "reviews": {
-    "origins": {
-      "auto_evolution": "自动演化"
-    }
   }
 }
