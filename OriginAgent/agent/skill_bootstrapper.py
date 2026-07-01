@@ -15,6 +15,8 @@ from typing import Any
 
 from OriginAgent.agent.skill_bootstrapper_models import (
     ActionTraceDigest,
+    RepeatedPattern,
+    SkillCandidate,
     _normalize_str_list,
     _normalize_text,
 )
@@ -44,13 +46,6 @@ def tool_signature(tool_sequence: list[str]) -> str:
     return "+".join(_normalize_str_list(tool_sequence, limit=16, max_chars=80))
 
 from collections import defaultdict
-
-from OriginAgent.agent.skill_bootstrapper_models import (
-    ActionTraceDigest,
-    RepeatedPattern,
-    _utcnow_iso,
-)
-
 
 class SkillBootstrapperScanner:
     """Scan digests and group by fingerprint to find repeated patterns."""
@@ -94,13 +89,8 @@ class SkillBootstrapperScanner:
             ))
         return patterns
 
-import re
 
-from OriginAgent.agent.skill_bootstrapper_models import (
-    RepeatedPattern,
-    SkillCandidate,
-    _utcnow_iso,
-)
+import re
 
 _DANGEROUS_TERMS_RE = re.compile(
     r"(?i)(?<![a-z0-9_])"
@@ -182,7 +172,7 @@ def compile_to_proposal_bundle(
     candidate: SkillCandidate,
     *,
     bundle_id: str | None = None,
-) -> "CompiledProposalBundle":
+) -> Any:
     """Wrap a ``SkillCandidate`` into a ``CompiledProposalBundle``."""
     from OriginAgent.agent.meta_programming import COMPILER_VERSION, CompiledProposalBundle
 

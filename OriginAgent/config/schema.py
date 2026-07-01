@@ -1029,6 +1029,14 @@ class MetaCognitionConfig(Base):
     """Sidecar meta-cognition trigger collection configuration."""
 
     enabled: bool = True
+    inner_monologue_enabled: bool = Field(
+        default=True,
+        validation_alias=AliasChoices(
+            "innerMonologueEnabled",
+            "inner_monologue_enabled",
+        ),
+        serialization_alias="innerMonologueEnabled",
+    )
     trigger_collection_enabled: bool = Field(
         default=True,
         validation_alias=AliasChoices(
@@ -1199,6 +1207,78 @@ class MetaCognitionConfig(Base):
             "allowed_evolution_target_types",
         ),
         serialization_alias="allowedEvolutionTargetTypes",
+    )
+    thought_substrate_enabled: bool = Field(
+        default=True,
+        validation_alias=AliasChoices(
+            "thoughtSubstrateEnabled",
+            "thought_substrate_enabled",
+        ),
+        serialization_alias="thoughtSubstrateEnabled",
+    )
+    thought_substrate_max_frames_per_session: int = Field(
+        default=500,
+        ge=10,
+        le=10_000,
+        validation_alias=AliasChoices(
+            "thoughtSubstrateMaxFramesPerSession",
+            "thought_substrate_max_frames_per_session",
+        ),
+        serialization_alias="thoughtSubstrateMaxFramesPerSession",
+    )
+    thought_substrate_sampling_rate: float = Field(
+        default=1.0,
+        ge=0.0,
+        le=1.0,
+        validation_alias=AliasChoices(
+            "thoughtSubstrateSamplingRate",
+            "thought_substrate_sampling_rate",
+        ),
+        serialization_alias="thoughtSubstrateSamplingRate",
+    )
+    perception_fusion_enabled: bool = Field(
+        default=True,
+        validation_alias=AliasChoices(
+            "perceptionFusionEnabled",
+            "perception_fusion_enabled",
+        ),
+        serialization_alias="perceptionFusionEnabled",
+    )
+    regulator_enabled: bool = Field(
+        default=True,
+        validation_alias=AliasChoices(
+            "regulatorEnabled",
+            "regulator_enabled",
+        ),
+        serialization_alias="regulatorEnabled",
+    )
+    skill_bootstrapper_enabled: bool = Field(
+        default=True,
+        validation_alias=AliasChoices(
+            "skillBootstrapperEnabled",
+            "skill_bootstrapper_enabled",
+        ),
+        serialization_alias="skillBootstrapperEnabled",
+    )
+    skill_bootstrapper_min_repeats: int = Field(
+        default=3,
+        ge=2,
+        le=100,
+        validation_alias=AliasChoices(
+            "skillBootstrapperMinRepeats",
+            "skill_bootstrapper_min_repeats",
+        ),
+        serialization_alias="skillBootstrapperMinRepeats",
+    )
+    skill_bootstrapper_min_confidence: float = Field(
+        default=0.5,
+        ge=0.0,
+        le=1.0,
+        validation_alias=AliasChoices(
+            "skillBootstrapperMinConfidence",
+            "skill_bootstrapper_min_confidence",
+        ),
+        serialization_alias="skillBootstrapperMinConfidence",
     )
 
 

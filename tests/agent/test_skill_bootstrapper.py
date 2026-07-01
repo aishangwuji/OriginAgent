@@ -223,3 +223,68 @@ class TestCompiler:
         assert bundle.target_type == "skill"
         assert bundle.target_key == "diagnose-cpu"
         assert bundle.risk_level == "medium"
+
+from OriginAgent.agent.skill_bootstrapper import (
+    SkillBootstrapperScanner,
+    SkillCandidateCompiler,
+    compile_to_proposal_bundle,
+)
+from OriginAgent.agent.skill_bootstrapper_models import ActionTraceDigest
+from OriginAgent.agent.meta_programming import CompiledProposalBundle
+
+
+class TestEndToEnd:
+    def test_basic_pipeline(self):
+        scanner = SkillBootstrapperScanner()
+        compiler = SkillCandidateCompiler()
+        digests = [
+            ActionTraceDigest(digest_id=f"d{i}", session_key=f"s{i % 3}",
+                              tool_sequence=["read_file", "grep"])
+            for i in range(5)
+        ]
+        digests.append(ActionTraceDigest(digest_id="d5", session_key="s3",
+                                         tool_sequence=["web_search"]))
+        patterns = scanner.scan(digests, min_repeats=2)
+        assert len(patterns) == 1
+        assert patterns[0].tool_signature == "read_file+grep"
+        assert patterns[0].repeat_count == 5
+
+        candidate = compiler.compile(patterns[0])
+        assert candidate is not None
+        assert candidate.skill_name == "read-file-grep"
+        assert candidate.confidence >= 0.5
+
+        bundle = compile_to_proposal_bundle(candidate)
+        assert isinstance(bundle, CompiledProposalBundle)
+        assert bundle.target_type == "skill"
+        assert bundle.target_key == "read-file-grep"
+        assert bundle.review_mode == "review_required"
+
+    def test_dangerous_tools_pipeline(self):
+        scanner = SkillBootstrapperScanner()
+        compiler = SkillCandidateCompiler()
+        digests = [
+            ActionTraceDigest(digest_id=f"d{i}", session_key=f"s{i}",
+                              tool_sequence=["exec", "grep"])
+            for i in range(4)
+        ]
+        patterns = scanner.scan(digests, min_repeats=2)
+        assert len(patterns) == 1
+
+        candidate = compiler.compile(patterns[0])
+        assert candidate is not None
+        assert "exec" in candidate.dangerous_tools
+        assert candidate.governance_path == "danger_review"
+
+        bundle = compile_to_proposal_bundle(candidate)
+        assert bundle.risk_level == "high"
+        assert bundle.review_mode == "danger_review"
+
+    def test_below_threshold(self):
+        scanner = SkillBootstrapperScanner()
+        digests = [
+            ActionTraceDigest(digest_id="d1", session_key="s1", tool_sequence=["read_file"]),
+            ActionTraceDigest(digest_id="d2", session_key="s2", tool_sequence=["grep"]),
+        ]
+        patterns = scanner.scan(digests, min_repeats=3)
+        assert len(patterns) == 0

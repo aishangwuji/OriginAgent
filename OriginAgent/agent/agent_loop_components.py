@@ -7,6 +7,7 @@ import os
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, Callable
 
 from OriginAgent.agent import model_presets as preset_helpers
@@ -28,7 +29,14 @@ from OriginAgent.agent.memory import Consolidator, Dream, dream_feature_flags
 from OriginAgent.agent.memory_governance import MemoryGovernance
 from OriginAgent.agent.meta_cognition_audit import JsonlMetaCognitionAuditLedger
 from OriginAgent.agent.meta_cognition_reflector import MetaCognitionReflector
+from OriginAgent.agent.meta_cognition_regulator import MetaCognitionRegulator
 from OriginAgent.agent.meta_cognition_runtime import MetaCognitionRuntime
+from OriginAgent.agent.perception_event_fusion import PerceptionEventFusion
+from OriginAgent.agent.skill_bootstrapper import (
+    SkillBootstrapperScanner,
+    SkillCandidateCompiler,
+)
+from OriginAgent.agent.thought_substrate_store import ThoughtSubstrate
 from OriginAgent.agent.reminders import ReminderStore
 from OriginAgent.agent.roaming_prewarm import RoamingPrewarmService
 from OriginAgent.agent.runner import AgentRunner
@@ -562,13 +570,37 @@ def build_loop_components(
         nearline_memory_config=values["_nearline_memory_config"],
     )
     values["_meta_cognition_audit"] = JsonlMetaCognitionAuditLedger(workspace)
+    # ── MetaCognitionRegulator (CS-007) ─────────────────────────────
+    _regulator_enabled = getattr(values.get("_meta_cognition_config"), "regulator_enabled", True)
+    values["_meta_cognition_regulator"] = MetaCognitionRegulator() if _regulator_enabled else None
+    # ── SkillBootstrapper (CS-009) ─────────────────────────────────
+    _bs_enabled = getattr(values.get("_meta_cognition_config"), "skill_bootstrapper_enabled", True)
+    _scanner: SkillBootstrapperScanner | None = None
+    _compiler: SkillCandidateCompiler | None = None
+    if _bs_enabled:
+        _scanner = SkillBootstrapperScanner()
+        _compiler = SkillCandidateCompiler()
+    values["_skill_bootstrapper_scanner"] = _scanner
+    values["_skill_bootstrapper_compiler"] = _compiler
     values["_meta_cognition_runtime"] = MetaCognitionRuntime(
         config=values["_meta_cognition_config"],
         audit=values["_meta_cognition_audit"],
     )
+    # ── ThoughtSubstrate (CogniSphere CS-002) ──────────────────────
+    meta_config = values["_meta_cognition_config"]
+    substrate_enabled = getattr(meta_config, "thought_substrate_enabled", True)
+    _thought_substrate: ThoughtSubstrate | None = None
+    if substrate_enabled:
+        _thought_substrate = ThoughtSubstrate(
+            workspace=workspace,
+            max_frames_per_session=getattr(meta_config, "thought_substrate_max_frames_per_session", 500),
+            sampling_rate=getattr(meta_config, "thought_substrate_sampling_rate", 1.0),
+            audit=values["_meta_cognition_audit"],
+        )
+    values["_thought_substrate"] = _thought_substrate
     values["_meta_cognition_reflector"] = MetaCognitionReflector(
         workspace=workspace,
-        config=values["_meta_cognition_config"],
+        config=meta_config,
         audit=values["_meta_cognition_audit"],
         auxiliary_router=values["auxiliary_router"],
         provider=provider,
@@ -576,7 +608,13 @@ def build_loop_components(
         sessions=values["sessions"],
         working_memory=values["working_memory"],
         context_config=defaults.context,
+        substrate=_thought_substrate,
     )
+    # ── PerceptionEventFusion (CS-003) ─────────────────────────────
+    _fusion_config = SimpleNamespace(
+        enabled=getattr(meta_config, "perception_fusion_enabled", True),
+    )
+    values["_perception_fusion"] = PerceptionEventFusion(config=_fusion_config)
     values["_cognitive_loop_enabled"] = bool(cognition_enabled)
     values["cognitive_scheduler"] = CognitiveScheduler(
         workspace=workspace,
