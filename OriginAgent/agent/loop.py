@@ -858,18 +858,19 @@ class AgentLoop:
         return getattr(self, "_last_continuity_session_key", None) or "__default__"
 
     def _record_runtime_context(self, session_key: str, runtime_context: RuntimeContext) -> None:
-        self._last_runtime_context = runtime_context
-        self._last_continuity_session_key = session_key
         state = self._state_holder.get(session_key)
         state.last_runtime_context = runtime_context
         state.last_continuity_session_key = session_key
+        # Track current session key for _resolve_state_key fallback.
+        # This is NOT a dual-write: it is the sole tracking variable for
+        # "which session is currently active", needed because the callback
+        # interface for _record_* methods does not carry session_key.
+        self._last_continuity_session_key = session_key
 
     def _record_continuity_session_key(self, session_key: str) -> None:
-        self._last_continuity_session_key = session_key
         self._state_holder.get(session_key).last_continuity_session_key = session_key
 
     def _record_context_assembly(self, payload: dict[str, Any]) -> None:
-        self._last_context_assembly = dict(payload)
         state_key = self._resolve_state_key()
         self._state_holder.get(state_key).last_context_assembly = dict(payload)
 
@@ -877,19 +878,14 @@ class AgentLoop:
         self,
         checkpoint: dict[str, Any] | None,
     ) -> None:
-        self._last_recovered_continuity_checkpoint = dict(checkpoint or {})
         state_key = self._resolve_state_key()
         self._state_holder.get(state_key).last_recovered_continuity_checkpoint = dict(checkpoint or {})
 
     def _record_governance_audit(self, audit: dict[str, Any]) -> None:
-        self._last_governance_audit = dict(audit)
-        self.context._last_governance_audit = dict(audit)
         state_key = self._resolve_state_key()
         self._state_holder.get(state_key).last_governance_audit = dict(audit)
 
     def _record_action_continuity_audit(self, audit: dict[str, Any]) -> None:
-        self._last_action_continuity_audit = dict(audit)
-        self._cached_action_summary = normalize_action_summary(self._last_action_continuity_audit)
         state_key = self._resolve_state_key()
         state = self._state_holder.get(state_key)
         state.last_action_continuity_audit = dict(audit)
@@ -916,7 +912,6 @@ class AgentLoop:
         )
 
     def _record_cognitive_scan(self, payload: dict[str, Any]) -> None:
-        self._last_cognitive_scan = dict(payload)
         state_key = self._resolve_state_key()
         self._state_holder.get(state_key).last_cognitive_scan = dict(payload)
 
@@ -1279,9 +1274,6 @@ class AgentLoop:
                 msg, session, history, pending_ask_id, pending_summary,
                 internal_event=internal_event, recovered_continuity_block=recovered_continuity_block,
             )
-            self._last_context_assembly = dict(
-                self._state_holder.get(session.key).last_context_assembly or {}
-            )
             return messages
         # fallback
         self_model_payload = self._build_prompt_self_model()
@@ -1291,19 +1283,16 @@ class AgentLoop:
             if self.context._context_config.enable_phase1_continuity:
                 assembled = self.context.assemble_user_content(current_message=None, media=None, channel=msg.channel, chat_id=self._runtime_chat_id(msg), sender_id=msg.sender_id, session_summary=pending_summary, session_metadata=session.metadata, internal_event=None, runtime_context=self._state_holder.get(session.key).last_runtime_context, session_key=session.key, recovered_continuity_block=recovered_continuity_block, include_current_message=False)
                 self._state_holder.get(session.key).last_context_assembly = dict(assembled.audit)
-                self._last_context_assembly = dict(assembled.audit)
                 messages.append({"role": "user", "content": assembled.blocks})
                 return self.context._apply_prompt_budget(messages, context_window_tokens=self.context_window_tokens, max_completion_tokens=getattr(self.provider.generation, "max_tokens", 4096))
             messages.append({"role": "user", "content": [self.context.build_runtime_context_block(msg.channel, self._runtime_chat_id(msg), self.context.timezone, sender_id=msg.sender_id, session_metadata=session.metadata)] + ([recovered_continuity_block] if recovered_continuity_block else []) + list(self.context.build_reference_context_blocks(session_summary=pending_summary, session_key=session.key, runtime_context=self._state_holder.get(session.key).last_runtime_context, current_message=msg.content))})
             self._state_holder.get(session.key).last_context_assembly = {"enabled": False, "session_key": session.key, "reason": "phase1_continuity_disabled", "block_kinds": [self.context.RUNTIME_CONTEXT_KIND] + [block.get("_meta", {}).get("kind") for block in self.context.build_reference_context_blocks(session_summary=pending_summary, session_key=session.key, runtime_context=self._state_holder.get(session.key).last_runtime_context, current_message=msg.content)]}
-            self._last_context_assembly = self._state_holder.get(session.key).last_context_assembly
             return self.context._apply_prompt_budget(messages, context_window_tokens=self.context_window_tokens, max_completion_tokens=getattr(self.provider.generation, "max_tokens", 4096))
-        built = self.context.build_messages(history=history, current_message=image_generation_prompt(msg.content, msg.metadata), media=msg.media if msg.media else None, channel=msg.channel, chat_id=self._runtime_chat_id(msg), sender_id=msg.sender_id, session_summary=pending_summary, session_metadata=session.metadata, internal_event=internal_event, self_model_payload=self_model_payload, runtime_context=self._last_runtime_context, session_key=session.key, recovered_continuity_block=recovered_continuity_block, context_window_tokens=self.context_window_tokens, max_completion_tokens=getattr(self.provider.generation, "max_tokens", 4096))
         state = self._state_holder.get(session.key)
+        built = self.context.build_messages(history=history, current_message=image_generation_prompt(msg.content, msg.metadata), media=msg.media if msg.media else None, channel=msg.channel, chat_id=self._runtime_chat_id(msg), sender_id=msg.sender_id, session_summary=pending_summary, session_metadata=session.metadata, internal_event=internal_event, self_model_payload=self_model_payload, runtime_context=state.last_runtime_context, session_key=session.key, recovered_continuity_block=recovered_continuity_block, context_window_tokens=self.context_window_tokens, max_completion_tokens=getattr(self.provider.generation, "max_tokens", 4096))
         state.last_context_assembly = dict(getattr(self.context, "_last_context_assembly_audit", {}) or {})
         if not state.last_context_assembly:
             state.last_context_assembly = self._snapshot_context_assembly_from_messages(built, session_key=session.key, runtime_context=state.last_runtime_context)
-        self._last_context_assembly = dict(state.last_context_assembly)
         return built
 
     def _build_prompt_self_model(self) -> dict[str, Any]:
@@ -1838,7 +1827,6 @@ class AgentLoop:
                 "world_truncated_by_limit": bool(world_kept >= max_world_items and len(world_attention_items) > world_kept),
                 "attention_merged_items": list(merged_attention),
             }
-            self._last_world_attention_write = state.last_world_attention_write  # compat
         else:
             state = self._state_holder.get(session.key)
             state.last_world_attention_write = {
@@ -1848,7 +1836,6 @@ class AgentLoop:
                 "world_truncated_by_limit": False,
                 "attention_merged_items": [item for item in (attention_items or []) if item],
             }
-            self._last_world_attention_write = state.last_world_attention_write  # compat
         self.working_memory.upsert(
             session,
             identity=runtime_context.identity,
@@ -2392,6 +2379,14 @@ class AgentLoop:
     def _clear_pending_user_turn(self, session: Session) -> None:
         AgentLoop._turn_persist_manager(self).clear_pending_user_turn(session)
         self._state_holder.drop(session.key)
+        # Reset flat attributes to prevent stale reads (backward compat)
+        self._last_runtime_context = None
+        self._last_continuity_session_key = None
+        self._last_context_assembly = {}
+        self._last_governance_audit = {}
+        self._last_action_continuity_audit = {}
+        self._last_cognitive_scan = {}
+        self._last_world_attention_write = {}
 
     def _clear_runtime_checkpoint(self, session: Session) -> None:
         AgentLoop._turn_persist_manager(self).clear_checkpoint(session)
