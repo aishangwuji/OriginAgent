@@ -1834,6 +1834,10 @@ class AgentLoop:
             with suppress(asyncio.CancelledError):
                 await asyncio.shield(self._active_intent_task)
             self._active_intent_task = None
+        # Clean up stale session state before shutdown
+        removed = self._state_holder.expire_stale()
+        if removed > 0:
+            logger.debug("SessionStateHolder: expired {} stale sessions during shutdown", removed)
         if self._background_tasks:
             await asyncio.gather(*self._background_tasks, return_exceptions=True)
             self._background_tasks.clear()
@@ -2964,6 +2968,7 @@ class AgentLoop:
 
     def _clear_pending_user_turn(self, session: Session) -> None:
         AgentLoop._turn_persist_manager(self).clear_pending_user_turn(session)
+        self._state_holder.drop(session.key)
 
     def _clear_runtime_checkpoint(self, session: Session) -> None:
         AgentLoop._turn_persist_manager(self).clear_checkpoint(session)
