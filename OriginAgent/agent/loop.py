@@ -1744,14 +1744,30 @@ class AgentLoop:
         """Schedule a coroutine as a tracked background task (drained on shutdown).
 
         Delegates to AgentHost so all background tasks live in one place.
+        Falls back to direct task creation when ``_host`` is not initialised
+        (e.g. tests that bypass ``__init__`` via ``__new__``).
         """
-        self._host.schedule_background(coro)
+        if hasattr(self, "_host") and self._host is not None:
+            self._host.schedule_background(coro)
+        else:
+            task = asyncio.create_task(coro)
+            self._background_tasks.add(task)
+            task.add_done_callback(self._background_tasks.discard)
 
     def _start_active_intent_loop(self) -> None:
-        """Compatibility shell delegating active-intent startup to AgentHost."""
-        self._active_intent_task = self._host.start_active_intent_loop(
-            self._active_intent_task
-        )
+        """Compatibility shell delegating active-intent startup to AgentHost.
+
+        Falls back to direct cognitive_runtime delegation when ``_host`` is
+        not initialised (e.g. tests that bypass ``__init__`` via ``__new__``).
+        """
+        if hasattr(self, "_host") and self._host is not None:
+            self._active_intent_task = self._host.start_active_intent_loop(
+                self._active_intent_task
+            )
+        else:
+            self._active_intent_task = self._cognitive_runtime.start_active_intent_loop(
+                self._active_intent_task
+            )
 
     async def _active_intent_loop(self) -> None:
         """Compatibility shell delegating the active-intent loop to AgentCognitiveRuntime."""
