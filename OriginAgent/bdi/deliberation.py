@@ -167,6 +167,7 @@ class DeliberationEngine:
         self._max_desires_per_cycle = max_desires_per_cycle
         self._auto_create_from_foresight = auto_create_from_foresight
         self._on_intention = on_intention
+        self._on_cycle_complete = None  # Optional callback: Callable[[DeliberationResult], Awaitable[None]]
 
         self._running = False
         self._task: asyncio.Task | None = None
@@ -449,7 +450,19 @@ class DeliberationEngine:
         )
         self._persist_cycle(cycle_id, started_at, result, "completed",
                             desires_before=desires_before)
+
+        # ── 9. Fire on_cycle_complete callback (CS-004) ─────────────
+        if self._on_cycle_complete is not None:
+            try:
+                await self._on_cycle_complete(result)
+            except Exception:
+                logger.exception("BDI: on_cycle_complete callback failed")
+
         return result
+
+    def set_on_cycle_complete(self, callback: Any) -> None:
+        """Register a callback invoked after every successful BDI cycle."""
+        self._on_cycle_complete = callback
 
     async def trigger_now(self) -> DeliberationResult:
         """Manually trigger a deliberation cycle from outside the loop."""

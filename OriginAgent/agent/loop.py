@@ -75,6 +75,7 @@ from OriginAgent.agent.memory import session_summary_text
 from OriginAgent.agent.memory_governance import MemoryGovernance
 from OriginAgent.agent.meta_cognition_models import MetaTrigger
 from OriginAgent.agent.meta_cognition_triggers import (
+    bridge_runtime_event_to_trigger,
     build_task_completion_trigger,
     build_tool_failure_trigger,
     build_user_correction_trigger,
@@ -453,6 +454,27 @@ class AgentLoop:
                 auto_create_from_foresight=bdi_config.auto_create_from_foresight,
                 on_intention=_on_bdi_intention,
             )
+
+            # ── InnerMonologueEngine (CS-004) ───────────────────────
+            self._inner_monologue_engine: Any = None
+            _ime_enabled = getattr(
+                getattr(self, "_meta_cognition_config", None),
+                "inner_monologue_enabled",
+                True,
+            )
+            if _ime_enabled:
+                from OriginAgent.agent.inner_monologue_engine import InnerMonologueEngine
+                self._inner_monologue_engine = InnerMonologueEngine(
+                    workspace=self.workspace,
+                    deliberation_engine=self._bdi_engine,
+                    substrate=getattr(self, "_thought_substrate", None),
+                    desire_store=self._desire_store,
+                    enabled=_ime_enabled,
+                )
+                self._bdi_engine.set_on_cycle_complete(
+                    self._inner_monologue_engine.on_bdi_cycle
+                )
+
             logger.info("BDI: DeliberationEngine initialized")
 
     def _build_transcription_provider(self, config: dict[str, Any] | None = None) -> Any | None:
@@ -2269,51 +2291,84 @@ class AgentLoop:
                     return
 
                 if status in {"error", "policy_denied"}:
-                    trigger = build_tool_failure_trigger(
-                        session_key=session_key,
-                        tool_name=name,
-                        params=params,
-                        status=status,
-                        error_kind=error_kind,
-                        policy_rule=policy_rule,
-                    )
-                    if trigger is not None:
-                        loop._record_meta_trigger(
-                            trigger,
-                            turn_id=getattr(loop, "_current_meta_turn_id", None),
+                    fusion = getattr(loop, "_perception_fusion", None)
+                    if fusion is not None and fusion.enabled:
+                        _re = fusion.bridge_tool_result(
+                            session_key=session_key,
+                            tool_name=name,
+                            status=status,
+                            params=params,
+                            error_kind=error_kind,
                         )
+                        if _re is not None:
+                            _t = bridge_runtime_event_to_trigger(_re)
+                            if _t is not None:
+                                loop._record_meta_trigger(
+                                    _t,
+                                    turn_id=getattr(loop, "_current_meta_turn_id", None),
+                                )
+                    else:
+                        trigger = build_tool_failure_trigger(
+                            session_key=session_key,
+                            tool_name=name,
+                            params=params,
+                            status=status,
+                            error_kind=error_kind,
+                            policy_rule=policy_rule,
+                        )
+                        if trigger is not None:
+                            loop._record_meta_trigger(
+                                trigger,
+                                turn_id=getattr(loop, "_current_meta_turn_id", None),
+                            )
 
                 if name == "complete_goal" and status == "success":
-                    session = loop.sessions.get_or_create(session_key)
-                    before_status = None
-                    raw = goal_state_raw(session.metadata)
-                    parsed = parse_goal_state(raw)
-                    if isinstance(parsed, dict):
-                        before_status = parsed.get("status")
-                    trigger = build_task_completion_trigger(
-                        session_key=session_key,
-                        session_metadata=dict(session.metadata or {}),
-                        params=params,
-                    )
-                    if trigger is not None:
-                        payload = dict(trigger.payload)
-                        payload["goal_status_before_completion"] = before_status or "active"
-                        trigger = MetaTrigger(
-                            trigger_id=trigger.trigger_id,
-                            session_key=trigger.session_key,
-                            trigger_type=trigger.trigger_type,
-                            source_type=trigger.source_type,
-                            source_reference=trigger.source_reference,
-                            severity=trigger.severity,
-                            created_at=trigger.created_at,
-                            cooldown_key=trigger.cooldown_key,
-                            evidence_refs=trigger.evidence_refs,
-                            payload=payload,
+                    fusion = getattr(loop, "_perception_fusion", None)
+                    if fusion is not None and fusion.enabled:
+                        _re = fusion.bridge_tool_result(
+                            session_key=session_key,
+                            tool_name=name,
+                            status=status,
+                            params=params,
                         )
-                        loop._record_meta_trigger(
-                            trigger,
-                            turn_id=getattr(loop, "_current_meta_turn_id", None),
+                        if _re is not None:
+                            _t = bridge_runtime_event_to_trigger(_re)
+                            if _t is not None:
+                                loop._record_meta_trigger(
+                                    _t,
+                                    turn_id=getattr(loop, "_current_meta_turn_id", None),
+                                )
+                    else:
+                        session = loop.sessions.get_or_create(session_key)
+                        before_status = None
+                        raw = goal_state_raw(session.metadata)
+                        parsed = parse_goal_state(raw)
+                        if isinstance(parsed, dict):
+                            before_status = parsed.get("status")
+                        trigger = build_task_completion_trigger(
+                            session_key=session_key,
+                            session_metadata=dict(session.metadata or {}),
+                            params=params,
                         )
+                        if trigger is not None:
+                            payload = dict(trigger.payload)
+                            payload["goal_status_before_completion"] = before_status or "active"
+                            trigger = MetaTrigger(
+                                trigger_id=trigger.trigger_id,
+                                session_key=trigger.session_key,
+                                trigger_type=trigger.trigger_type,
+                                source_type=trigger.source_type,
+                                source_reference=trigger.source_reference,
+                                severity=trigger.severity,
+                                created_at=trigger.created_at,
+                                cooldown_key=trigger.cooldown_key,
+                                evidence_refs=trigger.evidence_refs,
+                                payload=payload,
+                            )
+                            loop._record_meta_trigger(
+                                trigger,
+                                turn_id=getattr(loop, "_current_meta_turn_id", None),
+                            )
                         
 
                 if existing is not None:
@@ -2355,13 +2410,24 @@ class AgentLoop:
         try:
             self._current_meta_turn_id = ctx.turn_id
             self._meta_cognition_fast_path_refs = set()
-            trigger = build_user_correction_trigger(
-                session_key=ctx.session_key,
-                user_message=ctx.msg.content,
-                last_assistant_message=latest_assistant_message(ctx.all_messages),
-            )
-            if trigger is not None:
-                self._record_meta_trigger(trigger, turn_id=ctx.turn_id)
+            fusion = getattr(self, "_perception_fusion", None)
+            if fusion is not None and fusion.enabled:
+                _re = fusion.bridge_user_message(
+                    session_key=ctx.session_key,
+                    text=ctx.msg.content,
+                )
+                if _re is not None:
+                    _t = bridge_runtime_event_to_trigger(_re)
+                    if _t is not None:
+                        self._record_meta_trigger(_t, turn_id=ctx.turn_id)
+            else:
+                trigger = build_user_correction_trigger(
+                    session_key=ctx.session_key,
+                    user_message=ctx.msg.content,
+                    last_assistant_message=latest_assistant_message(ctx.all_messages),
+                )
+                if trigger is not None:
+                    self._record_meta_trigger(trigger, turn_id=ctx.turn_id)
             runtime.reset_turn(ctx.turn_id)
             self._last_meta_cognition_summary = runtime.summary()
         except Exception:
