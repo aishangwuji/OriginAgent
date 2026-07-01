@@ -59,6 +59,29 @@ _MAX_SIMILAR_PATTERNS = 3
 _MAX_SIMILAR_REFLECTIONS = 2
 
 
+def _build_observation_summary(turn_snapshot: dict[str, Any]) -> str:
+    """Compact snapshot summary for the ThoughtFrame observation field."""
+    parts: list[str] = []
+    user_msg = turn_snapshot.get("user_message")
+    if user_msg:
+        parts.append(f"user: {redact_meta_text(user_msg, max_chars=240)}")
+    world = turn_snapshot.get("world_summary_preview")
+    if world:
+        parts.append(f"world: {redact_meta_text(world, max_chars=200)}")
+    tool_count = len(turn_snapshot.get("tool_results") or [])
+    if tool_count:
+        parts.append(f"tools: {tool_count}")
+    return " | ".join(parts) if parts else "(empty)"
+
+
+def _extract_active_goal(session_key: str) -> str:
+    """Extract an active goal string from the session metadata for the frame."""
+    # Minimal Phase 1:  return empty — enriched by InnerMonologueEngine in Phase 2.
+    _ = session_key  # placeholder for future session.metadata lookup
+    return ""
+
+
+
 @dataclass(frozen=True)
 class MetaReflectionArtifacts:
     journals: list[ThoughtJournalEntry] = field(default_factory=list)
@@ -98,6 +121,7 @@ class MetaCognitionReflector:
         sessions: Any,
         working_memory: Any,
         context_config: Any | None = None,
+        substrate: Any | None = None,
     ) -> None:
         self.workspace = Path(workspace)
         self.config = config
@@ -108,6 +132,7 @@ class MetaCognitionReflector:
         self.sessions = sessions
         self.working_memory = working_memory
         self.context_config = context_config
+        self._substrate = substrate
         self._candidate_writer = GovernedMemoryWriter(self.workspace)
         self._running = 0
         self._consecutive_failures = 0
@@ -222,6 +247,17 @@ class MetaCognitionReflector:
                 ),
             )
 
+        # ── open ThoughtFrame (CogniSphere CS-002) ─────────────────────
+        substrate = self._substrate
+        if substrate is not None:
+            substrate.open_frame(
+                session_key,
+                trigger_refs=[t.trigger_id for t in triggers],
+                observation_summary=_build_observation_summary(turn_snapshot),
+                active_goal=_extract_active_goal(session_key),
+                confidence=0.0,
+            )
+
         self._running += 1
         try:
             session = self.sessions.get_or_create(session_key)
@@ -236,6 +272,8 @@ class MetaCognitionReflector:
                 )
             ]
             if not self.structured_reflection_enabled:
+                if substrate is not None:
+                    substrate.close_frame(session_key, enrichment={"strategy_summary": "minimal_journal_only"})
                 return self._remember(
                     MetaReflectionResult(
                         status="ok",
@@ -256,6 +294,8 @@ class MetaCognitionReflector:
                     ),
                 )
             if not reflectable_triggers:
+                if substrate is not None:
+                    substrate.close_frame(session_key, enrichment={"strategy_summary": "journal_only"})
                 return self._remember(
                     MetaReflectionResult(
                         status="ok",
@@ -365,6 +405,18 @@ class MetaCognitionReflector:
                 patterns=patterns,
                 evolution_seeds=evolution_seeds,
             )
+            if substrate is not None:
+                last_reflection = reflections[-1] if reflections else None
+                enrichment: dict[str, Any] = {
+                    "strategy_summary": (enriched.strategy_summary if enriched else ""),
+                    "expected_outcome": (enriched.expected_outcome if enriched else ""),
+                    "actual_outcome": (enriched.actual_outcome if enriched else ""),
+                    "mismatch_summary": (enriched.mismatch_summary if enriched else ""),
+                    "assumptions": (enriched.assumptions if enriched else []),
+                    "evidence_refs": [t.trigger_id for t in triggers],
+                    "retention_hint": (last_reflection.retention_hint if last_reflection is not None else "discard"),
+                }
+                substrate.close_frame(session_key, enrichment=enrichment)
             return self._remember(
                 MetaReflectionResult(
                     status="ok",
@@ -398,6 +450,8 @@ class MetaCognitionReflector:
             )
         except Exception as exc:
             logger.exception("Meta cognition reflection failed")
+            if substrate is not None:
+                substrate.close_frame(session_key)
             return self._remember(
                 MetaReflectionResult(
                     status="error",
