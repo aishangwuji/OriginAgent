@@ -11,6 +11,7 @@ from __future__ import annotations
 import hashlib
 import json
 import uuid
+from typing import Any
 
 from OriginAgent.agent.skill_bootstrapper_models import (
     ActionTraceDigest,
@@ -24,11 +25,7 @@ def _new_id(prefix: str = "sb") -> str:
 
 
 def build_fingerprint(digest: ActionTraceDigest) -> str:
-    """Return the deterministic fingerprint for an ``ActionTraceDigest``.
-
-    Delegates to the model's own fingerprint computation so the result is
-    always consistent with ``ActionTraceDigest.fingerprint``.
-    """
+    """Return the deterministic fingerprint for an ``ActionTraceDigest``."""
     return digest.fingerprint
 
 
