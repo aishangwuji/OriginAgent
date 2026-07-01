@@ -526,6 +526,74 @@ class AgentRuntime:
             "updated_at": str(raw.get("updated_at") or "").strip(),
         }
 
+    # ── Post-turn effects ───────────────────────────────────────
+
+    @staticmethod
+    def _nearline_turn_completed_successfully(ctx: Any) -> bool:
+        if ctx.stop_reason in {"ask_user", "error", "tool_error", "max_iterations", "empty_final_response"}:
+            return False
+        return bool((ctx.final_content or "").strip())
+
+    def _schedule_background_review(self, ctx: Any) -> None:
+        d = self._deps
+        if ctx.session is None:
+            return
+        d.background_review.refresh_config()
+        if not d.background_review.enabled:
+            return
+        if ctx.stop_reason in {"ask_user", "error", "tool_error"}:
+            return
+        if ctx.msg.channel == "system" or ctx.msg.sender_id == "subagent":
+            return
+        if not (ctx.final_content or "").strip():
+            return
+        max_recent = int(getattr(d.background_review.config, "max_recent_messages", 12) or 12)
+        messages = [dict(m) for m in ctx.session.messages if not m.get("_command")][-max_recent:]
+        d.host.schedule_background(
+            d.background_review.review_turn(
+                session_key=ctx.session_key, turn_id=ctx.turn_id,
+                channel=ctx.msg.channel, chat_id=ctx.msg.chat_id,
+                message_id=ctx.msg.metadata.get("message_id"),
+                messages=messages,
+            )
+        )
+
+    def _schedule_curator_review(self, ctx: Any) -> None:
+        d = self._deps
+        if ctx.session is None:
+            return
+        d.curator.refresh_config()
+        if not d.curator.enabled:
+            return
+        if ctx.stop_reason in {"ask_user", "error", "tool_error"}:
+            return
+        if ctx.msg.channel == "system" or ctx.msg.sender_id == "subagent":
+            return
+        if not (ctx.final_content or "").strip():
+            return
+        d.host.schedule_background(
+            d.curator.review_workspace(session_key=ctx.session_key, turn_id=ctx.turn_id)
+        )
+
+    def _schedule_nearline_memory(self, ctx: Any) -> None:
+        d = self._deps
+        if ctx.session is None:
+            return
+        service = d.nearline_memory
+        if service is None or not getattr(service, "enabled", False):
+            return
+        if not self._nearline_turn_completed_successfully(ctx):
+            return
+        actor_id = (ctx.runtime_context.actor_id
+                    if ctx.runtime_context is not None and getattr(ctx.runtime_context, "actor_id", None)
+                    else "user")
+        d.host.schedule_background(
+            service.process_turn(
+                session=ctx.session, channel=ctx.msg.channel, chat_id=ctx.msg.chat_id,
+                actor_id=actor_id, turn_id=ctx.turn_id,
+            )
+        )
+
     # ── Outbound assembly ───────────────────────────────────────
 
     def _assemble_outbound(

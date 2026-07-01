@@ -2573,7 +2573,8 @@ class AgentLoop:
         )
 
     def _schedule_background_review(self, ctx: TurnContext) -> None:
-        """Schedule a controlled learning review for successful foreground turns."""
+        if hasattr(self, "_runtime") and self._runtime is not None:
+            return self._runtime._schedule_background_review(ctx)
         if ctx.session is None:
             return
         self.background_review.refresh_config()
@@ -2585,28 +2586,19 @@ class AgentLoop:
             return
         if not (ctx.final_content or "").strip():
             return
-
-        max_recent = int(
-            getattr(self.background_review.config, "max_recent_messages", 12) or 12
-        )
-        messages = [
-            dict(message)
-            for message in ctx.session.messages
-            if not message.get("_command")
-        ][-max_recent:]
+        max_recent = int(getattr(self.background_review.config, "max_recent_messages", 12) or 12)
+        messages = [dict(m) for m in ctx.session.messages if not m.get("_command")][-max_recent:]
         self._schedule_background(
             self.background_review.review_turn(
-                session_key=ctx.session_key,
-                turn_id=ctx.turn_id,
-                channel=ctx.msg.channel,
-                chat_id=ctx.msg.chat_id,
-                message_id=ctx.msg.metadata.get("message_id"),
-                messages=messages,
+                session_key=ctx.session_key, turn_id=ctx.turn_id,
+                channel=ctx.msg.channel, chat_id=ctx.msg.chat_id,
+                message_id=ctx.msg.metadata.get("message_id"), messages=messages,
             )
         )
 
     def _schedule_curator_review(self, ctx: TurnContext) -> None:
-        """Schedule deterministic curator review after successful foreground turns."""
+        if hasattr(self, "_runtime") and self._runtime is not None:
+            return self._runtime._schedule_curator_review(ctx)
         if ctx.session is None:
             return
         self.curator.refresh_config()
@@ -2618,15 +2610,11 @@ class AgentLoop:
             return
         if not (ctx.final_content or "").strip():
             return
-        self._schedule_background(
-            self.curator.review_workspace(
-                session_key=ctx.session_key,
-                turn_id=ctx.turn_id,
-            )
-        )
+        self._schedule_background(self.curator.review_workspace(session_key=ctx.session_key, turn_id=ctx.turn_id))
 
     def _schedule_nearline_memory(self, ctx: TurnContext) -> None:
-        """Schedule nearline sidecar extraction without blocking the foreground reply."""
+        if hasattr(self, "_runtime") and self._runtime is not None:
+            return self._runtime._schedule_nearline_memory(ctx)
         if ctx.session is None:
             return
         service = getattr(self, "nearline_memory", None)
@@ -2634,30 +2622,12 @@ class AgentLoop:
             return
         if not self._nearline_turn_completed_successfully(ctx):
             return
-        actor_id = (
-            ctx.runtime_context.actor_id
-            if ctx.runtime_context is not None and getattr(ctx.runtime_context, "actor_id", None)
-            else "user"
-        )
-        self._schedule_background(
-            service.process_turn(
-                session=ctx.session,
-                channel=ctx.msg.channel,
-                chat_id=ctx.msg.chat_id,
-                actor_id=actor_id,
-                turn_id=ctx.turn_id,
-            )
-        )
+        actor_id = ctx.runtime_context.actor_id if ctx.runtime_context is not None and getattr(ctx.runtime_context, "actor_id", None) else "user"
+        self._schedule_background(service.process_turn(session=ctx.session, channel=ctx.msg.channel, chat_id=ctx.msg.chat_id, actor_id=actor_id, turn_id=ctx.turn_id))
 
     @staticmethod
     def _nearline_turn_completed_successfully(ctx: TurnContext) -> bool:
-        if ctx.stop_reason in {
-            "ask_user",
-            "error",
-            "tool_error",
-            "max_iterations",
-            "empty_final_response",
-        }:
+        if ctx.stop_reason in {"ask_user", "error", "tool_error", "max_iterations", "empty_final_response"}:
             return False
         return bool((ctx.final_content or "").strip())
 
