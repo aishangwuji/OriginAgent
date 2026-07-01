@@ -1962,89 +1962,23 @@ class AgentLoop:
         )
 
     @staticmethod
+    @staticmethod
     def _pending_confirmation_ref(confirmation: Any) -> dict[str, Any]:
-        return {
-            "confirmation_id": str(getattr(confirmation, "confirmation_id", "") or "").strip(),
-            "scope": str(getattr(confirmation, "scope", "") or "").strip(),
-            "status": str(getattr(confirmation, "status", "") or "").strip(),
-            "risk": str(getattr(confirmation, "risk", "") or "").strip(),
-            "updated_at": str(
-                getattr(confirmation, "consumed_at", None)
-                or getattr(confirmation, "created_at", None)
-                or ""
-            ).strip(),
-        }
+        return AgentRuntime._pending_confirmation_ref(confirmation)
 
     def _collect_pending_confirmation_refs(self, session: Session) -> list[dict[str, Any]]:
-        refs: list[dict[str, Any]] = []
-        try:
-            confirmations = self._confirmation_store.read_all()
-        except Exception:
-            return refs
-        for confirmation in confirmations:
-            scope = str(getattr(confirmation, "scope", "") or "").strip()
-            metadata = getattr(confirmation, "metadata", {}) or {}
-            session_ref = str(metadata.get("arc_session") or "").strip() if isinstance(metadata, dict) else ""
-            if scope and session.key not in scope and session_ref != session.key:
-                continue
-            ref = self._pending_confirmation_ref(confirmation)
-            if ref["confirmation_id"]:
-                refs.append(ref)
-        return refs[:8]
+        if hasattr(self, "_runtime") and self._runtime is not None:
+            return self._runtime._collect_pending_confirmation_refs(session)
+        return []
 
-    def _save_continuity_checkpoint(
-        self,
-        session: Session,
-        *,
-        runtime_context: RuntimeContext | None,
-    ) -> dict[str, Any]:
-        working = self.working_memory.load(
-            session,
-            identity=runtime_context.identity if runtime_context is not None else None,
-        )
-        profile_ref = None
-        try:
-            profiles = self.nearline_memory.store.read_profiles(limit=1)
-            if profiles:
-                profile = profiles[-1]
-                profile_ref = {
-                    "profile_id": profile.profile_id,
-                    "updated_at": profile.updated_at,
-                }
-        except Exception:
-            profile_ref = None
-        # Phase 5: simplified checkpoint — episode summaries, tone notes, and
-        # key quotes are handled by the episode system, not the checkpoint.
-        checkpoint = {
-            "session_key": session.key,
-            "current_goal": working.current_goal,
-            "current_plan": list(working.current_plan or []),
-            "open_loops": list(working.open_loops or []),
-            "active_constraints": list(working.active_constraints or []),
-            "pending_confirmation_refs": self._collect_pending_confirmation_refs(session),
-            "updated_at": _utcnow_iso(),
-        }
-        session.metadata[CONTINUITY_CHECKPOINT_KEY] = checkpoint
-        return checkpoint
+    def _save_continuity_checkpoint(self, session: Session, *, runtime_context: RuntimeContext | None) -> dict[str, Any]:
+        if hasattr(self, "_runtime") and self._runtime is not None:
+            return self._runtime._save_continuity_checkpoint(session, runtime_context=runtime_context)
+        return {"session_key": session.key, "current_goal": None}
 
     @staticmethod
     def _load_continuity_checkpoint(session: Session) -> dict[str, Any] | None:
-        raw = session.metadata.get(CONTINUITY_CHECKPOINT_KEY)
-        if not isinstance(raw, dict):
-            return None
-        return {
-            "session_key": str(raw.get("session_key") or session.key),
-            "current_goal": _trim_text(raw.get("current_goal"), max_chars=1000),
-            "current_plan": [str(item).strip() for item in raw.get("current_plan", []) if str(item).strip()][:8],
-            "open_loops": [str(item).strip() for item in raw.get("open_loops", []) if str(item).strip()][:8],
-            "active_constraints": [
-                str(item).strip() for item in raw.get("active_constraints", []) if str(item).strip()
-            ][:8],
-            "pending_confirmation_refs": [
-                dict(item) for item in raw.get("pending_confirmation_refs", []) if isinstance(item, dict)
-            ][:8],
-            "updated_at": str(raw.get("updated_at") or "").strip(),
-        }
+        return AgentRuntime._load_continuity_checkpoint(session)
 
     def _snapshot_context_assembly_from_messages(
         self,
