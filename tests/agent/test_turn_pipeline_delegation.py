@@ -92,7 +92,6 @@ async def test_process_message_non_system_uses_turn_pipeline_state_machine() -> 
     loop._refresh_provider_snapshot = MagicMock()
     loop._process_system_message = AsyncMock()
     loop._turn_pipeline = RecordingPipeline()
-    loop._current_meta_turn_id = None
     loop._turn_orchestrator = TurnOrchestrator(
         TurnOrchestratorDeps(
             turn_pipeline=loop._turn_pipeline,
@@ -100,8 +99,6 @@ async def test_process_message_non_system_uses_turn_pipeline_state_machine() -> 
             system_turn_handler=SimpleNamespace(process_message=loop._process_system_message),
             scan_meta_triggers_for_turn=MagicMock(),
             schedule_meta_cognition_reflection=MagicMock(),
-            set_current_meta_turn_id=lambda turn_id: setattr(loop, "_current_meta_turn_id", turn_id),
-            clear_current_meta_turn_id=lambda: setattr(loop, "_current_meta_turn_id", None),
         )
     )
 

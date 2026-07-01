@@ -406,6 +406,7 @@ class AgentTurnPipeline:
             session_key=ctx.session_key,
             capability_snapshot=snapshot,
             runtime_context=runtime_context,
+            turn_id=ctx.turn_id,
         )
         if message_tool := tools.get("message"):
             if isinstance(message_tool, MessageTool):
@@ -701,6 +702,7 @@ class AgentTurnPipeline:
             session_key=ctx.session_key,
             capability_snapshot=automation_snapshot,
             runtime_context=automation_runtime_context,
+            turn_id=ctx.turn_id,
         )
         result, precondition = executor.submit_automation(
             typed_action,

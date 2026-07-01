@@ -382,7 +382,6 @@ class AgentLoop:
         self._last_meta_trigger_scan: list[dict[str, Any]] = []
         self._last_meta_artifacts: dict[str, Any] = {}
         self._last_world_attention_write: dict[str, Any] = {}
-        self._current_meta_turn_id: str | None = None
         self._meta_cognition_fast_path_refs: set[str] = set()
         self.commands = CommandRouter()
         register_builtin_commands(self.commands)
@@ -407,8 +406,6 @@ class AgentLoop:
                 system_turn_handler=self._system_turn_handler,
                 scan_meta_triggers_for_turn=self._scan_meta_triggers_for_turn,
                 schedule_meta_cognition_reflection=self._schedule_meta_cognition_reflection,
-                set_current_meta_turn_id=self._set_current_meta_turn_id,
-                clear_current_meta_turn_id=self._clear_current_meta_turn_id,
             )
         )
         self._message_dispatcher = MessageDispatcher(MessageDispatcherDeps(loop=self))
@@ -916,12 +913,6 @@ class AgentLoop:
             record_context_assembly=lambda payload: self._record_context_assembly(payload),
         )
 
-    def _set_current_meta_turn_id(self, turn_id: str) -> None:
-        self._current_meta_turn_id = turn_id
-
-    def _clear_current_meta_turn_id(self) -> None:
-        self._current_meta_turn_id = None
-
     def _sync_subagent_runtime_limits(self) -> None:
         """Keep subagent runtime limits aligned with mutable loop settings."""
         self.subagents.max_iterations = self.max_iterations
@@ -1199,6 +1190,7 @@ class AgentLoop:
         trigger: str | None = None,
         capability_snapshot: CapabilitySnapshot | None = None,
         runtime_context: RuntimeContext | None = None,
+        turn_id: str | None = None,
     ) -> None:
         """Update context for all tools that need routing info."""
         snapshot = capability_snapshot or self._capability_snapshot
@@ -1215,6 +1207,7 @@ class AgentLoop:
             runtime_context=runtime_context,
             unified_session=self._unified_session,
             unified_session_key=UNIFIED_SESSION_KEY,
+            turn_id=turn_id,
         )
 
     @staticmethod
@@ -2313,7 +2306,7 @@ class AgentLoop:
                             if _t is not None:
                                 loop._record_meta_trigger(
                                     _t,
-                                    turn_id=getattr(loop, "_current_meta_turn_id", None),
+                                    turn_id=tool_runtime_context.turn_id,
                                 )
                     else:
                         trigger = build_tool_failure_trigger(
@@ -2327,7 +2320,7 @@ class AgentLoop:
                         if trigger is not None:
                             loop._record_meta_trigger(
                                 trigger,
-                                turn_id=getattr(loop, "_current_meta_turn_id", None),
+                                turn_id=tool_runtime_context.turn_id,
                             )
 
                 if name == "complete_goal" and status == "success":
@@ -2344,7 +2337,7 @@ class AgentLoop:
                             if _t is not None:
                                 loop._record_meta_trigger(
                                     _t,
-                                    turn_id=getattr(loop, "_current_meta_turn_id", None),
+                                    turn_id=tool_runtime_context.turn_id,
                                 )
                     else:
                         session = loop.sessions.get_or_create(session_key)
@@ -2375,7 +2368,7 @@ class AgentLoop:
                             )
                             loop._record_meta_trigger(
                                 trigger,
-                                turn_id=getattr(loop, "_current_meta_turn_id", None),
+                                turn_id=tool_runtime_context.turn_id,
                             )
                         
 
@@ -2416,7 +2409,6 @@ class AgentLoop:
         if runtime is None:
             return
         try:
-            self._current_meta_turn_id = ctx.turn_id
             self._meta_cognition_fast_path_refs = set()
             fusion = getattr(self, "_perception_fusion", None)
             if fusion is not None and fusion.enabled:
@@ -2440,8 +2432,6 @@ class AgentLoop:
             self._last_meta_cognition_summary = runtime.summary()
         except Exception:
             logger.debug("Meta-cognition turn-end scan failed", exc_info=True)
-        finally:
-            self._current_meta_turn_id = None
 
     def _maybe_apply_meta_fast_path(self, trigger: MetaTrigger) -> None:
         session_key = str(trigger.session_key or "").strip()

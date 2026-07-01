@@ -42,6 +42,7 @@ def set_tool_context(
     runtime_context: RuntimeContext | None = None,
     unified_session: bool = False,
     unified_session_key: str = "unified:default",
+    turn_id: str | None = None,
 ) -> None:
     """Update context for all tools that need routing info."""
     if runtime_context is not None:
@@ -97,6 +98,7 @@ def set_tool_context(
             trigger=trigger,
             channel=channel,
             chat_id=chat_id,
+            turn_id=turn_id,
         )
     if hasattr(tools, "set_audit_context"):
         tools.set_audit_context(actor_id=actor_id, session_key=effective_key)

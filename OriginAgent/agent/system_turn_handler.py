@@ -136,6 +136,7 @@ class SystemTurnHandler:
             session_key=key,
             capability_snapshot=snapshot,
             runtime_context=runtime_context,
+            turn_id=None,
         )
 
         history = session.get_history(

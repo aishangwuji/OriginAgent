@@ -59,6 +59,7 @@ class ToolRuntimeContext:
     trigger: str | None = None
     channel: str | None = None
     chat_id: str | None = None
+    turn_id: str | None = None
 
 
 class ToolExecutionObserver(Protocol):
@@ -154,6 +155,7 @@ class ToolRegistry:
         trigger: str | None = None,
         channel: str | None = None,
         chat_id: str | None = None,
+        turn_id: str | None = None,
     ) -> None:
         self._runtime_context = ToolRuntimeContext(
             actor_id=actor_id,
@@ -161,6 +163,7 @@ class ToolRegistry:
             trigger=trigger,
             channel=channel,
             chat_id=chat_id,
+            turn_id=turn_id,
         )
 
     @property
