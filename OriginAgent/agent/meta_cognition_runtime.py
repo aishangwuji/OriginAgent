@@ -42,8 +42,15 @@ class MetaCognitionRuntime:
     def __init__(self, *, config: Any, audit: JsonlMetaCognitionAuditLedger):
         self._config = config
         self._audit = audit
-        self._last_seen_by_source: dict[tuple[str, str, str], str] = {}
-        self._last_seen_by_session_and_type: dict[tuple[str, str], str] = {}
+        # ── Per-turn dedup isolation ──────────────────────────────────
+        self._dedup_by_turn: dict[str, dict[str, dict]] = {}
+        # _dedup_by_turn[turn_id] = {
+        #     "by_source": {(session_key, trigger_type, source_ref): created_at},
+        #     "by_session_type": {(session_key, key): created_at},
+        # }
+        # ── Fallback flat state for callers without turn_id ────────────
+        self._fallback_last_seen_by_source: dict[tuple[str, str, str], str] = {}
+        self._fallback_last_seen_by_session_and_type: dict[tuple[str, str], str] = {}
         self._status = MetaCognitionRuntimeStatus()
         self._recent_results: list[dict[str, Any]] = []
         self._queue: list[dict[str, Any]] = []
@@ -56,6 +63,18 @@ class MetaCognitionRuntime:
     @property
     def trigger_collection_enabled(self) -> bool:
         return bool(getattr(self._config, "trigger_collection_enabled", False))
+
+    def start_turn(self, turn_id: str) -> None:
+        """Initialize per-turn dedup isolation for a new turn."""
+        if turn_id not in self._dedup_by_turn:
+            self._dedup_by_turn[turn_id] = {
+                "by_source": {},
+                "by_session_type": {},
+            }
+
+    def end_turn(self, turn_id: str) -> None:
+        """Clean up per-turn dedup state after turn completes."""
+        self._dedup_by_turn.pop(turn_id, None)
 
     def record_trigger(
         self,
@@ -73,8 +92,18 @@ class MetaCognitionRuntime:
             self._remember_result(trigger, result)
             return result
 
+        # Determine which dedup store to use
+        if turn_id:
+            self.start_turn(turn_id)  # ensure turn state exists
+            dedup = self._dedup_by_turn[turn_id]
+            by_source = dedup["by_source"]
+            by_session_type = dedup["by_session_type"]
+        else:
+            by_source = self._fallback_last_seen_by_source
+            by_session_type = self._fallback_last_seen_by_session_and_type
+
         source_key = (trigger.session_key, trigger.trigger_type, trigger.source_reference)
-        if source_key in self._last_seen_by_source:
+        if source_key in by_source:
             result = RecordTriggerResult(
                 accepted=False,
                 decision="suppressed_duplicate",
@@ -97,7 +126,7 @@ class MetaCognitionRuntime:
             (trigger.session_key, trigger.trigger_type),
         ]
         for key in session_keys:
-            last = self._last_seen_by_session_and_type.get(key)
+            last = by_session_type.get(key)
             if not last:
                 continue
             delta = now_ts - _iso_to_ts(last)
@@ -137,9 +166,9 @@ class MetaCognitionRuntime:
         self._audit.append_trigger(trigger)
         result = RecordTriggerResult(accepted=True, decision="accepted")
         self._audit.append_runtime_decision(trigger=trigger, result=result, turn_id=turn_id)
-        self._last_seen_by_source[source_key] = trigger.created_at
-        self._last_seen_by_session_and_type[(trigger.session_key, "__session__")] = trigger.created_at
-        self._last_seen_by_session_and_type[(trigger.session_key, trigger.trigger_type)] = trigger.created_at
+        by_source[source_key] = trigger.created_at
+        by_session_type[(trigger.session_key, "__session__")] = trigger.created_at
+        by_session_type[(trigger.session_key, trigger.trigger_type)] = trigger.created_at
         self._status.turn_counters[turn_key] = accepted_in_turn + 1
         self._status.accepted_total += 1
         self._status.last_recorded_at = trigger.created_at

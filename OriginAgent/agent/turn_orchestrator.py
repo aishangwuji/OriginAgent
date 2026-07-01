@@ -64,6 +64,10 @@ class TurnOrchestrator:
             capability_snapshot=capability_snapshot,
         )
         self._deps.set_current_meta_turn_id(ctx.turn_id)
+        # Start turn-scoped dedup isolation on the meta runtime
+        meta_runtime = getattr(self._deps, "meta_cognition_runtime", None)
+        if meta_runtime and hasattr(meta_runtime, "start_turn"):
+            meta_runtime.start_turn(ctx.turn_id)
         try:
             while ctx.state is not TurnState.DONE:
                 handler_name = f"state_{ctx.state.name.lower()}"
@@ -120,4 +124,7 @@ class TurnOrchestrator:
             self._deps.schedule_meta_cognition_reflection(ctx)
             return ctx.outbound
         finally:
+            # End turn-scoped dedup isolation
+            if meta_runtime and hasattr(meta_runtime, "end_turn"):
+                meta_runtime.end_turn(ctx.turn_id)
             self._deps.clear_current_meta_turn_id()
