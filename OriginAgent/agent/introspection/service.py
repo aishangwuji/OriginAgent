@@ -30,6 +30,25 @@ from OriginAgent.memory.policy import nearline_runtime_enabled
 from OriginAgent.memory.store import NearlineMemoryStore
 
 
+def _resolve_state_for_inspection(loop: Any, session_key: str | None) -> Any | None:
+    """Peek at the SessionStateHolder entry for *session_key* without creating one.
+
+    This is a read-only inspector helper that avoids the dual-write pattern.
+    Returns ``None`` when there is no session_key or no tracked state.
+    """
+    if session_key is None:
+        return None
+    state_holder = getattr(loop, "_state_holder", None)
+    if state_holder is None:
+        return None
+    # Access internal dict directly — this is an inspection-only path
+    # that must not create entries.
+    states = getattr(state_holder, "_states", None)
+    if states is None or session_key not in states:
+        return None
+    return state_holder.get(session_key)
+
+
 class RuntimeIntrospectionService:
     """Build safe read models for runtime introspection tools.
 
@@ -279,17 +298,23 @@ class RuntimeIntrospectionService:
             return {}
         working_memory = getattr(loop, "working_memory", None)
         sessions = getattr(loop, "sessions", None)
-        runtime_context = getattr(loop, "_last_runtime_context", None)
         session_key = getattr(loop, "_last_continuity_session_key", None)
-        last_context_assembly = dict(getattr(loop, "_last_context_assembly", {}) or {})
+
+        # Read from SessionStateHolder — no flat-attribute dual-writes.
+        state = _resolve_state_for_inspection(loop, session_key)
+
+        runtime_context = getattr(state, "last_runtime_context", None) if state is not None else None
+        last_context_assembly = dict(getattr(state, "last_context_assembly", {}) or {}) if state is not None else {}
+        recovered_checkpoint = (
+            dict(getattr(state, "last_recovered_continuity_checkpoint", {}) or {})
+            if state is not None else {}
+        )
         out: dict[str, Any] = {
             "contract_version": self.CONTINUITY_CONTRACT_VERSION,
             "enabled": bool(working_memory is not None),
             "current_session_key": session_key,
             "last_context_assembly": last_context_assembly,
-            "recovered_continuity_checkpoint": dict(
-                getattr(loop, "_last_recovered_continuity_checkpoint", {}) or {}
-            ),
+            "recovered_continuity_checkpoint": recovered_checkpoint,
         }
         if last_context_assembly:
             out["assembly"] = {
@@ -324,7 +349,7 @@ class RuntimeIntrospectionService:
                 )
             except Exception:
                 out["working_memory"] = {}
-        out["governance"] = dict(getattr(loop, "_last_governance_audit", {}))
+        out["governance"] = dict(getattr(state, "last_governance_audit", {}) or {}) if state is not None else {}
         world_state = getattr(loop, "world_state", None)
         if world_state is not None and sessions is not None and session_key:
             try:
