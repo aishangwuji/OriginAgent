@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING, Any, Awaitable, Callable
 from loguru import logger
 
 from OriginAgent.agent import model_presets as preset_helpers
+from OriginAgent.agent.agent_host import AgentHost, AgentHostDependencies
 from OriginAgent.agent.agent_runtime_context import (
     build_bus_progress_callback,
     build_retry_wait_callback,
@@ -488,6 +489,16 @@ class AgentLoop:
                 )
 
             logger.info("BDI: DeliberationEngine initialized")
+
+        # ── AgentHost: infrastructure lifecycle ──────────────────────────
+        self._host = AgentHost(AgentHostDependencies(
+            tools=self.tools,
+            mcp_servers=self._mcp_servers,
+            cognitive_runtime=self._cognitive_runtime,
+        ))
+        # Re-point _background_tasks so tests and compat code that read
+        # loop._background_tasks see the host-owned set.
+        self._background_tasks = self._host._background_tasks  # type: ignore[assignment]
 
     def _build_transcription_provider(self, config: dict[str, Any] | None = None) -> Any | None:
         config = dict(config or {})
@@ -1102,121 +1113,12 @@ class AgentLoop:
         register_plugin_tools(self.tools, context=self._build_tool_context())
 
     async def _connect_mcp(self) -> None:
-        """Connect to configured MCP servers (one-time, lazy)."""
-        if not self._mcp_servers:
-            return
-        while True:
-            ready: asyncio.Future[bool] | None = None
-            runtime_task: asyncio.Task[None] | None = None
-            async with self._mcp_lifecycle_lock:
-                if self._mcp_state == "connected":
-                    return
-                if self._mcp_state == "connecting":
-                    ready = self._mcp_ready
-                elif self._mcp_state == "closing":
-                    runtime_task = self._mcp_runtime_task
-                else:
-                    ready = asyncio.get_running_loop().create_future()
-                    self._mcp_state = "connecting"
-                    self._mcp_connected = False
-                    self._mcp_connecting = True
-                    self._mcp_startup_error = None
-                    self._mcp_ready = ready
-                    self._mcp_shutdown_event = asyncio.Event()
-                    self._mcp_runtime_task = asyncio.create_task(
-                        self._run_mcp_runtime(ready, self._mcp_shutdown_event),
-                        name="originagent-mcp-runtime",
-                    )
-            if runtime_task is not None:
-                with suppress(Exception):
-                    await asyncio.shield(runtime_task)
-                continue
-            if ready is not None:
-                with suppress(Exception):
-                    await asyncio.shield(ready)
-                return
-            return
+        """Connect to configured MCP servers (one-time, lazy).
 
-    async def _run_mcp_runtime(
-        self,
-        ready: asyncio.Future[bool],
-        shutdown_event: asyncio.Event,
-    ) -> None:
-        """Own the MCP connection lifecycle inside a single task."""
-        from OriginAgent.agent.tools.mcp import connect_mcp_servers
-
-        stacks: dict[str, AsyncExitStack] = {}
-        clear_snapshot_on_exit = False
-        try:
-            stacks = await connect_mcp_servers(
-                self._mcp_servers,
-                self.tools,
-                snapshot_out=self._mcp_snapshot,
-            )
-            if not stacks:
-                logger.warning("No MCP servers connected successfully (will retry next message)")
-                async with self._mcp_lifecycle_lock:
-                    self._mcp_stacks = {}
-                    self._mcp_connected = False
-                    self._mcp_connecting = False
-                    self._mcp_state = "disconnected"
-                    if not ready.done():
-                        ready.set_result(False)
-                return
-
-            async with self._mcp_lifecycle_lock:
-                self._mcp_stacks = stacks
-                self._mcp_connected = True
-                self._mcp_connecting = False
-                self._mcp_state = "connected"
-                self._mcp_startup_error = None
-                if not ready.done():
-                    ready.set_result(True)
-
-            await shutdown_event.wait()
-            clear_snapshot_on_exit = True
-        except asyncio.CancelledError:
-            clear_snapshot_on_exit = True
-            logger.warning("MCP runtime cancelled (will retry next message)")
-            async with self._mcp_lifecycle_lock:
-                self._mcp_stacks.clear()
-                self._mcp_snapshot.clear()
-                self._mcp_connected = False
-                self._mcp_connecting = False
-                self._mcp_state = "disconnected"
-                if not ready.done():
-                    ready.set_result(False)
-            raise
-        except BaseException as e:
-            clear_snapshot_on_exit = True
-            logger.warning("Failed to connect MCP servers (will retry next message): {}", e)
-            async with self._mcp_lifecycle_lock:
-                self._mcp_stacks.clear()
-                self._mcp_snapshot.clear()
-                self._mcp_connected = False
-                self._mcp_connecting = False
-                self._mcp_state = "disconnected"
-                self._mcp_startup_error = e
-                if not ready.done():
-                    ready.set_result(False)
-            return
-        finally:
-            for name, stack in stacks.items():
-                try:
-                    await stack.aclose()
-                except (RuntimeError, BaseExceptionGroup):
-                    logger.debug("MCP server '{}' cleanup error (can be ignored)", name)
-            async with self._mcp_lifecycle_lock:
-                if self._mcp_runtime_task is asyncio.current_task():
-                    self._mcp_stacks.clear()
-                    if clear_snapshot_on_exit:
-                        self._mcp_snapshot.clear()
-                    self._mcp_connected = False
-                    self._mcp_connecting = False
-                    self._mcp_state = "disconnected"
-                    self._mcp_runtime_task = None
-                    self._mcp_ready = None
-                    self._mcp_shutdown_event = None
+        Delegates to AgentHost; kept as compat shell for callers like
+        ``process_direct()``.
+        """
+        await self._host._connect_mcp()
 
     def _set_tool_context(
         self, channel: str, chat_id: str,
@@ -1815,9 +1717,9 @@ class AgentLoop:
     async def run(self) -> None:
         """Run the agent loop, dispatching messages as tasks to stay responsive to /stop."""
         self._running = True
-        await self._connect_mcp()
+        await self._host._connect_mcp()
         self._schedule_session_search_refresh(force=self.session_search_index.rebuild_on_start)
-        self._start_active_intent_loop()
+        self._host._start_active_intent_loop()
         if self._bdi_engine:
             await self._bdi_engine.start()
         logger.info("Agent loop started")
@@ -1828,47 +1730,26 @@ class AgentLoop:
         return await self._get_message_dispatcher().dispatch_message(msg)
 
     async def close_mcp(self) -> None:
-        """Drain pending background archives, then close MCP connections."""
-        if self._active_intent_task is not None:
-            self._active_intent_task.cancel()
-            with suppress(asyncio.CancelledError):
-                await asyncio.shield(self._active_intent_task)
-            self._active_intent_task = None
-        # Clean up stale session state before shutdown
+        """Drain pending background archives, then close MCP connections.
+
+        Delegates infrastructure shutdown to AgentHost; keeps
+        SessionStateHolder cleanup here because the holder is loop-owned.
+        """
         removed = self._state_holder.expire_stale()
         if removed > 0:
             logger.debug("SessionStateHolder: expired {} stale sessions during shutdown", removed)
-        if self._background_tasks:
-            await asyncio.gather(*self._background_tasks, return_exceptions=True)
-            self._background_tasks.clear()
-        runtime_task: asyncio.Task[None] | None = None
-        async with self._mcp_lifecycle_lock:
-            runtime_task = self._mcp_runtime_task
-            shutdown_event = self._mcp_shutdown_event
-            if runtime_task is None:
-                self._mcp_connected = False
-                self._mcp_connecting = False
-                self._mcp_state = "disconnected"
-                self._mcp_stacks.clear()
-                self._mcp_snapshot.clear()
-                return
-            self._mcp_connected = False
-            self._mcp_connecting = False
-            self._mcp_state = "closing"
-            if shutdown_event is not None:
-                shutdown_event.set()
-        with suppress(Exception):
-            await asyncio.shield(runtime_task)
+        await self._host.shutdown()
 
     def _schedule_background(self, coro) -> None:
-        """Schedule a coroutine as a tracked background task (drained on shutdown)."""
-        task = asyncio.create_task(coro)
-        self._background_tasks.add(task)
-        task.add_done_callback(self._background_tasks.discard)
+        """Schedule a coroutine as a tracked background task (drained on shutdown).
+
+        Delegates to AgentHost so all background tasks live in one place.
+        """
+        self._host.schedule_background(coro)
 
     def _start_active_intent_loop(self) -> None:
-        """Compatibility shell delegating active-intent startup to AgentCognitiveRuntime."""
-        self._active_intent_task = self._cognitive_runtime.start_active_intent_loop(
+        """Compatibility shell delegating active-intent startup to AgentHost."""
+        self._active_intent_task = self._host.start_active_intent_loop(
             self._active_intent_task
         )
 
@@ -2055,7 +1936,8 @@ class AgentLoop:
         """Stop the agent loop."""
         if self._bdi_engine:
             self._bdi_engine.stop()
-        self._running = False
+        self._host.stop()
+        self._running = False  # compat — mirrors _host.running
         logger.info("Agent loop stopping")
 
     async def _process_system_message(
