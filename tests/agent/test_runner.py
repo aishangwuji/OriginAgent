@@ -1015,7 +1015,7 @@ def test_snip_history_drops_orphaned_tool_results_from_trimmed_slice(monkeypatch
         lambda msg: token_sizes.get(str(msg.get("content")), 40),
     )
 
-    trimmed = runner._snip_history(spec, messages)
+    trimmed = runner._snip_history(spec, provider, messages)
 
     # After the fix, the user message is recovered so the sequence is valid
     # for providers that require system → user (e.g. GLM error 1214).
@@ -3395,7 +3395,7 @@ def test_snip_history_preserves_user_message_after_truncation(monkeypatch):
         lambda msg: token_sizes.get(str(msg.get("content")), 100),
     )
 
-    trimmed = runner._snip_history(spec, messages)
+    trimmed = runner._snip_history(spec, provider, messages)
 
     # The first non-system message MUST be user (not assistant).
     non_system = [m for m in trimmed if m.get("role") != "system"]
@@ -3440,7 +3440,7 @@ def test_snip_history_no_user_at_all_falls_back_gracefully(monkeypatch):
         lambda msg: 100,
     )
 
-    trimmed = runner._snip_history(spec, messages)
+    trimmed = runner._snip_history(spec, provider, messages)
 
     # Should not crash.  The result should still be a valid list.
     assert isinstance(trimmed, list)
