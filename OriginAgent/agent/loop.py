@@ -2173,163 +2173,39 @@ class AgentLoop:
         registry._execution_observer = _MetaCognitionObserver()
 
     def _record_meta_trigger(self, trigger: MetaTrigger, *, turn_id: str | None = None) -> None:
-        result = self._meta_coordinator.record_trigger(trigger, turn_id=turn_id)
-        if result is not None and result.accepted and trigger.trigger_type == "user_correction":
-            self._maybe_apply_meta_fast_path(trigger)
+        if hasattr(self, "_runtime") and self._runtime is not None:
+            return self._runtime._record_meta_trigger(trigger, turn_id=turn_id)
 
     def _scan_meta_triggers_for_turn(self, ctx: TurnContext) -> None:
-        runtime = getattr(self, "_meta_cognition_runtime", None)
-        if runtime is None:
-            return
-        try:
-            self._meta_coordinator.reset_fast_path()
-            fusion = getattr(self, "_perception_fusion", None)
-            if fusion is not None and fusion.enabled:
-                _re = fusion.bridge_user_message(
-                    session_key=ctx.session_key,
-                    text=ctx.msg.content,
-                )
-                if _re is not None:
-                    _t = bridge_runtime_event_to_trigger(_re)
-                    if _t is not None:
-                        self._record_meta_trigger(_t, turn_id=ctx.turn_id)
-            else:
-                trigger = build_user_correction_trigger(
-                    session_key=ctx.session_key,
-                    user_message=ctx.msg.content,
-                    last_assistant_message=latest_assistant_message(ctx.all_messages),
-                )
-                if trigger is not None:
-                    self._record_meta_trigger(trigger, turn_id=ctx.turn_id)
-            self._meta_coordinator.runtime_reset_turn(ctx.turn_id)
-        except Exception:
-            logger.debug("Meta-cognition turn-end scan failed", exc_info=True)
+        if hasattr(self, "_runtime") and self._runtime is not None:
+            return self._runtime._scan_meta_triggers_for_turn(ctx)
 
     def _maybe_apply_meta_fast_path(self, trigger: MetaTrigger) -> None:
-        session_key = str(trigger.session_key or "").strip()
-        if not session_key or trigger.trigger_type != "user_correction":
-            return
-        sessions = getattr(self, "sessions", None)
-        working_memory = getattr(self, "working_memory", None)
-        runtime_context = self._state_holder.get(session_key).last_runtime_context
-        if sessions is None or working_memory is None:
-            return
-        try:
-            session = sessions.get_or_create(session_key)
-            snapshot = working_memory.load(
-                session,
-                identity=getattr(runtime_context, "identity", None) if runtime_context is not None else None,
-            )
-            payload = trigger.payload if isinstance(trigger.payload, dict) else {}
-            preview_source = payload.get("user_message_preview")
-            preview = _trim_text(preview_source, max_chars=160)
-            text = f"user_correction: {preview or 'correction recorded'}".strip()
-            if text in list(getattr(snapshot, "attention_items", []) or []):
-                self._meta_coordinator.add_fast_path_ref(trigger.source_reference)
-                self._meta_coordinator.record_fast_path_decision("fast_path_duplicate_skipped")
-                return
-            working_memory.append_attention_item(
-                session,
-                text,
-                identity=getattr(runtime_context, "identity", None) if runtime_context is not None else None,
-            )
-            self._meta_coordinator.add_fast_path_ref(trigger.source_reference)
-            self._meta_coordinator.record_fast_path_decision("fast_path_working_memory_written")
-        except Exception:
-            logger.debug("Meta-cognition fast path failed", exc_info=True)
+        if hasattr(self, "_runtime") and self._runtime is not None:
+            return self._runtime._maybe_apply_meta_fast_path(trigger)
 
     def _schedule_meta_cognition_reflection(self, ctx: TurnContext) -> None:
-        reflector = getattr(self, "_meta_cognition_reflector", None)
-        runtime = getattr(self, "_meta_cognition_runtime", None)
-        if reflector is None or runtime is None:
-            return
-        if ctx.session is None:
-            return
-        if ctx.stop_reason in {"ask_user", "error", "tool_error", "system", "subagent"}:
-            return
-        if ctx.msg.channel == "system" or ctx.msg.sender_id == "subagent":
-            return
-        if not (ctx.final_content or "").strip():
-            return
-        accepted = runtime.take_accepted_triggers_for_turn(ctx.turn_id)
-        if not accepted:
-            return
-        snapshot = {
-            "user_message": ctx.msg.content,
-            "assistant_final_content": ctx.final_content or "",
-            "previous_assistant_message": latest_assistant_message(ctx.session.messages[:-1]),
-            "world_summary_preview": self._meta_world_summary_preview(ctx),
-            "runtime_context": self._meta_runtime_context_summary(ctx.runtime_context),
-        }
-        if ctx.runtime_context is not None:
-            object.__setattr__(ctx.runtime_context, "meta_cognition_fast_path_refs", set(self._meta_coordinator.fast_path_refs))
-        self._schedule_background(
-            self._reflect_meta_cognition_turn(
-                session_key=ctx.session_key,
-                turn_id=ctx.turn_id,
-                turn_snapshot=snapshot,
-                accepted_triggers=accepted,
-                runtime_context=ctx.runtime_context,
-            )
-        )
+        if hasattr(self, "_runtime") and self._runtime is not None:
+            return self._runtime._schedule_meta_cognition_reflection(ctx)
 
-    async def _reflect_meta_cognition_turn(
-        self,
-        *,
-        session_key: str,
-        turn_id: str,
-        turn_snapshot: dict[str, Any],
-        accepted_triggers: list[MetaTrigger],
-        runtime_context: RuntimeContext | None,
-    ) -> None:
-        reflector = getattr(self, "_meta_cognition_reflector", None)
-        if reflector is None:
-            return
-        result = await reflector.reflect_turn(
-            session_key=session_key,
-            turn_id=turn_id,
-            turn_snapshot=turn_snapshot,
-            accepted_triggers=accepted_triggers,
-            runtime_context=runtime_context,
-        )
-        self._meta_coordinator.on_reflection_complete(reflector)
-        logger.debug(
-            "Meta cognition reflection finished for turn {} with status {} ({})",
-            turn_id,
-            result.status,
-            result.reason,
-        )
+    async def _reflect_meta_cognition_turn(self, *, session_key: str, turn_id: str,
+                                            turn_snapshot: dict, accepted_triggers: list,
+                                            runtime_context: RuntimeContext | None = None) -> None:
+        if hasattr(self, "_runtime") and self._runtime is not None:
+            return await self._runtime._reflect_meta_cognition_turn(
+                session_key=session_key, turn_id=turn_id, turn_snapshot=turn_snapshot,
+                accepted_triggers=accepted_triggers, runtime_context=runtime_context,
+            )
 
     def _meta_world_summary_preview(self, ctx: TurnContext) -> str:
-        session = ctx.session
-        if session is None:
-            return ""
-        world_state = getattr(self, "world_state", None)
-        if world_state is None:
-            return ""
-        try:
-            snapshot = world_state.load(
-                session,
-                identity=ctx.runtime_context if ctx.runtime_context is not None else None,
-            )
-        except Exception:
-            return ""
-        world_summary = getattr(snapshot, "world_summary", None)
-        if world_summary is None:
-            return ""
-        try:
-            data = world_summary.to_json()
-        except Exception:
-            return ""
-        focus = data.get("focus") if isinstance(data, dict) else []
-        if isinstance(focus, list):
-            return _trim_text(" | ".join(str(item or "").strip() for item in focus if str(item or "").strip()), max_chars=400)
+        if hasattr(self, "_runtime") and self._runtime is not None:
+            return self._runtime._meta_world_summary_preview(ctx)
         return ""
 
     def _meta_runtime_context_summary(self, runtime_context: RuntimeContext | None) -> dict[str, Any]:
-        if runtime_context is None:
-            return {}
-        return {
+        if hasattr(self, "_runtime") and self._runtime is not None:
+            return self._runtime._meta_runtime_context_summary(runtime_context)
+        return {} if runtime_context is None else {
             "actor_id": getattr(runtime_context, "actor_id", None),
             "user_id": getattr(runtime_context, "user_id", None),
             "session_id": getattr(runtime_context, "session_id", None),
