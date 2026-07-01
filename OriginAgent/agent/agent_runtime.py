@@ -419,6 +419,45 @@ class AgentRuntime:
                      f"Tool approval was rejected for {tool_name}. Do not use that capability unless the user asks again."), True)
         return None, False
 
+    # ── WebUI helpers ───────────────────────────────────────────
+
+    @staticmethod
+    def _is_webui_message(msg: Any) -> bool:
+        return msg.channel == "websocket" and msg.metadata.get("webui") is True
+
+    def _append_webui_command_transcript(self, msg: Any, content: str) -> None:
+        if not self._is_webui_message(msg):
+            return
+        from OriginAgent.utils.webui_transcript import append_transcript_object
+        try:
+            append_transcript_object(
+                f"websocket:{msg.chat_id}",
+                {"event": "message", "chat_id": msg.chat_id, "text": content},
+            )
+        except (TypeError, ValueError, OSError) as e:
+            logger.warning("webui command transcript append failed: {}", e)
+
+    # ── Turn persistence ────────────────────────────────────────
+
+    def _sanitize_persisted_blocks(
+        self, content: list[dict], *, should_truncate_text: bool = False, drop_runtime: bool = False,
+    ) -> list[dict]:
+        from OriginAgent.agent.agent_turn_persist import TurnPersistManager
+        max_chars = self._deps.max_tool_result_chars
+        return TurnPersistManager(max_chars, self._deps.sessions).sanitize_persisted_blocks(
+            content, should_truncate_text=should_truncate_text, drop_runtime=drop_runtime,
+        )
+
+    def _save_turn(self, session: Any, messages: list[dict], skip: int) -> None:
+        from OriginAgent.agent.agent_turn_persist import TurnPersistManager
+        max_chars = self._deps.max_tool_result_chars
+        TurnPersistManager(max_chars, self._deps.sessions).save_turn(session, messages, skip)
+
+    def _persist_subagent_followup(self, session: Any, msg: Any) -> bool:
+        from OriginAgent.agent.agent_turn_persist import TurnPersistManager
+        max_chars = self._deps.max_tool_result_chars
+        return TurnPersistManager(max_chars, self._deps.sessions).persist_subagent_followup(session, msg)
+
     # ── Outbound assembly ───────────────────────────────────────
 
     def _assemble_outbound(

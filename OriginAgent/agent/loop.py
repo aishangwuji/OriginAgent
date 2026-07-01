@@ -1451,46 +1451,33 @@ class AgentLoop:
         return None, False
 
     def _is_webui_message(self, msg: InboundMessage) -> bool:
+        if hasattr(self, "_runtime") and self._runtime is not None:
+            return self._runtime._is_webui_message(msg)
         return msg.channel == "websocket" and msg.metadata.get("webui") is True
 
-    def _append_webui_command_transcript(
-        self,
-        msg: InboundMessage,
-        content: str,
-    ) -> None:
-        """Persist a command response to the WebUI transcript."""
+    def _append_webui_command_transcript(self, msg: InboundMessage, content: str) -> None:
+        if hasattr(self, "_runtime") and self._runtime is not None:
+            self._runtime._append_webui_command_transcript(msg, content)
+            return
         if not self._is_webui_message(msg):
             return
         try:
-            append_transcript_object(
-                f"websocket:{msg.chat_id}",
-                {"event": "message", "chat_id": msg.chat_id, "text": content},
-            )
+            append_transcript_object(f"websocket:{msg.chat_id}", {"event": "message", "chat_id": msg.chat_id, "text": content})
         except (TypeError, ValueError, OSError) as e:
             logger.warning("webui command transcript append failed: {}", e)
 
     def _write_continuity_runtime_identity(
-        self,
-        session: Session,
-        runtime_context: RuntimeContext | None,
+        self, session: Session, runtime_context: RuntimeContext | None,
     ) -> None:
         if runtime_context is None:
             return
         session.metadata[CONTINUITY_RUNTIME_IDENTITY_KEY] = {
-            "user_id": runtime_context.user_id,
-            "device_id": runtime_context.device_id,
-            "session_id": runtime_context.session_id,
-            "scope": runtime_context.default_scope,
+            "user_id": runtime_context.user_id, "device_id": runtime_context.device_id,
+            "session_id": runtime_context.session_id, "scope": runtime_context.default_scope,
             "updated_at": _utcnow_iso(),
         }
 
-    def _persist_shortcut_command_turn(
-        self,
-        msg: InboundMessage,
-        session_key: str,
-        result: OutboundMessage,
-    ) -> None:
-        """Persist slash-command turns that bypass the normal RUN/SAVE states."""
+    def _persist_shortcut_command_turn(self, msg: InboundMessage, session_key: str, result: OutboundMessage) -> None:
         raw = msg.content.strip()
         if raw.lower() == "/new":
             if self._is_webui_message(msg):
@@ -1498,12 +1485,7 @@ class AgentLoop:
             return
         session = self.sessions.get_or_create(session_key)
         mark_webui_session(session, msg.metadata)
-        self._persist_user_message_early(
-            msg,
-            session,
-            pending_ask_id=None,
-            _command=True,
-        )
+        self._persist_user_message_early(msg, session, pending_ask_id=None, _command=True)
         if result.content.strip():
             session.add_message("assistant", result.content, _command=True)
         self._clear_pending_user_turn(session)
@@ -1530,16 +1512,9 @@ class AgentLoop:
             if msg.channel == "websocket":
                 await self.bus.publish_outbound(
                     OutboundMessage(
-                        channel=msg.channel,
-                        chat_id=msg.chat_id,
-                        content="",
-                        metadata={
-                            **dict(msg.metadata or {}),
-                            "_turn_end": True,
-                            "goal_state": goal_state_ws_blob(
-                                self.sessions.get_or_create(key).metadata
-                            ),
-                        },
+                        channel=msg.channel, chat_id=msg.chat_id, content="",
+                        metadata={**dict(msg.metadata or {}), "_turn_end": True,
+                                  "goal_state": goal_state_ws_blob(self.sessions.get_or_create(key).metadata)},
                     )
                 )
         else:
@@ -2760,31 +2735,20 @@ class AgentLoop:
     def _message_dispatcher_ref(self) -> MessageDispatcher:
         return self._get_message_dispatcher()
 
-    def _sanitize_persisted_blocks(
-        self,
-        content: list[dict[str, Any]],
-        *,
-        should_truncate_text: bool = False,
-        drop_runtime: bool = False,
-    ) -> list[dict[str, Any]]:
-        """Strip volatile multimodal payloads before writing session history."""
-        return AgentLoop._turn_persist_manager(self).sanitize_persisted_blocks(
-            content,
-            should_truncate_text=should_truncate_text,
-            drop_runtime=drop_runtime,
-        )
+    def _sanitize_persisted_blocks(self, content: list[dict[str, Any]], *,
+                                    should_truncate_text: bool = False, drop_runtime: bool = False) -> list[dict[str, Any]]:
+        if hasattr(self, "_runtime") and self._runtime is not None:
+            return self._runtime._sanitize_persisted_blocks(content, should_truncate_text=should_truncate_text, drop_runtime=drop_runtime)
+        return AgentLoop._turn_persist_manager(self).sanitize_persisted_blocks(content, should_truncate_text=should_truncate_text, drop_runtime=drop_runtime)
 
     def _save_turn(self, session: Session, messages: list[dict], skip: int) -> None:
-        """Save new-turn messages into session, truncating large tool results."""
+        if hasattr(self, "_runtime") and self._runtime is not None:
+            return self._runtime._save_turn(session, messages, skip)
         AgentLoop._turn_persist_manager(self).save_turn(session, messages, skip)
 
     def _persist_subagent_followup(self, session: Session, msg: InboundMessage) -> bool:
-        """Persist subagent follow-ups before prompt assembly so history stays durable.
-
-        Returns True if a new entry was appended; False if the follow-up was
-        deduped (same ``subagent_task_id`` already in session) or carries no
-        content worth persisting.
-        """
+        if hasattr(self, "_runtime") and self._runtime is not None:
+            return self._runtime._persist_subagent_followup(session, msg)
         return AgentLoop._turn_persist_manager(self).persist_subagent_followup(session, msg)
 
     def _set_runtime_checkpoint(self, session: Session, payload: dict[str, Any]) -> None:
