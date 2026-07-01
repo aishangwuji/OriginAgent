@@ -143,7 +143,21 @@ class AgentRunner:
     """Run a tool-capable LLM loop without product-layer concerns."""
 
     def __init__(self, provider: LLMProvider):
-        self.provider = provider
+        self._provider = provider
+
+    @property
+    def provider(self) -> LLMProvider:
+        return self._provider
+
+    @provider.setter
+    def provider(self, new_provider: LLMProvider) -> None:
+        old_model = getattr(self._provider, "model", None)
+        new_model = getattr(new_provider, "model", None)
+        logger.warning(
+            "AgentRunner provider swapped: {} -> {} (may affect in-flight executions)",
+            old_model, new_model,
+        )
+        self._provider = new_provider
 
     @staticmethod
     def _merge_message_content(left: Any, right: Any) -> str | list[dict[str, Any]]:
@@ -274,6 +288,7 @@ class AgentRunner:
         return injected_messages
 
     async def run(self, spec: AgentRunSpec) -> AgentRunResult:
+        provider = self._provider  # Freeze: local binding for entire run
         hook = spec.hook or AgentHook()
         messages = list(spec.initial_messages)
         final_content: str | None = None
@@ -300,7 +315,7 @@ class AgentRunner:
                 messages_for_model = self._backfill_missing_tool_results(messages_for_model)
                 messages_for_model = self._microcompact(messages_for_model)
                 messages_for_model = self._apply_tool_result_budget(spec, messages_for_model)
-                messages_for_model = self._snip_history(spec, messages_for_model)
+                messages_for_model = self._snip_history(spec, provider, messages_for_model)
                 # Snipping may have created new orphans; clean them up.
                 messages_for_model = self._drop_orphan_tool_results(messages_for_model)
                 messages_for_model = self._backfill_missing_tool_results(messages_for_model)
@@ -317,7 +332,7 @@ class AgentRunner:
                     messages_for_model = messages
             context = AgentHookContext(iteration=iteration, messages=messages)
             await hook.before_iteration(context)
-            response = await self._request_model(spec, messages_for_model, hook, context)
+            response = await self._request_model(provider, spec, messages_for_model, hook, context)
             raw_usage = self._usage_dict(response.usage)
             context.response = response
             context.usage = dict(raw_usage)
@@ -471,7 +486,7 @@ class AgentRunner:
                 )
                 if hook.wants_streaming():
                     await hook.on_stream_end(context, resuming=False)
-                response = await self._request_finalization_retry(spec, messages_for_model)
+                response = await self._request_finalization_retry(provider, spec, messages_for_model)
                 retry_usage = self._usage_dict(response.usage)
                 self._accumulate_usage(usage, retry_usage)
                 raw_usage = self._merge_usage(raw_usage, retry_usage)
@@ -649,6 +664,7 @@ class AgentRunner:
 
     async def _request_model(
         self,
+        provider: LLMProvider,
         spec: AgentRunSpec,
         messages: list[dict[str, Any]],
         hook: AgentHook,
@@ -677,7 +693,7 @@ class AgentRunner:
             not wants_streaming
             and spec.stream_progress_deltas
             and spec.progress_callback is not None
-            and getattr(self.provider, "supports_progress_deltas", False) is True
+            and getattr(provider, "supports_progress_deltas", False) is True
         )
 
         if wants_streaming:
@@ -692,7 +708,7 @@ class AgentRunner:
                 context.streamed_reasoning = True
                 await hook.emit_reasoning(delta)
 
-            coro = self.provider.chat_stream_with_retry(
+            coro = provider.chat_stream_with_retry(
                 **kwargs,
                 on_content_delta=_stream,
                 on_thinking_delta=_thinking,
@@ -720,12 +736,12 @@ class AgentRunner:
                     context.streamed_content = True
                     await spec.progress_callback(incremental)
 
-            coro = self.provider.chat_stream_with_retry(
+            coro = provider.chat_stream_with_retry(
                 **kwargs,
                 on_content_delta=_stream_progress,
             )
         else:
-            coro = self.provider.chat_with_retry(**kwargs)
+            coro = provider.chat_with_retry(**kwargs)
 
         # Streaming providers enforce their own idle timeout. Avoid an outer
         # wall-clock cap for streaming so active long reasoning is not killed
@@ -750,13 +766,14 @@ class AgentRunner:
 
     async def _request_finalization_retry(
         self,
+        provider: LLMProvider,
         spec: AgentRunSpec,
         messages: list[dict[str, Any]],
     ):
         retry_messages = list(messages)
         retry_messages.append(build_finalization_retry_message())
         kwargs = self._build_request_kwargs(spec, retry_messages, tools=None)
-        return await self.provider.chat_with_retry(**kwargs)
+        return await provider.chat_with_retry(**kwargs)
 
     @staticmethod
     def _usage_dict(usage: dict[str, Any] | None) -> dict[str, int]:
@@ -915,10 +932,24 @@ class AgentRunner:
         prepare_call = getattr(spec.tools, "prepare_call", None)
         tool, params, prep_error = None, tool_call.arguments, None
         if callable(prepare_call):
-            with suppress(Exception):
+            try:
                 prepared = prepare_call(tool_call.name, tool_call.arguments)
                 if isinstance(prepared, tuple) and len(prepared) == 3:
                     tool, params, prep_error = prepared
+                else:
+                    prep_error = (
+                        f"Error: prepare_call for '{tool_call.name}' "
+                        f"returned unexpected type: {type(prepared).__name__}"
+                    )
+                    logger.error(prep_error)
+            except BaseException as exc:
+                prep_error = (
+                    f"Error: prepare_call for '{tool_call.name}' "
+                    f"raised {type(exc).__name__}: {exc}"
+                )
+                logger.error(prep_error)
+                # tool stays None, params stays as original args
+                # Code falls through to `if prep_error:` branch which rejects the call
         if (
             prep_error is None
             and tool is not None
@@ -1363,12 +1394,13 @@ class AgentRunner:
     def _snip_history(
         self,
         spec: AgentRunSpec,
+        provider: LLMProvider,
         messages: list[dict[str, Any]],
     ) -> list[dict[str, Any]]:
         if not messages or not spec.context_window_tokens:
             return messages
 
-        provider_max_tokens = getattr(getattr(self.provider, "generation", None), "max_tokens", 4096)
+        provider_max_tokens = getattr(getattr(provider, "generation", None), "max_tokens", 4096)
         max_output = spec.max_tokens if isinstance(spec.max_tokens, int) else (
             provider_max_tokens if isinstance(provider_max_tokens, int) else 4096
         )
@@ -1379,7 +1411,7 @@ class AgentRunner:
             return messages
 
         estimate, _ = estimate_prompt_tokens_chain(
-            self.provider,
+            provider,
             spec.model,
             messages,
             spec.tools.get_definitions(),

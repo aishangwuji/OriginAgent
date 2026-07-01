@@ -84,3 +84,35 @@ async def test_subscriber_failure_signals_upstream():
     # Currently publish_inbound suppresses subscriber errors and returns True
     # This test documents the current behavior — after the fix it should change
     assert result is True  # Temporary: documents current behavior
+
+
+@pytest.mark.asyncio
+async def test_prepare_call_exception_becomes_prep_error():
+    """When prepare_call raises, it must be treated as a prep_error — not suppressed."""
+    from OriginAgent.agent.runner import AgentRunner
+    from OriginAgent.providers.base import LLMProvider
+
+    provider = MagicMock(spec=LLMProvider)
+    runner = AgentRunner(provider)
+
+    spec = MagicMock()
+    spec.tools.prepare_call = MagicMock(side_effect=ValueError("prepare crashed"))
+    spec.tools.execute = AsyncMock(return_value="unexpected bypass")
+    spec.fail_on_tool_error = False
+    spec.tools.audit_tool_result_async = None
+    spec.tools.audit_tool_result = None
+    spec.hook = None
+
+    tool_call = MagicMock()
+    tool_call.name = "test_tool"
+    tool_call.arguments = {"input": "data"}
+
+    result = await runner._run_tool(spec, tool_call, {}, {})
+
+    payload, event, error = result
+    # The tool should NOT have been executed
+    spec.tools.execute.assert_not_called()  # Critical assertion
+    # The error should mention the prepare failure
+    assert "prepare" in payload.lower() or "prepare" in str(event), (
+        "prepare_call exception should be reflected in the error payload"
+    )
