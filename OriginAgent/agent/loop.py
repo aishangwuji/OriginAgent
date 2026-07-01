@@ -113,11 +113,6 @@ from OriginAgent.bus.queue import MessageBus
 from OriginAgent.command import CommandContext, CommandRouter, register_builtin_commands
 from OriginAgent.config.schema import AgentDefaults
 from OriginAgent.providers.base import LLMProvider
-from OriginAgent.providers.transcription import (
-    GroqTranscriptionProvider,
-    OpenAITranscriptionProvider,
-    VolcengineTranscriptionProvider,
-)
 from OriginAgent.providers.factory import ProviderSnapshot
 from OriginAgent.security.capabilities import CapabilitySnapshot
 from OriginAgent.security.grants import CapabilityGrantStore, issue_tool_approval_grant
@@ -457,31 +452,6 @@ class AgentLoop:
         self._desire_store = self._host._desire_store
         self._bdi_engine = self._host._bdi_engine
         self._inner_monologue_engine = self._host._inner_monologue_engine
-
-    def _build_transcription_provider(self, config: dict[str, Any] | None = None) -> Any | None:
-        config = dict(config or {})
-        provider_name = str(config.get("provider") or "groq").strip()
-        provider_key = str(config.get("api_key") or "").strip()
-        provider_base = str(config.get("api_base") or "").strip()
-        language = config.get("language")
-        resource_id = config.get("resource_id")
-        user_id = config.get("user_id")
-        if not provider_key:
-            return None
-        try:
-            if provider_name == "openai":
-                return OpenAITranscriptionProvider(api_key=provider_key, api_base=provider_base or None, language=language or None)
-            if provider_name == "volcengine":
-                return VolcengineTranscriptionProvider(
-                    api_key=provider_key,
-                    api_base=provider_base or None,
-                    language=language or None,
-                    resource_id=resource_id or None,
-                    user_id=user_id or None,
-                )
-            return GroqTranscriptionProvider(api_key=provider_key, api_base=provider_base or None, language=language or None)
-        except Exception:
-            return None
 
     @classmethod
     def from_config(
@@ -934,7 +904,11 @@ class AgentLoop:
         self.context.memory.raw_archive(messages)
 
     def _apply_provider_snapshot(self, snapshot: ProviderSnapshot) -> None:
-        """Swap model/provider for future turns without disturbing an active one."""
+        """Swap model/provider for future turns without disturbing an active one.
+
+        Updates loop-level identity fields directly; delegates sub-service
+        propagation (runner, subagents, consolidator, dream, etc.) to AgentHost.
+        """
         if snapshot.signature == self._provider_signature:
             return
         provider = snapshot.provider
@@ -945,12 +919,6 @@ class AgentLoop:
         self.provider = provider
         self.model = model
         self.context_window_tokens = context_window_tokens
-        self.runner.provider = provider
-        self.subagents.set_provider(provider, model)
-        self.auxiliary_router.set_primary(provider, model)
-        self.background_review.set_provider(provider, model)
-        self.consolidator.set_provider(provider, model, context_window_tokens)
-        self.dream.set_provider(provider, model)
         self._provider_signature = snapshot.signature
         self._default_selection_signature = preset_helpers.default_selection_signature(
             snapshot.signature
@@ -964,8 +932,23 @@ class AgentLoop:
         )
         if self._runtime_model_publisher:
             self._runtime_model_publisher(model, self.model_preset)
+        # Propagate to sub-services via AgentHost
+        if hasattr(self, "_host") and self._host is not None:
+            self._host._apply_provider_snapshot(snapshot)
 
     def _refresh_provider_snapshot(self) -> None:
+        """Refresh the active provider snapshot before each turn.
+
+        Delegates snapshot loading to AgentHost when available; falls back
+        to the original logic for callers that bypass ``__init__``.
+        """
+        if hasattr(self, "_host") and self._host is not None:
+            snapshot = self._host.refresh_provider_snapshot()
+            if snapshot is not None:
+                self._apply_provider_snapshot(snapshot)
+            return
+
+        # Fallback: original logic for tests that bypass __init__
         if self.model_preset and self.model_preset != "default":
             if self._preset_snapshot_loader is None:
                 return
@@ -992,7 +975,19 @@ class AgentLoop:
         self._apply_provider_snapshot(snapshot)
 
     def set_model_preset(self, name: str) -> None:
-        """Switch the active runtime model preset for subsequent turns."""
+        """Switch the active runtime model preset for subsequent turns.
+
+        Delegates snapshot building to AgentHost when available; falls back
+        for callers that bypass ``__init__``.
+        """
+        if hasattr(self, "_host") and self._host is not None:
+            snapshot = self._host.build_preset_snapshot(name)
+            if snapshot is not None:
+                self.model_preset = preset_helpers.normalize_preset_name(name, self.model_presets)
+                self._apply_provider_snapshot(snapshot)
+            return
+
+        # Fallback for tests that bypass __init__
         preset_name = preset_helpers.normalize_preset_name(name, self.model_presets)
         snapshot = preset_helpers.build_runtime_preset_snapshot(
             name=preset_name,
@@ -1678,8 +1673,7 @@ class AgentLoop:
         await self._host._connect_mcp()
         self._schedule_session_search_refresh(force=self.session_search_index.rebuild_on_start)
         self._host._start_active_intent_loop()
-        if self._bdi_engine:
-            await self._bdi_engine.start()
+        await self._host.start_bdi()
         logger.info("Agent loop started")
         await self._get_message_dispatcher().run_forever()
 
@@ -1908,8 +1902,7 @@ class AgentLoop:
 
     def stop(self) -> None:
         """Stop the agent loop."""
-        if self._bdi_engine:
-            self._bdi_engine.stop()
+        self._host.stop_bdi()
         self._host.stop()
         self._running = False  # compat — mirrors _host.running
         logger.info("Agent loop stopping")
