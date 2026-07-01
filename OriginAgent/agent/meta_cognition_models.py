@@ -7,7 +7,10 @@ from datetime import datetime, timezone
 from typing import Any, Literal
 
 
-MetaTriggerType = Literal["tool_failure", "user_correction", "task_completion"]
+MetaTriggerType = Literal[
+    "tool_failure", "user_correction", "task_completion",
+    "cognitive_nudge", "world_change", "device_event",
+]
 MetaTriggerSeverity = Literal["low", "medium", "high"]
 MetaDecision = Literal[
     "accepted",
@@ -141,7 +144,10 @@ class MetaTrigger:
         object.__setattr__(self, "source_reference", _normalize_text(self.source_reference, max_chars=240))
         object.__setattr__(self, "cooldown_key", _normalize_text(self.cooldown_key, max_chars=240))
         object.__setattr__(self, "evidence_refs", _normalize_str_list(self.evidence_refs))
-        if self.trigger_type not in {"tool_failure", "user_correction", "task_completion"}:
+        if self.trigger_type not in {
+            "tool_failure", "user_correction", "task_completion",
+            "cognitive_nudge", "world_change", "device_event",
+        }:
             raise ValueError(f"invalid meta trigger_type: {self.trigger_type!r}")
         if self.severity not in {"low", "medium", "high"}:
             object.__setattr__(self, "severity", "medium")
@@ -195,11 +201,13 @@ class RecordTriggerResult:
 class ThoughtJournalEntry:
     entry_id: str
     session_key: str
+    frame_id: str = ""
     created_at: str = field(default_factory=_utcnow_iso)
     trigger_type: str = ""
     task_reference: str = ""
     strategy_summary: str = ""
     assumptions: list[str] = field(default_factory=list)
+    event_refs: list[str] = field(default_factory=list)
     evidence_refs: list[str] = field(default_factory=list)
     confidence: float = 0.0
     expected_outcome: str = ""
@@ -207,15 +215,18 @@ class ThoughtJournalEntry:
     mismatch_summary: str = ""
     suggested_next_action: str = ""
     summary: str = ""
+    retention_hint: str = "discard"
     payload: dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "entry_id", _normalize_text(self.entry_id, max_chars=160))
         object.__setattr__(self, "session_key", _normalize_text(self.session_key, max_chars=240))
+        object.__setattr__(self, "frame_id", _normalize_text(self.frame_id, max_chars=160))
         object.__setattr__(self, "trigger_type", _normalize_text(self.trigger_type, max_chars=80))
         object.__setattr__(self, "task_reference", _normalize_text(self.task_reference, max_chars=160))
         object.__setattr__(self, "strategy_summary", _normalize_text(self.strategy_summary, max_chars=240))
         object.__setattr__(self, "assumptions", _normalize_str_list(self.assumptions, limit=8, max_chars=160))
+        object.__setattr__(self, "event_refs", _normalize_str_list(self.event_refs, limit=8, max_chars=160))
         object.__setattr__(self, "evidence_refs", _normalize_str_list(self.evidence_refs, limit=8, max_chars=160))
         object.__setattr__(self, "confidence", _normalize_float(self.confidence))
         object.__setattr__(self, "expected_outcome", _normalize_text(self.expected_outcome, max_chars=240))
@@ -223,6 +234,7 @@ class ThoughtJournalEntry:
         object.__setattr__(self, "mismatch_summary", _normalize_text(self.mismatch_summary, max_chars=240))
         object.__setattr__(self, "suggested_next_action", _normalize_text(self.suggested_next_action, max_chars=240))
         object.__setattr__(self, "summary", _normalize_text(self.summary, max_chars=240))
+        object.__setattr__(self, "retention_hint", _normalize_retention_hint(self.retention_hint))
         object.__setattr__(self, "payload", _normalize_dict(self.payload))
 
     def to_json(self) -> dict[str, Any]:
@@ -234,8 +246,11 @@ class ThoughtJournalEntry:
         payload = _filter_known_fields(raw, allowed)
         payload.setdefault("entry_id", "")
         payload.setdefault("session_key", "")
+        payload.setdefault("frame_id", "")
         payload.setdefault("created_at", _utcnow_iso())
         payload.setdefault("summary", "")
+        payload.setdefault("event_refs", [])
+        payload.setdefault("retention_hint", "discard")
         payload.setdefault("payload", {})
         return cls(**payload)
 

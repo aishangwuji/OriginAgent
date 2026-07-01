@@ -146,3 +146,74 @@ def latest_assistant_message(all_messages: list[dict[str, Any]]) -> str | None:
         if isinstance(content, str) and content.strip():
             return content.strip()
     return None
+
+
+def bridge_runtime_event_to_trigger(event: Any) -> MetaTrigger | None:
+    """Convert a normalised ``RuntimeEvent`` into a ``MetaTrigger``.
+
+    Returns ``None`` when the event type cannot be mapped to any recognised
+    trigger category.
+    """
+    from OriginAgent.agent.perception_event_models import RuntimeEvent as RE
+
+    if not isinstance(event, RE):
+        return None
+
+    et = str(event.event_type).strip().lower()
+
+    # ── type → trigger mapping ─────────────────────────────────────
+    type_map: dict[str, str] = {
+        "tool_failure": "tool_failure",
+        "user_message": "user_correction",
+        "cognitive_nudge": "cognitive_nudge",
+        "world_change": "world_change",
+        "device_event": "device_event",
+        "cron_tick": "cognitive_nudge",
+    }
+
+    trigger_type = type_map.get(et)
+    if trigger_type is None:
+        return None
+
+    # skip user_message that isn't a correction
+    if et == "user_message":
+        matched = event.payload.get("matched_correction")
+        if not matched:
+            return None
+
+    # ── severity from confidence ───────────────────────────────────
+    conf = float(event.confidence)
+    if conf >= 0.6:
+        severity = "medium"
+    elif conf >= 0.3:
+        severity = "low"
+    else:
+        severity = "high"
+
+    # override via payload hints
+    payload_severity = str(event.payload.get("severity") or "").strip().lower()
+    if payload_severity in {"low", "medium", "high"}:
+        severity = payload_severity
+
+    digest = hashlib.sha256(
+        json.dumps([event.session_key, trigger_type, event.event_id], sort_keys=True).encode("utf-8"),
+    ).hexdigest()[:16]
+
+    return MetaTrigger(
+        trigger_id=f"meta:{trigger_type}:{event.session_key}:{digest}",
+        session_key=event.session_key,
+        trigger_type=trigger_type,  # type: ignore[arg-type]
+        source_type=event.source,
+        source_reference=event.event_id,
+        severity=severity,  # type: ignore[arg-type]
+        created_at=event.created_at or _utcnow_iso(),
+        cooldown_key=f"{event.session_key}:{trigger_type}:{et}:{digest}",
+        evidence_refs=[f"source:{event.source}", f"event:{event.event_id}"],
+        payload={
+            "event_type": et,
+            "event_summary": str(event.summary or ""),
+            "runtime_event_id": event.event_id,
+            "source": event.source,
+            **dict(event.payload or {}),
+        },
+    )
