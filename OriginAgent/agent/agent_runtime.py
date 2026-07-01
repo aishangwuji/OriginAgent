@@ -244,6 +244,150 @@ class AgentRuntime:
         from OriginAgent.agent.agent_runtime_context import snapshot_for_trigger
         return snapshot_for_trigger(trigger)
 
+    # ── Cognitive ───────────────────────────────────────────────
+
+    def _build_cognitive_runtime_context(self, session_key: str) -> Any:
+        channel, chat_id = (
+            session_key.split(":", 1)
+            if ":" in session_key
+            else ("cli", session_key)
+        )
+        from OriginAgent.bus.events import InboundMessage
+        from OriginAgent.agent.message_metadata import build_origin_metadata
+
+        msg = InboundMessage(
+            channel="system",
+            sender_id="agent_cognitive",
+            chat_id=session_key,
+            content="",
+            metadata=build_origin_metadata(
+                {
+                    "injected_event": "cognitive_event",
+                    "user_id": "agent_cognitive",
+                    "scope": "session",
+                },
+                origin_kind="cognitive_event",
+                is_inferred=True,
+                confidence=0.6,
+                trigger_reason="runtime_scan",
+            ),
+            session_key_override=session_key,
+        )
+        return self._resolve_runtime_context(
+            msg, channel=channel, chat_id=chat_id, session_key=session_key,
+        )
+
+    def _collect_cognitive_candidates(self, session_key: str) -> list[dict]:
+        d = self._deps
+        items: list[dict] = []
+        for candidate in d.active_intents.collect_candidates(session_key):
+            items.append({
+                "event": self._candidate_to_cognitive_event(session_key, {
+                    "kind": "active_intent",
+                    "candidate": candidate,
+                    "cooldown_key": candidate.intent_id,
+                    "message": d.active_intents.build_message(session_key, candidate),
+                }),
+                "message": d.active_intents.build_message(session_key, candidate),
+                "cooldown_key": candidate.intent_id,
+                "working_memory_attention": candidate.summary or candidate.content,
+                "working_memory_question": (
+                    "Should this pending item be confirmed now?"
+                    if candidate.intent_type == "pending_confirmation_nudge"
+                    else None
+                ),
+                "raw_candidate": candidate,
+            })
+        for record in d.reminder_store.list_due():
+            if record.session_key != session_key:
+                continue
+            content = (
+                "Scheduled reminder follow-up: a previously scheduled reminder is now due.\n"
+                f"Reminder: {record.content}\n"
+                "If helpful, continue from this due reminder and keep the follow-up bounded."
+            )
+            from OriginAgent.bus.events import InboundMessage
+            from OriginAgent.agent.cognitive_events import CognitiveEvent
+            from OriginAgent.agent.message_metadata import build_origin_metadata
+
+            message = InboundMessage(
+                channel="system", sender_id="agent_cognitive",
+                chat_id=record.chat_id or session_key, content=content,
+                session_key_override=session_key,
+                metadata=build_origin_metadata(
+                    {
+                        "injected_event": "cognitive_event",
+                        "_from_active": True,
+                        "cognitive_event_type": "scheduled_reminder",
+                        "cognitive_event_id": f"reminder:{record.reminder_id}",
+                        "reminder_id": record.reminder_id,
+                    },
+                    origin_kind="cognitive_event",
+                    is_inferred=True, confidence=0.8,
+                    trigger_reason="scheduled_reminder",
+                ),
+            )
+            event = CognitiveEvent(
+                event_id=f"reminder:{record.reminder_id}",
+                session_key=session_key,
+                event_type="scheduled_reminder",
+                source_type="reminder_store",
+                source_reference=record.reminder_id,
+                summary=_trim_text(record.content, max_chars=160),
+                priority="high",
+                payload={"due_at": record.due_at, "channel": record.channel, "chat_id": record.chat_id},
+            )
+            items.append({
+                "event": event, "message": message,
+                "cooldown_key": event.event_id,
+                "working_memory_attention": record.content,
+                "working_memory_question": "Is this reminder still relevant and ready to act on?",
+                "raw_candidate": record,
+            })
+        priority_order = {"high": 0, "medium": 1, "low": 2}
+        items.sort(key=lambda item: (priority_order.get(item["event"].priority, 9), item["event"].created_at))
+        return items
+
+    def _candidate_to_cognitive_event(self, session_key: str, item: Any) -> Any:
+        from OriginAgent.agent.cognitive_events import CognitiveEvent
+        if isinstance(item, dict) and isinstance(item.get("event"), CognitiveEvent):
+            return item["event"]
+        candidate = item.get("candidate") if isinstance(item, dict) and "candidate" in item else item
+        priority = "medium"
+        if getattr(candidate, "intent_type", "") in {"pending_confirmation_nudge", "goal_nudge"}:
+            priority = "high"
+        from OriginAgent.agent.cognitive_events import CognitiveEvent
+        return CognitiveEvent(
+            event_id=str(getattr(candidate, "intent_id", "")),
+            session_key=session_key,
+            event_type=str(getattr(candidate, "intent_type", "goal_nudge")),
+            source_type=str(getattr(candidate, "source_type", "active_intent")),
+            source_reference=str(getattr(candidate, "source_reference", "")),
+            summary=_trim_text(getattr(candidate, "summary", "") or getattr(candidate, "content", ""), max_chars=160),
+            priority=priority,
+            payload={"content": str(getattr(candidate, "content", ""))},
+        )
+
+    def _write_cognitive_event_to_working_memory(
+        self, session: Any, *, runtime_context: Any, event: Any,
+    ) -> bool:
+        d = self._deps
+        written = False
+        if event.summary:
+            d.working_memory.append_attention_item(session, event.summary, identity=runtime_context.identity)
+            written = True
+        if event.event_type in {"pending_confirmation_nudge", "scheduled_reminder"}:
+            question = (
+                "Should this pending confirmation be resolved now?"
+                if event.event_type == "pending_confirmation_nudge"
+                else "Is this due reminder still relevant and ready to act on?"
+            )
+            d.working_memory.append_pending_question(session, question, identity=runtime_context.identity)
+            written = True
+        if written:
+            d.sessions.save(session)
+        return written
+
     # ── Core turn pipeline ───────────────────────────────────────
 
     async def _run_agent_loop(

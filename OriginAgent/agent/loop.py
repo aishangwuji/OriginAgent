@@ -1868,160 +1868,33 @@ class AgentLoop:
         return sum(1 for task in active_tasks if not task.done())
 
     def _build_cognitive_runtime_context(self, session_key: str) -> RuntimeContext:
-        channel, chat_id = (
-            session_key.split(":", 1)
-            if ":" in session_key
-            else ("cli", session_key)
-        )
-        msg = InboundMessage(
-            channel="system",
-            sender_id="agent_cognitive",
-            chat_id=session_key,
-            content="",
-            metadata=build_origin_metadata(
-                {
-                    "injected_event": "cognitive_event",
-                    "user_id": "agent_cognitive",
-                    "scope": "session",
-                },
-                origin_kind="cognitive_event",
-                is_inferred=True,
-                confidence=0.6,
-                trigger_reason="runtime_scan",
-            ),
-            session_key_override=session_key,
-        )
-        return self._resolve_runtime_context(
-            msg,
-            channel=channel,
-            chat_id=chat_id,
-            session_key=session_key,
-        )
+        if hasattr(self, "_runtime") and self._runtime is not None:
+            return self._runtime._build_cognitive_runtime_context(session_key)
+        return RuntimeContext(actor_id="user", user_id="user", session_id=session_key)
 
     def _collect_cognitive_candidates(self, session_key: str) -> list[dict[str, Any]]:
-        items: list[dict[str, Any]] = []
-        for candidate in self.active_intents.collect_candidates(session_key):
-            items.append({
-                "event": self._candidate_to_cognitive_event(session_key, {
-                    "kind": "active_intent",
-                    "candidate": candidate,
-                    "cooldown_key": candidate.intent_id,
-                    "message": self.active_intents.build_message(session_key, candidate),
-                }),
-                "message": self.active_intents.build_message(session_key, candidate),
-                "cooldown_key": candidate.intent_id,
-                "working_memory_attention": candidate.summary or candidate.content,
-                "working_memory_question": (
-                    "Should this pending item be confirmed now?"
-                    if candidate.intent_type == "pending_confirmation_nudge"
-                    else None
-                ),
-                "raw_candidate": candidate,
-            })
-        for record in self._reminder_store.list_due():
-            if record.session_key != session_key:
-                continue
-            content = (
-                "Scheduled reminder follow-up: a previously scheduled reminder is now due.\n"
-                f"Reminder: {record.content}\n"
-                "If helpful, continue from this due reminder and keep the follow-up bounded."
-            )
-            message = InboundMessage(
-                channel="system",
-                sender_id="agent_cognitive",
-                chat_id=record.chat_id or session_key,
-                content=content,
-                session_key_override=session_key,
-                metadata=build_origin_metadata(
-                    {
-                        "injected_event": "cognitive_event",
-                        "_from_active": True,
-                        "cognitive_event_type": "scheduled_reminder",
-                        "cognitive_event_id": f"reminder:{record.reminder_id}",
-                        "reminder_id": record.reminder_id,
-                    },
-                    origin_kind="cognitive_event",
-                    is_inferred=True,
-                    confidence=0.8,
-                    trigger_reason="scheduled_reminder",
-                ),
-            )
-            event = CognitiveEvent(
-                event_id=f"reminder:{record.reminder_id}",
-                session_key=session_key,
-                event_type="scheduled_reminder",
-                source_type="reminder_store",
-                source_reference=record.reminder_id,
-                summary=_trim_text(record.content, max_chars=160),
-                priority="high",
-                payload={
-                    "due_at": record.due_at,
-                    "channel": record.channel,
-                    "chat_id": record.chat_id,
-                },
-            )
-            items.append({
-                "event": event,
-                "message": message,
-                "cooldown_key": event.event_id,
-                "working_memory_attention": record.content,
-                "working_memory_question": "Is this reminder still relevant and ready to act on?",
-                "raw_candidate": record,
-            })
-        priority_order = {"high": 0, "medium": 1, "low": 2}
-        items.sort(key=lambda item: (priority_order.get(item["event"].priority, 9), item["event"].created_at))
-        return items
+        if hasattr(self, "_runtime") and self._runtime is not None:
+            return self._runtime._collect_cognitive_candidates(session_key)
+        return []
 
     def _candidate_to_cognitive_event(self, session_key: str, item: Any) -> CognitiveEvent:
-        if isinstance(item, dict) and "event" in item and isinstance(item["event"], CognitiveEvent):
-            return item["event"]
-        candidate = item["candidate"] if isinstance(item, dict) and "candidate" in item else item
-        priority = "medium"
-        if getattr(candidate, "intent_type", "") in {"pending_confirmation_nudge", "goal_nudge"}:
-            priority = "high"
+        if hasattr(self, "_runtime") and self._runtime is not None:
+            return self._runtime._candidate_to_cognitive_event(session_key, item)
         return CognitiveEvent(
-            event_id=str(getattr(candidate, "intent_id", "")),
-            session_key=session_key,
-            event_type=str(getattr(candidate, "intent_type", "goal_nudge")),
-            source_type=str(getattr(candidate, "source_type", "active_intent")),
-            source_reference=str(getattr(candidate, "source_reference", "")),
-            summary=_trim_text(getattr(candidate, "summary", "") or getattr(candidate, "content", ""), max_chars=160),
-            priority=priority,
-            payload={
-                "content": str(getattr(candidate, "content", "")),
-            },
+            event_id="fallback", session_key=session_key,
+            event_type="fallback", source_type="fallback",
+            source_reference="", summary="", priority="low",
+            payload={},
         )
 
     def _write_cognitive_event_to_working_memory(
-        self,
-        session: Session,
-        *,
-        runtime_context: RuntimeContext,
-        event: CognitiveEvent,
+        self, session: Session, *, runtime_context: RuntimeContext, event: CognitiveEvent,
     ) -> bool:
-        written = False
-        if event.summary:
-            self.working_memory.append_attention_item(
-                session,
-                event.summary,
-                identity=runtime_context.identity,
+        if hasattr(self, "_runtime") and self._runtime is not None:
+            return self._runtime._write_cognitive_event_to_working_memory(
+                session, runtime_context=runtime_context, event=event,
             )
-            written = True
-        if event.event_type in {"pending_confirmation_nudge", "scheduled_reminder"}:
-            question = (
-                "Should this pending confirmation be resolved now?"
-                if event.event_type == "pending_confirmation_nudge"
-                else "Is this due reminder still relevant and ready to act on?"
-            )
-            self.working_memory.append_pending_question(
-                session,
-                question,
-                identity=runtime_context.identity,
-            )
-            written = True
-        if written:
-            self.sessions.save(session)
-        return written
+        return False
 
     def stop(self) -> None:
         """Stop the agent loop."""
