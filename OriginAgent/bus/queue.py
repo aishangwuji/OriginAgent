@@ -70,11 +70,11 @@ class MessageBus:
 
     # -- inbound ---------------------------------------------------------------
 
-    async def publish_inbound(self, msg: InboundMessage) -> None:
+    async def publish_inbound(self, msg: InboundMessage) -> bool:
         """Publish a message from a channel to the agent.
 
-        Never silently drops — blocks up to ``overflow_timeout``, then
-        spills to the persistence sink if one is configured.
+        Returns True if the message was accepted (enqueued or persisted).
+        Returns False only when the message was definitively dropped.
         """
         self._published_inbound += 1
         for sub in self._subscribers:
@@ -84,7 +84,7 @@ class MessageBus:
         # Phase 1: non-blocking fast path
         try:
             self.inbound.put_nowait(msg)
-            return
+            return True
         except asyncio.QueueFull:
             pass
 
@@ -94,7 +94,7 @@ class MessageBus:
                 self.inbound.put(msg),
                 timeout=self._overflow_timeout,
             )
-            return
+            return True
         except asyncio.TimeoutError:
             pass
 
@@ -103,9 +103,9 @@ class MessageBus:
             with _suppress_log("persist_inbound failed"):
                 await self._persistence.persist_inbound(msg)
                 self._persisted_inbound += 1
-                return
+                return True
 
-        # Last resort: count the drop (but still log it)
+        # Last resort: count the drop
         self._dropped_inbound += 1
         logger.warning(
             "MessageBus inbound queue full ({} items, max {}); "
@@ -116,6 +116,7 @@ class MessageBus:
             self._overflow_timeout,
             self._dropped_inbound,
         )
+        return False
 
     async def consume_inbound(self) -> InboundMessage:
         """Consume the next inbound message (blocks until available)."""
@@ -123,11 +124,11 @@ class MessageBus:
 
     # -- outbound --------------------------------------------------------------
 
-    async def publish_outbound(self, msg: OutboundMessage) -> None:
+    async def publish_outbound(self, msg: OutboundMessage) -> bool:
         """Publish a response from the agent to channels.
 
-        Never silently drops — blocks up to ``overflow_timeout``, then
-        spills to the persistence sink if one is configured.
+        Returns True if the message was accepted (enqueued or persisted).
+        Returns False only when the message was definitively dropped.
         """
         self._published_outbound += 1
         for sub in self._subscribers:
@@ -137,7 +138,7 @@ class MessageBus:
         # Phase 1: non-blocking fast path
         try:
             self.outbound.put_nowait(msg)
-            return
+            return True
         except asyncio.QueueFull:
             pass
 
@@ -147,7 +148,7 @@ class MessageBus:
                 self.outbound.put(msg),
                 timeout=self._overflow_timeout,
             )
-            return
+            return True
         except asyncio.TimeoutError:
             pass
 
@@ -156,9 +157,9 @@ class MessageBus:
             with _suppress_log("persist_outbound failed"):
                 await self._persistence.persist_outbound(msg)
                 self._persisted_outbound += 1
-                return
+                return True
 
-        # Last resort: count the drop (but still log it)
+        # Last resort: count the drop
         self._dropped_outbound += 1
         logger.warning(
             "MessageBus outbound queue full ({} items, max {}); "
@@ -169,6 +170,7 @@ class MessageBus:
             self._overflow_timeout,
             self._dropped_outbound,
         )
+        return False
 
     async def consume_outbound(self) -> OutboundMessage:
         """Consume the next outbound message (blocks until available)."""

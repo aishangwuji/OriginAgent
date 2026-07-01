@@ -259,13 +259,19 @@ class MessageDispatcher:
                     raise
                 except Exception:
                     logger.exception("Error processing message for session {}", session_key)
-                    await self.loop.bus.publish_outbound(
+                    ok = await self.loop.bus.publish_outbound(
                         OutboundMessage(
                             channel=msg.channel,
                             chat_id=msg.chat_id,
                             content="Sorry, I encountered an error.",
                         )
                     )
+                    if not ok:
+                        logger.error(
+                            "CRITICAL: Failed to deliver error response to session {} — "
+                            "outbound queue full and no persistence",
+                            session_key,
+                        )
         finally:
             queue = self.loop._pending_queues.pop(session_key, None)
             if queue is not None:

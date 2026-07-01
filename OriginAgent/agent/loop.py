@@ -441,7 +441,12 @@ class AgentLoop:
                         chat_id="",
                         session_key="bdi:deliberation",
                     )
-                    self.bus.publish_outbound(msg)
+                    ok = await self.bus.publish_outbound(msg)
+                    if not ok:
+                        logger.error(
+                            "BDI: Failed to publish intention message for desire={}",
+                            intent.desire_id,
+                        )
 
             self._bdi_engine = DeliberationEngine(
                 workspace=self.workspace,
