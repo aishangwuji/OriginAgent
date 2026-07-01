@@ -485,7 +485,7 @@ class AgentLoop:
             restrict_to_workspace=self.restrict_to_workspace,
             unified_session=self._unified_session,
             runtime_profile=self._runtime_profile,
-            consolidation_ratio=self._consolidation_ratio,
+            consolidation_ratio=0.5,
             domain_packs=self.domain_packs,
             max_messages=self._max_messages,
             background_review=self.background_review,
