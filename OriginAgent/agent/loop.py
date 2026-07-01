@@ -960,8 +960,15 @@ class AgentLoop:
         )
 
     def _sync_subagent_runtime_limits(self) -> None:
-        """Keep subagent runtime limits aligned with mutable loop settings."""
-        self.subagents.max_iterations = self.max_iterations
+        """Keep subagent runtime limits aligned with mutable loop settings.
+
+        Delegates to AgentRuntime when available; falls back for tests
+        that bypass __init__.
+        """
+        if hasattr(self, "_runtime") and self._runtime is not None:
+            self._runtime._sync_subagent_runtime_limits()
+        else:
+            self.subagents.max_iterations = self.max_iterations
 
     def _archive_session_file_cap(
         self,
@@ -1154,7 +1161,19 @@ class AgentLoop:
         runtime_context: RuntimeContext | None = None,
         turn_id: str | None = None,
     ) -> None:
-        """Update context for all tools that need routing info."""
+        """Update context for all tools that need routing info.
+
+        Delegates to AgentRuntime when available.
+        """
+        if hasattr(self, "_runtime") and self._runtime is not None:
+            self._runtime._set_tool_context(
+                channel, chat_id,
+                message_id=message_id, metadata=metadata,
+                session_key=session_key, actor_id=actor_id,
+                trigger=trigger, capability_snapshot=capability_snapshot,
+                runtime_context=runtime_context, turn_id=turn_id,
+            )
+            return
         snapshot = capability_snapshot or self._capability_snapshot
         set_tools_runtime_context(
             self.tools,
@@ -1209,9 +1228,13 @@ class AgentLoop:
         )
 
     def _tool_hint(self, tool_calls: list) -> str:
-        """Format tool calls as concise hints with smart abbreviation."""
-        from OriginAgent.utils.tool_hints import format_tool_hints
+        """Format tool calls as concise hints with smart abbreviation.
 
+        Delegates to AgentRuntime when available.
+        """
+        if hasattr(self, "_runtime") and self._runtime is not None:
+            return self._runtime._tool_hint(tool_calls)
+        from OriginAgent.utils.tool_hints import format_tool_hints
         return format_tool_hints(tool_calls, max_length=self.tool_hint_max_length)
 
     async def _build_bus_progress_callback(
@@ -1543,13 +1566,23 @@ class AgentLoop:
         return cancelled + sub_cancelled
 
     def _effective_session_key(self, msg: InboundMessage) -> str:
-        """Return the session key used for task routing and mid-turn injections."""
+        """Return the session key used for task routing and mid-turn injections.
+
+        Delegates to AgentRuntime when available.
+        """
+        if hasattr(self, "_runtime") and self._runtime is not None:
+            return self._runtime._effective_session_key(msg)
         if self._unified_session and not msg.session_key_override:
-            return UNIFIED_SESSION_KEY
+            return "unified:default"
         return msg.session_key
 
     def _replay_token_budget(self) -> int:
-        """Derive a token budget for session history replay from the context window."""
+        """Derive a token budget for session history replay from the context window.
+
+        Delegates to AgentRuntime when available.
+        """
+        if hasattr(self, "_runtime") and self._runtime is not None:
+            return self._runtime._replay_token_budget()
         if self.context_window_tokens <= 0:
             return 0
         max_output = getattr(getattr(self.provider, "generation", None), "max_tokens", 4096)

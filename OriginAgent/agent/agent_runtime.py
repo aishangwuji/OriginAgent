@@ -140,3 +140,85 @@ class AgentRuntime:
     @property
     def deps(self) -> RuntimeDependencies:
         return self._deps
+
+    # ── Leaf helpers (moved from AgentLoop) ──────────────────────
+
+    def _sync_subagent_runtime_limits(self) -> None:
+        """Keep subagent runtime limits aligned with mutable loop settings."""
+        if self._deps.subagents is not None:
+            self._deps.subagents.max_iterations = self._deps.max_iterations
+
+    def _effective_session_key(self, msg: Any) -> str:
+        """Return the session key used for task routing and mid-turn injections."""
+        if self._deps.unified_session and not getattr(msg, "session_key_override", None):
+            return "unified:default"
+        return msg.session_key
+
+    def _replay_token_budget(self) -> int:
+        """Derive a token budget for session history replay from the context window."""
+        if self._deps.context_window_tokens <= 0:
+            return 0
+        provider = self._deps.provider
+        max_output = getattr(getattr(provider, "generation", None), "max_tokens", 4096)
+        try:
+            reserved_output = int(max_output)
+        except (TypeError, ValueError):
+            reserved_output = 4096
+        budget = self._deps.context_window_tokens - max(1, reserved_output) - 1024
+        return budget if budget > 0 else max(128, self._deps.context_window_tokens // 2)
+
+    def _tool_hint(self, tool_calls: list) -> str:
+        """Format tool calls as concise hints with smart abbreviation."""
+        from OriginAgent.utils.tool_hints import format_tool_hints
+        return format_tool_hints(tool_calls, max_length=self._deps.tool_hint_max_length)
+
+    def _set_tool_context(
+        self, channel: str, chat_id: str,
+        message_id: str | None = None, metadata: dict | None = None,
+        session_key: str | None = None,
+        actor_id: str | None = None,
+        trigger: str | None = None,
+        capability_snapshot: Any = None,
+        runtime_context: Any = None,
+        turn_id: str | None = None,
+    ) -> None:
+        """Update context for all tools that need routing info."""
+        from OriginAgent.agent.agent_runtime_context import (
+            set_tool_context as set_tools_runtime_context,
+        )
+        _cap_snapshot = capability_snapshot  # turn-scoped, passed in
+        set_tools_runtime_context(
+            self._deps.tools,
+            channel=channel,
+            chat_id=chat_id,
+            message_id=message_id,
+            metadata=metadata,
+            session_key=session_key,
+            actor_id=actor_id,
+            trigger=trigger,
+            capability_snapshot=_cap_snapshot,
+            runtime_context=runtime_context,
+            unified_session=self._deps.unified_session,
+            unified_session_key="unified:default",
+            turn_id=turn_id,
+        )
+
+    @staticmethod
+    def _strip_think(text: str | None) -> str | None:
+        """Remove <think>…</think> blocks that some models embed in content."""
+        if not text:
+            return None
+        from OriginAgent.utils.helpers import strip_think
+        return strip_think(text) or None
+
+    @staticmethod
+    def _runtime_chat_id(msg: Any) -> str:
+        """Return the chat id shown in runtime metadata for the model."""
+        from OriginAgent.agent.agent_runtime_context import runtime_chat_id
+        return runtime_chat_id(msg)
+
+    @staticmethod
+    def _snapshot_for_trigger(trigger: str | None) -> Any:
+        """Return a capability snapshot for the given trigger."""
+        from OriginAgent.agent.agent_runtime_context import snapshot_for_trigger
+        return snapshot_for_trigger(trigger)
