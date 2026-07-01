@@ -61,3 +61,39 @@ class TestSkillCandidate:
         )
         assert not sc.dangerous_tools
         assert sc.verification_plan == []
+
+
+from OriginAgent.agent.skill_bootstrapper import build_fingerprint, fingerprint_from_tools
+from OriginAgent.agent.skill_bootstrapper_models import ActionTraceDigest
+
+
+def test_build_fingerprint_consistency():
+    d1 = ActionTraceDigest(digest_id="a", session_key="s1",
+                           tool_sequence=["read_file", "grep"])
+    d2 = ActionTraceDigest(digest_id="b", session_key="s2",
+                           tool_sequence=["read_file", "grep"])
+    fp1 = build_fingerprint(d1)
+    fp2 = build_fingerprint(d2)
+    assert fp1 == fp2  # same tools → same fingerprint across sessions
+
+
+def test_build_fingerprint_different_tools():
+    d1 = ActionTraceDigest(digest_id="a", session_key="s1",
+                           tool_sequence=["read_file"])
+    d2 = ActionTraceDigest(digest_id="b", session_key="s2",
+                           tool_sequence=["grep"])
+    assert build_fingerprint(d1) != build_fingerprint(d2)
+
+
+def test_build_fingerprint_empty():
+    d = ActionTraceDigest(digest_id="c", session_key="s3", tool_sequence=[])
+    assert build_fingerprint(d) == ""
+
+
+def test_fingerprint_from_tools():
+    fp = fingerprint_from_tools(["web_search", "web_fetch"], "query=error")
+    assert len(fp) == 32  # sha256 hex[:32]
+
+
+def test_fingerprint_from_tools_empty():
+    assert fingerprint_from_tools([], "") == ""
