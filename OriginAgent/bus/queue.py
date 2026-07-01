@@ -60,6 +60,10 @@ class MessageBus:
         self._dropped_outbound: int = 0
         self._persisted_inbound: int = 0
         self._persisted_outbound: int = 0
+        self._subscriber_failures_inbound: int = 0
+        self._subscriber_failures_outbound: int = 0
+        self._persist_failures_inbound: int = 0
+        self._persist_failures_outbound: int = 0
         self._started_at: float = time.monotonic()
 
     # -- subscriber management -------------------------------------------------
@@ -75,11 +79,21 @@ class MessageBus:
 
         Returns True if the message was accepted (enqueued or persisted).
         Returns False only when the message was definitively dropped.
+
+        Note: Subscriber callbacks are fire-and-forget — failures are counted
+        in stats() but do not affect the return value. Messages with failed
+        subscribers are still enqueued for processing.
         """
         self._published_inbound += 1
         for sub in self._subscribers:
-            with _suppress_log("subscriber on_inbound failed"):
+            try:
                 await sub.on_inbound(msg)
+            except BaseException as exc:
+                self._subscriber_failures_inbound += 1
+                logger.warning(
+                    "MessageBus subscriber on_inbound failed: {}: {}",
+                    type(exc).__name__, exc,
+                )
 
         # Phase 1: non-blocking fast path
         try:
@@ -100,10 +114,16 @@ class MessageBus:
 
         # Phase 3: spill to persistence sink
         if self._persistence is not None:
-            with _suppress_log("persist_inbound failed"):
+            try:
                 await self._persistence.persist_inbound(msg)
                 self._persisted_inbound += 1
                 return True
+            except BaseException as exc:
+                self._persist_failures_inbound += 1
+                logger.warning(
+                    "MessageBus persist_inbound failed: {}: {}",
+                    type(exc).__name__, exc,
+                )
 
         # Last resort: count the drop
         self._dropped_inbound += 1
@@ -129,11 +149,21 @@ class MessageBus:
 
         Returns True if the message was accepted (enqueued or persisted).
         Returns False only when the message was definitively dropped.
+
+        Note: Subscriber callbacks are fire-and-forget — failures are counted
+        in stats() but do not affect the return value. Messages with failed
+        subscribers are still enqueued for processing.
         """
         self._published_outbound += 1
         for sub in self._subscribers:
-            with _suppress_log("subscriber on_outbound failed"):
+            try:
                 await sub.on_outbound(msg)
+            except BaseException as exc:
+                self._subscriber_failures_outbound += 1
+                logger.warning(
+                    "MessageBus subscriber on_outbound failed: {}: {}",
+                    type(exc).__name__, exc,
+                )
 
         # Phase 1: non-blocking fast path
         try:
@@ -154,10 +184,16 @@ class MessageBus:
 
         # Phase 3: spill to persistence sink
         if self._persistence is not None:
-            with _suppress_log("persist_outbound failed"):
+            try:
                 await self._persistence.persist_outbound(msg)
                 self._persisted_outbound += 1
                 return True
+            except BaseException as exc:
+                self._persist_failures_outbound += 1
+                logger.warning(
+                    "MessageBus persist_outbound failed: {}: {}",
+                    type(exc).__name__, exc,
+                )
 
         # Last resort: count the drop
         self._dropped_outbound += 1
@@ -198,6 +234,10 @@ class MessageBus:
             "dropped_outbound": self._dropped_outbound,
             "persisted_inbound": self._persisted_inbound,
             "persisted_outbound": self._persisted_outbound,
+            "inbound_subscriber_failures": self._subscriber_failures_inbound,
+            "inbound_persist_failures": self._persist_failures_inbound,
+            "outbound_subscriber_failures": self._subscriber_failures_outbound,
+            "outbound_persist_failures": self._persist_failures_outbound,
             "inbound_queue_depth": self.inbound.qsize(),
             "inbound_queue_max": self.inbound.maxsize,
             "outbound_queue_depth": self.outbound.qsize(),
