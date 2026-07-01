@@ -12,14 +12,23 @@ import json
 import math
 import re
 import uuid
-from dataclasses import asdict, dataclass, field
-from datetime import datetime, time, timedelta, timezone
+from dataclasses import replace
+from datetime import datetime, time, timezone
 from pathlib import Path
 from typing import Any, Iterable
 
 from filelock import FileLock
 
 from OriginAgent.agent.facts import FactRecord, FactStore
+from OriginAgent.agent.world_simulator_models import (
+    CalibrationSummary,
+    CausalEdge,
+    EntityState,
+    SimulationFeedback,
+    SimulationRequest,
+    SimulationTrace,
+    _normalize_probability,
+)
 from OriginAgent.agent.world_state import SceneSnapshot, WorldStateManager
 from OriginAgent.utils.helpers import ensure_dir
 
@@ -39,10 +48,6 @@ def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
 
-def _utcnow_iso() -> str:
-    return _utcnow().isoformat()
-
-
 def _parse_datetime(value: str | None) -> datetime | None:
     if not value:
         return None
@@ -55,10 +60,6 @@ def _parse_datetime(value: str | None) -> datetime | None:
     return parsed.astimezone(timezone.utc)
 
 
-def _normalize_probability(value: float) -> float:
-    return max(0.0, min(1.0, float(value)))
-
-
 def _round_weight(value: float, *, ndigits: int = 10) -> float:
     return round(float(value), ndigits)
 
@@ -69,146 +70,6 @@ def _normalized_entropy(probability: float) -> float:
         return 0.0
     q = 1.0 - p
     return -((p * math.log2(p)) + (q * math.log2(q)))
-
-
-@dataclass(frozen=True)
-class EntityState:
-    entity_id: str
-    entity_type: str
-    attributes: dict[str, Any] = field(default_factory=dict)
-    confidence: float = 0.5
-    last_verified_at: str | None = None
-    staleness_seconds: float = 0.0
-    source_refs: list[str] = field(default_factory=list)
-
-    def to_json(self) -> dict[str, Any]:
-        return asdict(self)
-
-
-@dataclass
-class CausalEdge:
-    edge_id: str
-    cause: str
-    effect: str
-    confidence: float
-    alpha: float
-    beta: float
-    source_fact_id: str | None = None
-    support_count: int = 0
-    contradiction_count: int = 0
-    created_at: str = field(default_factory=_utcnow_iso)
-    updated_at: str = field(default_factory=_utcnow_iso)
-
-    def to_json(self) -> dict[str, Any]:
-        return asdict(self)
-
-    @classmethod
-    def from_json(cls, raw: dict[str, Any]) -> "CausalEdge":
-        return cls(
-            edge_id=str(raw.get("edge_id") or "").strip(),
-            cause=str(raw.get("cause") or "").strip(),
-            effect=str(raw.get("effect") or "").strip(),
-            confidence=_normalize_probability(float(raw.get("confidence", 0.5))),
-            alpha=float(raw.get("alpha", _DEFAULT_PRIOR_ALPHA)),
-            beta=float(raw.get("beta", _DEFAULT_PRIOR_BETA)),
-            source_fact_id=str(raw.get("source_fact_id")).strip() if raw.get("source_fact_id") else None,
-            support_count=max(0, int(raw.get("support_count", 0) or 0)),
-            contradiction_count=max(0, int(raw.get("contradiction_count", 0) or 0)),
-            created_at=str(raw.get("created_at") or _utcnow_iso()).strip(),
-            updated_at=str(raw.get("updated_at") or _utcnow_iso()).strip(),
-        )
-
-
-@dataclass(frozen=True)
-class SimulationRequest:
-    request_id: str
-    action: str
-    scope: str
-    trigger: str
-    risk: str
-    payload: dict[str, Any] = field(default_factory=dict)
-    requested_by: str | None = None
-    world_ref: str | None = None
-    facts_ref: list[str] = field(default_factory=list)
-    created_at: str = field(default_factory=_utcnow_iso)
-
-    def to_json(self) -> dict[str, Any]:
-        return asdict(self)
-
-
-@dataclass
-class SimulationTrace:
-    trace_id: str
-    request_id: str
-    status: str
-    predicted_outcomes: list[dict[str, Any]] = field(default_factory=list)
-    risk_score: float = 0.0
-    uncertainty_score: float = 0.0
-    assumptions: list[str] = field(default_factory=list)
-    recommended_confirmation: bool = False
-    evidence_refs: dict[str, list[str] | str] = field(default_factory=dict)
-    simulation_skipped_reason: str | None = None
-    created_at: str = field(default_factory=_utcnow_iso)
-
-    def to_json(self) -> dict[str, Any]:
-        return asdict(self)
-
-    @classmethod
-    def from_json(cls, raw: dict[str, Any]) -> "SimulationTrace":
-        return cls(
-            trace_id=str(raw.get("trace_id") or "").strip(),
-            request_id=str(raw.get("request_id") or "").strip(),
-            status=str(raw.get("status") or "not_applicable").strip(),
-            predicted_outcomes=list(raw.get("predicted_outcomes") or []),
-            risk_score=float(raw.get("risk_score", 0.0) or 0.0),
-            uncertainty_score=float(raw.get("uncertainty_score", 0.0) or 0.0),
-            assumptions=[str(item) for item in (raw.get("assumptions") or [])],
-            recommended_confirmation=bool(raw.get("recommended_confirmation", False)),
-            evidence_refs=dict(raw.get("evidence_refs") or {}),
-            simulation_skipped_reason=(
-                str(raw.get("simulation_skipped_reason")).strip()
-                if raw.get("simulation_skipped_reason")
-                else None
-            ),
-            created_at=str(raw.get("created_at") or _utcnow_iso()).strip(),
-        )
-
-
-@dataclass(frozen=True)
-class SimulationFeedback:
-    trace_id: str
-    outcome: str
-    observed_outcome: dict[str, Any] = field(default_factory=dict)
-    mismatch_score: float | None = None
-    evidence_refs: dict[str, Any] = field(default_factory=dict)
-    observed_at: str = field(default_factory=_utcnow_iso)
-    calibration_state: str = "pending"
-
-    def to_json(self) -> dict[str, Any]:
-        return asdict(self)
-
-    @classmethod
-    def from_json(cls, raw: dict[str, Any]) -> "SimulationFeedback":
-        mismatch = raw.get("mismatch_score")
-        return cls(
-            trace_id=str(raw.get("trace_id") or "").strip(),
-            outcome=str(raw.get("outcome") or "").strip(),
-            observed_outcome=dict(raw.get("observed_outcome") or {}),
-            mismatch_score=float(mismatch) if mismatch is not None else None,
-            evidence_refs=dict(raw.get("evidence_refs") or {}),
-            observed_at=str(raw.get("observed_at") or _utcnow_iso()).strip(),
-            calibration_state=str(raw.get("calibration_state") or "pending").strip() or "pending",
-        )
-
-
-@dataclass(frozen=True)
-class CalibrationSummary:
-    processed_feedback: int = 0
-    updated_edges: int = 0
-    skipped_feedback: int = 0
-
-    def to_json(self) -> dict[str, Any]:
-        return asdict(self)
 
 
 class WorldSimulator:
@@ -387,13 +248,16 @@ class WorldSimulator:
                 edge = edges_by_id.get(str(edge_id))
                 if edge is None:
                     continue
-                self._apply_calibration_decay(edge)
+                decayed = self._apply_calibration_decay(edge)
                 if feedback.outcome == "matched":
-                    edge.alpha = _round_weight(edge.alpha + 1.0)
+                    decayed = replace(decayed, alpha=_round_weight(decayed.alpha + 1.0))
                 elif feedback.outcome == "contradicted":
-                    edge.beta = _round_weight(edge.beta + 1.0)
-                edge.updated_at = _utcnow_iso()
-                edge.confidence = self._edge_probability(edge)
+                    decayed = replace(decayed, beta=_round_weight(decayed.beta + 1.0))
+                decayed = replace(
+                    decayed,
+                    confidence=self._edge_probability(decayed),
+                )
+                edges_by_id[edge.edge_id] = decayed
                 updated_edges.add(edge.edge_id)
             pending_updates.append(SimulationFeedback(
                 trace_id=feedback.trace_id,
@@ -653,9 +517,12 @@ class WorldSimulator:
         return 1.0 - combined if seen else 0.0
 
     @staticmethod
-    def _apply_calibration_decay(edge: CausalEdge) -> None:
-        edge.alpha = _round_weight(edge.alpha * _CALIBRATION_DECAY_FACTOR)
-        edge.beta = _round_weight(edge.beta * _CALIBRATION_DECAY_FACTOR)
+    def _apply_calibration_decay(edge: CausalEdge) -> CausalEdge:
+        return replace(
+            edge,
+            alpha=_round_weight(edge.alpha * _CALIBRATION_DECAY_FACTOR),
+            beta=_round_weight(edge.beta * _CALIBRATION_DECAY_FACTOR),
+        )
 
     @staticmethod
     def _required_entities(request: SimulationRequest) -> tuple[str, ...]:
