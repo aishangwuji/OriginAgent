@@ -93,3 +93,115 @@ class SkillBootstrapperScanner:
                 has_correction=has_correction,
             ))
         return patterns
+
+import re
+
+from OriginAgent.agent.skill_bootstrapper_models import (
+    RepeatedPattern,
+    SkillCandidate,
+    _utcnow_iso,
+)
+
+_DANGEROUS_TERMS_RE = re.compile(
+    r"(?i)(?<![a-z0-9_])"
+    r"(?:exec|shell|command|write_file|edit_file|cron|spawn|delete|remove|rm|"
+    r"powershell|cmd\.exe|message|send_message)"
+    r"(?![a-z0-9_])"
+)
+
+
+def _skill_name_from_signature(signature: str) -> str:
+    return signature.replace("+", "-").replace("_", "-").lower().strip("-") or "unnamed-pattern"
+
+
+def _build_skill_body(pattern: RepeatedPattern) -> str:
+    lines = [
+        f"# {_skill_name_from_signature(pattern.tool_signature)}",
+        "",
+        f"Auto-detected pattern (seen {pattern.repeat_count}x across "
+        f"{len(pattern.session_keys)} session(s)).",
+        "",
+        "## Steps",
+        "",
+    ]
+    for i, tool in enumerate(pattern.tool_signature.split("+"), 1):
+        lines.append(f"{i}. Use the `{tool}` tool")
+    lines.extend([
+        "",
+        "## When to Use",
+        "",
+        "This skill was bootstrapped from repeated usage patterns.",
+    ])
+    return "\n".join(lines)
+
+
+class SkillCandidateCompiler:
+    """Compile a ``RepeatedPattern`` into a ``SkillCandidate``."""
+
+    def compile(
+        self,
+        pattern: RepeatedPattern,
+        *,
+        min_confidence: float = 0.5,
+    ) -> SkillCandidate | None:
+        if pattern.confidence < min_confidence:
+            return None
+
+        signature = pattern.tool_signature
+        skill_name = _skill_name_from_signature(signature)
+
+        dangerous: list[str] = []
+        for tool in signature.split("+"):
+            if _DANGEROUS_TERMS_RE.search(tool):
+                dangerous.append(tool)
+
+        body = _build_skill_body(pattern)
+        governance = "danger_review" if dangerous else "review_required"
+
+        return SkillCandidate(
+            candidate_id=_new_id("sc"),
+            pattern_id=pattern.pattern_id,
+            skill_name=skill_name,
+            description=f"Auto-detected repeated pattern: {signature} "
+                        f"(seen {pattern.repeat_count}x, "
+                        f"confidence={pattern.confidence:.2f})",
+            body=body,
+            confidence=pattern.confidence,
+            governance_path=governance,
+            dangerous_tools=dangerous,
+            verification_plan=[f"Verify {t} usage is correct" for t in signature.split("+")],
+        )
+
+
+def _stable_hash(value: Any) -> str:
+    payload = json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def compile_to_proposal_bundle(
+    candidate: SkillCandidate,
+    *,
+    bundle_id: str | None = None,
+) -> "CompiledProposalBundle":
+    """Wrap a ``SkillCandidate`` into a ``CompiledProposalBundle``."""
+    from OriginAgent.agent.meta_programming import COMPILER_VERSION, CompiledProposalBundle
+
+    return CompiledProposalBundle(
+        bundle_id=bundle_id or _new_id("bundle"),
+        source_pattern_id=candidate.pattern_id,
+        source_signal_id="",
+        target_type="skill",
+        target_key=candidate.skill_name,
+        input_summary_hash=_stable_hash([
+            candidate.skill_name, candidate.body[:200],
+        ]),
+        compiler_version=COMPILER_VERSION,
+        summary=candidate.description,
+        hypothesis=f"Repeated pattern ({candidate.confidence:.2f} confidence) "
+                   f"suggests a reusable skill",
+        risk_level="high" if candidate.dangerous_tools else "medium",
+        review_mode="danger_review" if candidate.dangerous_tools else "review_required",
+        evidence_sources=[{"preview": candidate.body[:200]}],
+        payload={"skill_name": candidate.skill_name, "body_preview": candidate.body[:500]},
+        review_only=bool(candidate.dangerous_tools),
+    )

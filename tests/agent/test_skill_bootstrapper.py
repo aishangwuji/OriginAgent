@@ -163,3 +163,63 @@ class TestScanner:
         ]
         patterns = scanner.scan(digests, min_repeats=2)
         assert patterns[0].fingerprint_hash == digests[0].fingerprint
+
+from OriginAgent.agent.skill_bootstrapper import SkillCandidateCompiler, compile_to_proposal_bundle
+from OriginAgent.agent.skill_bootstrapper_models import RepeatedPattern, SkillCandidate
+from OriginAgent.agent.meta_programming import CompiledProposalBundle
+
+
+class TestCompiler:
+    def test_minimal(self):
+        compiler = SkillCandidateCompiler()
+        pattern = RepeatedPattern(
+            pattern_id="rp1", fingerprint_hash="abc", tool_signature="read_file+grep",
+            repeat_count=3, session_keys=["s1", "s2", "s3"], confidence=0.7,
+        )
+        candidate = compiler.compile(pattern)
+        assert candidate is not None
+        assert candidate.pattern_id == "rp1"
+        assert candidate.confidence == 0.7
+
+    def test_skill_name_format(self):
+        compiler = SkillCandidateCompiler()
+        pattern = RepeatedPattern(
+            pattern_id="rp2", fingerprint_hash="def", tool_signature="web_search+web_fetch",
+            repeat_count=5, session_keys=["s1"] * 5, confidence=0.85,
+        )
+        candidate = compiler.compile(pattern)
+        assert candidate.skill_name == "web-search-web-fetch"
+        assert candidate.governance_path == "review_required"
+
+    def test_dangerous_tools_detected(self):
+        compiler = SkillCandidateCompiler()
+        pattern = RepeatedPattern(
+            pattern_id="rp3", fingerprint_hash="ghi", tool_signature="exec",
+            repeat_count=3, session_keys=["s1", "s2", "s3"], confidence=0.7,
+        )
+        candidate = compiler.compile(pattern)
+        assert candidate is not None
+        assert "exec" in candidate.dangerous_tools
+
+    def test_low_confidence_returns_none(self):
+        compiler = SkillCandidateCompiler()
+        pattern = RepeatedPattern(
+            pattern_id="rp4", fingerprint_hash="jkl", tool_signature="read_file",
+            repeat_count=2, session_keys=["s1", "s2"], confidence=0.3,
+        )
+        candidate = compiler.compile(pattern, min_confidence=0.5)
+        assert candidate is None
+
+    def test_compile_to_proposal_bundle(self):
+        candidate = SkillCandidate(
+            candidate_id="sc1", pattern_id="rp1",
+            skill_name="diagnose-cpu",
+            description="Auto-detected: diagnose CPU spike",
+            body="1. Run top\n2. Check logs",
+            confidence=0.8,
+        )
+        bundle = compile_to_proposal_bundle(candidate)
+        assert bundle is not None
+        assert bundle.target_type == "skill"
+        assert bundle.target_key == "diagnose-cpu"
+        assert bundle.risk_level == "medium"
