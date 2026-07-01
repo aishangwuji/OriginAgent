@@ -429,7 +429,9 @@ async def test_message_dispatcher_error_publishes_fallback() -> None:
 
     published = loop.bus.publish_outbound.await_args.args[0]
     assert isinstance(published, OutboundMessage)
-    assert published.content == "Sorry, I encountered an error."
+    # RuntimeError("boom") classifies as INTERNAL
+    assert "unexpected error" in published.content.lower()
+    assert published.content != "Sorry, I encountered an error."
 
 
 @pytest.mark.asyncio
