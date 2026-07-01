@@ -388,6 +388,82 @@ class AgentRuntime:
             d.sessions.save(session)
         return written
 
+    # ── Tool approval ───────────────────────────────────────────
+
+    def _consume_tool_approval_reply(
+        self,
+        *,
+        session_key: str,
+        actor_id: str | None,
+        reply: str,
+    ) -> tuple:
+        d = self._deps
+        confirmation = d.confirmation_manager.latest_pending_tool_approval(session_key) if d.confirmation_manager else None
+        if confirmation is None:
+            return None, False
+        from OriginAgent.agent.confirmation import classify_confirmation_reply
+        classification = classify_confirmation_reply(reply)
+        if classification not in {"confirmed", "rejected"}:
+            return None, False
+        result = d.confirmation_manager.resolve_user_reply(confirmation.confirmation_id, reply)
+        tool_name = confirmation.metadata.get("tool_name") or confirmation.action or "tool"
+        if result.decision == "confirmed":
+            from OriginAgent.security.grants import issue_tool_approval_grant
+            grant = issue_tool_approval_grant(confirmation, d.grant_store, approved_by=actor_id)
+            return (("tool_approval",
+                     f"Tool approval confirmed for {tool_name}. "
+                     f"Short-lived grant {grant.grant_id} is active for this session. "
+                     "Continue the pending task using the newly approved capability."), True)
+        if result.decision == "rejected":
+            return (("tool_approval",
+                     f"Tool approval was rejected for {tool_name}. Do not use that capability unless the user asks again."), True)
+        return None, False
+
+    # ── Outbound assembly ───────────────────────────────────────
+
+    def _assemble_outbound(
+        self,
+        msg: Any,
+        final_content: str,
+        all_msgs: list[dict],
+        stop_reason: str,
+        had_injections: bool,
+        generated_media: list[str],
+        on_stream: Any = None,
+    ) -> Any | None:
+        """Assemble the final outbound message from turn results."""
+        from OriginAgent.agent.tools.message import MessageTool
+        from OriginAgent.agent.tools.ask import ask_user_options_from_messages, ask_user_outbound
+        from OriginAgent.bus.events import OutboundMessage
+        from OriginAgent.session.goal_state import goal_state_ws_blob
+
+        d = self._deps
+        if (mt := d.tools.get("message")) and isinstance(mt, MessageTool) and mt._sent_in_turn:
+            if not had_injections or stop_reason == "empty_final_response":
+                return None
+
+        preview = final_content[:120] + "..." if len(final_content) > 120 else final_content
+        logger.info("Response to {}:{}: {}", msg.channel, msg.sender_id, preview)
+
+        meta = dict(msg.metadata or {})
+        content, buttons = ask_user_outbound(
+            final_content,
+            ask_user_options_from_messages(all_msgs) if stop_reason == "ask_user" else [],
+            msg.channel,
+        )
+        if on_stream is not None and stop_reason not in {"ask_user", "error", "tool_error"}:
+            meta["_streamed"] = True
+        if msg.channel == "websocket":
+            meta["goal_state"] = goal_state_ws_blob(
+                d.sessions.get_or_create(self._effective_session_key(msg)).metadata
+            )
+
+        return OutboundMessage(
+            channel=msg.channel, chat_id=msg.chat_id,
+            content=content, media=generated_media,
+            metadata=meta, buttons=buttons,
+        )
+
     # ── Core turn pipeline ───────────────────────────────────────
 
     async def _run_agent_loop(

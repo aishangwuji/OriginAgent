@@ -1427,42 +1427,27 @@ class AgentLoop:
         actor_id: str | None,
         reply: str,
     ) -> tuple[tuple[str, str] | None, bool]:
+        if hasattr(self, "_runtime") and self._runtime is not None:
+            return self._runtime._consume_tool_approval_reply(
+                session_key=session_key, actor_id=actor_id, reply=reply,
+            )
+        # fallback
         confirmation = self._confirmation_manager.latest_pending_tool_approval(session_key)
         if confirmation is None:
             return None, False
         classification = classify_confirmation_reply(reply)
         if classification not in {"confirmed", "rejected"}:
             return None, False
-        result = self._confirmation_manager.resolve_user_reply(
-            confirmation.confirmation_id,
-            reply,
-        )
+        result = self._confirmation_manager.resolve_user_reply(confirmation.confirmation_id, reply)
         tool_name = confirmation.metadata.get("tool_name") or confirmation.action or "tool"
         if result.decision == "confirmed":
-            grant = issue_tool_approval_grant(
-                confirmation,
-                self._grant_store,
-                approved_by=actor_id,
-            )
-            return (
-                (
-                    "tool_approval",
-                    (
-                        f"Tool approval confirmed for {tool_name}. "
-                        f"Short-lived grant {grant.grant_id} is active for this session. "
-                        "Continue the pending task using the newly approved capability."
-                    ),
-                ),
-                True,
-            )
+            grant = issue_tool_approval_grant(confirmation, self._grant_store, approved_by=actor_id)
+            return (("tool_approval",
+                     f"Tool approval confirmed for {tool_name}. Short-lived grant {grant.grant_id} is active for this session. "
+                     "Continue the pending task using the newly approved capability."), True)
         if result.decision == "rejected":
-            return (
-                (
-                    "tool_approval",
-                    f"Tool approval was rejected for {tool_name}. Do not use that capability unless the user asks again.",
-                ),
-                True,
-            )
+            return (("tool_approval",
+                     f"Tool approval was rejected for {tool_name}. Do not use that capability unless the user asks again."), True)
         return None, False
 
     def _is_webui_message(self, msg: InboundMessage) -> bool:
@@ -2455,15 +2440,17 @@ class AgentLoop:
         generated_media: list[str],
         on_stream: Callable[[str], Awaitable[None]] | None,
     ) -> OutboundMessage | None:
-        """Assemble the final outbound message from turn results."""
-        # MessageTool suppression
+        if hasattr(self, "_runtime") and self._runtime is not None:
+            return self._runtime._assemble_outbound(
+                msg, final_content, all_msgs, stop_reason,
+                had_injections, generated_media, on_stream=on_stream,
+            )
+        # fallback
         if (mt := self.tools.get("message")) and isinstance(mt, MessageTool) and mt._sent_in_turn:
             if not had_injections or stop_reason == "empty_final_response":
                 return None
-
         preview = final_content[:120] + "..." if len(final_content) > 120 else final_content
         logger.info("Response to {}:{}: {}", msg.channel, msg.sender_id, preview)
-
         meta = dict(msg.metadata or {})
         content, buttons = ask_user_outbound(
             final_content,
@@ -2476,14 +2463,10 @@ class AgentLoop:
             meta["goal_state"] = goal_state_ws_blob(
                 self.sessions.get_or_create(self._effective_session_key(msg)).metadata
             )
-
         return OutboundMessage(
-            channel=msg.channel,
-            chat_id=msg.chat_id,
-            content=content,
-            media=generated_media,
-            metadata=meta,
-            buttons=buttons,
+            channel=msg.channel, chat_id=msg.chat_id,
+            content=content, media=generated_media,
+            metadata=meta, buttons=buttons,
         )
 
     async def _state_restore(self, ctx: TurnContext) -> str:
