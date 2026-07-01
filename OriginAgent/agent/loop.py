@@ -1622,13 +1622,37 @@ class AgentLoop:
     ) -> tuple[str | None, list[str], list[dict], str, bool]:
         """Run the agent iteration loop.
 
-        *on_stream*: called with each content delta during streaming.
-        *on_stream_end(resuming)*: called when a streaming session finishes.
-        ``resuming=True`` means tool calls follow (spinner should restart);
-        ``resuming=False`` means this is the final response.
-
-        Returns (final_content, tools_used, messages, stop_reason, had_injections).
+        Delegates to AgentRuntime when available; falls back to original
+        logic for callers that bypass ``__init__``.
         """
+        if hasattr(self, "_runtime") and self._runtime is not None:
+            async def _checkpoint_cb(sess: Session, payload: dict[str, Any]) -> None:
+                self._set_runtime_checkpoint(sess, payload)
+
+            result = await self._runtime._run_agent_loop(
+                initial_messages,
+                on_progress=on_progress,
+                on_stream=on_stream,
+                on_stream_end=on_stream_end,
+                on_retry_wait=on_retry_wait,
+                session=session,
+                channel=channel,
+                chat_id=chat_id,
+                message_id=message_id,
+                metadata=metadata,
+                session_key=session_key,
+                pending_queue=pending_queue,
+                actor_id=actor_id,
+                trigger=trigger,
+                capability_snapshot=capability_snapshot,
+                checkpoint_cb=_checkpoint_cb,
+                set_current_iteration=lambda it: setattr(self, "_current_iteration", it),
+            )
+            self._last_usage = getattr(result, "usage", None) if hasattr(result, "usage") else None
+            # result is a tuple from AgentRuntime
+            return result
+
+        # ── Fallback: original logic ──────────────────────────────────
         self._sync_subagent_runtime_limits()
         self._capability_snapshot = capability_snapshot or self._snapshot_for_trigger(trigger)
         if hasattr(self.tools, "set_capability_snapshot"):
@@ -1662,14 +1686,6 @@ class AgentLoop:
             self._set_runtime_checkpoint(session, payload)
 
         async def _drain_pending(*, limit: int = _MAX_INJECTIONS_PER_TURN) -> list[dict[str, Any]]:
-            """Drain follow-up messages from the pending queue.
-
-            When no messages are immediately available but sub-agents
-            spawned in this dispatch are still running, blocks until at
-            least one result arrives (or timeout).  This keeps the runner
-            loop alive so subsequent sub-agent completions are consumed
-            in-order rather than dispatched separately.
-            """
             if pending_queue is None:
                 return []
 
@@ -1711,9 +1727,6 @@ class AgentLoop:
                 except asyncio.QueueEmpty:
                     break
 
-            # Block if nothing drained but sub-agents spawned in this dispatch
-            # are still running.  Keeps the runner loop alive so subsequent
-            # completions are injected in-order rather than dispatched separately.
             if (not items
                     and session is not None
                     and self.subagents.get_running_count_by_session(session.key) > 0):
@@ -1770,8 +1783,6 @@ class AgentLoop:
         self._last_usage = result.usage
         if result.stop_reason == "max_iterations":
             logger.warning("Max iterations ({}) reached", self.max_iterations)
-            # Push final content through stream so streaming channels (e.g. Feishu)
-            # update the card instead of leaving it empty.
             if on_stream and on_stream_end:
                 await on_stream(result.final_content or "")
                 await on_stream_end(resuming=False)
