@@ -968,3 +968,165 @@ class AgentRuntime:
             "source": getattr(runtime_context, "source", None),
             "default_scope": getattr(runtime_context, "default_scope", None),
         }
+
+    # ── Message construction ────────────────────────────────────
+
+    def _build_prompt_self_model(self) -> dict:
+        d = self._deps
+        introspection = d.introspection
+        snapshot = introspection.runtime_context_snapshot() if introspection is not None else {}
+        from OriginAgent.agent.self_model import SelfModelService
+        return SelfModelService(
+            d.workspace,
+            audit_mode=getattr(d.tool_audit_config, "mode", "standard"),
+            runtime_profile=d.runtime_profile,
+            domain_pack_manager=d.domain_packs,
+            skills_loader=d.context.skills,
+            memory_store=d.context.memory,
+            nearline_memory_config=d.nearline_memory,
+            runtime_snapshot=snapshot,
+        ).build()
+
+    def _persist_user_message_early(
+        self, msg: Any, session: Any, pending_ask_id: str | None, **kwargs: Any
+    ) -> bool:
+        from OriginAgent.agent.agent_turn_persist import TurnPersistManager
+        return TurnPersistManager(
+            self._deps.max_tool_result_chars, self._deps.sessions
+        ).persist_user_message_early(msg, session, pending_ask_id, **kwargs)
+
+    def _snapshot_context_assembly_from_messages(
+        self, messages: list[dict], *, session_key: str | None, runtime_context: Any = None,
+    ) -> dict:
+        user_blocks: list[dict] = []
+        for message in reversed(messages):
+            if message.get("role") != "user":
+                continue
+            content = message.get("content")
+            if isinstance(content, list):
+                user_blocks = [block for block in content if isinstance(block, dict)]
+                break
+        return {
+            "enabled": bool(self._deps.context._context_config.enable_phase1_continuity),
+            "session_key": session_key,
+            "runtime_context": (
+                {
+                    "actor_id": runtime_context.actor_id, "user_id": runtime_context.user_id,
+                    "session_id": runtime_context.session_id, "device_id": runtime_context.device_id,
+                    "trigger": runtime_context.trigger, "source": runtime_context.source,
+                    "scope": runtime_context.default_scope,
+                } if runtime_context is not None else {}
+            ),
+            "block_kinds": [block.get("_meta", {}).get("kind") for block in user_blocks],
+            "reference_sources": [
+                block.get("_meta", {}).get("source") for block in user_blocks
+                if block.get("_meta", {}).get("kind") == "reference_context"
+            ],
+            "current_message_preview": next(
+                (str(block.get("text") or "")[:200] for block in reversed(user_blocks)
+                 if block.get("type") == "text" and not block.get("_meta")),
+                "",
+            ),
+        }
+
+    def _build_initial_messages(
+        self,
+        msg: Any,
+        session: Any,
+        history: list[dict],
+        pending_ask_id: str | None,
+        pending_summary: str | None,
+        internal_event: tuple | None = None,
+        recovered_continuity_block: dict | None = None,
+    ) -> list[dict]:
+        """Build the initial message list for the LLM turn."""
+        from OriginAgent.utils.image_generation_intent import image_generation_prompt
+        from OriginAgent.agent.tools.ask import ask_user_tool_result_messages
+
+        d = self._deps
+        self_model_payload = self._build_prompt_self_model()
+        if pending_ask_id:
+            system_prompt = d.context.build_system_prompt(
+                channel=msg.channel, session_summary=pending_summary,
+                self_model_payload=self_model_payload,
+            )
+            messages = ask_user_tool_result_messages(
+                system_prompt, history, pending_ask_id,
+                image_generation_prompt(msg.content, msg.metadata),
+            )
+            if d.context._context_config.enable_phase1_continuity:
+                assembled = d.context.assemble_user_content(
+                    current_message=None, media=None,
+                    channel=msg.channel, chat_id=self._runtime_chat_id(msg),
+                    sender_id=msg.sender_id, session_summary=pending_summary,
+                    session_metadata=session.metadata, internal_event=None,
+                    runtime_context=d.state_holder.get(session.key).last_runtime_context,
+                    session_key=session.key,
+                    recovered_continuity_block=recovered_continuity_block,
+                    include_current_message=False,
+                )
+                d.state_holder.get(session.key).last_context_assembly = dict(assembled.audit)
+                messages.append({"role": "user", "content": assembled.blocks})
+                return d.context._apply_prompt_budget(
+                    messages,
+                    context_window_tokens=d.context_window_tokens,
+                    max_completion_tokens=getattr(d.provider.generation, "max_tokens", 4096),
+                )
+            messages.append({
+                "role": "user",
+                "content": [
+                    d.context.build_runtime_context_block(
+                        msg.channel, self._runtime_chat_id(msg),
+                        d.context.timezone, sender_id=msg.sender_id,
+                        session_metadata=session.metadata,
+                    ),
+                    *([recovered_continuity_block] if recovered_continuity_block is not None else []),
+                    *d.context.build_reference_context_blocks(
+                        session_summary=pending_summary, session_key=session.key,
+                        runtime_context=d.state_holder.get(session.key).last_runtime_context,
+                        current_message=msg.content,
+                    ),
+                ],
+            })
+            d.state_holder.get(session.key).last_context_assembly = {
+                "enabled": False,
+                "session_key": session.key,
+                "reason": "phase1_continuity_disabled",
+                "block_kinds": [d.context.RUNTIME_CONTEXT_KIND] + [
+                    block.get("_meta", {}).get("kind")
+                    for block in d.context.build_reference_context_blocks(
+                        session_summary=pending_summary, session_key=session.key,
+                        runtime_context=d.state_holder.get(session.key).last_runtime_context,
+                        current_message=msg.content,
+                    )
+                ],
+            }
+            return d.context._apply_prompt_budget(
+                messages,
+                context_window_tokens=d.context_window_tokens,
+                max_completion_tokens=getattr(d.provider.generation, "max_tokens", 4096),
+            )
+        built = d.context.build_messages(
+            history=history,
+            current_message=image_generation_prompt(msg.content, msg.metadata),
+            media=msg.media if msg.media else None,
+            channel=msg.channel, chat_id=self._runtime_chat_id(msg),
+            sender_id=msg.sender_id, session_summary=pending_summary,
+            session_metadata=session.metadata, internal_event=internal_event,
+            self_model_payload=self_model_payload,
+            runtime_context=d.state_holder.get(session.key).last_runtime_context,
+            session_key=session.key,
+            recovered_continuity_block=recovered_continuity_block,
+            context_window_tokens=d.context_window_tokens,
+            max_completion_tokens=getattr(d.provider.generation, "max_tokens", 4096),
+        )
+        state = d.state_holder.get(session.key)
+        state.last_context_assembly = dict(
+            getattr(d.context, "_last_context_assembly_audit", {}) or {}
+        )
+        if not state.last_context_assembly:
+            state.last_context_assembly = self._snapshot_context_assembly_from_messages(
+                built, session_key=session.key,
+                runtime_context=state.last_runtime_context,
+            )
+        return built
