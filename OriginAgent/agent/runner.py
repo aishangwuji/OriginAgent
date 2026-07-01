@@ -35,6 +35,12 @@ from OriginAgent.utils.helpers import (
     truncate_text,
 )
 from OriginAgent.utils.prompt_templates import render_template
+from OriginAgent.agent.error_classifier import (
+    ClassifiedError,
+    ErrorKind,
+    classify_exception,
+    user_facing_message,
+)
 from OriginAgent.utils.runtime import (
     EMPTY_FINAL_RESPONSE_MESSAGE,
     build_finalization_retry_message,
@@ -45,7 +51,9 @@ from OriginAgent.utils.runtime import (
     repeated_workspace_violation_error,
 )
 
-_DEFAULT_ERROR_MESSAGE = "Sorry, I encountered an error calling the AI model."
+_DEFAULT_ERROR_MESSAGE = user_facing_message(
+    ClassifiedError(kind=ErrorKind.INTERNAL, technical_detail="model error", retryable=False)
+)
 _PERSISTED_MODEL_ERROR_PLACEHOLDER = "[Assistant reply unavailable due to model error.]"
 _MAX_EMPTY_RETRIES = 2
 _MAX_LENGTH_RECOVERIES = 3
@@ -520,7 +528,13 @@ class AgentRunner:
                 continue
 
             if response.finish_reason == "error":
-                final_content = clean or spec.error_message or _DEFAULT_ERROR_MESSAGE
+                error_msg = response.content or "model error"
+                if response.error_kind == "timeout":
+                    exc: BaseException = TimeoutError(error_msg)
+                else:
+                    exc = RuntimeError(error_msg)
+                classified = classify_exception(exc)
+                final_content = clean or spec.error_message or user_facing_message(classified)
                 stop_reason = "error"
                 error = final_content
                 self._append_model_error_placeholder(messages)

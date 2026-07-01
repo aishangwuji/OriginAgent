@@ -48,6 +48,7 @@ from OriginAgent.agent.agent_turn_pipeline import (
 )
 from OriginAgent.agent.services import AgentServiceContainer
 from OriginAgent.agent.turn_orchestrator import TurnOrchestrator, TurnOrchestratorDeps
+from OriginAgent.agent.error_classifier import ClassifiedError, ErrorKind, user_facing_message
 from OriginAgent.agent.message_dispatcher import MessageDispatcher, MessageDispatcherDeps
 from OriginAgent.agent.system_turn_handler import (
     SystemTurnHandler,
@@ -1743,7 +1744,9 @@ class AgentLoop:
                 max_iterations=self.max_iterations,
                 max_tool_result_chars=self.max_tool_result_chars,
                 hook=hook,
-                error_message="Sorry, I encountered an error calling the AI model.",
+                error_message=user_facing_message(
+                    ClassifiedError(kind=ErrorKind.INTERNAL, technical_detail="agent loop error", retryable=False)
+                ),
                 concurrent_tools=True,
                 tool_concurrency_limit=self._tool_concurrency_limit,
                 workspace=self.workspace,

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import dataclasses
+import sys
 import time
 from contextlib import nullcontext, AbstractContextManager
 from dataclasses import dataclass
@@ -10,6 +11,7 @@ from typing import Any, Awaitable, Callable, Protocol, runtime_checkable
 from loguru import logger
 
 from OriginAgent.bus.events import InboundMessage, OutboundMessage
+from OriginAgent.agent.error_classifier import classify_exception, user_facing_message
 from OriginAgent.session.goal_state import goal_state_ws_blob
 from OriginAgent.utils.webui_titles import maybe_generate_webui_title_after_turn
 
@@ -259,11 +261,13 @@ class MessageDispatcher:
                     raise
                 except Exception:
                     logger.exception("Error processing message for session {}", session_key)
+                    classified = classify_exception(sys.exc_info()[1] if sys.exc_info()[1] else Exception("unknown"))
+                    error_content = user_facing_message(classified)
                     ok = await self.loop.bus.publish_outbound(
                         OutboundMessage(
                             channel=msg.channel,
                             chat_id=msg.chat_id,
-                            content="Sorry, I encountered an error.",
+                            content=error_content,
                         )
                     )
                     if not ok:
