@@ -189,9 +189,6 @@ class AgentLoopAttributes:
     _last_action_continuity_audit: dict[str, Any] = field(default_factory=dict)
     _cached_action_summary: dict[str, Any] = field(default_factory=dict)
     _last_cognitive_scan: dict[str, Any] = field(default_factory=dict)
-    _last_meta_cognition_summary: dict[str, Any] = field(default_factory=dict)
-    _last_meta_trigger_scan: list[Any] = field(default_factory=list)
-    _last_meta_artifacts: dict[str, Any] = field(default_factory=dict)
 
 
 def build_loop_components(
@@ -718,9 +715,6 @@ def build_loop_components(
     values["_last_action_continuity_audit"] = {}
     values["_cached_action_summary"] = normalize_action_summary({})
     values["_last_cognitive_scan"] = {}
-    values["_last_meta_cognition_summary"] = {}
-    values["_last_meta_trigger_scan"] = []
-    values["_last_meta_artifacts"] = {}
 
     return LoopComponents(values=values)
 

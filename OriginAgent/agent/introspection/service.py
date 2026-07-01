@@ -473,13 +473,18 @@ class RuntimeIntrospectionService:
             summary.setdefault("seed_counts", {})
             summary.setdefault("last_signal_upserts", [])
         summary.setdefault("uncertainty_stats", {"avg": 0.0, "max": 0.0, "high_count": 0, "threshold": 0.5})
-        last_summary = dict(getattr(loop, "_last_meta_cognition_summary", {}) or {})
+        coordinator = getattr(loop, "_meta_coordinator", None)
+        if coordinator is not None:
+            last_summary = dict(coordinator.summary or {})
+            last_artifacts = dict(coordinator.last_artifacts or {})
+        else:
+            last_summary = {}
+            last_artifacts = {}
         if last_summary:
             summary.setdefault("runtime_status", last_summary.get("runtime_status", {}))
             summary.setdefault("artifact_status", last_summary.get("artifact_status", {}))
             summary.setdefault("bridge_decision_counts", last_summary.get("bridge_decision_counts", {}))
             summary.setdefault("fast_path_decision_counts", last_summary.get("fast_path_decision_counts", {}))
-        last_artifacts = dict(getattr(loop, "_last_meta_artifacts", {}) or {})
         if last_artifacts:
             summary.setdefault("recent_journals", list(last_artifacts.get("recent_journals") or []))
             summary.setdefault("recent_reflections", list(last_artifacts.get("recent_reflections") or []))

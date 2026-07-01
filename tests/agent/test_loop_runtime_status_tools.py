@@ -298,11 +298,11 @@ def test_user_correction_fast_path_writes_redacted_preview_and_counts(tmp_path: 
 
     snapshot = loop.working_memory.load(session, identity=None)
     assert "user_correction: 以后请简洁一点" in list(snapshot.attention_items or [])
-    assert loop._last_meta_cognition_summary["fast_path_decision_counts"]["fast_path_working_memory_written"] == 1
+    assert loop._meta_coordinator.summary["fast_path_decision_counts"]["fast_path_working_memory_written"] == 1
 
     loop._maybe_apply_meta_fast_path(trigger)
 
-    assert loop._last_meta_cognition_summary["fast_path_decision_counts"]["fast_path_duplicate_skipped"] == 1
+    assert loop._meta_coordinator.summary["fast_path_decision_counts"]["fast_path_duplicate_skipped"] == 1
 
 
 @pytest.mark.asyncio

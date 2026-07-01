@@ -588,13 +588,15 @@ def test_meta_cognition_summary_exposes_fast_path_decision_counts(tmp_path: Path
             }
         ),
         _meta_cognition_reflector=None,
-        _last_meta_cognition_summary={
-            "fast_path_decision_counts": {
-                "fast_path_working_memory_written": 1,
-                "fast_path_duplicate_skipped": 2,
-            }
-        },
-        _last_meta_artifacts={},
+        _meta_coordinator=SimpleNamespace(
+            summary={
+                "fast_path_decision_counts": {
+                    "fast_path_working_memory_written": 1,
+                    "fast_path_duplicate_skipped": 2,
+                }
+            },
+            last_artifacts={},
+        ),
     )
     service = RuntimeIntrospectionService(
         loop=loop,
