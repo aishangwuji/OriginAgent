@@ -51,12 +51,7 @@ async def test_prepare_call_exception_does_not_silently_pass():
 
 @pytest.mark.asyncio
 async def test_subscriber_failure_signals_upstream():
-    """When a subscriber raises, the caller should be able to detect it.
-
-    Currently publish_inbound suppresses subscriber errors with _suppress_log
-    and always returns True.  After the fix, subscriber failures should be
-    observable by the caller.
-    """
+    """When a subscriber raises, the failure is counted in stats."""
     from OriginAgent.bus.queue import InboundMessage, MessageBus
 
     bus = MessageBus(maxsize=10)
@@ -78,12 +73,15 @@ async def test_subscriber_failure_signals_upstream():
         content="hello",
     )
 
-    # This should indicate failure somehow
+    # Message is still accepted (enqueued) even if subscriber fails
     result = await bus.publish_inbound(msg)
+    assert result is True  # Subscriber failures don't affect enqueueing
 
-    # Currently publish_inbound suppresses subscriber errors and returns True
-    # This test documents the current behavior — after the fix it should change
-    assert result is True  # Temporary: documents current behavior
+    # Stats now count the failure
+    stats = bus.stats
+    assert stats["inbound_subscriber_failures"] == 1, (
+        f"Expected 1 inbound subscriber failure, got {stats['inbound_subscriber_failures']}"
+    )
 
 
 @pytest.mark.asyncio
