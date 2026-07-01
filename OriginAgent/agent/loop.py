@@ -1364,12 +1364,13 @@ class AgentLoop:
                     session_summary=pending_summary,
                     session_metadata=session.metadata,
                     internal_event=None,
-                    runtime_context=self._last_runtime_context,
+                    runtime_context=self._state_holder.get(session.key).last_runtime_context,
                     session_key=session.key,
                     recovered_continuity_block=recovered_continuity_block,
                     include_current_message=False,
                 )
-                self._last_context_assembly = dict(assembled.audit)
+                self._state_holder.get(session.key).last_context_assembly = dict(assembled.audit)
+                self._last_context_assembly = dict(assembled.audit)  # compat
                 messages.append({
                     "role": "user",
                     "content": assembled.blocks,
@@ -1393,12 +1394,12 @@ class AgentLoop:
                     *self.context.build_reference_context_blocks(
                         session_summary=pending_summary,
                         session_key=session.key,
-                        runtime_context=self._last_runtime_context,
+                        runtime_context=self._state_holder.get(session.key).last_runtime_context,
                         current_message=msg.content,
                     ),
                 ],
             })
-            self._last_context_assembly = {
+            self._state_holder.get(session.key).last_context_assembly = {
                 "enabled": False,
                 "session_key": session.key,
                 "reason": "phase1_continuity_disabled",
@@ -1409,12 +1410,13 @@ class AgentLoop:
                         for block in self.context.build_reference_context_blocks(
                             session_summary=pending_summary,
                             session_key=session.key,
-                            runtime_context=self._last_runtime_context,
+                            runtime_context=self._state_holder.get(session.key).last_runtime_context,
                             current_message=msg.content,
                         )
                     ],
                 ],
             }
+            self._last_context_assembly = self._state_holder.get(session.key).last_context_assembly  # compat
             return self.context._apply_prompt_budget(
                 messages,
                 context_window_tokens=self.context_window_tokens,
@@ -1437,13 +1439,15 @@ class AgentLoop:
             context_window_tokens=self.context_window_tokens,
             max_completion_tokens=getattr(self.provider.generation, "max_tokens", 4096),
         )
-        self._last_context_assembly = dict(getattr(self.context, "_last_context_assembly_audit", {}) or {})
-        if not self._last_context_assembly:
-            self._last_context_assembly = self._snapshot_context_assembly_from_messages(
+        state = self._state_holder.get(session.key)
+        state.last_context_assembly = dict(getattr(self.context, "_last_context_assembly_audit", {}) or {})
+        if not state.last_context_assembly:
+            state.last_context_assembly = self._snapshot_context_assembly_from_messages(
                 built,
                 session_key=session.key,
-                runtime_context=self._last_runtime_context,
+                runtime_context=state.last_runtime_context,
             )
+        self._last_context_assembly = dict(state.last_context_assembly)  # compat
         return built
 
     def _build_prompt_self_model(self) -> dict[str, Any]:
@@ -2122,21 +2126,25 @@ class AgentLoop:
                 if world_kept >= max_world_items:
                     break
             attention_items = merged_attention
-            self._last_world_attention_write = {
+            state = self._state_holder.get(session.key)
+            state.last_world_attention_write = {
                 "world_attention_total": len(world_attention_items),
                 "world_kept": world_kept,
                 "world_truncated": max(0, len(world_attention_items) - world_kept),
                 "world_truncated_by_limit": bool(world_kept >= max_world_items and len(world_attention_items) > world_kept),
                 "attention_merged_items": list(merged_attention),
             }
+            self._last_world_attention_write = state.last_world_attention_write  # compat
         else:
-            self._last_world_attention_write = {
+            state = self._state_holder.get(session.key)
+            state.last_world_attention_write = {
                 "world_attention_total": 0,
                 "world_kept": 0,
                 "world_truncated": 0,
                 "world_truncated_by_limit": False,
                 "attention_merged_items": [item for item in (attention_items or []) if item],
             }
+            self._last_world_attention_write = state.last_world_attention_write  # compat
         self.working_memory.upsert(
             session,
             identity=runtime_context.identity,
@@ -2460,7 +2468,7 @@ class AgentLoop:
             return
         sessions = getattr(self, "sessions", None)
         working_memory = getattr(self, "working_memory", None)
-        runtime_context = getattr(self, "_last_runtime_context", None)
+        runtime_context = self._state_holder.get(session_key).last_runtime_context
         if sessions is None or working_memory is None:
             return
         try:
