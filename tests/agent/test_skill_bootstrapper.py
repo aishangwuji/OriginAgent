@@ -97,3 +97,69 @@ def test_fingerprint_from_tools():
 
 def test_fingerprint_from_tools_empty():
     assert fingerprint_from_tools([], "") == ""
+
+from OriginAgent.agent.skill_bootstrapper import SkillBootstrapperScanner
+from OriginAgent.agent.skill_bootstrapper_models import ActionTraceDigest
+
+
+class TestScanner:
+    def test_empty(self):
+        scanner = SkillBootstrapperScanner()
+        patterns = scanner.scan([])
+        assert patterns == []
+
+    def test_single_digest_no_repeat(self):
+        scanner = SkillBootstrapperScanner()
+        digests = [ActionTraceDigest(digest_id="d1", session_key="s1", tool_sequence=["read_file"])]
+        patterns = scanner.scan(digests, min_repeats=2)
+        assert len(patterns) == 0
+
+    def test_two_matching(self):
+        scanner = SkillBootstrapperScanner()
+        digests = [
+            ActionTraceDigest(digest_id="d1", session_key="s1", tool_sequence=["read_file", "grep"]),
+            ActionTraceDigest(digest_id="d2", session_key="s2", tool_sequence=["read_file", "grep"]),
+        ]
+        patterns = scanner.scan(digests, min_repeats=2)
+        assert len(patterns) == 1
+        assert patterns[0].repeat_count == 2
+
+    def test_three_sessions(self):
+        scanner = SkillBootstrapperScanner()
+        digests = [
+            ActionTraceDigest(digest_id=f"d{i}", session_key=f"s{i}", tool_sequence=["web_search"])
+            for i in range(3)
+        ]
+        patterns = scanner.scan(digests, min_repeats=2)
+        assert len(patterns) == 1
+        assert patterns[0].repeat_count == 3
+
+    def test_two_distinct_patterns(self):
+        scanner = SkillBootstrapperScanner()
+        digests = [
+            ActionTraceDigest(digest_id="d1", session_key="s1", tool_sequence=["read_file"]),
+            ActionTraceDigest(digest_id="d2", session_key="s2", tool_sequence=["read_file"]),
+            ActionTraceDigest(digest_id="d3", session_key="s3", tool_sequence=["grep"]),
+            ActionTraceDigest(digest_id="d4", session_key="s4", tool_sequence=["grep"]),
+        ]
+        patterns = scanner.scan(digests, min_repeats=2)
+        assert len(patterns) == 2
+
+    def test_respects_min_repeats(self):
+        scanner = SkillBootstrapperScanner()
+        digests = [
+            ActionTraceDigest(digest_id=f"d{i}", session_key=f"s{i}", tool_sequence=["read_file"])
+            for i in range(3)
+        ]
+        assert len(scanner.scan(digests, min_repeats=1)) == 1
+        assert len(scanner.scan(digests, min_repeats=2)) == 1
+        assert len(scanner.scan(digests, min_repeats=4)) == 0
+
+    def test_dedupe_fingerprint(self):
+        scanner = SkillBootstrapperScanner()
+        digests = [
+            ActionTraceDigest(digest_id=f"d{i}", session_key=f"s{i}", tool_sequence=["read_file"])
+            for i in range(3)
+        ]
+        patterns = scanner.scan(digests, min_repeats=2)
+        assert patterns[0].fingerprint_hash == digests[0].fingerprint
