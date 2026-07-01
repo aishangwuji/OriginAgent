@@ -970,13 +970,9 @@ class AgentLoop:
         else:
             self.subagents.max_iterations = self.max_iterations
 
-    def _archive_session_file_cap(
-        self,
-        messages: list[dict[str, Any]],
-        *,
-        session_key: str,
-        reason: str,
-    ) -> None:
+    def _archive_session_file_cap(self, messages: list[dict], *, session_key: str, reason: str) -> None:
+        if hasattr(self, "_runtime") and self._runtime is not None:
+            return self._runtime._archive_session_file_cap(messages, session_key=session_key, reason=reason)
         if self.session_cold_archive is not None:
             self.session_cold_archive.archive(session_key, messages, reason=reason)
         self.context.memory.raw_archive(messages)
@@ -1369,9 +1365,9 @@ class AgentLoop:
         except (TypeError, ValueError, OSError) as e:
             logger.warning("webui command transcript append failed: {}", e)
 
-    def _write_continuity_runtime_identity(
-        self, session: Session, runtime_context: RuntimeContext | None,
-    ) -> None:
+    def _write_continuity_runtime_identity(self, session: Session, runtime_context: RuntimeContext | None) -> None:
+        if hasattr(self, "_runtime") and self._runtime is not None:
+            return self._runtime._write_continuity_runtime_identity(session, runtime_context)
         if runtime_context is None:
             return
         session.metadata[CONTINUITY_RUNTIME_IDENTITY_KEY] = {

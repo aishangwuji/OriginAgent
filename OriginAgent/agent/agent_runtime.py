@@ -969,6 +969,61 @@ class AgentRuntime:
             "default_scope": getattr(runtime_context, "default_scope", None),
         }
 
+    # ── Message dispatch ────────────────────────────────────────
+
+    async def _process_message(
+        self,
+        msg: Any,
+        session_key: str | None = None,
+        on_progress: Any = None,
+        on_stream: Any = None,
+        on_stream_end: Any = None,
+        pending_queue: Any = None,
+        capability_snapshot: Any = None,
+    ) -> Any | None:
+        """Process a single inbound message and return the response."""
+        return await self._deps.turn_orchestrator.process_message(
+            msg, session_key=session_key, on_progress=on_progress,
+            on_stream=on_stream, on_stream_end=on_stream_end,
+            pending_queue=pending_queue, capability_snapshot=capability_snapshot,
+        )
+
+    async def process_direct(
+        self,
+        content: str,
+        session_key: str = "cli:direct",
+        channel: str = "cli",
+        chat_id: str = "direct",
+        media: list[str] | None = None,
+        on_progress: Any = None,
+        on_stream: Any = None,
+        on_stream_end: Any = None,
+    ) -> Any | None:
+        """Process a message directly and return the outbound payload."""
+        await self._deps.host._connect_mcp()
+        from OriginAgent.bus.events import InboundMessage
+        msg = InboundMessage(channel=channel, sender_id="user", chat_id=chat_id,
+                             content=content, media=media or [])
+        return await self._process_message(msg, session_key=session_key,
+                                           on_progress=on_progress, on_stream=on_stream,
+                                           on_stream_end=on_stream_end)
+
+    def _write_continuity_runtime_identity(self, session: Any, runtime_context: Any) -> None:
+        if runtime_context is None:
+            return
+        CONTINUITY_RUNTIME_IDENTITY_KEY = "continuity_runtime_identity_v1"
+        session.metadata[CONTINUITY_RUNTIME_IDENTITY_KEY] = {
+            "user_id": runtime_context.user_id, "device_id": runtime_context.device_id,
+            "session_id": runtime_context.session_id, "scope": runtime_context.default_scope,
+            "updated_at": _utcnow_iso(),
+        }
+
+    def _archive_session_file_cap(self, messages: list[dict], *, session_key: str, reason: str) -> None:
+        d = self._deps
+        if d.session_cold_archive is not None:
+            d.session_cold_archive.archive(session_key, messages, reason=reason)
+        d.context.memory.raw_archive(messages)
+
     # ── Message construction ────────────────────────────────────
 
     def _build_prompt_self_model(self) -> dict:
