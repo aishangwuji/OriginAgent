@@ -352,14 +352,6 @@ class AgentLoop:
         )
         for name, value in built.values.items():
             setattr(self, name, value)
-        self._local_awareness_backend = LocalAwarenessBackend(
-            tts_config=dict((transcription_provider_config or {}).get("tts_config") or {}),
-        )
-        self._transcription_provider = self._build_transcription_provider(transcription_provider_config)
-        self._last_local_awareness_summary: dict[str, Any] = normalize_local_awareness_summary(
-            self.tools_config.local_awareness,
-            backend=self._local_awareness_backend,
-        )
         self._bind_action_resume_precheck()
         self._register_default_tools()
         if _tc.my.enable:
@@ -421,84 +413,50 @@ class AgentLoop:
         self._message_dispatcher = MessageDispatcher(MessageDispatcherDeps(loop=self))
         self._install_meta_cognition_observer()
 
-        # ── BDI Deliberation Engine ────────────────────────────────────────
-        self._desire_store: DesireStore | None = None
-        self._bdi_engine: DeliberationEngine | None = None
-
-        gw = getattr(effective_config, "gateway", None) if effective_config else None
-        bdi_config: "BDIConfig | None" = getattr(gw, "bdi", None) if gw is not None else None
-
-        if bdi_config and bdi_config.enabled:
-            from OriginAgent.bdi import DesireStore, DeliberationEngine
-
-            self._desire_store = DesireStore(self.workspace)
-
-            async def _on_bdi_intention(intent: "DeliberationIntention") -> None:
-                """Handle an intention formed by the BDI engine."""
-                logger.info(
-                    "BDI: executing intention — desire={} action={} scope={}",
-                    intent.desire_id, intent.action, intent.scope,
-                )
-                if intent.action == "send_message":
-                    from OriginAgent.bus.events import OutboundMessage
-
-                    channel = intent.scope if intent.scope != "system" else "cli"
-                    msg = OutboundMessage(
-                        channel=channel,
-                        content=intent.payload.get("text", ""),
-                        chat_id="",
-                        session_key="bdi:deliberation",
-                    )
-                    ok = await self.bus.publish_outbound(msg)
-                    if not ok:
-                        logger.error(
-                            "BDI: Failed to publish intention message for desire={}",
-                            intent.desire_id,
-                        )
-
-            self._bdi_engine = DeliberationEngine(
-                workspace=self.workspace,
-                store=self._desire_store,
-                provider=self.provider,
-                model=bdi_config.model_override or self.model,
-                enabled=bdi_config.enabled,
-                interval_s=bdi_config.interval_s,
-                max_desires_per_cycle=bdi_config.max_desires_per_cycle,
-                auto_create_from_foresight=bdi_config.auto_create_from_foresight,
-                on_intention=_on_bdi_intention,
-            )
-
-            # ── InnerMonologueEngine (CS-004) ───────────────────────
-            self._inner_monologue_engine: Any = None
-            _ime_enabled = getattr(
-                getattr(self, "_meta_cognition_config", None),
-                "inner_monologue_enabled",
-                True,
-            )
-            if _ime_enabled:
-                from OriginAgent.agent.inner_monologue_engine import InnerMonologueEngine
-                self._inner_monologue_engine = InnerMonologueEngine(
-                    workspace=self.workspace,
-                    deliberation_engine=self._bdi_engine,
-                    substrate=getattr(self, "_thought_substrate", None),
-                    desire_store=self._desire_store,
-                    enabled=_ime_enabled,
-                )
-                self._bdi_engine.set_on_cycle_complete(
-                    self._inner_monologue_engine.on_bdi_cycle
-                )
-
-            logger.info("BDI: DeliberationEngine initialized")
-
         # ── AgentHost: infrastructure lifecycle ──────────────────────────
+        # Constructed here so transcription/BDI compat attributes below can
+        # alias _host-owned state.
+        gw = getattr(effective_config, "gateway", None) if effective_config else None
+        _bdi_cfg: Any = getattr(gw, "bdi", None) if gw is not None else None
         self._host = AgentHost(AgentHostDependencies(
+            # Phase 2a
             tools=self.tools,
             mcp_servers=self._mcp_servers,
             cognitive_runtime=self._cognitive_runtime,
+            # Phase 2b — Provider
+            provider=self.provider,
+            model=self.model,
+            model_presets=self.model_presets,
+            model_preset=self.model_preset,
+            provider_snapshot_loader=self._provider_snapshot_loader,
+            preset_snapshot_loader=self._preset_snapshot_loader,
+            runtime_model_publisher=self._runtime_model_publisher,
+            provider_signature=self._provider_signature,
+            runner=self.runner,
+            subagents=self.subagents,
+            auxiliary_router=self.auxiliary_router,
+            background_review=self.background_review,
+            consolidator=self.consolidator,
+            dream=self.dream,
+            # Phase 2b — BDI
+            workspace=self.workspace,
+            bdi_config=_bdi_cfg if _bdi_cfg and _bdi_cfg.enabled else None,
+            meta_cognition_config=getattr(self, "_meta_cognition_config", None),
+            # Phase 2b — Transcription
+            transcription_provider_config=transcription_provider_config,
+            tools_config=self.tools_config,
         ))
         # Re-point _background_tasks so tests and compat code that read
         # loop._background_tasks see the host-owned set.
         self._background_tasks = self._host._background_tasks  # type: ignore[assignment]
+
+        # ── Compat aliases from AgentHost ─────────────────────────────────
+        self._transcription_provider = self._host._transcription_provider
+        self._local_awareness_backend = self._host._local_awareness_backend
+        self._last_local_awareness_summary = self._host._last_local_awareness_summary
+        self._desire_store = self._host._desire_store
+        self._bdi_engine = self._host._bdi_engine
+        self._inner_monologue_engine = self._host._inner_monologue_engine
 
     def _build_transcription_provider(self, config: dict[str, Any] | None = None) -> Any | None:
         config = dict(config or {})
