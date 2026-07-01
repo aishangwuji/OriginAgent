@@ -87,8 +87,9 @@ class ActionTraceDigest:
 
     @classmethod
     def from_json(cls, raw: Any) -> "ActionTraceDigest":
-        allowed = set(cls.__dataclass_fields__.keys()) | {"fingerprint"}
+        allowed = set(cls.__dataclass_fields__.keys())
         payload = _filter_known_fields(raw, allowed)
+        payload.pop("fingerprint", None)  # init=False, computed in __post_init__
         payload.setdefault("digest_id", "")
         payload.setdefault("session_key", "")
         payload.setdefault("created_at", _utcnow_iso())
