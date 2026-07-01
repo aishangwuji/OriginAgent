@@ -16,6 +16,7 @@ from loguru import logger
 
 from OriginAgent.agent import model_presets as preset_helpers
 from OriginAgent.agent.agent_host import AgentHost, AgentHostDependencies
+from OriginAgent.agent.agent_runtime import AgentRuntime, RuntimeDependencies
 from OriginAgent.agent.agent_runtime_context import (
     build_bus_progress_callback,
     build_retry_wait_callback,
@@ -452,6 +453,76 @@ class AgentLoop:
         self._desire_store = self._host._desire_store
         self._bdi_engine = self._host._bdi_engine
         self._inner_monologue_engine = self._host._inner_monologue_engine
+
+        # ── AgentRuntime: stateless message router ────────────────────────
+        self._runtime = AgentRuntime(RuntimeDependencies(
+            state_holder=self._state_holder,
+            host=self._host,
+            tools=self.tools,
+            provider=self.provider,
+            runner=self.runner,
+            context=self.context,
+            sessions=self.sessions,
+            bus=self.bus,
+            workspace=self.workspace,
+            subagents=self.subagents,
+            working_memory=self.working_memory,
+            commands=self.commands,
+            action_planner=self.action_planner,
+            active_intents=self.active_intents,
+            reminder_store=self._reminder_store,
+            world_state=self.world_state,
+            model=self.model,
+            max_iterations=self.max_iterations,
+            context_window_tokens=self.context_window_tokens,
+            context_block_limit=self.context_block_limit,
+            max_tool_result_chars=self.max_tool_result_chars,
+            provider_retry_mode=self.provider_retry_mode,
+            tool_hint_max_length=self.tool_hint_max_length,
+            tools_config=self.tools_config,
+            web_config=self.web_config,
+            exec_config=self.exec_config,
+            restrict_to_workspace=self.restrict_to_workspace,
+            unified_session=self._unified_session,
+            runtime_profile=self._runtime_profile,
+            consolidation_ratio=self._consolidation_ratio,
+            domain_packs=self.domain_packs,
+            max_messages=self._max_messages,
+            background_review=self.background_review,
+            curator=self.curator,
+            nearline_memory=self.nearline_memory,
+            session_search_index=self.session_search_index,
+            consolidator=self.consolidator,
+            dream=self.dream,
+            cognitive_loop=self.cognitive_loop,
+            cognitive_scheduler=self.cognitive_scheduler,
+            cognitive_audit=self._cognitive_audit,
+            session_cold_archive=self.session_cold_archive,
+            rolling_episode_compaction=self.rolling_episode_compaction,
+            memory_governance=self.memory_governance,
+            auto_compact=self.auto_compact,
+            meta_cognition_runtime=getattr(self, "_meta_cognition_runtime", None),
+            meta_cognition_reflector=getattr(self, "_meta_cognition_reflector", None),
+            meta_cognition_regulator=getattr(self, "_meta_cognition_regulator", None),
+            meta_cognition_config=getattr(self, "_meta_cognition_config", None),
+            meta_coordinator=self._meta_coordinator,
+            perception_fusion=getattr(self, "_perception_fusion", None),
+            file_state_store=self._file_state_store,
+            confirmation_store=self._confirmation_store,
+            confirmation_manager=self._confirmation_manager,
+            grant_store=self._grant_store,
+            cron_service=self.cron_service,
+            introspection=self.introspection,
+            actor_resolver=self.actor_resolver,
+            auxiliary_router=self.auxiliary_router,
+            tool_audit_config=self._tool_audit_config,
+            evolution_config=self.evolution_config,
+            extra_hooks=self._extra_hooks,
+            pending_queues=self._pending_queues,
+            domain_runtime_overrides=self._domain_runtime_overrides,
+            domain_runtime_contributions=self._domain_runtime_contributions,
+            bdi_engine=self._bdi_engine,
+        ))
 
     @classmethod
     def from_config(
