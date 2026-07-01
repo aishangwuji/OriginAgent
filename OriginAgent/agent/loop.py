@@ -850,26 +850,40 @@ class AgentLoop:
     def _record_runtime_context(self, session_key: str, runtime_context: RuntimeContext) -> None:
         self._last_runtime_context = runtime_context
         self._last_continuity_session_key = session_key
+        state = self._state_holder.get(session_key)
+        state.last_runtime_context = runtime_context
+        state.last_continuity_session_key = session_key
 
     def _record_continuity_session_key(self, session_key: str) -> None:
         self._last_continuity_session_key = session_key
+        self._state_holder.get(session_key).last_continuity_session_key = session_key
 
     def _record_context_assembly(self, payload: dict[str, Any]) -> None:
         self._last_context_assembly = dict(payload)
+        state_key = self._resolve_state_key()
+        self._state_holder.get(state_key).last_context_assembly = dict(payload)
 
     def _record_recovered_continuity_checkpoint(
         self,
         checkpoint: dict[str, Any] | None,
     ) -> None:
         self._last_recovered_continuity_checkpoint = dict(checkpoint or {})
+        state_key = self._resolve_state_key()
+        self._state_holder.get(state_key).last_recovered_continuity_checkpoint = dict(checkpoint or {})
 
     def _record_governance_audit(self, audit: dict[str, Any]) -> None:
         self._last_governance_audit = dict(audit)
         self.context._last_governance_audit = dict(audit)
+        state_key = self._resolve_state_key()
+        self._state_holder.get(state_key).last_governance_audit = dict(audit)
 
     def _record_action_continuity_audit(self, audit: dict[str, Any]) -> None:
         self._last_action_continuity_audit = dict(audit)
         self._cached_action_summary = normalize_action_summary(self._last_action_continuity_audit)
+        state_key = self._resolve_state_key()
+        state = self._state_holder.get(state_key)
+        state.last_action_continuity_audit = dict(audit)
+        state.cached_action_summary = normalize_action_summary(dict(audit))
 
     def _build_cognitive_runtime_deps(self) -> CognitiveRuntimeDeps:
         return CognitiveRuntimeDeps(
@@ -893,6 +907,8 @@ class AgentLoop:
 
     def _record_cognitive_scan(self, payload: dict[str, Any]) -> None:
         self._last_cognitive_scan = dict(payload)
+        state_key = self._resolve_state_key()
+        self._state_holder.get(state_key).last_cognitive_scan = dict(payload)
 
     def _get_turn_orchestrator(self) -> TurnOrchestrator:
         return self._turn_orchestrator
