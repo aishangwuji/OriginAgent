@@ -89,6 +89,7 @@ from OriginAgent.agent.progress_hook import AgentProgressHook
 from OriginAgent.agent.runner import _MAX_INJECTIONS_PER_TURN, AgentRunner, AgentRunSpec
 from OriginAgent.agent.self_model import SelfModelService
 from OriginAgent.agent.reminders import ReminderStore
+from OriginAgent.agent.session_state import SessionStateHolder, SessionScopedState
 from OriginAgent.agent.working_memory import WorkingMemoryManager
 from OriginAgent.agent.subagent import SubagentManager
 from OriginAgent.agent.world_state import WorldStateManager
@@ -368,6 +369,11 @@ class AgentLoop:
                     introspection_service=self.introspection,
                 )
             )
+        self._state_holder = SessionStateHolder(ttl_s=3600.0)
+        # Session-scoped state — delegated to SessionStateHolder.
+        # Direct attribute access is kept for backward compatibility
+        # with getattr(loop, "_last_*") consumers; _record_* methods
+        # write to both the attribute and the holder.
         self._runtime_vars: dict[str, Any] = {}
         self._capability_snapshot: CapabilitySnapshot | None = None
         self._current_iteration: int = 0
@@ -829,6 +835,17 @@ class AgentLoop:
 
     def _get_max_messages(self):
         return self._max_messages
+
+    def _resolve_state_key(self, session_key: str | None = None) -> str:
+        """Resolve the effective session key for state-holder lookups.
+
+        Falls back to ``_last_continuity_session_key`` when the caller
+        doesn't pass an explicit key (backward-compat for pre-existing
+        code paths).
+        """
+        if session_key:
+            return session_key
+        return getattr(self, "_last_continuity_session_key", None) or "__default__"
 
     def _record_runtime_context(self, session_key: str, runtime_context: RuntimeContext) -> None:
         self._last_runtime_context = runtime_context
