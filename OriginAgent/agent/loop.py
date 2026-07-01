@@ -1217,6 +1217,14 @@ class AgentLoop:
         chat_id: str | None = None,
         session_key: str | None = None,
     ) -> RuntimeContext:
+        """Resolve runtime context for a message.
+
+        Delegates to AgentRuntime when available.
+        """
+        if hasattr(self, "_runtime") and self._runtime is not None:
+            return self._runtime._resolve_runtime_context(
+                msg, channel=channel, chat_id=chat_id, session_key=session_key,
+            )
         return self.actor_resolver.resolve_runtime_context(
             channel=msg.channel,
             chat_id=msg.chat_id,

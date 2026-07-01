@@ -217,6 +217,27 @@ class AgentRuntime:
         from OriginAgent.agent.agent_runtime_context import runtime_chat_id
         return runtime_chat_id(msg)
 
+    def _resolve_runtime_context(
+        self,
+        msg: Any,
+        *,
+        channel: str | None = None,
+        chat_id: str | None = None,
+        session_key: str | None = None,
+    ) -> Any:
+        """Resolve runtime context for a message."""
+        if self._deps.actor_resolver is not None:
+            return self._deps.actor_resolver.resolve_runtime_context(
+                channel=msg.channel,
+                chat_id=msg.chat_id,
+                sender_id=msg.sender_id,
+                metadata=msg.metadata or {},
+                session_key=session_key,
+                routing_channel=channel,
+                routing_chat_id=chat_id,
+            )
+        return None
+
     @staticmethod
     def _snapshot_for_trigger(trigger: str | None) -> Any:
         """Return a capability snapshot for the given trigger."""
