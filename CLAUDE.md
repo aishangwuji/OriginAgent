@@ -52,13 +52,41 @@ originagent gateway
 Messages flow through an async `MessageBus` (`OriginAgent/bus/queue.py`) that decouples chat channels from the agent core:
 
 1. **Channels** (`OriginAgent/channels/`) receive messages from external platforms and publish `InboundMessage` events to the bus.
-2. **`AgentLoop`** (`OriginAgent/agent/loop.py`) consumes inbound messages, builds context, and coordinates each turn.
-3. **`AgentRunner`** (`OriginAgent/agent/runner.py`) handles the LLM conversation loop: sends messages to the provider, receives tool calls, executes tools, and streams responses.
-4. Responses are published as `OutboundMessage` events back to the appropriate channel.
+2. **`AgentLoop`** (`OriginAgent/agent/loop.py`) acts as a **Facade** — it delegates inbound messages to `AgentRuntime` for processing, and delegates infrastructure management (MCP, BDI, provider) to `AgentHost`.
+3. **`AgentRuntime`** (`OriginAgent/agent/agent_runtime.py`) is the **stateless message router**: it builds LLM context, drives the turn pipeline via `TurnOrchestrator`, manages meta-cognition and cognitive scheduling, and dispatches post-turn side effects.
+4. **`AgentRunner`** (`OriginAgent/agent/runner.py`) handles the LLM conversation loop: sends messages to the provider, receives tool calls, executes tools, and streams responses.
+5. Responses are published as `OutboundMessage` events back to the appropriate channel.
+
+### Agent Core Decomposition (Internal Architecture)
+
+The agent loop has been decomposed into three focused internal components to eliminate the original "God Object":
+
+```
+AgentLoop (Facade ~2434 lines)
+├── AgentRuntime (~1187 lines)    ← Stateless message router
+│   ├── Turn pipeline (build messages, run agent loop, assemble outbound)
+│   ├── Meta-cognition (triggers, reflection, fast-path)
+│   ├── Cognitive scheduling (candidates, events, working memory)
+│   ├── Post-turn effects (background review, curator, nearline memory)
+│   ├── Continuity & checkpoint
+│   └── Message dispatch & persistence
+├── AgentHost (~543 lines)        ← Infrastructure lifecycle
+│   ├── MCP connection lifecycle
+│   ├── Provider management (snapshot, preset switching)
+│   ├── BDI deliberation engine
+│   ├── Transcription provider
+│   └── Background task scheduling
+└── SessionStateHolder (~96 lines) ← Session-scoped state container
+    └── Per-session _last_* scratchpad (thread-safe, TTL-based expiry)
+```
 
 ### Key Subsystems
 
-- **Agent Loop** (`agent/loop.py`, `agent/runner.py`): Core processing engine. `AgentLoop` manages session keys, hooks, and context building. `AgentRunner` executes the multi-turn LLM conversation with tool execution.
+- **Agent Loop Facade** (`agent/loop.py`): Public API (`__init__`, `from_config`, `from_options`, `run()`, `stop()`, `process_direct()`) — delegates all logic to AgentHost + AgentRuntime. Does NOT contain business logic.
+- **Agent Runtime** (`agent/agent_runtime.py`): Stateless message processor. Receives all context as explicit parameters, never stores mutable state on `self`. All `self.xxx` references resolve to `self._deps.xxx` (injected `RuntimeDependencies`).
+- **Agent Host** (`agent/agent_host.py`): Infrastructure lifecycle manager. Owns MCP connections, BDI engine, provider swapping, and background task draining.
+- **Session State** (`agent/session_state.py`): Thread-safe, session-keyed container for cross-turn scratchpad state. Uses double-checked locking. Drops stale entries after TTL.
+- **Agent Runner** (`agent/runner.py`): Executes the multi-turn LLM conversation with tool execution.
 - **LLM Providers** (`providers/`): Provider implementations (Anthropic, OpenAI-compatible, Azure, GitHub Copilot, Bedrock, etc.) built on a common base (`base.py`). Adding a new provider requires only: (1) add a `ProviderSpec` to `registry.py`, (2) add a field to `ProvidersConfig` in `config/schema.py`. `factory.py` handles instantiation and model discovery. Provider auto-detection matches model names against provider keywords.
 - **Channels** (`channels/`): Platform integrations (Telegram, Discord, Slack, Feishu/飞书, Matrix, WhatsApp, QQ, WeChat/微信, DingTalk, MSTeams, Email, WebSocket). `manager.py` discovers and coordinates them. Channels are auto-discovered via `pkgutil` scan + entry-point plugins.
 - **Tools** (`agent/tools/`): Agent capabilities registered in `ToolRegistry` (`registry.py`): filesystem (read/write/edit/list), shell execution with sandbox support, web search/fetch, MCP servers, cron scheduling, notebook editing, subagent spawning, image generation, and `MyTool` for self-inspection.
@@ -80,7 +108,8 @@ Messages flow through an async `MessageBus` (`OriginAgent/bus/queue.py`) that de
 
 These are from `.agent/design.md`, `.agent/security.md`, and `.agent/gotchas.md` (all in Chinese — translate as needed):
 
-- **Keep the core lean**: `agent/loop.py` and `agent/runner.py` are critical hot-path files. New functionality goes through channels, tools, skills, or MCP — not into the agent main loop.
+- **AgentLoop is a Facade, not a God Object**: `loop.py` delegates to `AgentRuntime` (message routing), `AgentHost` (infrastructure lifecycle), and `SessionStateHolder` (session state). New message-routing logic goes into `agent_runtime.py`. New infrastructure goes into `agent_host.py`. New methods on AgentLoop must be <5 line compat shells that delegate.
+- **AgentRuntime is stateless**: All context (session_key, session, messages) arrives as explicit parameters. Never store mutable state on `self` — use `session_state.py` if cross-turn state is needed. `self._deps.xxx` is the only allowed `self` member.
 - **Favor repetition over premature abstraction**: Each channel and provider file is intentionally self-contained and independently readable. Do not extract shared base classes to eliminate similar code across channels.
 - **Explicit over implicit**: All config must be declared as Pydantic models in `config/schema.py`. Errors must raise explicit exceptions rather than silently correcting invalid input.
 - **Atomic session writes**: `agent/memory.py` uses temp-file + fsync + rename + dir-fsync. Never replace with plain `open(..., "w")`.
@@ -89,6 +118,7 @@ These are from `.agent/design.md`, `.agent/security.md`, and `.agent/gotchas.md`
 - **Workspace restriction**: All filesystem tools must resolve paths through `_resolve_path` in `agent/tools/filesystem.py`, enforcing workspace boundaries.
 - **SSRF protection**: All outbound HTTP from tools must pass through `validate_url_target` in `security/network.py` (blocks private IPs, link-local, cloud metadata).
 - **Skills as extension point**: Built-in skills in `OriginAgent/skills/` use Markdown + YAML frontmatter. Agent capabilities that are knowledge-based (not code logic) should extend via skills, not hardcoded into the agent loop.
+- **Compatibility first**: When moving methods from AgentLoop to AgentRuntime, always keep a compat shell with `hasattr(self, "_runtime")` fallback. Tests that use `AgentLoop.__new__` bypass `__init__` and must still work.
 
 ## Branching Strategy
 
@@ -120,11 +150,28 @@ Stable features are cherry-picked from `nightly` into `main` (~weekly), not merg
 
 ## Key File Locations
 
+### Agent Core (Decomposed)
+
+| File | Lines | Responsibility |
+|------|-------|----------------|
+| `OriginAgent/agent/loop.py` | ~2434 | **Facade** — public API, compat shells, factory methods. Delegates to AgentRuntime + AgentHost. |
+| `OriginAgent/agent/agent_runtime.py` | ~1187 | **Stateless message router** — turn pipeline, meta-cognition, cognitive scheduling, continuity, outbound assembly. |
+| `OriginAgent/agent/agent_host.py` | ~543 | **Infrastructure lifecycle** — MCP connections, BDI engine, provider management, transcription, background tasks. |
+| `OriginAgent/agent/session_state.py` | ~96 | **Session-scoped state** — thread-safe container for cross-turn `_last_*` scratchpad, TTL-based expiry. |
+| `OriginAgent/agent/runner.py` | — | LLM conversation loop (provider calls, tool execution, streaming). |
+
+### Other Locations
+
 - Config schema: `OriginAgent/config/schema.py`
 - Provider base / registry: `OriginAgent/providers/base.py` / `registry.py`
 - Channel base / manager: `OriginAgent/channels/base.py` / `manager.py`
 - Tool registry: `OriginAgent/agent/tools/registry.py`
-- Agent loop core: `OriginAgent/agent/loop.py` / `runner.py`
+- Turn orchestration: `OriginAgent/agent/turn_orchestrator.py`
+- Turn pipeline: `OriginAgent/agent/agent_turn_pipeline.py`
+- Turn persistence: `OriginAgent/agent/agent_turn_persist.py`
+- System turn handler: `OriginAgent/agent/system_turn_handler.py`
+- Message dispatcher: `OriginAgent/agent/message_dispatcher.py`
+- Agent cognitive runtime: `OriginAgent/agent/agent_cognitive_runtime.py`
 - Memory / Dream: `OriginAgent/agent/memory.py`
 - Session manager: `OriginAgent/session/manager.py`
 - SSRF / security: `OriginAgent/security/network.py`
