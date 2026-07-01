@@ -222,4 +222,10 @@ This project is indexed by GitNexus as **OriginAgent** (25902 symbols, 53542 rel
 | Tools, resources, schema reference | `.claude/skills/gitnexus/gitnexus-guide/SKILL.md` |
 | Index, status, clean, wiki CLI commands | `.claude/skills/gitnexus/gitnexus-cli/SKILL.md` |
 
+## Code Conventions
+
+### Exception Handling
+- NEVER use `with suppress(Exception):` in business logic paths.
+  Only use suppress with specific exception types in cleanup code.
+
 <!-- gitnexus:end -->

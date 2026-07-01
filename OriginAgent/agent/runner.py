@@ -936,12 +936,6 @@ class AgentRunner:
                 prepared = prepare_call(tool_call.name, tool_call.arguments)
                 if isinstance(prepared, tuple) and len(prepared) == 3:
                     tool, params, prep_error = prepared
-                else:
-                    prep_error = (
-                        f"Error: prepare_call for '{tool_call.name}' "
-                        f"returned unexpected type: {type(prepared).__name__}"
-                    )
-                    logger.error(prep_error)
             except BaseException as exc:
                 prep_error = (
                     f"Error: prepare_call for '{tool_call.name}' "
@@ -1098,7 +1092,7 @@ class AgentRunner:
     ) -> None:
         audit = getattr(spec.tools, "audit_tool_result_async", None)
         if callable(audit):
-            with suppress(Exception):
+            try:
                 await audit(
                     name=name,
                     tool=tool,
@@ -1109,10 +1103,12 @@ class AgentRunner:
                     policy_rule=policy_rule,
                     result=result,
                 )
+            except BaseException as exc:
+                logger.error("Tool audit failed (name={}): {}: {}", name, type(exc).__name__, exc)
             return
         audit = getattr(spec.tools, "audit_tool_result", None)
         if callable(audit):
-            with suppress(Exception):
+            try:
                 audit(
                     name=name,
                     tool=tool,
@@ -1123,6 +1119,8 @@ class AgentRunner:
                     policy_rule=policy_rule,
                     result=result,
                 )
+            except BaseException as exc:
+                logger.error("Tool audit failed (name={}): {}: {}", name, type(exc).__name__, exc)
 
     @staticmethod
     def _policy_rule_from_error(text: str) -> str | None:

@@ -1412,8 +1412,12 @@ class AgentLoop:
         tasks = self._active_tasks.pop(key, [])
         cancelled = sum(1 for t in tasks if not t.done() and t.cancel())
         for t in tasks:
-            with suppress(asyncio.CancelledError, Exception):
+            try:
                 await t
+            except asyncio.CancelledError:
+                pass  # Cancellation is expected during shutdown
+            except BaseException as exc:
+                logger.warning("Task cancellation wait failed: {}: {}", type(exc).__name__, exc)
         sub_cancelled = await self.subagents.cancel_by_session(key)
         return cancelled + sub_cancelled
 
