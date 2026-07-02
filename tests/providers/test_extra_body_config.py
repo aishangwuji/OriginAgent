@@ -5,10 +5,8 @@ from __future__ import annotations
 from typing import Any
 from unittest.mock import MagicMock
 
-from OriginAgent.providers.openai_compat_provider import (
-    OpenAICompatProvider,
-    _deep_merge,
-)
+from OriginAgent.providers.openai_compat_provider import OpenAICompatProvider
+from OriginAgent.utils.dict_utils import deep_merge as _deep_merge
 
 # ---------------------------------------------------------------------------
 # _deep_merge unit tests

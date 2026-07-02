@@ -9,7 +9,6 @@ import mimetypes
 import os
 import re
 from collections.abc import Awaitable, Callable, Iterator
-from pathlib import Path
 from typing import Any
 
 import json_repair

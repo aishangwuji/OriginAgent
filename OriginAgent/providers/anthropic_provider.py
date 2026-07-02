@@ -9,7 +9,6 @@ import re
 import secrets
 import string
 from collections.abc import Awaitable, Callable
-from pathlib import Path
 from typing import Any
 
 import json_repair
