@@ -437,7 +437,7 @@ async def test_build_webui_thread_marks_pdf_user_media_as_file(
 
     channel = _ch(bus, session_manager=sm, port=0)
     with patch("OriginAgent.gateway.media_server.get_media_dir", return_value=media):
-        body = channel._build_webui_thread_from_session("websocket:pdf-kind")
+        body = channel._rest_api._build_webui_thread_from_session("websocket:pdf-kind")
 
     assert body is not None
     user_msg = next(m for m in body["messages"] if m["role"] == "user")

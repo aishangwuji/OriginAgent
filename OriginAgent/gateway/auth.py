@@ -34,6 +34,8 @@ def _bearer_token(headers: Any) -> str | None:
         return None
     if isinstance(headers, dict):
         auth = headers.get("Authorization") or headers.get("authorization")
+    elif hasattr(headers, "get"):
+        auth = headers.get("Authorization") or headers.get("authorization")
     else:
         auth = getattr(headers, "authorization", None) or getattr(headers, "Authorization", None)
     if auth and auth.lower().startswith("bearer "):

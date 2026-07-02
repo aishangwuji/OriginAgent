@@ -455,13 +455,13 @@ async def test_api_token_pool_purges_expired(bus: MagicMock, tmp_path: Path) -> 
         path = "/api/sessions"
         headers = {"Authorization": "Bearer expired"}
 
-    assert channel._check_api_token(_FakeReq()) is False
+    assert channel._gateway_auth.check_api_token(_FakeReq()) is False
 
     class _LiveReq:
         path = "/api/sessions"
         headers = {"Authorization": "Bearer live"}
 
-    assert channel._check_api_token(_LiveReq()) is True
+    assert channel._gateway_auth.check_api_token(_LiveReq()) is True
 
 
 class _FakeConn:
@@ -516,8 +516,8 @@ def test_wildcard_ipv6_without_auth_raises(bus: MagicMock) -> None:
 
 def test_wildcard_ipv6_with_secret_is_valid(bus: MagicMock) -> None:
     channel = _ch(bus, host="::", tokenIssueSecret="s3cret")
-    resp = channel._handle_webui_bootstrap(
-        _REMOTE, _FakeReq({"X-OriginAgent-Auth": "s3cret"})
+    resp = channel._rest_api._handle_webui_bootstrap(
+        _FakeReq({"X-OriginAgent-Auth": "s3cret"}), _REMOTE
     )
     assert resp.status_code == 200
 
@@ -525,8 +525,8 @@ def test_wildcard_ipv6_with_secret_is_valid(bus: MagicMock) -> None:
 def test_bootstrap_accepts_static_token_as_secret(bus: MagicMock) -> None:
     """When only token (not token_issue_secret) is set, bootstrap accepts it."""
     channel = _ch(bus, host="0.0.0.0", token="static-tok")
-    resp = channel._handle_webui_bootstrap(
-        _REMOTE, _FakeReq({"Authorization": "Bearer static-tok"})
+    resp = channel._rest_api._handle_webui_bootstrap(
+        _FakeReq({"Authorization": "Bearer static-tok"}), _REMOTE
     )
     assert resp.status_code == 200
     body = json.loads(resp.body)
@@ -535,7 +535,7 @@ def test_bootstrap_accepts_static_token_as_secret(bus: MagicMock) -> None:
 
 def test_localhost_without_auth_is_valid(bus: MagicMock) -> None:
     channel = _ch(bus, host="127.0.0.1")
-    resp = channel._handle_webui_bootstrap(_LOCAL, _NO_HEADERS)
+    resp = channel._rest_api._handle_webui_bootstrap(_NO_HEADERS, _LOCAL)
     assert resp.status_code == 200
 
 
@@ -545,7 +545,7 @@ def test_bootstrap_prefers_runtime_model_name(bus: MagicMock, monkeypatch: pytes
         lambda: "from-disk",
     )
     channel = _ch(bus, host="127.0.0.1", runtime_model_name=lambda: "  live/model  ")
-    resp = channel._handle_webui_bootstrap(_LOCAL, _NO_HEADERS)
+    resp = channel._rest_api._handle_webui_bootstrap(_NO_HEADERS, _LOCAL)
     assert resp.status_code == 200
     body = json.loads(resp.body)
     assert body["model_name"] == "live/model"
@@ -560,11 +560,11 @@ def test_bootstrap_falls_back_when_runtime_returns_empty(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(
-        "OriginAgent.channels.websocket._default_model_name_from_config",
+        "OriginAgent.gateway.rest_api._default_model_name_from_config",
         lambda: "from-disk",
     )
     channel = _ch(bus, host="127.0.0.1", runtime_model_name=lambda: "   ")
-    resp = channel._handle_webui_bootstrap(_LOCAL, _NO_HEADERS)
+    resp = channel._rest_api._handle_webui_bootstrap(_NO_HEADERS, _LOCAL)
     assert resp.status_code == 200
     body = json.loads(resp.body)
     assert body["model_name"] == "from-disk"
@@ -572,7 +572,7 @@ def test_bootstrap_falls_back_when_runtime_returns_empty(
 
 def test_bootstrap_falls_back_when_runtime_raises(bus: MagicMock, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
-        "OriginAgent.channels.websocket._default_model_name_from_config",
+        "OriginAgent.gateway.rest_api._default_model_name_from_config",
         lambda: "from-disk",
     )
 
@@ -580,7 +580,7 @@ def test_bootstrap_falls_back_when_runtime_raises(bus: MagicMock, monkeypatch: p
         raise RuntimeError("resolver failed")
 
     channel = _ch(bus, host="127.0.0.1", runtime_model_name=boom)
-    resp = channel._handle_webui_bootstrap(_LOCAL, _NO_HEADERS)
+    resp = channel._rest_api._handle_webui_bootstrap(_NO_HEADERS, _LOCAL)
     assert resp.status_code == 200
     body = json.loads(resp.body)
     assert body["model_name"] == "from-disk"
@@ -588,16 +588,16 @@ def test_bootstrap_falls_back_when_runtime_raises(bus: MagicMock, monkeypatch: p
 
 def test_bootstrap_rejects_wrong_secret(bus: MagicMock) -> None:
     channel = _ch(bus, host="0.0.0.0", tokenIssueSecret="correct")
-    resp = channel._handle_webui_bootstrap(
-        _REMOTE, _FakeReq({"Authorization": "Bearer wrong"})
+    resp = channel._rest_api._handle_webui_bootstrap(
+        _FakeReq({"Authorization": "Bearer wrong"}), _REMOTE
     )
     assert resp.status_code == 401
 
 
 def test_bootstrap_accepts_remote_with_valid_secret(bus: MagicMock) -> None:
     channel = _ch(bus, host="0.0.0.0", tokenIssueSecret="s3cret")
-    resp = channel._handle_webui_bootstrap(
-        _REMOTE, _FakeReq({"Authorization": "Bearer s3cret"})
+    resp = channel._rest_api._handle_webui_bootstrap(
+        _FakeReq({"Authorization": "Bearer s3cret"}), _REMOTE
     )
     assert resp.status_code == 200
     body = json.loads(resp.body)
@@ -606,8 +606,8 @@ def test_bootstrap_accepts_remote_with_valid_secret(bus: MagicMock) -> None:
 
 def test_bootstrap_accepts_x_OriginAgent_auth_header(bus: MagicMock) -> None:
     channel = _ch(bus, host="0.0.0.0", tokenIssueSecret="s3cret")
-    resp = channel._handle_webui_bootstrap(
-        _REMOTE, _FakeReq({"X-OriginAgent-Auth": "s3cret"})
+    resp = channel._rest_api._handle_webui_bootstrap(
+        _FakeReq({"X-OriginAgent-Auth": "s3cret"}), _REMOTE
     )
     assert resp.status_code == 200
 
@@ -615,5 +615,5 @@ def test_bootstrap_accepts_x_OriginAgent_auth_header(bus: MagicMock) -> None:
 def test_bootstrap_secret_also_enforced_on_localhost(bus: MagicMock) -> None:
     """When secret is set, even localhost must provide it (reverse-proxy safety)."""
     channel = _ch(bus, host="0.0.0.0", tokenIssueSecret="s3cret")
-    resp = channel._handle_webui_bootstrap(_LOCAL, _NO_HEADERS)
+    resp = channel._rest_api._handle_webui_bootstrap(_NO_HEADERS, _LOCAL)
     assert resp.status_code == 401
