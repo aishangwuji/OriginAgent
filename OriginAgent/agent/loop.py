@@ -407,7 +407,8 @@ class AgentLoop:
             )
         )
         self._message_dispatcher = MessageDispatcher(MessageDispatcherDeps(loop=self))
-        self._install_meta_cognition_observer()
+        if getattr(self, "_meta_cognition_runtime", None) is not None:
+            self._install_meta_cognition_observer()
 
         # ── AgentHost: infrastructure lifecycle ──────────────────────────
         # Constructed here so transcription/BDI compat attributes below can

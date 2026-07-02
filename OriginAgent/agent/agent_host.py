@@ -109,8 +109,13 @@ class AgentHost:
             backend=self._local_awareness_backend,
         )
 
-        # ── BDI initialisation ──────────────────────────────────
-        self._init_bdi_engine()
+        # ── BDI initialisation (lazy) ────────────────────────────
+        if self._deps.bdi_config is not None:
+            self._init_bdi_engine()
+        else:
+            self._bdi_engine = None
+            self._desire_store = None
+            self._inner_monologue_engine = None
 
     # ── Public properties (read from AgentLoop compat shims) ─────
 
