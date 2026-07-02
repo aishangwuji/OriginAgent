@@ -4,11 +4,32 @@ import asyncio
 import base64
 import os
 import uuid
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 import httpx
 from loguru import logger
+
+
+@dataclass
+class TranscriptionResult:
+    """Result of a voice transcription attempt.
+
+    Attributes:
+        text: The transcribed text (empty string on failure).
+        error: A human-readable error description, or None on success.
+        error_type: One of ``"config_error"``, ``"service_error"``,
+            ``"file_error"``, or None on success.
+    """
+    text: str
+    error: str | None = None
+    error_type: str | None = None
+
+    @property
+    def is_error(self) -> bool:
+        """True when the transcription attempt did not produce valid text."""
+        return self.error is not None
 
 # Up to 3 retries (4 attempts total) with exponential backoff on transient
 # failures. Whisper endpoints occasionally return 502/503 under load, and
@@ -34,7 +55,7 @@ async def _post_transcription_with_retry(
     model: str,
     provider_label: str,
     language: str | None = None,
-) -> str:
+) -> TranscriptionResult:
     """POST an audio file for transcription, retrying on transient errors.
 
     Retries on connect/read/timeout failures and on 408/429/5xx responses.
@@ -49,7 +70,7 @@ async def _post_transcription_with_retry(
         data = path.read_bytes()
     except OSError as e:
         logger.exception("{} transcription error: cannot read audio file: {}", provider_label, e)
-        return ""
+        return TranscriptionResult("", error=f"cannot read audio file: {e}", error_type="file_error")
     headers = {"Authorization": f"Bearer {api_key}"}
 
     async with httpx.AsyncClient() as client:
@@ -79,10 +100,13 @@ async def _post_transcription_with_retry(
                     _MAX_RETRIES + 1,
                     e,
                 )
-                return ""
+                return TranscriptionResult(
+                    "", error=f"transcription service error after {_MAX_RETRIES + 1} attempts: {e}",
+                    error_type="service_error",
+                )
             except Exception as e:
                 logger.exception("{} transcription error: {}", provider_label, e)
-                return ""
+                return TranscriptionResult("", error=f"transcription error: {e}", error_type="service_error")
 
             if response.status_code in _RETRYABLE_STATUS and attempt < _MAX_RETRIES:
                 logger.warning(
@@ -97,9 +121,25 @@ async def _post_transcription_with_retry(
 
             try:
                 response.raise_for_status()
+            except httpx.HTTPStatusError as e:
+                # 401/403 = user's API key is wrong — config error, not transient
+                if response.status_code in (401, 403):
+                    logger.error(
+                        "{} transcription config error: HTTP {}: {}",
+                        provider_label, response.status_code, e,
+                    )
+                    return TranscriptionResult(
+                        "", error=f"transcription config error: HTTP {response.status_code}",
+                        error_type="config_error",
+                    )
+                logger.exception("{} transcription HTTP error: {}", provider_label, e)
+                return TranscriptionResult(
+                    "", error=f"transcription HTTP {response.status_code}: {e}",
+                    error_type="service_error",
+                )
             except Exception as e:
                 logger.exception("{} transcription error: {}", provider_label, e)
-                return ""
+                return TranscriptionResult("", error=f"transcription error: {e}", error_type="service_error")
 
             try:
                 payload = response.json()
@@ -109,15 +149,25 @@ async def _post_transcription_with_retry(
                     provider_label,
                     e,
                 )
-                return ""
+                return TranscriptionResult(
+                    "", error=f"malformed response body: {e}",
+                    error_type="service_error",
+                )
             if not isinstance(payload, dict):
                 logger.error(
                     "{} transcription error: unexpected response shape: {!r}",
                     provider_label,
                     type(payload).__name__,
                 )
-                return ""
-            return payload.get("text", "")
+                return TranscriptionResult(
+                    "", error=f"unexpected response shape: {type(payload).__name__}",
+                    error_type="service_error",
+                )
+            text = payload.get("text", "")
+            return TranscriptionResult(text) if isinstance(text, str) else TranscriptionResult(
+                "", error="unexpected text field type",
+                error_type="service_error",
+            )
 
 
 class OpenAITranscriptionProvider:
@@ -137,14 +187,14 @@ class OpenAITranscriptionProvider:
         )
         self.language = language or None
 
-    async def transcribe(self, file_path: str | Path) -> str:
+    async def transcribe(self, file_path: str | Path) -> TranscriptionResult:
         if not self.api_key:
             logger.warning("OpenAI API key not configured for transcription")
-            return ""
+            return TranscriptionResult("", error="API key not configured", error_type="config_error")
         path = Path(file_path)
         if not path.exists():
             logger.error("Audio file not found: {}", file_path)
-            return ""
+            return TranscriptionResult("", error=f"Audio file not found: {file_path}", error_type="file_error")
         return await _post_transcription_with_retry(
             self.api_url,
             api_key=self.api_key,
@@ -176,7 +226,7 @@ class GroqTranscriptionProvider:
         )
         self.language = language or None
 
-    async def transcribe(self, file_path: str | Path) -> str:
+    async def transcribe(self, file_path: str | Path) -> TranscriptionResult:
         """
         Transcribe an audio file using Groq.
 
@@ -184,16 +234,16 @@ class GroqTranscriptionProvider:
             file_path: Path to the audio file.
 
         Returns:
-            Transcribed text.
+            TranscriptionResult with transcribed text or error details.
         """
         if not self.api_key:
             logger.warning("Groq API key not configured for transcription")
-            return ""
+            return TranscriptionResult("", error="API key not configured", error_type="config_error")
 
         path = Path(file_path)
         if not path.exists():
             logger.error("Audio file not found: {}", file_path)
-            return ""
+            return TranscriptionResult("", error=f"Audio file not found: {file_path}", error_type="file_error")
 
         return await _post_transcription_with_retry(
             self.api_url,
@@ -230,21 +280,21 @@ class VolcengineTranscriptionProvider:
         )
         self.user_id = (user_id or os.environ.get("VOLCENGINE_TRANSCRIPTION_USER_ID") or "").strip() or "originagent"
 
-    async def transcribe(self, file_path: str | Path) -> str:
+    async def transcribe(self, file_path: str | Path) -> TranscriptionResult:
         if not self.api_key:
             logger.warning("Volcengine API key not configured for transcription")
-            return ""
+            return TranscriptionResult("", error="API key not configured", error_type="config_error")
 
         path = Path(file_path)
         if not path.exists():
             logger.error("Audio file not found: {}", file_path)
-            return ""
+            return TranscriptionResult("", error=f"Audio file not found: {file_path}", error_type="file_error")
 
         try:
             data = path.read_bytes()
         except OSError as e:
             logger.exception("Volcengine transcription error: cannot read audio file: {}", e)
-            return ""
+            return TranscriptionResult("", error=f"cannot read audio file: {e}", error_type="file_error")
 
         audio_format = _guess_volcengine_audio_format(path)
         request_id = str(uuid.uuid4())
@@ -290,10 +340,13 @@ class VolcengineTranscriptionProvider:
                         _MAX_RETRIES + 1,
                         e,
                     )
-                    return ""
+                    return TranscriptionResult(
+                        "", error=f"transcription service error after {_MAX_RETRIES + 1} attempts: {e}",
+                        error_type="service_error",
+                    )
                 except Exception as e:
                     logger.exception("Volcengine transcription error: {}", e)
-                    return ""
+                    return TranscriptionResult("", error=f"transcription error: {e}", error_type="service_error")
 
                 status_code = response.status_code
                 header_code = str(response.headers.get("X-Api-Status-Code") or "").strip()
@@ -315,7 +368,10 @@ class VolcengineTranscriptionProvider:
                     response.raise_for_status()
                 except Exception as e:
                     logger.exception("Volcengine transcription HTTP error: {}", e)
-                    return ""
+                    return TranscriptionResult(
+                        "", error=f"transcription HTTP {response.status_code}: {e}",
+                        error_type="service_error",
+                    )
 
                 if header_code and header_code != "20000000":
                     logger.error(
@@ -323,7 +379,10 @@ class VolcengineTranscriptionProvider:
                         header_code,
                         response.headers.get("X-Api-Message") or "",
                     )
-                    return ""
+                    return TranscriptionResult(
+                        "", error=f"transcription business error {header_code}",
+                        error_type="service_error",
+                    )
 
                 try:
                     payload = response.json()
@@ -332,19 +391,30 @@ class VolcengineTranscriptionProvider:
                         "Volcengine transcription error: malformed response body: {}",
                         e,
                     )
-                    return ""
+                    return TranscriptionResult(
+                        "", error=f"malformed response body: {e}",
+                        error_type="service_error",
+                    )
                 if not isinstance(payload, dict):
                     logger.error(
                         "Volcengine transcription error: unexpected response shape: {!r}",
                         type(payload).__name__,
                     )
-                    return ""
+                    return TranscriptionResult(
+                        "", error=f"unexpected response shape: {type(payload).__name__}",
+                        error_type="service_error",
+                    )
                 result = payload.get("result")
                 if not isinstance(result, dict):
-                    return ""
-                text = result.get("text")
-                return text if isinstance(text, str) else ""
-        return ""
+                    return TranscriptionResult(
+                        "", error="unexpected result shape",
+                        error_type="service_error",
+                    )
+                inner_text = result.get("text")
+                if isinstance(inner_text, str):
+                    return TranscriptionResult(inner_text)
+                return TranscriptionResult("", error="unexpected text field type", error_type="service_error")
+        return TranscriptionResult("", error="unexpected control flow", error_type="service_error")
 
 
 def _guess_volcengine_audio_format(path: Path) -> str:

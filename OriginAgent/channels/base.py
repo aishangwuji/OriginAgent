@@ -76,7 +76,10 @@ class BaseChannel(ABC):
                     api_base=self.transcription_api_base or None,
                     language=self.transcription_language or None,
                 )
-            return await provider.transcribe(file_path)
+            result = await provider.transcribe(file_path)
+            if result.is_error:
+                self.logger.warning("Audio transcription failed: {} ({})", result.error, result.error_type)
+            return result.text
         except Exception:
             self.logger.exception("Audio transcription failed")
             return ""

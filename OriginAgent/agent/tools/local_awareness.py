@@ -9,6 +9,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from loguru import logger
+
 from OriginAgent.agent.local_awareness import LocalAwarenessBackend
 from OriginAgent.providers.transcription import (
     GroqTranscriptionProvider,
@@ -860,7 +862,10 @@ class TranscribeAudioSampleTool(_LocalAwarenessTool):
                 "source_mime_type": mime_type or None,
             }
         try:
-            text = await provider.transcribe(str(path))
+            result = await provider.transcribe(str(path))
+            if result.is_error:
+                logger.warning("Audio transcription failed: {} ({})", result.error, result.error_type)
+            text = result.text
         except Exception as exc:
             return {
                 "status": "failed",

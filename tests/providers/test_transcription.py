@@ -11,6 +11,7 @@ import pytest
 from OriginAgent.providers.transcription import (
     GroqTranscriptionProvider,
     OpenAITranscriptionProvider,
+    TranscriptionResult,
     VolcengineTranscriptionProvider,
 )
 
@@ -45,7 +46,8 @@ async def test_openai_retries_on_5xx_then_succeeds(audio_file: Path) -> None:
     post = AsyncMock(side_effect=[_response(503), _response(200, {"text": "hello"})])
     with patch("httpx.AsyncClient.post", post), patch("asyncio.sleep", AsyncMock()):
         result = await provider.transcribe(audio_file)
-    assert result == "hello"
+    assert result.text == "hello"
+    assert not result.is_error
     assert post.await_count == 2
 
 
@@ -55,7 +57,8 @@ async def test_openai_retries_on_429_then_succeeds(audio_file: Path) -> None:
     post = AsyncMock(side_effect=[_response(429), _response(200, {"text": "rate ok"})])
     with patch("httpx.AsyncClient.post", post), patch("asyncio.sleep", AsyncMock()):
         result = await provider.transcribe(audio_file)
-    assert result == "rate ok"
+    assert result.text == "rate ok"
+    assert not result.is_error
     assert post.await_count == 2
 
 
@@ -66,7 +69,8 @@ async def test_openai_retries_on_connect_error(audio_file: Path) -> None:
     post = AsyncMock(side_effect=[httpx.ConnectError("boom"), _response(200, {"text": "ok"})])
     with patch("httpx.AsyncClient.post", post), patch("asyncio.sleep", AsyncMock()):
         result = await provider.transcribe(audio_file)
-    assert result == "ok"
+    assert result.text == "ok"
+    assert not result.is_error
     assert post.await_count == 2
 
 
@@ -77,19 +81,23 @@ async def test_openai_does_not_retry_on_auth_error(audio_file: Path) -> None:
     post = AsyncMock(return_value=_response(401, {"error": {"message": "bad key"}}))
     with patch("httpx.AsyncClient.post", post), patch("asyncio.sleep", AsyncMock()):
         result = await provider.transcribe(audio_file)
-    assert result == ""
+    assert result.is_error
+    assert result.error_type == "config_error"
+    assert result.text == ""
     assert post.await_count == 1
 
 
 @pytest.mark.asyncio
 async def test_openai_gives_up_after_max_attempts(audio_file: Path) -> None:
-    """Persistent 503 returns "" after the final retry — never hangs."""
+    """Persistent 503 returns TranscriptionResult with service_error after the final retry."""
     provider = OpenAITranscriptionProvider(api_key="sk-test")
     post = AsyncMock(return_value=_response(503))
     sleep = AsyncMock()
     with patch("httpx.AsyncClient.post", post), patch("asyncio.sleep", sleep):
         result = await provider.transcribe(audio_file)
-    assert result == ""
+    assert result.is_error
+    assert result.error_type == "service_error"
+    assert result.text == ""
     # 4 attempts total (initial + 3 retries) with 3 sleeps between them.
     assert post.await_count == 4
     assert sleep.await_count == 3
@@ -118,7 +126,8 @@ async def test_groq_retries_on_5xx_then_succeeds(audio_file: Path) -> None:
     post = AsyncMock(side_effect=[_response(502), _response(200, {"text": "groq ok"})])
     with patch("httpx.AsyncClient.post", post), patch("asyncio.sleep", AsyncMock()):
         result = await provider.transcribe(audio_file)
-    assert result == "groq ok"
+    assert result.text == "groq ok"
+    assert not result.is_error
     assert post.await_count == 2
 
 
@@ -128,7 +137,9 @@ async def test_groq_does_not_retry_on_auth_error(audio_file: Path) -> None:
     post = AsyncMock(return_value=_response(403))
     with patch("httpx.AsyncClient.post", post), patch("asyncio.sleep", AsyncMock()):
         result = await provider.transcribe(audio_file)
-    assert result == ""
+    assert result.is_error
+    assert result.error_type == "config_error"
+    assert result.text == ""
     assert post.await_count == 1
 
 
@@ -144,7 +155,10 @@ async def test_openai_missing_api_key_short_circuits(audio_file: Path) -> None:
         provider = OpenAITranscriptionProvider(api_key=None)
         post = AsyncMock()
         with patch("httpx.AsyncClient.post", post):
-            assert await provider.transcribe(audio_file) == ""
+            result = await provider.transcribe(audio_file)
+        assert result.is_error
+        assert result.error_type == "config_error"
+        assert result.text == ""
         assert post.await_count == 0
 
 
@@ -153,20 +167,25 @@ async def test_openai_missing_file_short_circuits() -> None:
     provider = OpenAITranscriptionProvider(api_key="sk-test")
     post = AsyncMock()
     with patch("httpx.AsyncClient.post", post):
-        assert await provider.transcribe("/nonexistent/path/voice.ogg") == ""
+        result = await provider.transcribe("/nonexistent/path/voice.ogg")
+    assert result.is_error
+    assert result.error_type == "file_error"
+    assert result.text == ""
     assert post.await_count == 0
 
 
 @pytest.mark.asyncio
 async def test_returns_empty_when_file_unreadable(audio_file: Path) -> None:
-    """Existing file that cannot be read (PermissionError/OSError): "" with no HTTP attempt."""
+    """Existing file that cannot be read (PermissionError/OSError): file_error with no HTTP attempt."""
     provider = OpenAITranscriptionProvider(api_key="sk-test")
     post = AsyncMock()
     with patch("pathlib.Path.read_bytes", side_effect=PermissionError("denied")), patch(
         "httpx.AsyncClient.post", post
     ):
         result = await provider.transcribe(audio_file)
-    assert result == ""
+    assert result.is_error
+    assert result.error_type == "file_error"
+    assert result.text == ""
     assert post.await_count == 0
 
 
@@ -189,7 +208,8 @@ async def test_provider_forwards_language_in_multipart(
     post = AsyncMock(return_value=_response(200, {"text": "ok"}))
     with patch("httpx.AsyncClient.post", post), patch("asyncio.sleep", AsyncMock()):
         result = await provider.transcribe(audio_file)
-    assert result == "ok"
+    assert result.text == "ok"
+    assert not result.is_error
     assert post.await_count == 1
     files = post.await_args_list[0].kwargs["files"]
     assert files["language"] == (None, language)
@@ -209,7 +229,8 @@ async def test_provider_omits_language_when_unset(
     post = AsyncMock(return_value=_response(200, {"text": "ok"}))
     with patch("httpx.AsyncClient.post", post), patch("asyncio.sleep", AsyncMock()):
         result = await provider.transcribe(audio_file)
-    assert result == "ok"
+    assert result.text == "ok"
+    assert not result.is_error
     assert post.await_count == 1
     files = post.await_args_list[0].kwargs["files"]
     assert "language" not in files
@@ -222,7 +243,8 @@ async def test_language_survives_retry(audio_file: Path) -> None:
     post = AsyncMock(side_effect=[_response(503), _response(200, {"text": "konnichiwa"})])
     with patch("httpx.AsyncClient.post", post), patch("asyncio.sleep", AsyncMock()):
         result = await provider.transcribe(audio_file)
-    assert result == "konnichiwa"
+    assert result.text == "konnichiwa"
+    assert not result.is_error
     assert post.await_count == 2
     for call in post.await_args_list:
         assert call.kwargs["files"]["language"] == (None, "ja")
@@ -241,7 +263,8 @@ async def test_volcengine_transcribes_audio_data_payload(audio_file: Path) -> No
     )
     with patch("httpx.AsyncClient.post", post), patch("asyncio.sleep", AsyncMock()):
         result = await provider.transcribe(audio_file)
-    assert result == "ni hao"
+    assert result.text == "ni hao"
+    assert not result.is_error
     kwargs = post.await_args_list[0].kwargs
     assert kwargs["headers"]["X-Api-Resource-Id"] == "volc.bigasr.auc_turbo"
     assert kwargs["json"]["audio"]["format"] == "ogg"
@@ -266,7 +289,8 @@ async def test_volcengine_retries_on_busy_header_code(audio_file: Path) -> None:
     post = AsyncMock(side_effect=[busy, ok])
     with patch("httpx.AsyncClient.post", post), patch("asyncio.sleep", AsyncMock()):
         result = await provider.transcribe(audio_file)
-    assert result == "done"
+    assert result.text == "done"
+    assert not result.is_error
     assert post.await_count == 2
 
 
@@ -282,18 +306,22 @@ async def test_returns_empty_on_malformed_json_body(audio_file: Path) -> None:
     post = AsyncMock(return_value=_raw_response(200, b"<html>not json</html>"))
     with patch("httpx.AsyncClient.post", post), patch("asyncio.sleep", AsyncMock()):
         result = await provider.transcribe(audio_file)
-    assert result == ""
+    assert result.is_error
+    assert result.error_type == "service_error"
+    assert result.text == ""
     assert post.await_count == 1
 
 
 @pytest.mark.asyncio
 async def test_returns_empty_on_non_dict_json_body(audio_file: Path) -> None:
-    """200 with a JSON array (not dict): no AttributeError leak; return "" immediately."""
+    """200 with a JSON array (not dict): no AttributeError leak; return service_error."""
     provider = OpenAITranscriptionProvider(api_key="sk-test")
     post = AsyncMock(return_value=_raw_response(200, b"[]"))
     with patch("httpx.AsyncClient.post", post), patch("asyncio.sleep", AsyncMock()):
         result = await provider.transcribe(audio_file)
-    assert result == ""
+    assert result.is_error
+    assert result.error_type == "service_error"
+    assert result.text == ""
     assert post.await_count == 1
 
 
@@ -311,7 +339,8 @@ async def test_retries_on_every_advertised_transient_status(
     post = AsyncMock(side_effect=[_response(status), _response(200, {"text": "ok"})])
     with patch("httpx.AsyncClient.post", post), patch("asyncio.sleep", AsyncMock()):
         result = await provider.transcribe(audio_file)
-    assert result == "ok"
+    assert result.text == "ok"
+    assert not result.is_error
     assert post.await_count == 2
 
 
@@ -334,5 +363,6 @@ async def test_retries_on_every_advertised_transient_exception(
     post = AsyncMock(side_effect=[exc, _response(200, {"text": "recovered"})])
     with patch("httpx.AsyncClient.post", post), patch("asyncio.sleep", AsyncMock()):
         result = await provider.transcribe(audio_file)
-    assert result == "recovered"
+    assert result.text == "recovered"
+    assert not result.is_error
     assert post.await_count == 2

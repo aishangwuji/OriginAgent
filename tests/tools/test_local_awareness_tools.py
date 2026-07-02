@@ -28,6 +28,7 @@ from OriginAgent.agent.tools.local_awareness import (
     TranscribeAudioSampleTool,
 )
 from OriginAgent.agent.identity import ActorResolver
+from OriginAgent.providers.transcription import TranscriptionResult
 from OriginAgent.agent.world_state import WorldStateManager
 from OriginAgent.config.schema import ToolsConfig
 from OriginAgent.session.manager import SessionManager
@@ -757,7 +758,7 @@ async def test_transcribe_audio_sample_builds_volcengine_provider_from_channel_c
             self.language = language
 
         async def transcribe(self, file_path):
-            return "volc text"
+            return TranscriptionResult("volc text")
 
     with patch("OriginAgent.agent.tools.local_awareness.VolcengineTranscriptionProvider", _StubVolcengine):
         result = await tool.execute("uploads/perception/audio.wav")
@@ -777,7 +778,7 @@ async def test_transcribe_audio_sample_writes_world_state_audio_status(tmp_path:
         audio=ToolsConfig.LocalAwarenessAudioConfig(transcriptionEnabled=True),
     )
     loop = _loop_with_world(config.local_awareness, tmp_path)
-    loop._transcription_provider = SimpleNamespace(transcribe=AsyncMock(return_value="hello room"))
+    loop._transcription_provider = SimpleNamespace(transcribe=AsyncMock(return_value=TranscriptionResult("hello room")))
     tool = TranscribeAudioSampleTool(
         workspace=tmp_path,
         config=config,
