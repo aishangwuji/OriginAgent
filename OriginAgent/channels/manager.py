@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import time
 from collections.abc import Callable
 from contextlib import suppress
 from pathlib import Path
@@ -71,7 +72,7 @@ class ChannelManager:
         self._webui_runtime_introspection = webui_runtime_introspection
         self.channels: dict[str, BaseChannel] = {}
         self._dispatch_task: asyncio.Task | None = None
-        self._origin_reply_fingerprints: dict[tuple[str, str, str], str] = {}
+        self._origin_reply_fingerprints: dict[tuple[str, str, str], tuple[str, float]] = {}
 
         self._init_channels()
 
@@ -281,14 +282,18 @@ class ChannelManager:
         origin_message_id = metadata.get("origin_message_id")
         if isinstance(origin_message_id, str) and origin_message_id:
             key = (msg.channel, msg.chat_id, origin_message_id)
-            if self._origin_reply_fingerprints.get(key) == fingerprint:
-                return True
-            self._origin_reply_fingerprints[key] = fingerprint
+            entry = self._origin_reply_fingerprints.get(key)
+            if entry is not None:
+                val, ts = entry
+                if time.monotonic() - ts < 300:
+                    if val == fingerprint:
+                        return True
+            self._origin_reply_fingerprints[key] = (fingerprint, time.monotonic())
 
         message_id = metadata.get("message_id")
         if isinstance(message_id, str) and message_id:
             key = (msg.channel, msg.chat_id, message_id)
-            self._origin_reply_fingerprints[key] = fingerprint
+            self._origin_reply_fingerprints[key] = (fingerprint, time.monotonic())
 
         return False
 
