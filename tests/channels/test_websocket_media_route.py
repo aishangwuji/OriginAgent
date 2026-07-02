@@ -95,7 +95,7 @@ def test_sign_media_path_rejects_paths_outside_media_root(
     media = tmp_path / "media"
     media.mkdir()
     channel = _ch(bus, port=0)
-    with patch("OriginAgent.channels.websocket.get_media_dir", return_value=media):
+    with patch("OriginAgent.gateway.media_server.get_media_dir", return_value=media):
         assert channel._sign_media_path(outside) is None
         # Traversal via the media root is also rejected — the resolve() step
         # normalises ``..`` out before the relative_to check.
@@ -110,13 +110,13 @@ def test_sign_media_path_round_trips_via_hmac(
     media.mkdir()
     (media / "a.png").write_bytes(_PNG_BYTES)
     channel = _ch(bus, port=0)
-    with patch("OriginAgent.channels.websocket.get_media_dir", return_value=media):
+    with patch("OriginAgent.gateway.media_server.get_media_dir", return_value=media):
         url = channel._sign_media_path(media / "a.png")
     assert url is not None
     assert url.startswith("/api/media/")
     sig, payload = url[len("/api/media/"):].split("/", 1)
     expected = hmac.new(
-        channel._media_secret, payload.encode("ascii"), hashlib.sha256
+        channel._media_server._media_secret, payload.encode("ascii"), hashlib.sha256
     ).digest()[:16]
     assert _b64url_decode(sig) == expected
     # The payload decodes back to the *relative* path — no absolute-path leaks.
@@ -139,7 +139,7 @@ async def test_media_route_serves_signed_file(
     target.write_bytes(_PNG_BYTES)
 
     channel = _ch(bus, port=29920)
-    with patch("OriginAgent.channels.websocket.get_media_dir", return_value=media):
+    with patch("OriginAgent.gateway.media_server.get_media_dir", return_value=media):
         url_path = channel._sign_media_path(target)
         assert url_path is not None
         server_task = asyncio.create_task(channel.start())
@@ -173,7 +173,7 @@ async def test_media_route_rejects_bad_signature(
     (media / "f.png").write_bytes(_PNG_BYTES)
 
     channel = _ch(bus, port=29921)
-    with patch("OriginAgent.channels.websocket.get_media_dir", return_value=media):
+    with patch("OriginAgent.gateway.media_server.get_media_dir", return_value=media):
         good = channel._sign_media_path(media / "f.png")
         assert good is not None
         _, payload = good[len("/api/media/"):].split("/", 1)
@@ -212,11 +212,11 @@ async def test_media_route_rejects_path_traversal_payload(
     # Hand-craft a traversal payload the legit signer would refuse to mint.
     payload = _b64url_encode(b"../secret.txt")
     mac = hmac.new(
-        channel._media_secret, payload.encode("ascii"), hashlib.sha256
+        channel._media_server._media_secret, payload.encode("ascii"), hashlib.sha256
     ).digest()[:16]
     url = f"/api/media/{_b64url_encode(mac)}/{payload}"
 
-    with patch("OriginAgent.channels.websocket.get_media_dir", return_value=media):
+    with patch("OriginAgent.gateway.media_server.get_media_dir", return_value=media):
         server_task = asyncio.create_task(channel.start())
         await asyncio.sleep(0.3)
         try:
@@ -240,7 +240,7 @@ async def test_media_route_404s_missing_file(
     target.write_bytes(_PNG_BYTES)
 
     channel = _ch(bus, port=29923)
-    with patch("OriginAgent.channels.websocket.get_media_dir", return_value=media):
+    with patch("OriginAgent.gateway.media_server.get_media_dir", return_value=media):
         url_path = channel._sign_media_path(target)
         assert url_path is not None
         target.unlink()  # the file vanishes between signing and fetching
@@ -268,10 +268,10 @@ async def test_media_route_degrades_non_image_to_octet_stream(
     (media / "scary.html").write_bytes(b"<script>alert(1)</script>")
 
     channel = _ch(bus, port=29924)
-    with patch("OriginAgent.channels.websocket.get_media_dir", return_value=media):
+    with patch("OriginAgent.gateway.media_server.get_media_dir", return_value=media):
         payload = _b64url_encode(b"scary.html")
         mac = hmac.new(
-            channel._media_secret, payload.encode("ascii"), hashlib.sha256
+            channel._media_server._media_secret, payload.encode("ascii"), hashlib.sha256
         ).digest()[:16]
         url = f"/api/media/{_b64url_encode(mac)}/{payload}"
         server_task = asyncio.create_task(channel.start())
@@ -311,7 +311,7 @@ async def test_session_messages_exposes_signed_media_urls(
     sm.save(sess)
 
     channel = _ch(bus, session_manager=sm, port=29925)
-    with patch("OriginAgent.channels.websocket.get_media_dir", return_value=media):
+    with patch("OriginAgent.gateway.media_server.get_media_dir", return_value=media):
         server_task = asyncio.create_task(channel.start())
         await asyncio.sleep(0.3)
         try:
@@ -356,7 +356,7 @@ async def test_session_messages_skips_vanished_media(
     sm.save(sess)
 
     channel = _ch(bus, session_manager=sm, port=29926)
-    with patch("OriginAgent.channels.websocket.get_media_dir", return_value=media):
+    with patch("OriginAgent.gateway.media_server.get_media_dir", return_value=media):
         server_task = asyncio.create_task(channel.start())
         await asyncio.sleep(0.3)
         try:
@@ -398,7 +398,7 @@ async def test_session_messages_stages_workspace_upload_media_for_preview(
     sm.save(sess)
 
     channel = _ch(bus, session_manager=sm, port=29927)
-    with patch("OriginAgent.channels.websocket.get_media_dir", return_value=media):
+    with patch("OriginAgent.gateway.media_server.get_media_dir", return_value=media):
         server_task = asyncio.create_task(channel.start())
         await asyncio.sleep(0.3)
         try:
@@ -436,7 +436,7 @@ async def test_build_webui_thread_marks_pdf_user_media_as_file(
     sm.save(sess)
 
     channel = _ch(bus, session_manager=sm, port=0)
-    with patch("OriginAgent.channels.websocket.get_media_dir", return_value=media):
+    with patch("OriginAgent.gateway.media_server.get_media_dir", return_value=media):
         body = channel._build_webui_thread_from_session("websocket:pdf-kind")
 
     assert body is not None

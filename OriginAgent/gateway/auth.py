@@ -19,68 +19,54 @@ from websockets.http11 import Headers, Response
 #    circular dependency between gateway.auth and websocket.py). ──────
 
 
-def _http_json_response(data: dict[str, Any], *, status: int = 200) -> Response:
-    body = json.dumps(data, ensure_ascii=False).encode("utf-8")
-    headers = Headers(
-        [
-            ("Date", email.utils.formatdate(usegmt=True)),
-            ("Connection", "close"),
-            ("Content-Length", str(len(body))),
-            ("Content-Type", "application/json; charset=utf-8"),
-        ]
-    )
-    reason = http.HTTPStatus(status).phrase
-    return Response(status, reason, headers, body)
+from hmac import compare_digest
+from urllib.parse import parse_qs, urlparse
+
+from OriginAgent.gateway._helpers import http_error, http_json_response
 
 
-def _http_error(status: int, message: str | None = None) -> Response:
-    from websockets.http11 import Response as WsResponse
-
-    body = (message or http.HTTPStatus(status).phrase).encode("utf-8")
-    headers = Headers(
-        [
-            ("Date", email.utils.formatdate(usegmt=True)),
-            ("Connection", "close"),
-            ("Content-Length", str(len(body))),
-            ("Content-Type", "text/plain; charset=utf-8"),
-        ]
-    )
-    reason = http.HTTPStatus(status).phrase
-    return WsResponse(status, reason, headers, body)
+# ── Helper functions (originally in websocket.py) ──────────────────────
 
 
 def _bearer_token(headers: Any) -> str | None:
-    raw = _query_first(_headers_to_dict(headers), "authorization") or ""
-    if raw.lower().startswith("bearer "):
-        return raw[7:]
+    """Pull a Bearer token out of standard or query-style headers."""
+    auth = getattr(headers, "authorization", None) or getattr(headers, "Authorization", None)
+    if auth and auth.lower().startswith("bearer "):
+        return auth[7:].strip() or None
     return None
 
 
-def _issue_route_secret_matches(headers: Any, configured_secret: str) -> bool:
-    from hmac import compare_digest
-
-    provided = _bearer_token(headers) or _query_first(
-        _parse_query(getattr(headers, "path", "")), "secret"
-    )
-    if provided is None:
-        return False
-    return compare_digest(provided.encode("utf-8"), configured_secret.encode("utf-8"))
-
-
-def _is_localhost(connection: Any) -> bool:
-    host, port = _remote_addr(connection)
-    return host == "127.0.0.1" or host == "::1" or host == "localhost"
-
-
 def _parse_query(path_with_query: str) -> dict[str, list[str]]:
-    from urllib.parse import parse_qs, urlparse
-
     return parse_qs(urlparse(path_with_query).query)
 
 
 def _query_first(query: dict[str, list[str]], key: str) -> str | None:
     values = query.get(key)
     return values[0] if values else None
+
+
+def _headers_to_dict(headers: Any) -> dict[str, str]:
+    """Convert websockets/http header-like object to a plain dict (lowercased keys)."""
+    result: dict[str, str] = {}
+    if hasattr(headers, "get_all"):
+        for k in headers.get_all():
+            result.setdefault(k.lower(), getattr(headers, "get", lambda k, d=None: d)(k, "") or "")
+    elif isinstance(headers, dict):
+        for k, v in headers.items():
+            result[k.lower()] = str(v or "")
+    elif hasattr(headers, "raw_items"):
+        for k, v in headers.raw_items():
+            result[k.lower()] = v
+    return result
+
+
+def _issue_route_secret_matches(headers: Any, configured_secret: str) -> bool:
+    provided = _bearer_token(headers) or _query_first(
+        _parse_query(getattr(headers, "path", "")), "secret"
+    )
+    if provided is None:
+        return False
+    return compare_digest(provided.encode("utf-8"), configured_secret.encode("utf-8"))
 
 
 def _remote_addr(connection: Any) -> tuple[str, int]:
@@ -91,28 +77,8 @@ def _remote_addr(connection: Any) -> tuple[str, int]:
     return ("127.0.0.1", 0)
 
 
-def _headers_to_dict(headers: Any) -> dict[str, str]:
-    """Convert websockets/http header-like object to a plain dict (lowercased keys)."""
-    result: dict[str, str] = {}
-    if hasattr(headers, "get_all"):
-        for k in headers.get_all():
-            result.setdefault(k.lower(), headers.get(k) or "")
-    elif isinstance(headers, dict):
-        for k, v in headers.items():
-            result[k.lower()] = str(v or "")
-    elif hasattr(headers, "raw_items"):
-        for k, v in headers.raw_items():
-            result[k.lower()] = v
-    return result
-
-
 class GatewayAuth:
-    """Token generation, validation, and HMAC media URL signing.
-
-    Owns two token pools:
-    - ``issued_tokens``: single-use tokens consumed at WebSocket handshake.
-    - ``api_tokens``: multi-use tokens for the embedded webui's REST surface.
-    """
+    """Token generation, validation, and HMAC media URL signing."""
 
     _MAX_ISSUED_TOKENS = 1000
 
@@ -163,10 +129,10 @@ class GatewayAuth:
                 "too many outstanding issued tokens ({}), rejecting issuance",
                 len(self._issued_tokens),
             )
-            return _http_json_response({"error": "too many outstanding tokens"}, status=429)
+            return http_json_response({"error": "too many outstanding tokens"}, status=429)
         token_value = f"nbwt_{secrets.token_urlsafe(32)}"
         self._issued_tokens[token_value] = time.monotonic() + float(self._config.token_ttl_s)
-        return _http_json_response(
+        return http_json_response(
             {"token": token_value, "expires_in": self._config.token_ttl_s}
         )
 

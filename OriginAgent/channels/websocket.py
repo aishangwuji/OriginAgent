@@ -33,6 +33,7 @@ from websockets.http11 import Response
 
 from OriginAgent.bus.events import OUTBOUND_META_AGENT_UI, OutboundMessage
 from OriginAgent.gateway.auth import GatewayAuth
+from OriginAgent.gateway.media_server import MediaServer
 from OriginAgent.bus.queue import MessageBus
 from OriginAgent.agent.message_metadata import extract_origin_metadata, origin_label
 from OriginAgent.config.doctor import build_config_doctor_report
@@ -796,11 +797,8 @@ class WebSocketChannel(BaseChannel):
         )
         self._runtime_model_name = runtime_model_name
         self._runtime_introspection = runtime_introspection
-        # Process-local secret used to HMAC-sign media URLs. The signed URL is
-        # the capability — anyone who holds a valid URL can fetch that one
-        # file, nothing else. The secret regenerates on restart so links
-        # become self-expiring (callers just refresh the session list).
-        self._media_secret: bytes = secrets.token_bytes(32)
+        # Media server — signed URLs + static SPA serving (gateway/media_server.py).
+        self._media_server = MediaServer(secrets.token_bytes(32), self._static_dist_path)
         # Cached config to avoid repeated self._load_config() disk I/O (D2).
         self._cached_config: Any = None
         self._cached_config_path: str | None = None
@@ -1061,10 +1059,9 @@ class WebSocketChannel(BaseChannel):
             return self._authorize_websocket_handshake(connection, query)
 
         # 5. Static SPA serving (only if a build directory was wired in).
-        if self._static_dist_path is not None:
-            response = self._serve_static(got)
-            if response is not None:
-                return response
+        response = self._media_server.serve_static(got)
+        if response is not None:
+            return response
 
         return connection.respond(404, "Not Found")
 
@@ -2508,51 +2505,10 @@ class WebSocketChannel(BaseChannel):
             msg.pop("media", None)
 
     def _sign_media_path(self, abs_path: Path) -> str | None:
-        """Return a ``/api/media/<sig>/<payload>`` URL for *abs_path*, or
-        ``None`` when the path does not resolve inside the media root.
-
-        The URL is self-authenticating: the signature binds the payload to
-        this process's ``_media_secret``, so only paths we chose to sign can
-        be fetched. The returned path is relative to the server origin; the
-        client joins it against the existing webui base.
-        """
-        try:
-            media_root = get_media_dir().resolve()
-            rel = abs_path.resolve().relative_to(media_root)
-        except (OSError, ValueError):
-            return None
-        payload = _b64url_encode(rel.as_posix().encode("utf-8"))
-        mac = hmac.new(
-            self._media_secret, payload.encode("ascii"), hashlib.sha256
-        ).digest()[:16]
-        return f"/api/media/{_b64url_encode(mac)}/{payload}"
+        return self._media_server.sign_media_path(abs_path)
 
     def _sign_or_stage_media_path(self, path: Path) -> dict[str, str] | None:
-        """Return a signed media URL payload for *path*.
-
-        Persisted inbound media may already live under ``get_media_dir`` and
-        can be signed directly. Workspace uploads and outbound bot-generated
-        files may live elsewhere on disk; copy those into the websocket media
-        bucket first so the browser can fetch them through the existing
-        signed media route without exposing arbitrary filesystem paths.
-        """
-        signed = self._sign_media_path(path)
-        if signed is not None:
-            return {"url": signed, "name": path.name}
-        try:
-            if not path.is_file():
-                return None
-            media_dir = get_media_dir("websocket")
-            safe_name = safe_filename(path.name) or "attachment"
-            staged = media_dir / f"{uuid.uuid4().hex[:12]}-{safe_name}"
-            shutil.copyfile(path, staged)
-        except OSError as exc:
-            self.logger.warning("failed to stage outbound media {}: {}", path, exc)
-            return None
-        signed = self._sign_media_path(staged)
-        if signed is None:
-            return None
-        return {"url": signed, "name": path.name}
+        return self._media_server.sign_or_stage_media_path(path, self.logger)
 
     def _workspace_upload_dir(self) -> Path:
         workspace: str | Path | None = None
@@ -2565,52 +2521,7 @@ class WebSocketChannel(BaseChannel):
         return get_workspace_upload_dir(workspace, "websocket")
 
     def _handle_media_fetch(self, sig: str, payload: str) -> Response:
-        """Serve a single media file previously signed via
-        :meth:`_sign_media_path`. Validates the signature, decodes the
-        payload to a relative path, and streams the file bytes with a
-        long-lived immutable cache header (the URL already encodes the
-        file identity, so caches can be aggressive)."""
-        try:
-            provided_mac = _b64url_decode(sig)
-        except (ValueError, binascii.Error):
-            return _http_error(401, "invalid signature")
-        expected_mac = hmac.new(
-            self._media_secret, payload.encode("ascii"), hashlib.sha256
-        ).digest()[:16]
-        if not hmac.compare_digest(expected_mac, provided_mac):
-            return _http_error(401, "invalid signature")
-        try:
-            rel_bytes = _b64url_decode(payload)
-            rel_str = rel_bytes.decode("utf-8")
-        except (ValueError, binascii.Error, UnicodeDecodeError):
-            return _http_error(400, "invalid payload")
-        # An attacker who somehow bypassed the HMAC check would still need
-        # the resolved path to escape the media root; guard defensively.
-        try:
-            media_root = get_media_dir().resolve()
-            candidate = (media_root / rel_str).resolve()
-            candidate.relative_to(media_root)
-        except (OSError, ValueError):
-            return _http_error(404, "not found")
-        if not candidate.is_file():
-            return _http_error(404, "not found")
-        try:
-            body = candidate.read_bytes()
-        except OSError:
-            return _http_error(500, "read error")
-        mime, _ = mimetypes.guess_type(candidate.name)
-        if mime not in _MEDIA_ALLOWED_MIMES:
-            mime = "application/octet-stream"
-        return _http_response(
-            body,
-            content_type=mime,
-            extra_headers=[
-                ("Cache-Control", "private, max-age=31536000, immutable"),
-                # Paired with the MIME whitelist above: prevents browsers from
-                # MIME-sniffing an octet-stream fallback into executable HTML.
-                ("X-Content-Type-Options", "nosniff"),
-            ],
-        )
+        return self._media_server.handle_media_fetch(sig, payload)
 
     def _handle_session_delete(self, request: WsRequest, key: str) -> Response:
         if not self._check_api_token(request):
@@ -2628,50 +2539,6 @@ class WebSocketChannel(BaseChannel):
         deleted = self._session_manager.delete_session(decoded_key)
         deleted = delete_webui_thread(decoded_key) or deleted
         return _http_json_response({"deleted": bool(deleted)})
-
-    def _serve_static(self, request_path: str) -> Response | None:
-        """Resolve *request_path* against the built SPA directory; SPA fallback to index.html."""
-        assert self._static_dist_path is not None
-        rel = request_path.lstrip("/")
-        if not rel:
-            rel = "index.html"
-        # Reject path-traversal attempts and absolute targets.
-        if ".." in rel.split("/") or rel.startswith("/"):
-            return _http_error(403, "Forbidden")
-        candidate = (self._static_dist_path / rel).resolve()
-        try:
-            candidate.relative_to(self._static_dist_path)
-        except ValueError:
-            return _http_error(403, "Forbidden")
-        if not candidate.is_file():
-            # SPA history-mode fallback: unknown routes serve index.html so the
-            # client-side router can render them.
-            index = self._static_dist_path / "index.html"
-            if index.is_file():
-                candidate = index
-            else:
-                return None
-        try:
-            body = candidate.read_bytes()
-        except OSError as e:
-            self.logger.warning("static: failed to read {}: {}", candidate, e)
-            return _http_error(500, "Internal Server Error")
-        ctype, _ = mimetypes.guess_type(candidate.name)
-        if ctype is None:
-            ctype = "application/octet-stream"
-        if ctype.startswith("text/") or ctype in {"application/javascript", "application/json"}:
-            ctype = f"{ctype}; charset=utf-8"
-        # Hash-named build assets are cache-friendly; index.html must stay fresh.
-        if candidate.name == "index.html":
-            cache = "no-cache"
-        else:
-            cache = "public, max-age=31536000, immutable"
-        return _http_response(
-            body,
-            status=200,
-            content_type=ctype,
-            extra_headers=[("Cache-Control", cache)],
-        )
 
     def _authorize_websocket_handshake(self, connection: Any, query: dict[str, list[str]]) -> Any:
         supplied = _query_first(query, "token")
