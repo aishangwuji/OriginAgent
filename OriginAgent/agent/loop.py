@@ -1469,175 +1469,31 @@ class AgentLoop:
         trigger: str | None = None,
         capability_snapshot: CapabilitySnapshot | None = None,
     ) -> tuple[str | None, list[str], list[dict], str, bool]:
-        """Run the agent iteration loop.
+        """Run the agent iteration loop via AgentRuntime."""
+        async def _checkpoint_cb(sess: Session, payload: dict[str, Any]) -> None:
+            self._set_runtime_checkpoint(sess, payload)
 
-        Delegates to AgentRuntime when available; falls back to original
-        logic for callers that bypass ``__init__``.
-        """
-        if hasattr(self, "_runtime") and self._runtime is not None:
-            async def _checkpoint_cb(sess: Session, payload: dict[str, Any]) -> None:
-                self._set_runtime_checkpoint(sess, payload)
-
-            result = await self._runtime._run_agent_loop(
-                initial_messages,
-                on_progress=on_progress,
-                on_stream=on_stream,
-                on_stream_end=on_stream_end,
-                on_retry_wait=on_retry_wait,
-                session=session,
-                channel=channel,
-                chat_id=chat_id,
-                message_id=message_id,
-                metadata=metadata,
-                session_key=session_key,
-                pending_queue=pending_queue,
-                actor_id=actor_id,
-                trigger=trigger,
-                capability_snapshot=capability_snapshot,
-                checkpoint_cb=_checkpoint_cb,
-                set_current_iteration=lambda it: setattr(self, "_current_iteration", it),
-            )
-            self._last_usage = getattr(result, "usage", None) if hasattr(result, "usage") else None
-            # result is a tuple from AgentRuntime
-            return result
-
-        # ── Fallback: original logic ──────────────────────────────────
-        self._sync_subagent_runtime_limits()
-        self._capability_snapshot = capability_snapshot or self._snapshot_for_trigger(trigger)
-        if hasattr(self.tools, "set_capability_snapshot"):
-            self.tools.set_capability_snapshot(self._capability_snapshot)
-
-        loop_hook = AgentProgressHook(
+        result = await self._runtime._run_agent_loop(
+            initial_messages,
             on_progress=on_progress,
             on_stream=on_stream,
             on_stream_end=on_stream_end,
+            on_retry_wait=on_retry_wait,
+            session=session,
             channel=channel,
             chat_id=chat_id,
             message_id=message_id,
             metadata=metadata,
             session_key=session_key,
-            tool_hint_max_length=self.tool_hint_max_length,
-            set_tool_context=self._set_tool_context,
-            on_iteration=lambda iteration: setattr(self, "_current_iteration", iteration),
+            pending_queue=pending_queue,
             actor_id=actor_id,
             trigger=trigger,
-            capability_snapshot=self._capability_snapshot,
-            sensitive_tool_log_names=_SENSITIVE_TOOL_LOG_FALLBACK_NAMES,
-            sensitive_tool_log_prefixes=_SENSITIVE_TOOL_LOG_FALLBACK_PREFIXES,
+            capability_snapshot=capability_snapshot,
+            checkpoint_cb=_checkpoint_cb,
+            set_current_iteration=lambda it: setattr(self, "_current_iteration", it),
         )
-        hook: AgentHook = (
-            CompositeHook([loop_hook] + self._extra_hooks) if self._extra_hooks else loop_hook
-        )
-
-        async def _checkpoint(payload: dict[str, Any]) -> None:
-            if session is None:
-                return
-            self._set_runtime_checkpoint(session, payload)
-
-        async def _drain_pending(*, limit: int = _MAX_INJECTIONS_PER_TURN) -> list[dict[str, Any]]:
-            if pending_queue is None:
-                return []
-
-            def _to_user_message(pending_msg: InboundMessage) -> dict[str, Any]:
-                content = pending_msg.content
-                media = pending_msg.media if pending_msg.media else None
-                if media:
-                    content, media = extract_documents(content, media)
-                    media = media or None
-                runtime_block = self.context.build_runtime_context_block(
-                    pending_msg.channel,
-                    self._runtime_chat_id(pending_msg),
-                    self.context.timezone,
-                )
-                if (
-                    pending_msg.sender_id == "subagent"
-                    or pending_msg.metadata.get("injected_event") == "subagent_result"
-                ):
-                    merged: list[dict[str, Any]] = [
-                        runtime_block,
-                        self.context.build_internal_event_block("subagent_result", content),
-                    ]
-                elif pending_msg.metadata.get("injected_event") == "active_intent":
-                    merged = [
-                        runtime_block,
-                        self.context.build_internal_event_block("active_intent", content),
-                    ]
-                else:
-                    merged = [
-                        runtime_block,
-                        *self.context._build_user_content(content, media),
-                    ]
-                return {"role": "user", "content": merged}
-
-            items: list[dict[str, Any]] = []
-            while len(items) < limit:
-                try:
-                    items.append(_to_user_message(pending_queue.get_nowait()))
-                except asyncio.QueueEmpty:
-                    break
-
-            if (not items
-                    and session is not None
-                    and self.subagents.get_running_count_by_session(session.key) > 0):
-                try:
-                    msg = await asyncio.wait_for(pending_queue.get(), timeout=300)
-                except asyncio.TimeoutError:
-                    logger.warning(
-                        "Timeout waiting for sub-agent completion in session {}",
-                        session.key,
-                    )
-                    return items
-                items.append(_to_user_message(msg))
-                while len(items) < limit:
-                    try:
-                        items.append(_to_user_message(pending_queue.get_nowait()))
-                    except asyncio.QueueEmpty:
-                        break
-
-            return items
-
-        active_session_key = session.key if session else session_key
-        file_state_token = bind_file_states(self._file_state_store.for_session(active_session_key))
-        try:
-            result = await self.runner.run(AgentRunSpec(
-                initial_messages=initial_messages,
-                tools=self.tools,
-                model=self.model,
-                max_iterations=self.max_iterations,
-                max_tool_result_chars=self.max_tool_result_chars,
-                hook=hook,
-                error_message=user_facing_message(
-                    ClassifiedError(kind=ErrorKind.INTERNAL, technical_detail="agent loop error", retryable=False)
-                ),
-                concurrent_tools=True,
-                tool_concurrency_limit=self._tool_concurrency_limit,
-                workspace=self.workspace,
-                session_key=session.key if session else None,
-                context_window_tokens=self.context_window_tokens,
-                context_block_limit=self.context_block_limit,
-                provider_retry_mode=self.provider_retry_mode,
-                progress_callback=on_progress,
-                stream_progress_deltas=on_stream is not None,
-                retry_wait_callback=on_retry_wait,
-                checkpoint_callback=_checkpoint,
-                injection_callback=_drain_pending,
-                llm_timeout_s=runner_wall_llm_timeout_s(
-                    self.sessions,
-                    session_key,
-                    metadata=session.metadata if session is not None else None,
-                ),
-            ))
-        finally:
-            reset_file_states(file_state_token)
-        self._last_usage = result.usage
-        if result.stop_reason == "max_iterations":
-            logger.warning("Max iterations ({}) reached", self.max_iterations)
-            if on_stream and on_stream_end:
-                await on_stream(result.final_content or "")
-                await on_stream_end(resuming=False)
-        elif result.stop_reason == "error":
-            logger.error("LLM returned error: {}", (result.final_content or "")[:200])
-        return result.final_content, result.tools_used, result.messages, result.stop_reason, result.had_injections
+        self._last_usage = getattr(result, "usage", None) if hasattr(result, "usage") else None
+        return result
 
     async def run(self) -> None:
         """Run the agent loop, dispatching messages as tasks to stay responsive to /stop."""

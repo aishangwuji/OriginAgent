@@ -1300,14 +1300,21 @@ async def test_runner_blocks_repeated_external_fetches():
 
 @pytest.mark.asyncio
 async def test_loop_max_iterations_message_stays_stable(tmp_path):
-    loop = _make_loop(tmp_path)
+    from OriginAgent.agent.loop import AgentLoop
+    from OriginAgent.bus.queue import MessageBus
+
+    loop = AgentLoop(
+        bus=MessageBus(),
+        provider=MagicMock(),
+        workspace=tmp_path,
+        max_iterations=2,
+    )
     loop.provider.chat_with_retry = AsyncMock(return_value=LLMResponse(
         content="working",
         tool_calls=[ToolCallRequest(id="call_1", name="list_dir", arguments={})],
     ))
     loop.tools.get_definitions = MagicMock(return_value=[])
     loop.tools.execute = AsyncMock(return_value="ok")
-    loop.max_iterations = 2
 
     final_content, _, _, _, _ = await loop._run_agent_loop([])
 
