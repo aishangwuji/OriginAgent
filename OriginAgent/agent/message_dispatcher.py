@@ -42,6 +42,7 @@ class DispatcherAwareLoop(Protocol):
     def _effective_session_key(self, msg: InboundMessage) -> str: ...
     def _restore_runtime_checkpoint(self, session: Any) -> bool: ...
     def _clear_pending_user_turn(self, session: Any) -> None: ...
+    def expire_stale_sessions(self) -> int: ...
 
 
 @dataclass(frozen=True)
@@ -60,9 +61,11 @@ class MessageDispatcher:
 
     PENDING_QUEUE_MAXSIZE = 20
     _MAX_TRANSIENT_CANCELS = 5
+    _STALE_EXPIRY_INTERVAL = 300  # seconds between expire_stale() checks
 
     def __init__(self, deps: MessageDispatcherDeps) -> None:
         self._deps = deps
+        self._last_expiry_check: float = 0.0
 
     @property
     def loop(self) -> Any:
@@ -79,6 +82,10 @@ class MessageDispatcher:
                     self.loop._schedule_background,
                     active_session_keys=self.loop._pending_queues.keys(),
                 )
+                now = time.monotonic()
+                if now - self._last_expiry_check >= self._STALE_EXPIRY_INTERVAL:
+                    self.loop.expire_stale_sessions()
+                    self._last_expiry_check = now
                 continue
             except asyncio.CancelledError:
                 if not self.loop._running or asyncio.current_task().cancelling():

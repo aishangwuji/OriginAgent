@@ -11,6 +11,8 @@ import time
 from dataclasses import dataclass, field
 from typing import Any
 
+from loguru import logger
+
 
 @dataclass
 class SessionScopedState:
@@ -88,6 +90,8 @@ class SessionStateHolder:
                     stale.append(key)
             for key in stale:
                 del self._states[key]
+        if stale:
+            logger.info("SessionStateHolder: expired {} stale session(s)", len(stale))
         return len(stale)
 
     @property

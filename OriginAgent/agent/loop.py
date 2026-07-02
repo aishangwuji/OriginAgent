@@ -1652,6 +1652,16 @@ class AgentLoop:
         """Compatibility shell; delegates to MessageDispatcher.dispatch_message."""
         return await self._get_message_dispatcher().dispatch_message(msg)
 
+    def expire_stale_sessions(self) -> int:
+        """Periodic maintenance: expire stale SessionStateHolder entries.
+
+        Called by ``MessageDispatcher.run_forever()`` from its idle cycle.
+        """
+        removed = self._state_holder.expire_stale()
+        if removed > 0:
+            logger.debug("SessionStateHolder: expired {} stale session(s) during idle cycle", removed)
+        return removed
+
     async def close_mcp(self) -> None:
         """Drain pending background archives, then close MCP connections.
 

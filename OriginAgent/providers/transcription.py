@@ -366,6 +366,21 @@ class VolcengineTranscriptionProvider:
 
                 try:
                     response.raise_for_status()
+                except httpx.HTTPStatusError as e:
+                    if response.status_code in (401, 403):
+                        logger.error(
+                            "Volcengine transcription config error: HTTP {}",
+                            response.status_code,
+                        )
+                        return TranscriptionResult(
+                            "", error=f"transcription config error: HTTP {response.status_code}",
+                            error_type="config_error",
+                        )
+                    logger.exception("Volcengine transcription HTTP error: {}", e)
+                    return TranscriptionResult(
+                        "", error=f"transcription HTTP {response.status_code}: {e}",
+                        error_type="service_error",
+                    )
                 except Exception as e:
                     logger.exception("Volcengine transcription HTTP error: {}", e)
                     return TranscriptionResult(
