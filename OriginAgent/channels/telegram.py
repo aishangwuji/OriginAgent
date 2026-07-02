@@ -26,7 +26,7 @@ from telegram.request import HTTPXRequest
 
 from OriginAgent.bus.events import OutboundMessage
 from OriginAgent.bus.queue import MessageBus
-from OriginAgent.channels.base import BaseChannel
+from OriginAgent.channels.base import BaseChannel, ChannelNotReadyError
 from OriginAgent.channels._text_utils import strip_markdown_block, strip_markdown_inline
 from OriginAgent.channels._stream_buffer import StreamBuffer
 from OriginAgent.command.builtin import build_help_text
@@ -451,8 +451,7 @@ class TelegramChannel(BaseChannel):
     async def send(self, msg: OutboundMessage) -> None:
         """Send a message through Telegram."""
         if not self._app:
-            self.logger.warning("bot not running")
-            return
+            raise ChannelNotReadyError("telegram", "bot not initialized")
 
         # Only stop typing indicator and remove reaction for final responses
         if not msg.metadata.get("_progress", False):

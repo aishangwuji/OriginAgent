@@ -36,7 +36,7 @@ from pydantic import Field
 
 from OriginAgent.bus.events import OutboundMessage
 from OriginAgent.bus.queue import MessageBus
-from OriginAgent.channels.base import BaseChannel
+from OriginAgent.channels.base import BaseChannel, ChannelNotReadyError
 from OriginAgent.config.schema import Base
 from OriginAgent.security.network import validate_url_target
 from OriginAgent.utils.logging_bridge import redirect_lib_logging
@@ -243,8 +243,7 @@ class QQChannel(BaseChannel):
         """Send attachments first, then text."""
         try:
             if not self._client:
-                self.logger.warning("client not initialized")
-                return
+                raise ChannelNotReadyError("qq", "client not initialized")
 
             msg_id = msg.metadata.get("message_id")
             chat_type = self._chat_type_cache.get(msg.chat_id, "c2c")

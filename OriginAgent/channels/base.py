@@ -14,6 +14,17 @@ from OriginAgent.config.schema import PairingConfig
 from OriginAgent.pairing import PAIRING_CODE_META_KEY, format_pairing_reply, generate_code, is_approved
 
 
+class ChannelNotReadyError(Exception):
+    """Raised when a channel is not ready to send a message.
+
+    This is a transient error — the caller should retry.
+    """
+    def __init__(self, channel_name: str, reason: str) -> None:
+        self.channel_name = channel_name
+        self.reason = reason
+        super().__init__(f"{channel_name} not ready: {reason}")
+
+
 class BaseChannel(ABC):
     """
     Abstract base class for chat channel implementations.

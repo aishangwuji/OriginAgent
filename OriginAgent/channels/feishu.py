@@ -19,7 +19,7 @@ from pydantic import Field
 
 from OriginAgent.bus.events import OutboundMessage
 from OriginAgent.bus.queue import MessageBus
-from OriginAgent.channels.base import BaseChannel
+from OriginAgent.channels.base import BaseChannel, ChannelNotReadyError
 from OriginAgent.config.paths import get_media_dir
 from OriginAgent.config.schema import Base
 from OriginAgent.utils.logging_bridge import redirect_lib_logging
@@ -1486,8 +1486,7 @@ class FeishuChannel(BaseChannel):
     async def send(self, msg: OutboundMessage) -> None:
         """Send a message through Feishu, including media (images/files) if present."""
         if not self._client:
-            self.logger.warning("client not initialized")
-            return
+            raise ChannelNotReadyError("feishu", "client not initialized")
 
         try:
             receive_id_type = "chat_id" if msg.chat_id.startswith("oc_") else "open_id"

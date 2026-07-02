@@ -14,7 +14,7 @@ from pydantic import Field
 
 from OriginAgent.bus.events import OutboundMessage
 from OriginAgent.bus.queue import MessageBus
-from OriginAgent.channels.base import BaseChannel
+from OriginAgent.channels.base import BaseChannel, ChannelNotReadyError
 from OriginAgent.channels._stream_buffer import StreamBuffer
 from OriginAgent.command.builtin import build_help_text
 from OriginAgent.config.paths import get_media_dir
@@ -440,8 +440,7 @@ class DiscordChannel(BaseChannel):
         """Send a message through Discord using discord.py."""
         client = self._client
         if client is None or not client.is_ready():
-            self.logger.warning("client not ready; dropping outbound message")
-            return
+            raise ChannelNotReadyError("discord", "client not ready")
 
         is_progress = bool((msg.metadata or {}).get("_progress"))
 

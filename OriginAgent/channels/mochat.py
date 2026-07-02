@@ -14,7 +14,7 @@ import httpx
 
 from OriginAgent.bus.events import OutboundMessage
 from OriginAgent.bus.queue import MessageBus
-from OriginAgent.channels.base import BaseChannel
+from OriginAgent.channels.base import BaseChannel, ChannelNotReadyError
 from OriginAgent.config.paths import get_runtime_subdir
 from OriginAgent.config.schema import Base
 from pydantic import Field
@@ -347,8 +347,7 @@ class MochatChannel(BaseChannel):
     async def send(self, msg: OutboundMessage) -> None:
         """Send outbound message to session or panel."""
         if not self.config.claw_token:
-            self.logger.warning("claw_token missing, skip send")
-            return
+            raise ChannelNotReadyError("mochat", "claw_token not configured")
 
         parts = ([msg.content.strip()] if msg.content and msg.content.strip() else [])
         if msg.media:

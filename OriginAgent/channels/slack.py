@@ -15,7 +15,7 @@ from slackify_markdown import slackify_markdown
 
 from OriginAgent.bus.events import OutboundMessage
 from OriginAgent.bus.queue import MessageBus
-from OriginAgent.channels.base import BaseChannel
+from OriginAgent.channels.base import BaseChannel, ChannelNotReadyError
 from OriginAgent.config.paths import get_media_dir
 from OriginAgent.config.schema import Base
 from OriginAgent.utils.helpers import safe_filename, split_message
@@ -126,8 +126,7 @@ class SlackChannel(BaseChannel):
     async def send(self, msg: OutboundMessage) -> None:
         """Send a message through Slack."""
         if not self._web_client:
-            self.logger.warning("client not running")
-            return
+            raise ChannelNotReadyError("slack", "web_client not initialized")
         try:
             target_chat_id = await self._resolve_target_chat_id(msg.chat_id)
             slack_meta = msg.metadata.get("slack", {}) if msg.metadata else {}
