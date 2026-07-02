@@ -32,6 +32,7 @@ from websockets.http11 import Request as WsRequest
 from websockets.http11 import Response
 
 from OriginAgent.bus.events import OUTBOUND_META_AGENT_UI, OutboundMessage
+from OriginAgent.gateway.auth import GatewayAuth
 from OriginAgent.bus.queue import MessageBus
 from OriginAgent.agent.message_metadata import extract_origin_metadata, origin_label
 from OriginAgent.config.doctor import build_config_doctor_report
@@ -785,10 +786,8 @@ class WebSocketChannel(BaseChannel):
         self._conn_chats: dict[Any, set[str]] = {}
         # connection -> default chat_id for legacy frames that omit routing.
         self._conn_default: dict[Any, str] = {}
-        # Single-use tokens consumed at WebSocket handshake.
-        self._issued_tokens: dict[str, float] = {}
-        # Multi-use tokens for the embedded webui's REST surface; checked but not consumed.
-        self._api_tokens: dict[str, float] = {}
+        # Gateway authentication — extracted to gateway/auth.py.
+        self._gateway_auth = GatewayAuth(self.config)
         self._stop_event: asyncio.Event | None = None
         self._server_task: asyncio.Task[None] | None = None
         self._session_manager = session_manager
@@ -881,50 +880,13 @@ class WebSocketChannel(BaseChannel):
     _MAX_ISSUED_TOKENS = 10_000
 
     def _purge_expired_issued_tokens(self) -> None:
-        now = time.monotonic()
-        for token_key, expiry in list(self._issued_tokens.items()):
-            if now > expiry:
-                self._issued_tokens.pop(token_key, None)
+        self._gateway_auth.purge_expired_issued_tokens()
 
     def _take_issued_token_if_valid(self, token_value: str | None) -> bool:
-        """Validate and consume one issued token (single use per connection attempt).
-
-        Uses single-step pop to minimize the window between lookup and removal;
-        safe under asyncio's single-threaded cooperative model.
-        """
-        if not token_value:
-            return False
-        self._purge_expired_issued_tokens()
-        expiry = self._issued_tokens.pop(token_value, None)
-        if expiry is None:
-            return False
-        if time.monotonic() > expiry:
-            return False
-        return True
+        return self._gateway_auth.take_issued_token_if_valid(token_value)
 
     def _handle_token_issue_http(self, connection: Any, request: Any) -> Any:
-        secret = self.config.token_issue_secret.strip()
-        if secret:
-            if not _issue_route_secret_matches(request.headers, secret):
-                return connection.respond(401, "Unauthorized")
-        else:
-            self.logger.warning(
-                "token_issue_path is set but token_issue_secret is empty; "
-                "any client can obtain connection tokens — set token_issue_secret for production."
-            )
-        self._purge_expired_issued_tokens()
-        if len(self._issued_tokens) >= self._MAX_ISSUED_TOKENS:
-            self.logger.error(
-                "too many outstanding issued tokens ({}), rejecting issuance",
-                len(self._issued_tokens),
-            )
-            return _http_json_response({"error": "too many outstanding tokens"}, status=429)
-        token_value = f"nbwt_{secrets.token_urlsafe(32)}"
-        self._issued_tokens[token_value] = time.monotonic() + float(self.config.token_ttl_s)
-
-        return _http_json_response(
-            {"token": token_value, "expires_in": self.config.token_ttl_s}
-        )
+        return self._gateway_auth.handle_token_issue_http(connection, request, self.logger)
 
     # -- HTTP dispatch ------------------------------------------------------
 
@@ -1109,24 +1071,10 @@ class WebSocketChannel(BaseChannel):
     # -- HTTP route handlers ------------------------------------------------
 
     def _check_api_token(self, request: WsRequest) -> bool:
-        """Validate a request against the API token pool (multi-use, TTL-bound)."""
-        self._purge_expired_api_tokens()
-        token = _bearer_token(request.headers) or _query_first(
-            _parse_query(request.path), "token"
-        )
-        if not token:
-            return False
-        expiry = self._api_tokens.get(token)
-        if expiry is None or time.monotonic() > expiry:
-            self._api_tokens.pop(token, None)
-            return False
-        return True
+        return self._gateway_auth.check_api_token(request)
 
     def _purge_expired_api_tokens(self) -> None:
-        now = time.monotonic()
-        for token_key, expiry in list(self._api_tokens.items()):
-            if now > expiry:
-                self._api_tokens.pop(token_key, None)
+        self._gateway_auth.purge_expired_api_tokens()
 
     def _handle_webui_bootstrap(self, connection: Any, request: Any) -> Response:
         # When a secret is configured (token_issue_secret or static token),
@@ -1142,21 +1090,14 @@ class WebSocketChannel(BaseChannel):
         # Cap outstanding tokens to avoid runaway growth from a misbehaving client.
         self._purge_expired_issued_tokens()
         self._purge_expired_api_tokens()
-        if (
-            len(self._issued_tokens) >= self._MAX_ISSUED_TOKENS
-            or len(self._api_tokens) >= self._MAX_ISSUED_TOKENS
-        ):
+        if self._gateway_auth.total_token_count >= self._MAX_ISSUED_TOKENS:
             return _http_response(
                 json.dumps({"error": "too many outstanding tokens"}).encode("utf-8"),
                 status=429,
                 content_type="application/json; charset=utf-8",
             )
         token = f"nbwt_{secrets.token_urlsafe(32)}"
-        expiry = time.monotonic() + float(self.config.token_ttl_s)
-        # Same string registered in both pools: the WS handshake consumes one copy
-        # while the REST surface keeps validating the other until TTL expiry.
-        self._issued_tokens[token] = expiry
-        self._api_tokens[token] = expiry
+        self._gateway_auth.register_dual_token(token, float(self.config.token_ttl_s))
         return _http_json_response(
             {
                 "token": token,
@@ -3128,8 +3069,7 @@ class WebSocketChannel(BaseChannel):
         self._subs.clear()
         self._conn_chats.clear()
         self._conn_default.clear()
-        self._issued_tokens.clear()
-        self._api_tokens.clear()
+        self._gateway_auth.clear_all()
 
     async def _safe_send_to(self, connection: Any, raw: str, *, label: str = "") -> None:
         """Send a raw frame to one connection, cleaning up on ConnectionClosed."""
