@@ -6,7 +6,11 @@ import json
 from pathlib import Path
 from typing import Any
 
-from OriginAgent.utils.attachments import AttachmentDescriptor, attachment_placeholder_text
+from OriginAgent.utils.attachments import (
+    AttachmentDescriptor,
+    attachment_placeholder_text,
+    parse_attachment,
+)
 
 
 def convert_messages(
@@ -67,34 +71,6 @@ def convert_messages(
     return system_prompt, input_items
 
 
-def _attachment_descriptor(block: dict[str, Any]) -> AttachmentDescriptor | None:
-    attachment = block.get("attachment")
-    if not isinstance(attachment, dict):
-        return None
-    path = attachment.get("path")
-    name = attachment.get("name")
-    kind = attachment.get("kind")
-    size_bytes = attachment.get("size_bytes")
-    if not isinstance(path, str) or not path:
-        return None
-    if not isinstance(name, str) or not name:
-        name = path.rsplit("/", 1)[-1].rsplit("\\", 1)[-1]
-    if not isinstance(kind, str) or not kind:
-        return None
-    if not isinstance(size_bytes, int):
-        size_bytes = 0
-    mime = attachment.get("mime")
-    source = attachment.get("source")
-    metadata = attachment.get("metadata")
-    return AttachmentDescriptor(
-        path=Path(path),
-        name=name,
-        mime=mime if isinstance(mime, str) else None,
-        kind=kind,  # type: ignore[arg-type]
-        size_bytes=size_bytes,
-        source=source if isinstance(source, str) else "media",
-        metadata=metadata if isinstance(metadata, dict) else {},
-    )
 
 
 def _native_attachment_content(
@@ -141,7 +117,7 @@ def convert_user_message(
                 if url:
                     converted.append({"type": "input_image", "image_url": url, "detail": "auto"})
             elif item.get("type") == "attachment_ref":
-                descriptor = _attachment_descriptor(item)
+                descriptor = parse_attachment(item)
                 if descriptor is None:
                     continue
                 native = _native_attachment_content(

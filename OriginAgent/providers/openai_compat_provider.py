@@ -38,6 +38,7 @@ from OriginAgent.providers.openai_responses import (
     parse_response_output,
 )
 from OriginAgent.utils.attachments import attachment_placeholder_text, describe_attachment
+from OriginAgent.utils.dict_utils import deep_merge
 
 if TYPE_CHECKING:
     from OriginAgent.providers.registry import ProviderSpec
@@ -231,24 +232,6 @@ def _responses_circuit_key(
     effort = reasoning_effort.lower() if isinstance(reasoning_effort, str) else ""
     return f"{model_name}:{effort}"
 
-
-def _deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
-    """Recursively merge *override* into *base*, returning a new dict.
-
-    Nested dicts are merged key-by-key; all other types in *override*
-    replace the corresponding key in *base*.
-    """
-    merged = dict(base)
-    for key, value in override.items():
-        if (
-            key in merged
-            and isinstance(merged[key], dict)
-            and isinstance(value, dict)
-        ):
-            merged[key] = _deep_merge(merged[key], value)
-        else:
-            merged[key] = value
-    return merged
 
 
 def _strip_attachment_ref_content(messages: list[dict[str, Any]]) -> list[dict[str, Any]] | None:
@@ -617,7 +600,7 @@ class OpenAICompatProvider(LLMProvider):
         # do not clobber sibling keys already set by thinking-style logic.
         if self._extra_body:
             existing = kwargs.get("extra_body", {})
-            kwargs["extra_body"] = _deep_merge(existing, self._extra_body)
+            kwargs["extra_body"] = deep_merge(existing, self._extra_body)
 
         return kwargs
 

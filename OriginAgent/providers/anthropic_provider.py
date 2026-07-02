@@ -15,7 +15,11 @@ from typing import Any
 import json_repair
 
 from OriginAgent.providers.base import LLMProvider, LLMResponse, ToolCallRequest
-from OriginAgent.utils.attachments import AttachmentDescriptor, attachment_placeholder_text
+from OriginAgent.utils.attachments import (
+    AttachmentDescriptor,
+    attachment_placeholder_text,
+    parse_attachment,
+)
 
 _ALNUM = string.ascii_letters + string.digits
 
@@ -24,25 +28,6 @@ def _gen_tool_id() -> str:
     return "toolu_" + "".join(secrets.choice(_ALNUM) for _ in range(22))
 
 
-def _attachment_descriptor(block: dict[str, Any]) -> AttachmentDescriptor | None:
-    attachment = block.get("attachment")
-    if not isinstance(attachment, dict):
-        return None
-    path = attachment.get("path")
-    kind = attachment.get("kind")
-    if not isinstance(path, str) or not path or not isinstance(kind, str) or not kind:
-        return None
-    name = attachment.get("name")
-    size_bytes = attachment.get("size_bytes")
-    return AttachmentDescriptor(
-        path=Path(path),
-        name=name if isinstance(name, str) and name else Path(path).name,
-        mime=attachment.get("mime") if isinstance(attachment.get("mime"), str) else None,
-        kind=kind,  # type: ignore[arg-type]
-        size_bytes=size_bytes if isinstance(size_bytes, int) else 0,
-        source=attachment.get("source") if isinstance(attachment.get("source"), str) else "media",
-        metadata=attachment.get("metadata") if isinstance(attachment.get("metadata"), dict) else {},
-    )
 
 
 class AnthropicProvider(LLMProvider):
@@ -279,7 +264,7 @@ class AnthropicProvider(LLMProvider):
 
     @staticmethod
     def _convert_attachment_block(block: dict[str, Any]) -> dict[str, Any] | None:
-        descriptor = _attachment_descriptor(block)
+        descriptor = parse_attachment(block)
         if descriptor is None:
             return {"type": "text", "text": "[attachment omitted]"}
         if descriptor.kind == "document" and descriptor.mime == "application/pdf":

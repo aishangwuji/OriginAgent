@@ -15,22 +15,18 @@ from typing import Any
 import json_repair
 
 from OriginAgent.providers.base import LLMProvider, LLMResponse, ToolCallRequest
-from OriginAgent.utils.attachments import AttachmentDescriptor, attachment_placeholder_text
+from OriginAgent.utils.attachments import (
+    AttachmentDescriptor,
+    attachment_placeholder_text,
+    parse_attachment,
+)
+from OriginAgent.utils.dict_utils import deep_merge
 
 _IMAGE_DATA_URL = re.compile(r"^data:image/([a-zA-Z0-9.+-]+);base64,(.*)$", re.DOTALL)
 _TEXT_BLOCK_TYPES = {"text", "input_text", "output_text"}
 _TEMPERATURE_UNSUPPORTED_MODEL_TOKENS = ("claude-opus-4-7",)
 _ADAPTIVE_THINKING_ONLY_MODEL_TOKENS = ("claude-opus-4-7",)
 
-
-def _deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
-    merged = dict(base)
-    for key, value in override.items():
-        if key in merged and isinstance(merged[key], dict) and isinstance(value, dict):
-            merged[key] = _deep_merge(merged[key], value)
-        else:
-            merged[key] = value
-    return merged
 
 
 def _next_or_none(iterator: Iterator[dict[str, Any]]) -> dict[str, Any] | None:
@@ -40,25 +36,7 @@ def _next_or_none(iterator: Iterator[dict[str, Any]]) -> dict[str, Any] | None:
         return None
 
 
-def _attachment_descriptor(block: dict[str, Any]) -> AttachmentDescriptor | None:
-    attachment = block.get("attachment")
-    if not isinstance(attachment, dict):
-        return None
-    path = attachment.get("path")
-    kind = attachment.get("kind")
-    if not isinstance(path, str) or not path or not isinstance(kind, str) or not kind:
-        return None
-    name = attachment.get("name")
-    size_bytes = attachment.get("size_bytes")
-    return AttachmentDescriptor(
-        path=Path(path),
-        name=name if isinstance(name, str) and name else Path(path).name,
-        mime=attachment.get("mime") if isinstance(attachment.get("mime"), str) else None,
-        kind=kind,  # type: ignore[arg-type]
-        size_bytes=size_bytes if isinstance(size_bytes, int) else 0,
-        source=attachment.get("source") if isinstance(attachment.get("source"), str) else "media",
-        metadata=attachment.get("metadata") if isinstance(attachment.get("metadata"), dict) else {},
-    )
+
 
 
 class BedrockProvider(LLMProvider):
@@ -142,7 +120,7 @@ class BedrockProvider(LLMProvider):
 
     @staticmethod
     def _attachment_block(block: dict[str, Any]) -> dict[str, Any] | None:
-        descriptor = _attachment_descriptor(block)
+        descriptor = parse_attachment(block)
         if descriptor is None:
             return {"text": "[attachment omitted]"}
         try:
@@ -446,7 +424,7 @@ class BedrockProvider(LLMProvider):
             if thinking:
                 additional["thinking"] = thinking
         if self._extra_body:
-            additional = _deep_merge(additional, self._extra_body)
+            additional = deep_merge(additional, self._extra_body)
         if additional:
             kwargs["additionalModelRequestFields"] = additional
 

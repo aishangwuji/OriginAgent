@@ -60,6 +60,34 @@ class AttachmentDescriptor:
     metadata: dict[str, Any] = field(default_factory=dict)
 
 
+def parse_attachment(block: dict[str, Any]) -> AttachmentDescriptor | None:
+    """Parse an attachment dict from provider messages into AttachmentDescriptor.
+
+    Expects ``block`` to contain an ``"attachment"`` key with a dict value
+    having at least ``path`` (str) and ``kind`` (str) fields.
+
+    Returns ``None`` when *block* has no valid ``"attachment"``.
+    """
+    attachment = block.get("attachment")
+    if not isinstance(attachment, dict):
+        return None
+    path = attachment.get("path")
+    kind = attachment.get("kind")
+    if not isinstance(path, str) or not path or not isinstance(kind, str) or not kind:
+        return None
+    name = attachment.get("name")
+    size_bytes = attachment.get("size_bytes")
+    return AttachmentDescriptor(
+        path=Path(path),
+        name=name if isinstance(name, str) and name else Path(path).name,
+        mime=attachment.get("mime") if isinstance(attachment.get("mime"), str) else None,
+        kind=kind,  # type: ignore[arg-type]
+        size_bytes=size_bytes if isinstance(size_bytes, int) else 0,
+        source=attachment.get("source") if isinstance(attachment.get("source"), str) else "media",
+        metadata=attachment.get("metadata") if isinstance(attachment.get("metadata"), dict) else {},
+    )
+
+
 def _kind_from_path(path: Path, mime: str | None) -> AttachmentKind:
     if mime:
         if mime.startswith("image/"):
