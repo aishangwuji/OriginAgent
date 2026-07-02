@@ -30,7 +30,12 @@ from OriginAgent.gateway._helpers import http_error, http_json_response
 
 def _bearer_token(headers: Any) -> str | None:
     """Pull a Bearer token out of standard or query-style headers."""
-    auth = getattr(headers, "authorization", None) or getattr(headers, "Authorization", None)
+    if headers is None:
+        return None
+    if isinstance(headers, dict):
+        auth = headers.get("Authorization") or headers.get("authorization")
+    else:
+        auth = getattr(headers, "authorization", None) or getattr(headers, "Authorization", None)
     if auth and auth.lower().startswith("bearer "):
         return auth[7:].strip() or None
     return None

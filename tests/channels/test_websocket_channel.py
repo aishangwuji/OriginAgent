@@ -637,7 +637,7 @@ async def test_settings_api_returns_safe_subset_and_updates_whitelist(
     monkeypatch.setattr("OriginAgent.config.loader._current_config_path", config_path)
 
     channel = _ch(bus, port=port)
-    channel._api_tokens["tok"] = time.monotonic() + 300
+    channel._gateway_auth._api_tokens["tok"] = time.monotonic() + 300
 
     server_task = asyncio.create_task(channel.start())
     await asyncio.sleep(0.3)
@@ -854,7 +854,7 @@ async def test_settings_mcp_routes_manage_servers(
     monkeypatch.setattr("OriginAgent.config.loader._current_config_path", config_path)
 
     channel = _ch(bus, port=port)
-    channel._api_tokens["tok"] = time.monotonic() + 300
+    channel._gateway_auth._api_tokens["tok"] = time.monotonic() + 300
 
     server_task = asyncio.create_task(channel.start())
     await asyncio.sleep(0.3)
@@ -977,7 +977,7 @@ async def test_settings_mcp_routes_validate_input(
     monkeypatch.setattr("OriginAgent.config.loader._current_config_path", config_path)
 
     channel = _ch(bus, port=port)
-    channel._api_tokens["tok"] = time.monotonic() + 300
+    channel._gateway_auth._api_tokens["tok"] = time.monotonic() + 300
 
     server_task = asyncio.create_task(channel.start())
     await asyncio.sleep(0.3)
@@ -1039,7 +1039,7 @@ async def test_settings_provider_models_contract_route_validates_scope(
     monkeypatch.setattr("OriginAgent.config.loader._current_config_path", config_path)
 
     channel = _ch(bus, port=port)
-    channel._api_tokens["tok"] = time.monotonic() + 300
+    channel._gateway_auth._api_tokens["tok"] = time.monotonic() + 300
 
     server_task = asyncio.create_task(channel.start())
     await asyncio.sleep(0.3)
@@ -1196,7 +1196,7 @@ async def test_unknown_api_routes_return_json_404_not_spa(
     port = 29895
     channel = _ch(bus, port=port, static_dist_path=tmp_path)
     (tmp_path / "index.html").write_text("<!doctype html><html></html>", encoding="utf-8")
-    channel._api_tokens["tok"] = time.monotonic() + 300
+    channel._gateway_auth._api_tokens["tok"] = time.monotonic() + 300
 
     server_task = asyncio.create_task(channel.start())
     await asyncio.sleep(0.3)
@@ -1218,7 +1218,7 @@ async def test_unknown_api_routes_return_json_404_not_spa(
 async def test_commands_api_returns_slash_command_metadata(bus: MagicMock) -> None:
     port = 29892
     channel = _ch(bus, port=port)
-    channel._api_tokens["tok"] = time.monotonic() + 300
+    channel._gateway_auth._api_tokens["tok"] = time.monotonic() + 300
 
     server_task = asyncio.create_task(channel.start())
     await asyncio.sleep(0.3)
@@ -1246,7 +1246,7 @@ async def test_commands_api_returns_slash_command_metadata(bus: MagicMock) -> No
 async def test_commands_api_localizes_when_lang_query_is_present(bus: MagicMock) -> None:
     port = 29893
     channel = _ch(bus, port=port)
-    channel._api_tokens["tok"] = time.monotonic() + 300
+    channel._gateway_auth._api_tokens["tok"] = time.monotonic() + 300
 
     server_task = asyncio.create_task(channel.start())
     await asyncio.sleep(0.3)
@@ -1345,7 +1345,7 @@ async def test_token_issue_rejects_when_at_capacity(bus: MagicMock) -> None:
 
     try:
         # Fill issued tokens to capacity
-        channel._issued_tokens = {
+        channel._gateway_auth._issued_tokens = {
             f"nbwt_fill_{i}": time.monotonic() + 300 for i in range(channel._MAX_ISSUED_TOKENS)
         }
 
@@ -1727,7 +1727,7 @@ def test_handle_webui_thread_get_returns_json(tmp_path, monkeypatch) -> None:
     append_transcript_object(key, {"event": "user", "chat_id": "c1", "text": "hi"})
     bus = MagicMock()
     channel = _ch(bus)
-    channel._api_tokens["tok"] = time.monotonic() + 300.0
+    channel._gateway_auth._api_tokens["tok"] = time.monotonic() + 300.0
     enc = quote(key, safe="")
     req = Request(f"/api/sessions/{enc}/webui-thread", Headers([("Authorization", "Bearer tok")]))
     resp = channel._handle_webui_thread_get(req, enc)
@@ -1772,7 +1772,7 @@ def test_review_api_lists_details_and_applies_with_auth(
     ])
 
     channel = _ch(bus)
-    channel._api_tokens["tok"] = time.monotonic() + 300
+    channel._gateway_auth._api_tokens["tok"] = time.monotonic() + 300
     authed = Headers([("Authorization", "Bearer tok")])
 
     denied = channel._handle_reviews_list(Request("/api/reviews", Headers([])))
@@ -1960,7 +1960,7 @@ def test_webui_self_api_requires_token_and_returns_self_model(
     monkeypatch.setattr("OriginAgent.config.loader._current_config_path", config_path)
 
     channel = _ch(bus)
-    channel._api_tokens["tok"] = time.monotonic() + 300
+    channel._gateway_auth._api_tokens["tok"] = time.monotonic() + 300
     authed = Headers([("Authorization", "Bearer tok")])
 
     denied = channel._handle_self(Request("/api/self", Headers([])))
@@ -2007,7 +2007,7 @@ def test_webui_skill_lifecycle_api_requires_token_and_updates_workspace_skill(
     )
 
     channel = _ch(bus)
-    channel._api_tokens["tok"] = time.monotonic() + 300
+    channel._gateway_auth._api_tokens["tok"] = time.monotonic() + 300
     authed = Headers([("Authorization", "Bearer tok")])
 
     denied = channel._handle_skills_list(Request("/api/skills", Headers([])))
@@ -2084,7 +2084,7 @@ def test_domains_api_lists_details_and_actions_with_auth(
     (source / "CAPABILITIES.md").write_text("# Research\n", encoding="utf-8")
 
     channel = _ch(bus)
-    channel._api_tokens["tok"] = time.monotonic() + 300
+    channel._gateway_auth._api_tokens["tok"] = time.monotonic() + 300
     authed = Headers([("Authorization", "Bearer tok")])
 
     denied = channel._handle_domains_list(Request("/api/domains", Headers([])))

@@ -448,8 +448,8 @@ async def test_api_token_pool_purges_expired(bus: MagicMock, tmp_path: Path) -> 
     channel = _ch(bus, session_manager=sm, port=29908)
     # Don't start a server — directly inject and validate.
     import time as _time
-    channel._api_tokens["expired"] = _time.monotonic() - 1
-    channel._api_tokens["live"] = _time.monotonic() + 60
+    channel._gateway_auth._api_tokens["expired"] = _time.monotonic() - 1
+    channel._gateway_auth._api_tokens["live"] = _time.monotonic() + 60
 
     class _FakeReq:
         path = "/api/sessions"
