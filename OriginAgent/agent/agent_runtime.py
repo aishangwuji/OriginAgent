@@ -7,11 +7,14 @@ scratchpad and on AgentHost for infrastructure lifecycle.
 
 from __future__ import annotations
 
+import time as _time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
 
 from loguru import logger
+
+from OriginAgent.utils.tracing import set_session, span
 
 
 def _utcnow_iso() -> str:
@@ -1079,11 +1082,17 @@ class AgentRuntime:
         capability_snapshot: Any = None,
     ) -> Any | None:
         """Process a single inbound message and return the response."""
-        return await self._deps.turn_orchestrator.process_message(
-            msg, session_key=session_key, on_progress=on_progress,
-            on_stream=on_stream, on_stream_end=on_stream_end,
-            pending_queue=pending_queue, capability_snapshot=capability_snapshot,
-        )
+        sk = session_key or getattr(msg, "session_key", None) or "unknown"
+        from OriginAgent.utils.tracing import new_trace as _new_trace
+        _new_trace()
+        set_session(sk)
+        turn_id = f"{getattr(msg, 'channel', 'msg')}:{_time.time_ns()}"
+        with span("turn.process", attrs={"session_key": sk, "turn_id": turn_id}):
+            return await self._deps.turn_orchestrator.process_message(
+                msg, session_key=session_key, on_progress=on_progress,
+                on_stream=on_stream, on_stream_end=on_stream_end,
+                pending_queue=pending_queue, capability_snapshot=capability_snapshot,
+            )
 
     async def process_direct(
         self,
@@ -1097,6 +1106,9 @@ class AgentRuntime:
         on_stream_end: Any = None,
     ) -> Any | None:
         """Process a message directly and return the outbound payload."""
+        from OriginAgent.utils.tracing import new_trace as _new_trace
+        _new_trace()
+        set_session(session_key)
         await self._deps.host._connect_mcp()
         from OriginAgent.bus.events import InboundMessage
         msg = InboundMessage(channel=channel, sender_id="user", chat_id=chat_id,

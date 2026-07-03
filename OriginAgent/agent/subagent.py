@@ -14,6 +14,7 @@ from typing import Any, Callable
 from loguru import logger
 
 from OriginAgent.agent.agent_tool_setup import register_default_tools
+from OriginAgent.utils.tracing import log_event
 from OriginAgent.agent.hook import AgentHook, AgentHookContext
 from OriginAgent.agent.runner import AgentRunner, AgentRunSpec
 from OriginAgent.agent.subagent_policy import SubagentPolicy
@@ -203,6 +204,7 @@ class SubagentManager:
                         f"({current_children}/{child_limit})."
                     )
         task_id = str(uuid.uuid4())[:8]
+        log_event("subagent.spawn", agent_id=task_id, parent_session=session_key, label=(label or task[:40]))
         display_label = label or task[:30] + ("..." if len(task) > 30 else "")
         resolved_root = root_subagent_id or task_id
         origin = {
@@ -541,6 +543,7 @@ class SubagentManager:
                     self._format_partial_progress(result),
                     origin, "error", origin_message_id,
                 )
+                log_event("subagent.completed", agent_id=task_id, status="tool_error", session_key=origin.get("session_key"))
             elif result.stop_reason == "error":
                 self._record_terminal_task(
                     task_id=task_id,
@@ -559,6 +562,7 @@ class SubagentManager:
                     result.error or "Error: subagent execution failed.",
                     origin, "error", origin_message_id,
                 )
+                log_event("subagent.completed", agent_id=task_id, status="error", session_key=origin.get("session_key"))
             else:
                 final_result = result.final_content or "Task completed but no final response was generated."
                 logger.info("Subagent [{}] completed successfully", task_id)
@@ -584,6 +588,7 @@ class SubagentManager:
                     provider_summary=provider_selection.provider_summary,
                 )
                 await self._announce_result(task_id, label, task, final_result, origin, "ok", origin_message_id)
+                log_event("subagent.completed", agent_id=task_id, status="ok", session_key=origin.get("session_key"))
 
         except asyncio.CancelledError:
             status.phase = "error"
@@ -655,6 +660,7 @@ class SubagentManager:
             ))
             logger.exception("Subagent [{}] failed", task_id)
             await self._announce_result(task_id, label, task, f"Error: {e}", origin, "error", origin_message_id)
+            log_event("subagent.completed", agent_id=task_id, status="exception", session_key=origin.get("session_key"))
         finally:
             if status.phase in {"done", "error"}:
                 self._delete_live_state(task_id)

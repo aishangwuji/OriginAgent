@@ -8,6 +8,7 @@ from typing import Any, Callable
 
 from OriginAgent.agent.cognitive_events import CognitiveDecision, CognitiveEvent
 from OriginAgent.agent.identity import RuntimeContext
+from OriginAgent.utils.tracing import log_event
 
 
 @dataclass
@@ -64,6 +65,7 @@ class AgentCognitiveRuntime:
             running_subagents=running_subagents,
         )
         if not eligible:
+            log_event("cognitive.pass.skipped", session_key=session_key, reason=(reason or "ineligible"))
             event = CognitiveEvent(
                 event_id=f"skip:{session_key}:{reason or 'ineligible'}",
                 session_key=session_key,
@@ -141,6 +143,7 @@ class AgentCognitiveRuntime:
                 emitted_count += 1
                 if event.event_type == "scheduled_reminder":
                     self._deps.reminder_store.mark_fired(event.source_reference)
+                log_event("cognitive.event.emitted", session_key=session_key, event_type=event.event_type, summary=str(event.summary)[:80])
             decision = CognitiveDecision(
                 decision_id=f"decision:{event.event_id}",
                 event_id=event.event_id,

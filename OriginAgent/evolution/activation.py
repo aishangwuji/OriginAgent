@@ -25,6 +25,7 @@ from typing import Any, Callable
 from filelock import FileLock
 
 from OriginAgent.agent.domain_pack_governance import DomainPackGovernanceService
+from OriginAgent.utils.tracing import log_event
 from OriginAgent.agent.skill_lifecycle import SkillLifecycleStore
 from OriginAgent.evolution.events import EventType, EvolutionEvent
 from OriginAgent.evolution.ledger import EvolutionLedger, canonical_dump
@@ -85,6 +86,7 @@ class EvolutionModuleActivator:
         must be a non-empty string identifying the human approver.
         System-initiated activations without human approval are rejected.
         """
+        log_event("evolution.activate.requested", artifact_digest=artifact_digest, actor=actor)
         with self._locked():
             # ── Manual approval gate ─────────────────────────────────
             config = self._load_config()
@@ -93,6 +95,7 @@ class EvolutionModuleActivator:
                 if config else True
             )
             if require_approval and not (approved_by and approved_by.strip()):
+                log_event("evolution.activate.rejected", reason="manual_approval_required", artifact_digest=artifact_digest)
                 return EvolutionActivationResult(
                     ok=False,
                     status="rejected",
@@ -525,6 +528,7 @@ class EvolutionModuleActivator:
         }
         _write_json_atomic(self._activation_metadata_path(str(context["artifact_digest"])), metadata)
         appended = self.ledger.append(event)
+        log_event("evolution.activate.completed", module_id=str(context["module_id"]), module_version=str(context["module_version"]))
         return _result_from_metadata(metadata, ok=True, status="active", events=(appended,))
 
     def _load_activation_context(self, artifact_digest: str) -> dict[str, Any]:

@@ -13,6 +13,7 @@ from typing import Any
 from loguru import logger
 
 from OriginAgent.agent.hook import AgentHook, AgentHookContext
+from OriginAgent.utils.tracing import log_event
 from OriginAgent.agent.tools.ask import AskUserInterrupt
 from OriginAgent.agent.tools.registry import (
     is_policy_denial_text,
@@ -628,6 +629,13 @@ class AgentRunner:
             if drained_after_max_iterations:
                 had_injections = True
 
+        log_event(
+            "run.complete",
+            stop_reason=stop_reason,
+            tool_count=len(tools_used),
+            tokens_used=usage.get("completion_tokens", 0),
+            session_key=spec.session_key,
+        )
         return AgentRunResult(
             final_content=final_content,
             messages=messages,
@@ -669,6 +677,7 @@ class AgentRunner:
         hook: AgentHook,
         context: AgentHookContext,
     ):
+        log_event("llm.request", model=spec.model, session_key=spec.session_key)
         timeout_s: float | None = spec.llm_timeout_s
         if timeout_s is None:
             # Default to a finite timeout to avoid per-session lock starvation when an LLM
@@ -805,6 +814,7 @@ class AgentRunner:
         external_lookup_counts: dict[str, int],
         workspace_violation_counts: dict[str, int],
     ) -> tuple[list[Any], list[dict[str, str]], BaseException | None]:
+        log_event("tools.execute", tool_count=len(tool_calls), session_key=spec.session_key)
         batches = self._partition_tool_batches(spec, tool_calls)
         tool_results: list[tuple[Any, dict[str, str], BaseException | None]] = []
         for batch in batches:
