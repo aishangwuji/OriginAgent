@@ -207,8 +207,8 @@ class ChannelManager:
         """Start a channel and log any exceptions."""
         try:
             await channel.start()
-        except Exception:
-            logger.exception("Failed to start channel {}", name)
+        except Exception as exc:
+            logger.error("Failed to start channel {}: {}", name, exc)
 
     async def start_all(self) -> None:
         """Start all channels and the outbound dispatcher."""
