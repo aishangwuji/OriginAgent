@@ -157,6 +157,7 @@ class DeliberationEngine:
         auto_create_from_foresight: bool = True,
         on_intention: Any | None = None,   # Callable[[DeliberationIntention], Awaitable[None]]
         event_bus: Any | None = None,      # MessageBus for WorldStateWatcher
+        shared_space: Any = None,          # SharedSpace | None — cross-tenant shared state
     ) -> None:
         self.workspace = Path(workspace)
         self._store = store
@@ -178,6 +179,8 @@ class DeliberationEngine:
         # ── BDI-native primitives ──────────────────────────────────────
         self._intention_stack = IntentionStack(max_depth=10)
         self._plan_library = PlanLibrary(self.workspace)
+        self._shared_space = shared_space
+
         self._watcher = WorldStateWatcher(
             engine=self,
             event_bus=event_bus,
@@ -539,6 +542,12 @@ class DeliberationEngine:
             beliefs["status"] = summary.status
         except Exception:
             beliefs["status"] = "unavailable"
+
+        # Pull shared space if available (cross-tenant facts and devices)
+        if self._shared_space is not None:
+            beliefs["shared_facts"] = self._shared_space.shared_facts()
+            beliefs["shared_devices"] = self._shared_space.device_domains
+
         return beliefs
 
     # ------------------------------------------------------------------
@@ -608,6 +617,20 @@ class DeliberationEngine:
                     f"- {candidate.desire_id}: {candidate.suspend_reason[:80]} "
                     f"(suspended at {candidate.suspended_at})"
                 )
+
+        # Show shared space beliefs if available
+        shared_facts = beliefs.get("shared_facts")
+        if shared_facts:
+            lines.append("")
+            lines.append(f"## Shared Facts ({len(shared_facts)} visible to all tenants)")
+            for f in shared_facts:
+                content = f.get("content", str(f))
+                lines.append(f"- {content[:200]}")
+
+        shared_devices = beliefs.get("shared_devices")
+        if shared_devices:
+            lines.append("")
+            lines.append(f"## Shared Device Domains ({', '.join(shared_devices)})")
 
         if not desires:
             lines.append("(no active desires)")
