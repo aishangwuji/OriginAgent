@@ -259,7 +259,13 @@ class DeliberationEngine:
         # 0. Check for resumable suspended intentions
         await self._check_resumptions()
 
-        # 1. Collect active desires
+        # 1. Optionally auto-create desires from foresight records
+        # MUST run before the empty-desires check — otherwise a cold start
+        # with foresights but no desires will never create its first desire.
+        if self._auto_create_from_foresight:
+            await self._sync_foresights([])
+
+        # 2. Collect active desires
         desires = self._store.list_deliberable()
         if not desires:
             result = DeliberationResult(
@@ -274,7 +280,7 @@ class DeliberationEngine:
 
         desires_before = len(desires)
 
-        # 2. Optionally auto-create desires from foresight records
+        # 3. Re-sync foresights (now with dedup against existing desires)
         if self._auto_create_from_foresight:
             await self._sync_foresights(desires)
             desires = self._store.list_deliberable()
