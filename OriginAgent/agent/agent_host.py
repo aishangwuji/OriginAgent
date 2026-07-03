@@ -196,7 +196,7 @@ class AgentHost:
 
     async def _connect_mcp(self) -> None:
         """Connect to configured MCP servers (one-time, lazy)."""
-        if not self._mcp_servers:
+        if not self._deps.mcp_servers:
             return
         while True:
             ready: asyncio.Future[bool] | None = None
@@ -242,7 +242,7 @@ class AgentHost:
         clear_snapshot_on_exit = False
         try:
             stacks = await connect_mcp_servers(
-                self._mcp_servers,
+                self._deps.mcp_servers,
                 self._deps.tools,
                 snapshot_out=self._mcp_snapshot,
             )
