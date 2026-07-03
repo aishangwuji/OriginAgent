@@ -389,6 +389,16 @@ class AgentLoop:
         # alias _host-owned state.
         gw = getattr(effective_config, "gateway", None) if effective_config else None
         _bdi_cfg: Any = getattr(gw, "bdi", None) if gw is not None else None
+        _tenants_cfg = getattr(gw, "tenants", None) if gw is not None else None
+        _speaker_cfg = getattr(gw, "speaker_recognition", None) if gw is not None else None
+
+        from OriginAgent.identity.tenant import TenantRegistry
+        from OriginAgent.identity.resolver import IdentityResolver
+        self._tenant_registry = TenantRegistry(self.workspace, _tenants_cfg)
+        self._identity_resolver = IdentityResolver.from_config(
+            self._tenant_registry, _speaker_cfg
+        )
+
         self._host = AgentHost(AgentHostDependencies(
             # Phase 2a
             tools=self.tools,
@@ -416,6 +426,8 @@ class AgentLoop:
             # Phase 2b — Transcription
             transcription_provider_config=transcription_provider_config,
             tools_config=self.tools_config,
+            # Phase 2c — Tenant identity
+            tenants_config=_tenants_cfg,
         ))
         # Re-point _background_tasks so tests and compat code that read
         # loop._background_tasks see the host-owned set.
@@ -426,7 +438,7 @@ class AgentLoop:
         self._local_awareness_backend = self._host._local_awareness_backend
         self._last_local_awareness_summary = self._host._last_local_awareness_summary
         self._desire_store = self._host._desire_store
-        self._bdi_engine = self._host._bdi_engine
+        self._bdi_engine = self._host.bdi_engine
         self._inner_monologue_engine = self._host._inner_monologue_engine
 
         # ── AgentRuntime: stateless message router ────────────────────────
@@ -1541,7 +1553,26 @@ class AgentLoop:
         await self._get_message_dispatcher().run_forever()
 
     async def _dispatch(self, msg: InboundMessage) -> None:
-        """Compatibility shell; delegates to MessageDispatcher.dispatch_message."""
+        """Compatibility shell; delegates to MessageDispatcher.dispatch_message.
+
+        Before delegating, resolves tenant identity from channel+sender_id and
+        sets the tenant's unified session key as the session_key_override.
+        """
+        # ── Tenant resolution ──────────────────────────────────────────────
+        # hasattr guard preserves backward compat for tests that bypass
+        # __init__ via __new__ (no tenant registry configured).
+        resolver = getattr(self, "_identity_resolver", None)
+        if resolver is not None:
+            tenant = resolver.resolve(
+                channel=msg.channel,
+                sender_id=msg.sender_id,
+            )
+            from OriginAgent.agent.tenant_context import set_current_tenant
+            set_current_tenant(tenant)
+
+            if not msg.session_key_override:
+                msg.session_key_override = tenant.unified_session_key
+
         return await self._get_message_dispatcher().dispatch_message(msg)
 
     def expire_stale_sessions(self) -> int:

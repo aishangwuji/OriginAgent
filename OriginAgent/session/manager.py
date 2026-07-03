@@ -33,6 +33,23 @@ _SESSION_PREVIEW_MAX_CHARS = 120
 _CONTINUITY_RUNTIME_IDENTITY_KEY = "continuity_runtime_identity_v1"
 
 
+def tenant_workspace(workspace: Path, tenant_id: str) -> Path:
+    """Return the per-tenant workspace directory.
+
+    Workspace layout:
+        workspace/
+          sessions/           -> per-tenant sessions (legacy compat)
+          tenants/
+            {tenant_id}/
+              memory/         -> facts, BDI desires, foresights
+              sessions/       -> this tenant's history
+              bdi/
+          shared/
+            memory/           -> shared facts, shared devices
+    """
+    return workspace / "tenants" / tenant_id
+
+
 def _serialize_episodes(episodes: list["Episode"]) -> list[dict[str, Any]]:
     """Serialize episode list for JSON persistence."""
     result: list[dict[str, Any]] = []

@@ -24,6 +24,7 @@ class AgentHostDependencies:
 
     Phase 2a: tools, mcp_servers, cognitive_runtime, bus
     Phase 2b: provider, bdi, transcription dependencies
+    Phase 2c: tenant identity
     """
 
     # Phase 2a
@@ -56,6 +57,9 @@ class AgentHostDependencies:
     # Phase 2b — Transcription
     transcription_provider_config: dict | None = None
     tools_config: Any = None  # ToolsConfig
+
+    # Phase 2c — Tenant identity
+    tenants_config: Any = None  # TenantsConfig | None
 
 
 class AgentHost:
@@ -92,7 +96,8 @@ class AgentHost:
 
         # ── BDI state ───────────────────────────────────────────
         self._desire_store: Any = None
-        self._bdi_engine: Any = None
+        self._bdi_engines: dict[str, Any] = {}  # tenant_id -> DeliberationEngine
+        self._legacy_bdi_engine: Any = None  # Single-tenant fallback
         self._inner_monologue_engine: Any = None
 
         # ── Transcription ───────────────────────────────────────
@@ -110,12 +115,7 @@ class AgentHost:
         )
 
         # ── BDI initialisation (lazy) ────────────────────────────
-        if self._deps.bdi_config is not None:
-            self._init_bdi_engine()
-        else:
-            self._bdi_engine = None
-            self._desire_store = None
-            self._inner_monologue_engine = None
+        self._init_bdi()
 
     # ── Public properties (read from AgentLoop compat shims) ─────
 
@@ -336,7 +336,18 @@ class AgentHost:
 
     @property
     def bdi_engine(self) -> Any | None:
-        return self._bdi_engine
+        """Compat: return the default tenant's BDI engine for single-tenant mode.
+
+        When tenants are configured, use _bdi_engines[tenant_id] instead.
+        This property preserves backward compat for loop.py:429
+        (self._bdi_engine = self._host._bdi_engine) and all existing callers.
+        """
+        if self._bdi_engines:
+            # Multi-tenant: return first active tenant's engine
+            for engine in self._bdi_engines.values():
+                return engine
+            return None
+        return self._legacy_bdi_engine  # Single-tenant fallback
 
     @property
     def desire_store(self) -> Any | None:
@@ -345,6 +356,64 @@ class AgentHost:
     @property
     def inner_monologue_engine(self) -> Any | None:
         return self._inner_monologue_engine
+
+    def _init_bdi(self) -> None:
+        """Initialize BDI: legacy path if no tenants, per-tenant otherwise."""
+        if self._deps.bdi_config is None:
+            self._desire_store = None
+            self._legacy_bdi_engine = None
+            self._inner_monologue_engine = None
+            return
+
+        if self._deps.tenants_config and self._deps.tenants_config.tenants:
+            # Multi-tenant: engines initialized lazily per-tenant on first message
+            self._legacy_bdi_engine = None
+            self._desire_store = None
+            self._inner_monologue_engine = None
+        else:
+            # Single-tenant: use existing init path (unchanged behavior)
+            self._init_bdi_engine_legacy()
+
+    def _init_bdi_engine_legacy(self) -> None:
+        """Existing single-tenant BDI init — preserved verbatim."""
+        self._init_bdi_engine()
+
+    def _init_bdi_engine_for_tenant(self, tenant: Any) -> None:
+        """Initialize BDI for a single tenant (multi-tenant mode)."""
+        if not tenant.bdi_enabled or tenant.tenant_id in self._bdi_engines:
+            return
+
+        from OriginAgent.bdi import DesireStore, DeliberationEngine
+
+        workspace = tenant.workspace_dir
+        desire_store = DesireStore(workspace)
+        engine = DeliberationEngine(
+            workspace=workspace,
+            store=desire_store,
+            provider=self._deps.provider,
+            model=self._deps.model or "",
+            enabled=True,
+            interval_s=getattr(self._deps.bdi_config, "interval_s", 120),
+            on_intention=self._on_bdi_intention_for(tenant),
+        )
+        self._bdi_engines[tenant.tenant_id] = engine
+
+    def _on_bdi_intention_for(self, tenant: Any):
+        """Create an on_intention callback scoped to *tenant*."""
+        async def handler(intent: Any) -> None:
+            if intent.action == "send_message":
+                from OriginAgent.bus.events import OutboundMessage
+                for binding in tenant.bindings:
+                    channel = binding["channel"]
+                    msg = OutboundMessage(
+                        channel=channel,
+                        content=intent.payload.get("text", ""),
+                        chat_id=binding.get("chat_id", ""),
+                        session_key=tenant.unified_session_key,
+                    )
+                    if self._deps.bus:
+                        await self._deps.bus.publish_outbound(msg)
+        return handler
 
     async def _on_bdi_intention(self, intent: Any) -> None:
         """Handle an intention formed by the BDI engine."""
@@ -376,7 +445,7 @@ class AgentHost:
         bdi_config = self._deps.bdi_config
         if bdi_config is None:
             self._desire_store = None
-            self._bdi_engine = None
+            self._legacy_bdi_engine = None
             self._inner_monologue_engine = None
             return
 
@@ -384,7 +453,7 @@ class AgentHost:
 
         self._desire_store = DesireStore(self._deps.workspace)
 
-        self._bdi_engine = DeliberationEngine(
+        self._legacy_bdi_engine = DeliberationEngine(
             workspace=self._deps.workspace,
             store=self._desire_store,
             provider=self._deps.provider,
@@ -408,26 +477,33 @@ class AgentHost:
 
             self._inner_monologue_engine = InnerMonologueEngine(
                 workspace=self._deps.workspace,
-                deliberation_engine=self._bdi_engine,
+                deliberation_engine=self._legacy_bdi_engine,
                 substrate=None,
                 desire_store=self._desire_store,
                 enabled=_ime_enabled,
             )
-            self._bdi_engine.set_on_cycle_complete(
+            self._legacy_bdi_engine.set_on_cycle_complete(
                 self._inner_monologue_engine.on_bdi_cycle
             )
 
         logger.info("BDI: DeliberationEngine initialized via AgentHost")
 
     async def start_bdi(self) -> None:
-        """Start the BDI engine if configured."""
-        if self._bdi_engine is not None:
-            await self._bdi_engine.start()
+        """Start the BDI engine(s) if configured."""
+        if self._bdi_engines:
+            for tenant_id, engine in self._bdi_engines.items():
+                await engine.start()
+                logger.info("BDI: started engine for tenant {}", tenant_id)
+        elif self._legacy_bdi_engine is not None:
+            await self._legacy_bdi_engine.start()
 
     def stop_bdi(self) -> None:
-        """Stop the BDI engine if configured."""
-        if self._bdi_engine is not None:
-            self._bdi_engine.stop()
+        """Stop the BDI engine(s) if configured."""
+        if self._bdi_engines:
+            for engine in self._bdi_engines.values():
+                engine.stop()
+        elif self._legacy_bdi_engine is not None:
+            self._legacy_bdi_engine.stop()
 
     # ── Provider Management ──────────────────────────────────────
 
