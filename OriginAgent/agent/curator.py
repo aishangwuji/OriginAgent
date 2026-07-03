@@ -53,6 +53,7 @@ from OriginAgent.agent.workflow_artifacts import validate_workflow_artifact_dir,
 from OriginAgent.config.schema import CuratorConfig, EvolutionConfig
 from OriginAgent.evolution.events import EventType, EvolutionEvent
 from OriginAgent.evolution.ledger import EvolutionLedger
+from OriginAgent.evolution.ledger_factory import create_ledger
 
 CURATOR_ORIGIN = "curator"
 _CURATOR_SESSION_KEY = "curator:system"
@@ -796,7 +797,7 @@ class CuratorService:
         workflow_name = str(artifact.get("workflow_name") or payload.get("workflow_name") or "")
         artifact_path = str(artifact.get("path") or payload.get("subject_path") or "")
         try:
-            EvolutionLedger(self.workspace).append(EvolutionEvent.new(
+            create_ledger(self.workspace, config=self._evolution_config).append(EvolutionEvent.new(
                 EventType.UNMAPPED,
                 actor=AUTO_EVOLUTION_ORIGIN,
                 module_id=workflow_name,

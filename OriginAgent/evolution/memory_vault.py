@@ -19,6 +19,8 @@ from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
 from OriginAgent.evolution.events import EventType, EvolutionEvent
 from OriginAgent.evolution.ledger import EvolutionLedger, compute_event_hash
+from OriginAgent.evolution.ledger_factory import create_ledger
+from OriginAgent.evolution.ledger_sqlite import SqliteEvolutionLedger
 
 VAULT_SCHEMA_VERSION = "originagent.evolution.memory_vault.v1"
 PAYLOAD_SCHEMA_VERSION = "originagent.evolution.memory_vault_payload.v1"
@@ -26,6 +28,25 @@ VAULT_DIGEST_DOMAIN = b"originagent.ec9.vault.v1"
 ENCRYPTION_ALGORITHM = "AES-256-GCM"
 AES_GCM_NONCE_BYTES = 12
 VAULT_KEY_BYTES = 32
+
+def _read_ledger_jsonl(ledger: EvolutionLedger | SqliteEvolutionLedger, workspace: Path) -> bytes | None:
+    """Read ledger events as JSONL bytes, backend-agnostic."""
+    if isinstance(ledger, SqliteEvolutionLedger):
+        import sqlite3
+
+        conn = ledger._get_conn()
+        rows = conn.execute(
+            "SELECT payload_json FROM evolution_events ORDER BY rowid"
+        ).fetchall()
+        if not rows:
+            return None
+        return ("\n".join(row[0] for row in rows) + "\n").encode("utf-8")
+
+    # JSONL EvolutionLedger
+    if ledger.event_path and ledger.event_path.exists():
+        return ledger.event_path.read_bytes()
+    return None
+
 
 ALLOWED_MEMORY_FILES = (
     "SOUL.md",
@@ -85,6 +106,7 @@ def export_memory_vault(
     agent_key_hash: str,
     key_file: Path | str,
     out: Path | str,
+    config: Any | None = None,
 ) -> dict[str, Any]:
     workspace = Path(workspace)
     out = Path(out)
@@ -92,13 +114,27 @@ def export_memory_vault(
     passport_id = _normalize_bytes32(passport_id, "passport_id")
     agent_key_hash = _normalize_bytes32(agent_key_hash, "agent_key_hash")
 
-    ledger = EvolutionLedger(workspace)
+    ledger = create_ledger(workspace, config=config)
     ledger_verification = ledger.verify_chain()
     if not ledger_verification.ok:
         raise MemoryVaultError(f"source evolution ledger is broken: {ledger_verification.error}")
     source_terminal_hash = ledger_verification.terminal_event_hash or ""
 
     files = _read_allowed_files(workspace)
+
+    # Include ledger events as JSONL regardless of backend
+    ledger_jsonl = _read_ledger_jsonl(ledger, workspace)
+    if ledger_jsonl is not None and not any(f["path"] == "memory/evolution_events.jsonl" for f in files):
+        files.append(
+            {
+                "path": "memory/evolution_events.jsonl",
+                "sha256": _sha256(ledger_jsonl),
+                "size": len(ledger_jsonl),
+                "content_b64": _b64encode(ledger_jsonl),
+            }
+        )
+        files.sort(key=lambda item: str(item["path"]))
+
     if not files:
         raise MemoryVaultError("no allowed memory files exist in source workspace")
 
@@ -196,6 +232,7 @@ def import_memory_vault(
     target_workspace: Path | str,
     apply: bool = False,
     replace: bool = False,
+    config: Any | None = None,
 ) -> MemoryVaultImportResult:
     vault = read_memory_vault(vault_path)
     key = _read_vault_key(Path(key_file))
@@ -216,7 +253,7 @@ def import_memory_vault(
         )
 
     _write_payload_files(target, files)
-    event = EvolutionLedger(target).append(
+    event = create_ledger(target, config=config).append(
         EvolutionEvent.new(
             EventType.MEMORY_VAULT_IMPORTED,
             result={

@@ -16,6 +16,7 @@ from OriginAgent.evolution.activation import EvolutionActivationResult, Evolutio
 from OriginAgent.evolution.capability_gate import EvolutionCapabilityGate, EvolutionCapabilityResult
 from OriginAgent.evolution.events import EventType, EvolutionEvent
 from OriginAgent.evolution.ledger import EvolutionLedger, LedgerStatus, canonical_dump
+from OriginAgent.evolution.ledger_factory import create_ledger, migrate_if_needed
 from OriginAgent.evolution.package import (
     EvolutionPackage,
     copy_artifact,
@@ -79,9 +80,18 @@ class EvolutionModuleManager:
         config_saver: Callable[[Any], None] | None = None,
     ) -> None:
         self.workspace = Path(workspace)
-        self.ledger = ledger or EvolutionLedger(self.workspace)
         self._config_loader = config_loader
         self._config_saver = config_saver
+        self.ledger = ledger or create_ledger(
+            self.workspace,
+            config=self._config_loader() if self._config_loader else None,
+        )
+
+        # Auto-migrate from JSONL on first SQLite startup
+        migrate_if_needed(
+            self.workspace,
+            config=self._config_loader() if self._config_loader else None,
+        )
         memory_dir = self.workspace / "memory"
         self.staging_root = memory_dir / "evolution_staging"
         self._lock_path = Path(lock_path) if lock_path is not None else memory_dir / ".evolution_manager.lock"

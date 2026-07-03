@@ -10,6 +10,7 @@ from typing import Any
 from OriginAgent.evolution.activation import ACTIVATION_SCHEMA_VERSION
 from OriginAgent.evolution.events import EventType
 from OriginAgent.evolution.ledger import EvolutionLedger
+from OriginAgent.evolution.ledger_factory import create_ledger
 from OriginAgent.evolution.package import read_package_manifest
 from OriginAgent.evolution.verifier import EvolutionModuleVerifier
 from OriginAgent.security.capabilities import CapabilitySnapshot, intersect_capability_snapshots
@@ -30,12 +31,17 @@ class EvolutionCapabilityResult:
 class EvolutionCapabilityGate:
     """Build least-privilege runtime capabilities for active evolution modules."""
 
-    def __init__(self, workspace: Path, ledger: EvolutionLedger | None = None) -> None:
+    def __init__(
+        self,
+        workspace: Path,
+        ledger: EvolutionLedger | None = None,
+        config: Any | None = None,
+    ) -> None:
         self.workspace = Path(workspace)
         self.memory_dir = self.workspace / "memory"
         self.staging_root = self.memory_dir / "evolution_staging"
         self.activation_root = self.memory_dir / "evolution_activations"
-        self.ledger = ledger or EvolutionLedger(self.workspace)
+        self.ledger = ledger or create_ledger(self.workspace, config=config)
 
     def snapshot_for_artifact(
         self,
@@ -156,6 +162,16 @@ class EvolutionCapabilityGate:
         return data
 
     def _has_verified_event(self, artifact_digest: str) -> bool:
+        from OriginAgent.evolution.ledger_sqlite import SqliteEvolutionLedger
+
+        if isinstance(self.ledger, SqliteEvolutionLedger):
+            conn = self.ledger._get_conn()
+            row = conn.execute(
+                "SELECT 1 FROM evolution_events WHERE event_type = ? AND artifact_digest = ? LIMIT 1",
+                (EventType.MODULE_VERIFIED.value, artifact_digest),
+            ).fetchone()
+            return row is not None
+
         verification = self.ledger.verify_chain()
         if not verification.ok or not self.ledger.event_path.exists():
             return False

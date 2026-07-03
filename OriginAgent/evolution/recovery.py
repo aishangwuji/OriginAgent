@@ -15,6 +15,7 @@ from filelock import FileLock
 from OriginAgent.evolution.activation import ACTIVATION_SCHEMA_VERSION
 from OriginAgent.evolution.events import EventType, EvolutionEvent
 from OriginAgent.evolution.ledger import EvolutionLedger, canonical_dump
+from OriginAgent.evolution.ledger_factory import create_ledger
 from OriginAgent.evolution.telemetry import sanitize_telemetry_text
 from OriginAgent.utils.helpers import truncate_text
 
@@ -39,11 +40,12 @@ class EvolutionRecoveryManager:
         workspace: Path,
         ledger: EvolutionLedger | None = None,
         lock_path: Path | None = None,
+        config: Any | None = None,
     ) -> None:
         self.workspace = Path(workspace)
         self.memory_dir = self.workspace / "memory"
         self.activation_root = self.memory_dir / "evolution_activations"
-        self.ledger = ledger or EvolutionLedger(self.workspace)
+        self.ledger = ledger or create_ledger(self.workspace, config=config)
         self._lock_path = Path(lock_path) if lock_path is not None else self.memory_dir / ".evolution_activation.lock"
 
     def record_teardown(

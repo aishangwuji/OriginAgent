@@ -17,6 +17,7 @@ from filelock import FileLock
 from OriginAgent.agent.facts import FactRecord, FactStore, render_memory_md
 from OriginAgent.evolution.events import EventType, EvolutionEvent
 from OriginAgent.evolution.ledger import EvolutionLedger, canonical_dump
+from OriginAgent.evolution.ledger_factory import create_ledger
 
 BRANCH_SCHEMA_VERSION = "originagent.evolution.state_branch.v1"
 
@@ -68,11 +69,12 @@ class EvolutionStateBranchStore:
         ledger: EvolutionLedger | None = None,
         lock_path: Path | None = None,
         lock_factory: Callable[[], FileLock] | None = None,
+        config: Any | None = None,
     ) -> None:
         self.workspace = Path(workspace)
         self.memory_dir = self.workspace / "memory"
         self.branch_root = self.memory_dir / "evolution_branches"
-        self.ledger = ledger or EvolutionLedger(self.workspace)
+        self.ledger = ledger or create_ledger(self.workspace, config=config)
         self._lock_path = Path(lock_path) if lock_path is not None else self.memory_dir / ".lock"
         self._lock_factory = lock_factory
         self.fact_store = FactStore(
@@ -511,7 +513,26 @@ class EvolutionStateBranchStore:
         return list(merged.values())
 
     def _find_verified_event(self, artifact_digest: str) -> dict[str, str] | None:
-        """Return the matching verified event by scanning the ledger in O(n)."""
+        """Return the matching verified event by scanning the ledger."""
+
+        from OriginAgent.evolution.ledger_sqlite import SqliteEvolutionLedger
+
+        if isinstance(self.ledger, SqliteEvolutionLedger):
+            conn = self.ledger._get_conn()
+            verification = self.ledger.verify_chain()
+            if not verification.ok:
+                return None
+            row = conn.execute(
+                "SELECT event_hash FROM evolution_events "
+                "WHERE event_type = ? AND artifact_digest = ? ORDER BY rowid DESC LIMIT 1",
+                (EventType.MODULE_VERIFIED.value, artifact_digest),
+            ).fetchone()
+            if row is None:
+                return None
+            return {
+                "event_hash": str(row["event_hash"] or ""),
+                "terminal_event_hash": verification.terminal_event_hash or "",
+            }
 
         verification = self.ledger.verify_chain()
         if not verification.ok:

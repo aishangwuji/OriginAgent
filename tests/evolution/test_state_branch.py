@@ -29,10 +29,25 @@ def _write_package(root: Path, manifest_updates: dict[str, Any] | None = None) -
 
 
 def _event_rows(workspace: Path) -> list[dict]:
+    import sqlite3
+
     path = workspace / "memory" / "evolution_events.jsonl"
-    if not path.exists():
-        return []
-    return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
+    if path.exists():
+        return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
+    db_path = workspace / "memory" / "evolution_ledger.sqlite3"
+    if db_path.exists():
+        conn = sqlite3.connect(str(db_path))
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute("SELECT * FROM evolution_events ORDER BY rowid").fetchall()
+        conn.close()
+        result = []
+        for row in rows:
+            d = dict(row)
+            payload = json.loads(d.pop("payload_json", "{}"))
+            merged = {**payload, **d}
+            result.append(merged)
+        return result
+    return []
 
 
 def _verified_digest(tmp_path: Path) -> tuple[Path, str]:

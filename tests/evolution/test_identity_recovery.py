@@ -69,10 +69,25 @@ def _stage_verify_activate(
 
 
 def _event_rows(workspace: Path) -> list[dict[str, Any]]:
+    import sqlite3
+
     path = workspace / "memory" / "evolution_events.jsonl"
-    if not path.exists():
-        return []
-    return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
+    if path.exists():
+        return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
+    db_path = workspace / "memory" / "evolution_ledger.sqlite3"
+    if db_path.exists():
+        conn = sqlite3.connect(str(db_path))
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute("SELECT * FROM evolution_events ORDER BY rowid").fetchall()
+        conn.close()
+        result = []
+        for row in rows:
+            d = dict(row)
+            payload = json.loads(d.pop("payload_json", "{}"))
+            merged = {**payload, **d}
+            result.append(merged)
+        return result
+    return []
 
 
 def _activation_metadata(workspace: Path, artifact_digest: str) -> dict[str, Any]:
@@ -171,7 +186,7 @@ def test_runtime_status_wraps_ledger_status(tmp_path: Path) -> None:
     status = manager.runtime_status()
 
     assert status.chain_integrity == "ok"
-    assert status.event_path == "memory/evolution_events.jsonl"
+    assert status.event_count == 0
 
 
 def test_rollback_failure_marks_dirty_rollback(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -264,7 +279,7 @@ def test_record_teardown_failure_and_success(tmp_path: Path, monkeypatch: pytest
     assert [event.event_type for event in succeeded.events] == ["teardown_started", "teardown_succeeded"]
     assert metadata["status"] == "rolled_back"
 
-    event_text = (workspace / "memory" / "evolution_events.jsonl").read_text(encoding="utf-8")
+    event_text = "\n".join(json.dumps(row, sort_keys=True) for row in _event_rows(workspace))
     assert str(workspace.resolve()) not in event_text
     assert "token=secret" not in event_text
 

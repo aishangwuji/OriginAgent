@@ -132,4 +132,18 @@ def run_evolution_maintenance(
         }
     except Exception:
         logger.exception("Evolution schema validation failed")
+
+    # ── SQLite ledger maintenance ─────────────────────────────────
+    try:
+        from OriginAgent.evolution.ledger_factory import create_ledger
+        from OriginAgent.evolution.ledger_sqlite import SqliteEvolutionLedger
+
+        ledger = create_ledger(workspace, config=config)
+        if isinstance(ledger, SqliteEvolutionLedger):
+            conn = ledger._get_conn()
+            conn.execute("PRAGMA incremental_vacuum")
+            logger.debug("Evolution ledger SQLite VACUUM completed")
+    except Exception:
+        logger.exception("Evolution ledger VACUUM failed")
+
     return maintenance

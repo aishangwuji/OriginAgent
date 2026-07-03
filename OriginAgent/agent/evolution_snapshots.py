@@ -20,6 +20,7 @@ from OriginAgent.agent.skill_artifacts import validate_skill_artifact_dir
 from OriginAgent.agent.workflow_artifacts import validate_workflow_artifact_dir
 from OriginAgent.evolution.events import EventType, EvolutionEvent
 from OriginAgent.evolution.ledger import EvolutionLedger
+from OriginAgent.evolution.ledger_factory import create_ledger
 from OriginAgent.utils.helpers import ensure_dir, truncate_text
 
 SNAPSHOT_SCHEMA_VERSION = "originagent.evolution.snapshot.v1"
@@ -72,8 +73,9 @@ class EvolutionRollbackResult:
 class EvolutionSnapshotStore:
     """Store immutable copies of governed workflow and skill artifacts."""
 
-    def __init__(self, workspace: Path) -> None:
+    def __init__(self, workspace: Path, config: Any | None = None) -> None:
         self.workspace = Path(workspace)
+        self._config = config
         self.root = ensure_dir(self.workspace / SNAPSHOT_ROOT_RELATIVE)
         self._lock = FileLock(str(self.root / ".evolution_snapshots.lock"))
 
@@ -457,7 +459,7 @@ class EvolutionRollbackService:
         result: dict[str, Any],
     ) -> dict[str, Any]:
         try:
-            event = EvolutionLedger(self.workspace).append(EvolutionEvent.new(
+            event = create_ledger(self.workspace, config=self._config).append(EvolutionEvent.new(
                 event_type,
                 actor=actor,
                 module_id=artifact_name,

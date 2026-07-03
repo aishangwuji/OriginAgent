@@ -19,6 +19,7 @@ from OriginAgent.agent.memory import redact_memory_text
 from OriginAgent.evolution.capability_gate import EvolutionCapabilityGate
 from OriginAgent.evolution.events import EventType, EvolutionEvent
 from OriginAgent.evolution.ledger import EvolutionLedger, canonical_dump
+from OriginAgent.evolution.ledger_factory import create_ledger
 from OriginAgent.evolution.package import read_package_manifest
 from OriginAgent.evolution.verifier import EvolutionModuleVerifier, EvolutionVerificationReport
 from OriginAgent.utils.helpers import truncate_text
@@ -91,6 +92,7 @@ class EvolutionTelemetryRecorder:
         workspace: Path,
         ledger: EvolutionLedger | None = None,
         lock_path: Path | None = None,
+        config: Any | None = None,
     ) -> None:
         self.workspace = Path(workspace)
         self.memory_dir = self.workspace / "memory"
@@ -98,7 +100,7 @@ class EvolutionTelemetryRecorder:
         self.proof_root = self.memory_dir / "evolution_proofs"
         self.staging_root = self.memory_dir / "evolution_staging"
         self.branch_root = self.memory_dir / "evolution_branches"
-        self.ledger = ledger or EvolutionLedger(self.workspace)
+        self.ledger = ledger or create_ledger(self.workspace, config=config)
         self._lock_path = Path(lock_path) if lock_path is not None else self.memory_dir / ".evolution_telemetry.lock"
 
     def record(
@@ -591,6 +593,16 @@ class EvolutionTelemetryRecorder:
             return None, sanitize_telemetry_text(str(exc), self.workspace)
 
     def _latest_ledger_event(self, artifact_digest: str, event_type: EventType) -> dict[str, Any] | None:
+        from OriginAgent.evolution.ledger_sqlite import SqliteEvolutionLedger
+
+        if isinstance(self.ledger, SqliteEvolutionLedger):
+            conn = self.ledger._get_conn()
+            row = conn.execute(
+                "SELECT * FROM evolution_events WHERE event_type = ? AND artifact_digest = ? ORDER BY rowid DESC LIMIT 1",
+                (event_type.value, artifact_digest),
+            ).fetchone()
+            return dict(row) if row is not None else None
+
         if not self.ledger.event_path.exists():
             return None
         latest: dict[str, Any] | None = None

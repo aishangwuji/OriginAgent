@@ -800,6 +800,11 @@ class EvolutionConfig(Base):
     """Governed self-evolution observability settings."""
 
     mode: Literal["conservative", "curated", "exploratory", "aggressive"] = "curated"
+    ledger_backend: Literal["jsonl", "sqlite"] = Field(
+        default="sqlite",
+        validation_alias=AliasChoices("ledgerBackend", "ledger_backend"),
+        serialization_alias="ledgerBackend",
+    )
     allow_manual_override: bool = Field(
         default=False,
         validation_alias=AliasChoices("allowManualOverride", "allow_manual_override"),

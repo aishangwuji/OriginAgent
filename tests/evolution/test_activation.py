@@ -95,10 +95,28 @@ def _stage_and_verify(manager: EvolutionModuleManager, source: Path):
 
 
 def _event_rows(workspace: Path, filename: str = "evolution_events.jsonl") -> list[dict[str, Any]]:
+    import sqlite3
+
     path = workspace / "memory" / filename
-    if not path.exists():
+    if path.exists():
+        return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
+    # Only fall back to SQLite when the default event filename is requested
+    if filename != "evolution_events.jsonl":
         return []
-    return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
+    db_path = workspace / "memory" / "evolution_ledger.sqlite3"
+    if db_path.exists():
+        conn = sqlite3.connect(str(db_path))
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute("SELECT * FROM evolution_events ORDER BY rowid").fetchall()
+        conn.close()
+        result = []
+        for row in rows:
+            d = dict(row)
+            payload = json.loads(d.pop("payload_json", "{}"))
+            merged = {**payload, **d}
+            result.append(merged)
+        return result
+    return []
 
 
 def test_unverified_digest_activation_fails(tmp_path: Path) -> None:
@@ -330,7 +348,7 @@ def test_activation_events_do_not_record_absolute_paths(tmp_path: Path) -> None:
     manager.activate_module(staged.artifact_digest, approved_by="test")
     manager.rollback_module(staged.artifact_digest)
 
-    event_text = (workspace / "memory" / "evolution_events.jsonl").read_text(encoding="utf-8")
+    event_text = "\n".join(json.dumps(row, sort_keys=True) for row in _event_rows(workspace))
     assert str(source.resolve()) not in event_text
     assert str((workspace / "skills" / "calendar-helper").resolve()) not in event_text
     assert str((workspace / staged.staging_path).resolve()) not in event_text

@@ -58,10 +58,25 @@ def _write_domain_pack_package(
 
 
 def _event_rows(workspace: Path) -> list[dict]:
+    import sqlite3
+
     path = workspace / "memory" / "evolution_events.jsonl"
-    if not path.exists():
-        return []
-    return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
+    if path.exists():
+        return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
+    db_path = workspace / "memory" / "evolution_ledger.sqlite3"
+    if db_path.exists():
+        conn = sqlite3.connect(str(db_path))
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute("SELECT * FROM evolution_events ORDER BY rowid").fetchall()
+        conn.close()
+        result = []
+        for row in rows:
+            d = dict(row)
+            payload = json.loads(d.pop("payload_json", "{}"))
+            merged = {**payload, **d}
+            result.append(merged)
+        return result
+    return []
 
 
 def test_stage_valid_skill_package_writes_staging_and_events(tmp_path: Path) -> None:
@@ -107,7 +122,7 @@ def test_stage_events_do_not_record_source_absolute_path(tmp_path: Path) -> None
 
     manager.stage(source)
 
-    event_text = (workspace / "memory" / "evolution_events.jsonl").read_text(encoding="utf-8")
+    event_text = "\n".join(json.dumps(row, sort_keys=True) for row in _event_rows(workspace))
     assert str(source.resolve()) not in event_text
     assert str(workspace.resolve()) not in event_text
     assert "source-skill" in event_text
@@ -308,7 +323,7 @@ def test_verify_events_do_not_record_absolute_paths(tmp_path: Path) -> None:
 
     manager.verify(staged.artifact_digest)
 
-    event_text = (workspace / "memory" / "evolution_events.jsonl").read_text(encoding="utf-8")
+    event_text = "\n".join(json.dumps(row, sort_keys=True) for row in _event_rows(workspace))
     assert str(source.resolve()) not in event_text
     assert str((workspace / staged.staging_path).resolve()) not in event_text
     assert staged.staging_path in event_text
@@ -411,7 +426,7 @@ def test_manager_state_branch_events_do_not_record_absolute_paths(tmp_path: Path
     assert branch.ok
     manager.discard_state_branch(branch.branch_id)
 
-    event_text = (workspace / "memory" / "evolution_events.jsonl").read_text(encoding="utf-8")
+    event_text = "\n".join(json.dumps(row, sort_keys=True) for row in _event_rows(workspace))
     assert str(source.resolve()) not in event_text
     assert str((workspace / "memory" / "evolution_branches" / branch.branch_id).resolve()) not in event_text
     assert branch.branch_id in event_text

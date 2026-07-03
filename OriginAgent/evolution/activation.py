@@ -28,6 +28,7 @@ from OriginAgent.agent.domain_pack_governance import DomainPackGovernanceService
 from OriginAgent.agent.skill_lifecycle import SkillLifecycleStore
 from OriginAgent.evolution.events import EventType, EvolutionEvent
 from OriginAgent.evolution.ledger import EvolutionLedger, canonical_dump
+from OriginAgent.evolution.ledger_factory import create_ledger
 from OriginAgent.evolution.package import EVOLUTION_MANIFEST_FILENAME, read_package_manifest
 from OriginAgent.evolution.verifier import EvolutionModuleVerifier
 
@@ -65,10 +66,13 @@ class EvolutionModuleActivator:
         self.staging_root = self.memory_dir / "evolution_staging"
         self.activation_root = self.memory_dir / "evolution_activations"
         self.branch_root = self.memory_dir / "evolution_branches"
-        self.ledger = ledger or EvolutionLedger(self.workspace)
-        self._lock_path = Path(lock_path) if lock_path is not None else self.memory_dir / ".evolution_activation.lock"
         self._config_loader = config_loader
         self._config_saver = config_saver
+        self.ledger = ledger or create_ledger(
+            self.workspace,
+            config=self._config_loader() if self._config_loader else None,
+        )
+        self._lock_path = Path(lock_path) if lock_path is not None else self.memory_dir / ".evolution_activation.lock"
 
     def activate(
         self, artifact_digest: str, *,
@@ -707,6 +711,16 @@ class EvolutionModuleActivator:
         )
 
     def _has_verified_event(self, artifact_digest: str) -> bool:
+        from OriginAgent.evolution.ledger_sqlite import SqliteEvolutionLedger
+
+        if isinstance(self.ledger, SqliteEvolutionLedger):
+            conn = self.ledger._get_conn()
+            row = conn.execute(
+                "SELECT 1 FROM evolution_events WHERE event_type = ? AND artifact_digest = ? LIMIT 1",
+                (EventType.MODULE_VERIFIED.value, artifact_digest),
+            ).fetchone()
+            return row is not None
+
         verification = self.ledger.verify_chain()
         if not verification.ok or not self.ledger.event_path.exists():
             return False

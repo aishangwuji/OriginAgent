@@ -7,6 +7,7 @@ from typer.testing import CliRunner
 from OriginAgent.cli.commands import app
 from OriginAgent.evolution.events import EventType, EvolutionEvent
 from OriginAgent.evolution.ledger import EvolutionLedger
+from OriginAgent.evolution.ledger_factory import create_ledger
 from OriginAgent.evolution.memory_vault import (
     MemoryVaultError,
     export_memory_vault,
@@ -42,7 +43,7 @@ def _source_workspace(path: Path) -> Path:
         '{"private_key":"must stay out"}\n',
         encoding="utf-8",
     )
-    EvolutionLedger(path).append(EvolutionEvent.new(EventType.MODULE_PROPOSED, module_id="alpha"))
+    create_ledger(path).append(EvolutionEvent.new(EventType.MODULE_PROPOSED, module_id="alpha"))
     return path
 
 
@@ -158,11 +159,20 @@ def test_conflict_requires_replace_and_replace_preserves_other_files(tmp_path) -
 
 
 def test_broken_source_ledger_blocks_export(tmp_path) -> None:
+    import sqlite3
+
     source = _source_workspace(tmp_path / "source")
-    event_path = source / "memory" / "evolution_events.jsonl"
-    line = json.loads(event_path.read_text(encoding="utf-8").splitlines()[0])
-    line["module_id"] = "tampered"
-    event_path.write_text(json.dumps(line) + "\n", encoding="utf-8")
+    db_path = source / "memory" / "evolution_ledger.sqlite3"
+    if db_path.exists():
+        conn = sqlite3.connect(str(db_path))
+        conn.execute("UPDATE evolution_events SET event_hash = 'tampered' WHERE rowid = 1")
+        conn.commit()
+        conn.close()
+    else:
+        event_path = source / "memory" / "evolution_events.jsonl"
+        line = json.loads(event_path.read_text(encoding="utf-8").splitlines()[0])
+        line["module_id"] = "tampered"
+        event_path.write_text(json.dumps(line) + "\n", encoding="utf-8")
     key_file = tmp_path / "vault.key"
     _write_key(key_file)
 

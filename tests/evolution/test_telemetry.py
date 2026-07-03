@@ -60,10 +60,26 @@ def _stage_and_verify(
 
 
 def _event_rows(workspace: Path) -> list[dict[str, Any]]:
+    import sqlite3
+
+    # Try JSONL first (compat), then SQLite
     path = workspace / "memory" / "evolution_events.jsonl"
-    if not path.exists():
-        return []
-    return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
+    if path.exists():
+        return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
+    db_path = workspace / "memory" / "evolution_ledger.sqlite3"
+    if db_path.exists():
+        conn = sqlite3.connect(str(db_path))
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute("SELECT * FROM evolution_events ORDER BY rowid").fetchall()
+        conn.close()
+        result = []
+        for row in rows:
+            d = dict(row)
+            payload = json.loads(d.pop("payload_json", "{}"))
+            merged = {**payload, **d}
+            result.append(merged)
+        return result
+    return []
 
 
 def test_telemetry_recorded_event_is_createable_and_written(tmp_path: Path) -> None:
@@ -111,7 +127,7 @@ def test_telemetry_sanitizes_paths_url_query_secrets_and_traceback(tmp_path: Pat
     telemetry_text = (
         workspace / "memory" / "evolution_telemetry" / digest / "telemetry.jsonl"
     ).read_text(encoding="utf-8")
-    ledger_text = (workspace / "memory" / "evolution_events.jsonl").read_text(encoding="utf-8")
+    ledger_text = "\n".join(json.dumps(row, sort_keys=True) for row in _event_rows(workspace))
     serialized = telemetry_text + ledger_text
     assert str(workspace.resolve()) not in serialized
     assert str(workspace.resolve()).replace("\\", "/") not in serialized
@@ -357,13 +373,22 @@ def test_proof_bundle_requires_verified_artifact(tmp_path: Path) -> None:
 
 
 def test_proof_bundle_fails_when_ledger_chain_is_broken(tmp_path: Path) -> None:
+    import sqlite3
+
     workspace = tmp_path / "workspace"
     manager, digest = _stage_and_verify(workspace, _write_skill_package(tmp_path / "source"))
-    event_path = workspace / "memory" / "evolution_events.jsonl"
-    event_path.write_text(
-        event_path.read_text(encoding="utf-8").replace('"module_verified"', '"module_failed"', 1),
-        encoding="utf-8",
-    )
+    db_path = workspace / "memory" / "evolution_ledger.sqlite3"
+    if db_path.exists():
+        conn = sqlite3.connect(str(db_path))
+        conn.execute("UPDATE evolution_events SET event_hash = 'broken' WHERE rowid = 1")
+        conn.commit()
+        conn.close()
+    else:
+        event_path = workspace / "memory" / "evolution_events.jsonl"
+        event_path.write_text(
+            event_path.read_text(encoding="utf-8").replace('"module_verified"', '"module_failed"', 1),
+            encoding="utf-8",
+        )
 
     result = manager.build_proof_bundle(digest)
 
