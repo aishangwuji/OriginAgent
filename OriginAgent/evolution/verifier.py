@@ -58,6 +58,8 @@ class EvolutionVerificationReport:
     permissions_evaluated: dict[str, Any] | None = None
     permissions_denied: tuple[str, ...] = ()
     unknown_keys_rejected: tuple[str, ...] = ()
+    code_semantic_violations: tuple[str, ...] = ()
+    """AST-detected code-to-manifest mismatches.  Empty when clean."""
 
 
 class EvolutionModuleVerifier:
@@ -164,7 +166,11 @@ class EvolutionModuleVerifier:
         )
         _append_external_checks(manifest.external_endpoints, manifest.external_side_effects, checks)
         _append_context_budget_checks(manifest.context_budget, checks)
-        _append_python_file_check(artifact_dir, checks)
+        code_semantic_violations = _append_code_semantic_check(
+            artifact_dir,
+            manifest.permissions,
+            checks,
+        )
 
         return _report(
             checks=checks,
@@ -174,6 +180,7 @@ class EvolutionModuleVerifier:
             permissions_evaluated=permissions_evaluated,
             permissions_denied=tuple(permissions_denied),
             unknown_keys_rejected=tuple(unknown_keys),
+            code_semantic_violations=code_semantic_violations,
         )
 
     def _read_staging_metadata(
@@ -356,16 +363,41 @@ def _append_context_budget_checks(context_budget: dict[str, Any], checks: list[d
     )
 
 
-def _append_python_file_check(artifact_dir: Path, checks: list[dict[str, Any]]) -> None:
-    python_count = sum(1 for path in artifact_dir.rglob("*.py") if path.is_file())
+def _append_code_semantic_check(
+    artifact_dir: Path,
+    permissions: dict[str, Any],
+    checks: list[dict[str, Any]],
+) -> tuple[str, ...]:
+    """Scan Python files for capability violations vs declared permissions.
+
+    Replaces the old file-counting stub with actual AST-based analysis.
+    Returns the tuple of violation strings for inclusion in the report.
+    """
+    from OriginAgent.evolution.code_scanner import scan_artifact_for_violations
+
+    scan_result = scan_artifact_for_violations(artifact_dir, permissions)
+    python_count = scan_result.scanned_file_count
+
+    if scan_result.ok and python_count == 0:
+        message = "no Python files to scan"
+    elif scan_result.ok:
+        message = f"scanned {python_count} Python file(s) — no capability violations"
+    else:
+        violation_summary = "; ".join(scan_result.violations)
+        message = (
+            f"scanned {python_count} Python file(s) — "
+            f"{len(scan_result.violations)} violation(s): {violation_summary}"
+        )
+
     checks.append(
         _check(
-            "Python 文件存在性",
-            True,
-            "contains_python_files",
-            f"artifact contains {python_count} Python file(s)",
+            "代码语义-权限声明一致性",
+            scan_result.ok,
+            "permission_code_semantic_mismatch",
+            message,
         )
     )
+    return scan_result.violations
 
 
 def _append_permission_check(
@@ -390,6 +422,7 @@ def _report(
     permissions_evaluated: dict[str, Any] | None = None,
     permissions_denied: tuple[str, ...] = (),
     unknown_keys_rejected: tuple[str, ...] = (),
+    code_semantic_violations: tuple[str, ...] = (),
 ) -> EvolutionVerificationReport:
     failed = [check for check in checks if not check["ok"]]
     return EvolutionVerificationReport(
@@ -405,6 +438,7 @@ def _report(
         permissions_evaluated=permissions_evaluated or {},
         permissions_denied=permissions_denied,
         unknown_keys_rejected=unknown_keys_rejected,
+        code_semantic_violations=code_semantic_violations,
     )
 
 

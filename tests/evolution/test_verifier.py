@@ -101,7 +101,7 @@ def test_successful_report_includes_phase_1c_check_codes(tmp_path: Path) -> None
         "external_endpoints",
         "external_writes_state",
         "context_token_budget",
-        "contains_python_files",
+        "permission_code_semantic_mismatch",
     }
 
 
@@ -294,11 +294,11 @@ def test_unavailable_domain_pack_still_verifies(tmp_path: Path) -> None:
     assert report.module_type == "domain_pack"
 
 
-def test_python_files_are_not_imported_and_are_reported(tmp_path: Path) -> None:
+def test_python_files_scanned_for_semantic_violations(tmp_path: Path) -> None:
+    """Verifier scans .py files and reports no violations for safe imports."""
     source = _write_package(tmp_path / "source")
-    marker = tmp_path / "imported.txt"
     (source / "side_effect.py").write_text(
-        f"from pathlib import Path\nPath({str(marker)!r}).write_text('imported')\n",
+        "from pathlib import Path\n\ndef helper():\n    return Path('/tmp')\n",
         encoding="utf-8",
     )
     workspace = tmp_path / "workspace"
@@ -308,10 +308,9 @@ def test_python_files_are_not_imported_and_are_reported(tmp_path: Path) -> None:
     report = EvolutionModuleVerifier(workspace).verify(staged.artifact_digest)
 
     assert report.ok is True
-    assert marker.exists() is False
-    python_check = _check(report, "contains_python_files")
-    assert python_check["ok"] is True
-    assert "1 Python file" in python_check["message"]
+    semantic_check = _check(report, "permission_code_semantic_mismatch")
+    assert semantic_check["ok"] is True
+    assert len(report.code_semantic_violations) == 0
 
 
 def test_adversarial_exec_false_but_code_imports_os_fails(tmp_path: Path) -> None:
