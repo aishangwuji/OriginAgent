@@ -8,7 +8,6 @@ from dataclasses import dataclass
 from typing import Any
 
 from OriginAgent.agent.evolution import (
-    SIGNAL_KIND_SKILL,
     SIGNAL_KIND_WORKFLOW,
     OpportunitySignalCandidate,
     OpportunitySignalStore,

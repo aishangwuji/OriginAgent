@@ -5,7 +5,7 @@ Eliminates the duplicated _StreamBuf dataclass across channel implementations (A
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any, Generic, TypeVar
 
 _MessageRef = TypeVar("_MessageRef")

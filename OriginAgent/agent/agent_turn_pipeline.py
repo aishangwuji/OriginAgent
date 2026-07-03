@@ -381,7 +381,6 @@ class AgentTurnPipeline:
     async def state_build(self, ctx: TurnContext) -> TurnEvent:
         consolidator = self._deps.get_consolidator()
         tools = self._deps.get_tools()
-        context = self._deps.get_context()
         await consolidator.maybe_consolidate_by_tokens(
             ctx.session,
             replay_max_messages=self._deps.get_max_messages(),

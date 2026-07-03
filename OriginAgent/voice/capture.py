@@ -1,8 +1,6 @@
 """Audio capture with Voice Activity Detection (VAD)."""
 from __future__ import annotations
 
-import collections
-import os
 import tempfile
 import uuid
 import wave
@@ -155,12 +153,6 @@ class HotkeyListener:
             from pynput.keyboard import Key
 
             parts = [p.strip() for p in target_key_str.lower().split("+")]
-            # Simple approach: check the final key
-            try:
-                k = key.char.lower() if hasattr(key, "char") and key.char else ""
-            except Exception:
-                k = ""
-            key_str = k or str(key)
             for part in parts:
                 if part == "ctrl" and Key.ctrl not in current_keys:
                     return False

@@ -1854,7 +1854,6 @@ def domain_init(
     include_tests: bool = typer.Option(True, "--tests/--no-tests", help="Include tests/ template"),
 ) -> None:
     """Scaffold a new domain pack directory from built-in templates."""
-    from pathlib import Path
 
     from OriginAgent.agent.domain_pack_scaffold import scaffold_domain_pack
 

@@ -12,7 +12,6 @@ if typing.TYPE_CHECKING:
     from pydantic import BaseModel
 
     from OriginAgent.agent.tools.context import ToolContext
-    from OriginAgent.agent.tools.security import ToolSecurityClass
 
 # Matches :meth:`Tool._cast_value` / :meth:`Schema.validate_json_schema_value` behavior
 _JSON_TYPE_MAP: dict[str, type | tuple[type, ...]] = {

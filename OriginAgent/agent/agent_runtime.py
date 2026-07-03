@@ -506,6 +506,7 @@ class AgentRuntime:
             "open_loops": list(working.open_loops or []),
             "active_constraints": list(working.active_constraints or []),
             "pending_confirmation_refs": self._collect_pending_confirmation_refs(session),
+            "profile_ref": profile_ref,
             "updated_at": _utcnow_iso(),
         }
         session.metadata.setdefault("continuity_checkpoint_v1", checkpoint)
@@ -668,7 +669,6 @@ class AgentRuntime:
         Returns (final_content, tools_used, messages, stop_reason, had_injections).
         """
         import asyncio as _asyncio
-        from contextlib import suppress
 
         from OriginAgent.agent.agent_runtime_context import snapshot_for_trigger
         from OriginAgent.agent.error_classifier import ClassifiedError, ErrorKind, user_facing_message

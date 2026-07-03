@@ -13,18 +13,12 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:
     from collections.abc import Callable
 
-    from OriginAgent.agent.hook import AgentHook
     from OriginAgent.agent.identity import ActorResolver
-    from OriginAgent.agent.subagent import SubagentManager
-    from OriginAgent.bus.queue import MessageBus
     from OriginAgent.config.schema import (
-        AuxiliaryConfig,
         ChannelsConfig,
         Config,
         DomainPacksConfig,
-        EvolutionConfig,
         ExecToolConfig,
-        LearningConfig,
         ModelPresetConfig,
         ProviderConfig,
         ToolsConfig,
@@ -34,7 +28,6 @@ if TYPE_CHECKING:
     from OriginAgent.domain_packs import DomainPackManager
     from OriginAgent.providers.base import LLMProvider
     from OriginAgent.providers.factory import ProviderSnapshot
-    from OriginAgent.security.capabilities import CapabilitySnapshot
     from OriginAgent.session.manager import SessionManager
 
 

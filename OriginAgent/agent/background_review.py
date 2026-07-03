@@ -2062,7 +2062,7 @@ def _normalize_relation_candidates_from_payload(payload: dict[str, Any]) -> list
             "target_fact_id": str(fact_pair[1]).strip(),
             "fact_pair": [str(fact_pair[0]).strip(), str(fact_pair[1]).strip()],
             "confidence": payload.get("relation_confidence"),
-            "origin": str(record_origin := payload.get("origin") or "").strip() or DEFAULT_REVIEW_ORIGIN,
+            "origin": str(payload.get("origin") or "").strip() or DEFAULT_REVIEW_ORIGIN,
             "evidence": {
                 "proposal_fact_pair": [str(fact_pair[0]).strip(), str(fact_pair[1]).strip()],
             },

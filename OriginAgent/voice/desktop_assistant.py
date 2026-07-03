@@ -16,11 +16,8 @@ from __future__ import annotations
 
 import asyncio
 import json
-import os
 import sys
-import time
 import uuid
-from pathlib import Path
 
 from loguru import logger
 
@@ -187,10 +184,10 @@ class DesktopVoiceAssistant:
         listener_task = asyncio.create_task(self._listen_loop())
         tts_task = asyncio.create_task(self._play_tts())
 
-        print(f"\n🎤 Desktop Voice Assistant")
-        print(f"   Connected to {self._ws_url}")
-        print(f"   Chat ID: {self._chat_id}")
-        print(f"   Press Enter to speak (or type 'q' to quit)")
+        print("\n🎤 Desktop Voice Assistant")
+        print("   Connected to " + str(self._ws_url))
+        print("   Chat ID: " + str(self._chat_id))
+        print("   Press Enter to speak (or type 'q' to quit)")
         print()
 
         try:

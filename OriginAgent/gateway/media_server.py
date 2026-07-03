@@ -12,17 +12,14 @@ from __future__ import annotations
 import binascii
 import hashlib
 import hmac
-import json
 import mimetypes
-import re
 import shutil
 import uuid
 from pathlib import Path
 from typing import Any
 
-from loguru import logger
 
-from OriginAgent.config.paths import get_media_dir, get_workspace_upload_dir
+from OriginAgent.config.paths import get_media_dir
 from OriginAgent.utils.helpers import safe_filename
 from OriginAgent.gateway._helpers import (
     b64url_decode,

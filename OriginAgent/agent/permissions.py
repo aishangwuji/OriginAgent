@@ -26,9 +26,9 @@ class PermissionRequest:
     trigger: str
     permission: str
     attributes: dict[str, str] = field(default_factory=dict)
-    device_domain: InitVar[str | None] = None
+    _device_domain: InitVar[str | None] = None
 
-    def __post_init__(self, device_domain: str | None) -> None:
+    def __post_init__(self, _device_domain: str | None) -> None:
         self.actor_id = _normalize_actor_id(self.actor_id)
         self.action = str(self.action or "").strip()
         self.scope = str(self.scope or "").strip()
@@ -40,8 +40,8 @@ class PermissionRequest:
         if self.trigger not in VALID_TRIGGERS:
             raise ValueError(f"invalid trigger: {self.trigger!r}")
         self.attributes = _normalize_attributes(self.attributes)
-        if device_domain is not None:
-            self.attributes.setdefault("device_domain", _normalize_attribute_value(device_domain))
+        if _device_domain is not None:
+            self.attributes.setdefault("device_domain", _normalize_attribute_value(_device_domain))
 
     @property
     def device_domain(self) -> str:

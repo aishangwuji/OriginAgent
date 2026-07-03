@@ -12,7 +12,6 @@ from collections import Counter
 from collections.abc import Iterable
 import hashlib
 import json
-import math
 import os
 import re
 import uuid
@@ -1780,7 +1779,7 @@ class FactStore:
             content=content,
         )
         if supersedes_fact_id:
-            changed = self._deprecate_fact_in_records(
+            self._deprecate_fact_in_records(
                 records,
                 supersedes_fact_id,
                 updated_at=now,

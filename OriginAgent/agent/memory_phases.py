@@ -11,11 +11,8 @@ from typing import TYPE_CHECKING, Any
 from loguru import logger
 
 if TYPE_CHECKING:
-    from datetime import datetime
 
     from OriginAgent.agent.memory import Dream
-    from OriginAgent.agent.task_runtime import build_task_report, remember_report
-    from OriginAgent.agent.runtime_models import TaskRunReport
 
 
 # ── Public result types ──────────────────────────────────────────────────────
@@ -232,10 +229,8 @@ async def run_phase2(
     current file context, then dispatches to the AgentRunner for tool-based
     maintenance (skill creation, file updates, etc.).
     """
-    from OriginAgent.agent.runtime_models import now_iso
     from OriginAgent.agent.runner import AgentRunSpec
     from OriginAgent.agent.skills import BUILTIN_SKILLS_DIR
-    from OriginAgent.agent.task_runtime import build_task_report
     from OriginAgent.utils.prompt_templates import render_template
 
     existing_skills = dream._list_existing_skills()

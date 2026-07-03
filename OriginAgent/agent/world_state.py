@@ -1164,7 +1164,6 @@ class WorldStateManager:
             )
             if token
         }
-        scope_resolver = runtime_context.identity and runtime_context
         visible: list[SceneSnapshot] = []
         filtered_candidates: list[dict[str, Any]] = []
         selection_reasons: list[str] = []

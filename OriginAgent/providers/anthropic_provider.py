@@ -15,7 +15,6 @@ import json_repair
 
 from OriginAgent.providers.base import LLMProvider, LLMResponse, ToolCallRequest
 from OriginAgent.utils.attachments import (
-    AttachmentDescriptor,
     attachment_placeholder_text,
     parse_attachment,
 )

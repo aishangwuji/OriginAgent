@@ -18,7 +18,7 @@ from loguru import logger
 from websockets.http11 import Request as WsRequest
 from websockets.http11 import Response
 
-from OriginAgent.gateway._helpers import http_error, http_json_response, http_response
+from OriginAgent.gateway._helpers import http_error, http_json_response
 from OriginAgent.gateway.auth import GatewayAuth
 
 if TYPE_CHECKING:
@@ -716,7 +716,7 @@ class RestApi:
     # ── Settings ───────────────────────────────────────────────────────────
 
     def _settings_payload(self, *, requires_restart: bool = False) -> dict[str, Any]:
-        from OriginAgent.config.loader import get_config_path, load_config
+        from OriginAgent.config.loader import get_config_path
         from OriginAgent.providers.model_fetch_contract import get_provider_model_catalog_kind
         from OriginAgent.providers.registry import PROVIDERS, find_by_name
 
@@ -844,7 +844,6 @@ class RestApi:
         from OriginAgent.agent.confirmation import PendingConfirmationStore
         from OriginAgent.agent.domain_packs import DomainPackManager
         from OriginAgent.agent.self_model import SelfModelService
-        from OriginAgent.config.loader import load_config
 
         config = self._load_config()
         manager = DomainPackManager(
@@ -872,7 +871,6 @@ class RestApi:
 
     def _review_store(self):
         from OriginAgent.agent.background_review import ReviewProposalStore
-        from OriginAgent.config.loader import load_config
 
         return ReviewProposalStore(self._load_config().workspace_path)
 
@@ -917,7 +915,6 @@ class RestApi:
         if not self._check_api_token(request):
             return http_error(401, "Unauthorized")
         from OriginAgent.agent.background_review import ReviewProposalStore
-        from OriginAgent.config.loader import load_config
 
         proposal_id = unquote(proposal_id)
         query = _parse_query(request.path)
@@ -946,7 +943,6 @@ class RestApi:
     def _skills_loader(self):
         from OriginAgent.agent.domain_packs import DomainPackManager
         from OriginAgent.agent.skills import SkillsLoader
-        from OriginAgent.config.loader import load_config
 
         config = self._load_config()
         manager = DomainPackManager(
@@ -1044,7 +1040,6 @@ class RestApi:
     def _domain_governance_service(self):
         from OriginAgent.agent.domain_pack_governance import DomainPackGovernanceService
         from OriginAgent.agent.domain_packs import DomainPackManager
-        from OriginAgent.config.loader import load_config
 
         config = self._load_config()
         manager = DomainPackManager(
@@ -1133,7 +1128,7 @@ class RestApi:
     def _handle_settings_update(self, request: WsRequest) -> Response:
         if not self._check_api_token(request):
             return http_error(401, "Unauthorized")
-        from OriginAgent.config.loader import load_config, save_config
+        from OriginAgent.config.loader import save_config
         from OriginAgent.providers.registry import find_by_name
 
         query = _parse_query(request.path)
@@ -1171,7 +1166,7 @@ class RestApi:
     def _handle_settings_provider_update(self, request: WsRequest) -> Response:
         if not self._check_api_token(request):
             return http_error(401, "Unauthorized")
-        from OriginAgent.config.loader import load_config, save_config
+        from OriginAgent.config.loader import save_config
         from OriginAgent.providers.registry import find_by_name
 
         query = _parse_query(request.path)
@@ -1213,7 +1208,6 @@ class RestApi:
     async def _handle_settings_provider_models(self, request: WsRequest) -> Response:
         if not self._check_api_token(request):
             return http_error(401, "Unauthorized")
-        from OriginAgent.config.loader import load_config
         from OriginAgent.providers.model_fetch_contract import (
             ProviderModelFetchError,
             ProviderModelFetchHttpError,
@@ -1263,7 +1257,7 @@ class RestApi:
     def _handle_settings_web_search_update(self, request: WsRequest) -> Response:
         if not self._check_api_token(request):
             return http_error(401, "Unauthorized")
-        from OriginAgent.config.loader import load_config, save_config
+        from OriginAgent.config.loader import save_config
 
         query = _parse_query(request.path)
         provider_name = (_query_first(query, "provider") or "").strip().lower()
@@ -1320,7 +1314,7 @@ class RestApi:
     def _handle_settings_learning_background_review_update(self, request: WsRequest) -> Response:
         if not self._check_api_token(request):
             return http_error(401, "Unauthorized")
-        from OriginAgent.config.loader import load_config, save_config
+        from OriginAgent.config.loader import save_config
 
         query = _parse_query(request.path)
         enabled = _query_bool(query, "enabled")
@@ -1337,7 +1331,7 @@ class RestApi:
     def _handle_settings_runtime_update(self, request: WsRequest) -> Response:
         if not self._check_api_token(request):
             return http_error(401, "Unauthorized")
-        from OriginAgent.config.loader import load_config, save_config
+        from OriginAgent.config.loader import save_config
 
         query = _parse_query(request.path)
         raw = _query_first(query, "config")
@@ -1538,7 +1532,7 @@ class RestApi:
     def _handle_settings_local_awareness_audio_update(self, request: WsRequest) -> Response:
         if not self._check_api_token(request):
             return http_error(401, "Unauthorized")
-        from OriginAgent.config.loader import load_config, save_config
+        from OriginAgent.config.loader import save_config
 
         query = _parse_query(request.path)
         raw = _query_first(query, "config")
@@ -1659,7 +1653,7 @@ class RestApi:
             return http_error(401, "Unauthorized")
         from pydantic import ValidationError
 
-        from OriginAgent.config.loader import load_config, save_config
+        from OriginAgent.config.loader import save_config
         from OriginAgent.config.schema import MCPServerConfig
 
         query = _parse_query(request.path)
@@ -1704,7 +1698,7 @@ class RestApi:
     def _handle_settings_mcp_home_assistant_upsert(self, request: WsRequest) -> Response:
         if not self._check_api_token(request):
             return http_error(401, "Unauthorized")
-        from OriginAgent.config.loader import load_config, save_config
+        from OriginAgent.config.loader import save_config
         from OriginAgent.config.schema import MCPServerConfig
 
         query = _parse_query(request.path)
@@ -1749,7 +1743,7 @@ class RestApi:
     def _handle_settings_mcp_delete(self, request: WsRequest) -> Response:
         if not self._check_api_token(request):
             return http_error(401, "Unauthorized")
-        from OriginAgent.config.loader import load_config, save_config
+        from OriginAgent.config.loader import save_config
 
         query = _parse_query(request.path)
         name = (_query_first(query, "name") or "").strip()

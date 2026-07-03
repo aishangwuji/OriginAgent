@@ -8,7 +8,6 @@ import re
 import tempfile
 from collections import Counter
 from pathlib import Path
-from typing import Any
 
 from filelock import FileLock
 from loguru import logger

@@ -5,14 +5,10 @@ Extracted from WebSocketChannel to its own focused component.
 
 from __future__ import annotations
 
-import email.utils
-import http
-import json
 import secrets
 import time
 from typing import Any
 
-from websockets.http11 import Headers, Response
 
 
 # ── Static helpers (originally in websocket.py, extracted to break
@@ -22,7 +18,7 @@ from websockets.http11 import Headers, Response
 from hmac import compare_digest
 from urllib.parse import parse_qs, urlparse
 
-from OriginAgent.gateway._helpers import http_error, http_json_response
+from OriginAgent.gateway._helpers import http_json_response
 
 
 # ── Helper functions (originally in websocket.py) ──────────────────────

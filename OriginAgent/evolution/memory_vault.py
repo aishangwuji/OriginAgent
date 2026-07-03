@@ -8,7 +8,6 @@ import hashlib
 import json
 import os
 import re
-import tempfile
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -19,7 +18,7 @@ from cryptography.exceptions import InvalidTag
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
 from OriginAgent.evolution.events import EventType, EvolutionEvent
-from OriginAgent.evolution.ledger import EvolutionLedger, canonical_dump, compute_event_hash
+from OriginAgent.evolution.ledger import EvolutionLedger, compute_event_hash
 
 VAULT_SCHEMA_VERSION = "originagent.evolution.memory_vault.v1"
 PAYLOAD_SCHEMA_VERSION = "originagent.evolution.memory_vault_payload.v1"

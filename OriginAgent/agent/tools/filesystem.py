@@ -264,7 +264,7 @@ class _FsTool(Tool):
     def _resolve_for_read_entry(self, entry: Path) -> Path | None:
         """Resolve a discovered read-only entry without following symlinks first."""
         try:
-            st = entry.lstat()
+            entry.lstat()
         except OSError:
             return None
         if os.path.islink(entry):
@@ -285,7 +285,7 @@ class _FsTool(Tool):
         """Resolve a user-supplied read root without following a symlink root."""
         candidate = self._candidate_path(path)
         try:
-            st = candidate.lstat()
+            candidate.lstat()
         except OSError as exc:
             raise FileNotFoundError(f"Path not found: {path}") from exc
         if os.path.islink(candidate):

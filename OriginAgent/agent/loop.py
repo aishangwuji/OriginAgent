@@ -3,11 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-import dataclasses
-import json
 import os
-import time
-from contextlib import nullcontext, suppress
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Awaitable, Callable
@@ -33,15 +29,10 @@ from OriginAgent.agent.agent_tool_setup import (
     should_register_exec,
 )
 from OriginAgent.agent.action_summary import normalize_action_summary
-from OriginAgent.agent.local_awareness import LocalAwarenessBackend, normalize_local_awareness_summary
-from OriginAgent.agent.message_metadata import build_origin_metadata
-from OriginAgent.agent.active_intents import ActiveIntentConfig, ActiveIntentService
 from OriginAgent.agent.agent_cognitive_runtime import AgentCognitiveRuntime, CognitiveRuntimeDeps
 from OriginAgent.agent.agent_loop_components import build_loop_components
-from OriginAgent.agent.action_planning import UnifiedActionPlanner
 from OriginAgent.agent.agent_turn_pipeline import (
     AgentTurnPipeline,
-    StateTraceEntry,
     TURN_PIPELINE_TRANSITIONS,
     TurnContext,
     TurnEvent,
@@ -50,7 +41,6 @@ from OriginAgent.agent.agent_turn_pipeline import (
 )
 from OriginAgent.agent.services import AgentServiceContainer
 from OriginAgent.agent.turn_orchestrator import TurnOrchestrator, TurnOrchestratorDeps
-from OriginAgent.agent.error_classifier import ClassifiedError, ErrorKind, user_facing_message
 from OriginAgent.agent.message_dispatcher import MessageDispatcher, MessageDispatcherDeps
 from OriginAgent.agent.system_turn_handler import (
     SystemTurnHandler,
@@ -59,55 +49,31 @@ from OriginAgent.agent.system_turn_handler import (
 )
 from OriginAgent.domain_packs.robot.runtime.robot_actions import TypedRobotAction
 from OriginAgent.agent.agent_turn_persist import TurnPersistManager
-from OriginAgent.agent.autocompact import AutoCompact
-from OriginAgent.agent.auxiliary_llm import AuxiliaryLLMRouter
-from OriginAgent.agent.background_review import BackgroundReviewService
-from OriginAgent.agent.cognitive_audit import JsonlCognitiveAuditLedger
 from OriginAgent.agent.cognitive_events import CognitiveDecision, CognitiveEvent
-from OriginAgent.agent.cognitive_scheduler import CognitiveScheduler, CognitiveSchedulerConfig
-from OriginAgent.agent.cognitive_loop import CognitiveLoop, CognitiveLoopConfig
 from OriginAgent.agent.context import ContextBuilder
 from OriginAgent.agent.action_safety import ActionDecision
-from OriginAgent.agent.curator import CuratorService
 from OriginAgent.agent.domain_packs import DomainPackManager
-from OriginAgent.agent.hook import AgentHook, CompositeHook
+from OriginAgent.agent.hook import AgentHook
 from OriginAgent.agent.identity import ActorResolver, RuntimeContext
-from OriginAgent.agent.introspection.service import RuntimeIntrospectionService
-from OriginAgent.agent.memory import Consolidator, Dream, dream_feature_flags
-from OriginAgent.agent.memory import session_summary_text
-from OriginAgent.agent.memory_governance import MemoryGovernance
 from OriginAgent.agent.meta_cognition_coordinator import MetaCognitionCoordinator
 from OriginAgent.agent.meta_cognition_models import MetaTrigger
 from OriginAgent.agent.meta_cognition_triggers import (
     bridge_runtime_event_to_trigger,
     build_task_completion_trigger,
     build_tool_failure_trigger,
-    build_user_correction_trigger,
-    latest_assistant_message,
 )
-from OriginAgent.memory.rolling import RollingEpisodeCompaction
-from OriginAgent.agent.roaming_prewarm import RoamingPrewarmService
-from OriginAgent.agent.progress_hook import AgentProgressHook
-from OriginAgent.agent.runner import _MAX_INJECTIONS_PER_TURN, AgentRunner, AgentRunSpec
 from OriginAgent.agent.self_model import SelfModelService
-from OriginAgent.agent.reminders import ReminderStore
-from OriginAgent.agent.session_state import SessionStateHolder, SessionScopedState
-from OriginAgent.agent.working_memory import WorkingMemoryManager
+from OriginAgent.agent.session_state import SessionStateHolder
 from OriginAgent.agent.subagent import SubagentManager
-from OriginAgent.agent.world_state import WorldStateManager
-from OriginAgent.memory.pipeline import NearlineMemoryPipeline
 from OriginAgent.agent.tools.ask import (
     ask_user_options_from_messages,
     ask_user_outbound,
     ask_user_tool_result_messages,
     pending_ask_user_id,
 )
-from OriginAgent.agent.tools.audit import JsonlToolAuditSink, ToolAuditConfig
-from OriginAgent.agent.audit import AuditLogger
-from OriginAgent.agent.confirmation import ConfirmationManager, PendingConfirmationStore, classify_confirmation_reply
-from OriginAgent.agent.tools.file_state import FileStateStore, bind_file_states, reset_file_states
+from OriginAgent.agent.tools.audit import ToolAuditConfig
+from OriginAgent.agent.confirmation import classify_confirmation_reply
 from OriginAgent.agent.tools.message import MessageTool
-from OriginAgent.agent.tools.registry import ToolRegistry
 from OriginAgent.agent.tools.self import MyTool
 from OriginAgent.bus.events import InboundMessage, OutboundMessage
 from OriginAgent.bus.queue import MessageBus
@@ -116,14 +82,11 @@ from OriginAgent.config.schema import AgentDefaults
 from OriginAgent.providers.base import LLMProvider
 from OriginAgent.providers.factory import ProviderSnapshot
 from OriginAgent.security.capabilities import CapabilitySnapshot
-from OriginAgent.security.grants import CapabilityGrantStore, issue_tool_approval_grant
-from OriginAgent.session.cold_archive import SessionColdArchiveStore
-from OriginAgent.session.goal_state import goal_state_raw, goal_state_ws_blob, parse_goal_state, runner_wall_llm_timeout_s
+from OriginAgent.security.grants import issue_tool_approval_grant
+from OriginAgent.session.goal_state import goal_state_raw, goal_state_ws_blob, parse_goal_state
 from OriginAgent.session.manager import Session, SessionManager
-from OriginAgent.session.search_index import SessionSearchIndexService
-from OriginAgent.utils.document import extract_documents
 from OriginAgent.utils.image_generation_intent import image_generation_prompt
-from OriginAgent.utils.webui_titles import mark_webui_session, maybe_generate_webui_title_after_turn
+from OriginAgent.utils.webui_titles import mark_webui_session
 from OriginAgent.utils.webui_transcript import append_transcript_object, delete_webui_transcript
 
 if TYPE_CHECKING:
@@ -137,11 +100,13 @@ if TYPE_CHECKING:
         CuratorConfig,
         EvolutionConfig,
         ModelPresetConfig,
+        NearlineMemoryConfig,
         ProviderConfig,
         ToolsConfig,
         WebToolsConfig,
     )
     from OriginAgent.cron.service import CronService
+    from OriginAgent.agent.loop_options import LoopOptions
 
 
 UNIFIED_SESSION_KEY = "unified:default"
@@ -688,7 +653,7 @@ class AgentLoop:
         Extra keyword arguments are forwarded to ``AgentLoop.__init__``,
         allowing callers to override or extend derived options.
         """
-        from OriginAgent.agent.loop_options import LoopOptions, ProviderOptions
+        from OriginAgent.agent.loop_options import LoopOptions
 
         if not isinstance(options, LoopOptions):
             raise TypeError(f"expected LoopOptions, got {type(options).__name__}")

@@ -4,9 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
-import binascii
 import email.utils
-import hashlib
 import hmac
 import http
 import ipaddress
@@ -14,7 +12,6 @@ import json
 import mimetypes
 import re
 import secrets
-import shutil
 import ssl
 import socket
 import time
@@ -37,24 +34,14 @@ from OriginAgent.gateway.media_server import MediaServer
 from OriginAgent.gateway.rest_api import RestApi
 from OriginAgent.bus.queue import MessageBus
 from OriginAgent.agent.message_metadata import extract_origin_metadata, origin_label
-from OriginAgent.config.doctor import build_config_doctor_report
 from OriginAgent.channels.base import BaseChannel
-from OriginAgent.command.builtin import builtin_command_palette
-from OriginAgent.config.paths import get_media_dir, get_webui_dir, get_workspace_upload_dir
-from OriginAgent.agent.runtime_mode import build_runtime_mode_summary
+from OriginAgent.config.paths import get_workspace_upload_dir
 from OriginAgent.config.schema import Base
 from OriginAgent.session.goal_state import goal_state_ws_blob
 from OriginAgent.utils.attachments import describe_attachment
-from OriginAgent.utils.helpers import safe_filename
 from OriginAgent.utils.media_decode import (
     FileSizeExceeded,
     save_base64_data_url,
-)
-from OriginAgent.utils.subagent_channel_display import scrub_subagent_messages_for_channel
-from OriginAgent.utils.webui_thread_disk import delete_webui_thread
-from OriginAgent.utils.webui_transcript import (
-    build_webui_thread_response,
-    read_transcript_lines,
 )
 
 if TYPE_CHECKING:

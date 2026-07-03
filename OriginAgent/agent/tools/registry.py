@@ -13,8 +13,6 @@ from OriginAgent.agent.tools.audit import ToolAuditConfig, ToolAuditSink, ToolCa
 from OriginAgent.agent.tools.base import Tool
 from OriginAgent.agent.tools.security import (
     CAPABILITY_REQUIRED_CLASSES,
-    SECURITY_AUDIT_CLASSES,
-    ToolSecurityClass,
 )
 from OriginAgent.security.capabilities import CapabilitySnapshot, intersect_capability_snapshots
 from OriginAgent.security.grants import CapabilityGrant, CapabilityGrantStore

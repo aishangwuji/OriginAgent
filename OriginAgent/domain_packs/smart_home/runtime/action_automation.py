@@ -11,7 +11,7 @@ from typing import Any
 from OriginAgent.agent.action_continuity import ActionContinuityInputs, ActionProposal
 from OriginAgent.agent.action_runtime import ActionExecutionResult
 from OriginAgent.domain_packs.smart_home.runtime.device_actions import TypedDeviceAction
-from OriginAgent.domain_packs.smart_home.runtime.devices import DeviceRegistry
+from OriginAgent.domain_packs.smart_home.runtime.devices import DeviceRegistry, DeviceRecord
 
 
 @dataclass(frozen=True)

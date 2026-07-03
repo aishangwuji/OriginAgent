@@ -6,7 +6,6 @@ import asyncio
 import inspect
 import os
 import time
-from contextlib import suppress
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -887,7 +886,7 @@ class AgentRunner:
             if interrupt_raised and pending:
                 for pt in pending:
                     pt.cancel()
-                cancelled_results = await asyncio.gather(*pending, return_exceptions=True)
+                await asyncio.gather(*pending, return_exceptions=True)
                 for pt in pending:
                     tc = tasks.pop(pt)
                     result = ("", {"name": tc.name, "status": "cancelled"}, None)

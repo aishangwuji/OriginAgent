@@ -78,10 +78,8 @@ class EpisodeContextTool(Tool, ContextAware):
         for msg in history:
             role = msg["role"]
             content = msg.get("content", "") or ""
-            timestamp = ""
             if content.startswith("[Message Time: "):
                 idx = content.index("]")
-                timestamp = content[15:idx]
                 content = content[idx + 2:]  # skip "] "
             tag = role.upper()
             if content:

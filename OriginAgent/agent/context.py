@@ -1,6 +1,5 @@
 """Context builder for assembling agent prompts."""
 
-import base64
 import json
 import mimetypes
 import platform

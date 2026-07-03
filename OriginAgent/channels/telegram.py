@@ -7,7 +7,6 @@ import re
 import time
 import unicodedata
 from contextlib import suppress
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
 
@@ -27,7 +26,7 @@ from telegram.request import HTTPXRequest
 from OriginAgent.bus.events import OutboundMessage
 from OriginAgent.bus.queue import MessageBus
 from OriginAgent.channels.base import BaseChannel, ChannelNotReadyError
-from OriginAgent.channels._text_utils import strip_markdown_block, strip_markdown_inline
+from OriginAgent.channels._text_utils import strip_markdown_inline
 from OriginAgent.channels._stream_buffer import StreamBuffer
 from OriginAgent.command.builtin import build_help_text
 from OriginAgent.config.paths import get_media_dir

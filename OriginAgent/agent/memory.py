@@ -30,7 +30,6 @@ from OriginAgent.agent.facts import (
     ValidationIssue,
     canonical_key_for_fact,
     domain_id_for_fact,
-    parse_fact_proposal_response,
     render_memory_md as render_facts_memory_md,
     validate_deprecation_proposal,
     validate_fact_proposal,
@@ -41,7 +40,7 @@ from OriginAgent.agent.evolution import (
     detect_skill_opportunity_candidates,
     detect_workflow_opportunity_candidates,
 )
-from OriginAgent.agent.runner import AgentRunner, AgentRunSpec
+from OriginAgent.agent.runner import AgentRunner
 from OriginAgent.agent.runtime_models import TaskRunReport, now_iso
 from OriginAgent.agent.task_runtime import build_task_report, remember_report, report_to_status_payload
 from OriginAgent.agent.tools.registry import ToolRegistry

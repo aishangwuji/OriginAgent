@@ -21,7 +21,6 @@ from OriginAgent.agent.background_review import BackgroundReviewService
 from OriginAgent.agent.cognitive_audit import JsonlCognitiveAuditLedger
 from OriginAgent.agent.cognitive_loop import CognitiveLoop, CognitiveLoopConfig
 from OriginAgent.agent.cognitive_scheduler import CognitiveScheduler, CognitiveSchedulerConfig
-from OriginAgent.agent.context import ContextBuilder
 from OriginAgent.agent.curator import CuratorService
 from OriginAgent.agent.domain_packs import DomainPackManager
 from OriginAgent.agent.introspection.service import RuntimeIntrospectionService
@@ -40,7 +39,6 @@ from OriginAgent.agent.thought_substrate_store import ThoughtSubstrate
 from OriginAgent.agent.reminders import ReminderStore
 from OriginAgent.agent.roaming_prewarm import RoamingPrewarmService
 from OriginAgent.agent.runner import AgentRunner
-from OriginAgent.agent.subagent import SubagentManager
 from OriginAgent.agent.tools.audit import JsonlToolAuditSink, ToolAuditConfig
 from OriginAgent.agent.tools.file_state import FileStateStore
 from OriginAgent.agent.tools.registry import ToolRegistry
@@ -52,7 +50,6 @@ from OriginAgent.memory.pipeline import NearlineMemoryPipeline
 from OriginAgent.memory.rolling import RollingEpisodeCompaction
 from OriginAgent.security.grants import CapabilityGrantStore
 from OriginAgent.session.cold_archive import SessionColdArchiveStore
-from OriginAgent.session.manager import SessionManager
 from OriginAgent.session.search_index import SessionSearchIndexService
 
 

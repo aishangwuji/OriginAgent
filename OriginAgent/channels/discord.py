@@ -6,7 +6,6 @@ import asyncio
 import importlib.util
 import time
 from contextlib import suppress
-from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 
