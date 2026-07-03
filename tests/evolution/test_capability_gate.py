@@ -53,7 +53,7 @@ def _stage_verify_activate(
     assert staged.ok, staged.error
     verified = manager.verify(staged.artifact_digest)
     assert verified.ok, verified.error
-    activated = manager.activate_module(staged.artifact_digest)
+    activated = manager.activate_module(staged.artifact_digest, approved_by="test")
     assert activated.ok, activated.error
     return manager, staged.artifact_digest
 

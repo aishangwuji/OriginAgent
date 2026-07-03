@@ -70,8 +70,36 @@ class EvolutionModuleActivator:
         self._config_loader = config_loader
         self._config_saver = config_saver
 
-    def activate(self, artifact_digest: str, *, actor: str = "user") -> EvolutionActivationResult:
+    def activate(
+        self, artifact_digest: str, *,
+        actor: str = "user",
+        approved_by: str | None = None,
+    ) -> EvolutionActivationResult:
+        """Activate a verified staged module.
+
+        When require_manual_approval is True (default), ``approved_by``
+        must be a non-empty string identifying the human approver.
+        System-initiated activations without human approval are rejected.
+        """
         with self._locked():
+            # ── Manual approval gate ─────────────────────────────────
+            config = self._load_config()
+            require_approval = (
+                config.get("require_manual_approval", True)
+                if config else True
+            )
+            if require_approval and not (approved_by and approved_by.strip()):
+                return EvolutionActivationResult(
+                    ok=False,
+                    status="rejected",
+                    artifact_digest=artifact_digest,
+                    error=(
+                        "Manual approval required. Set approved_by to the "
+                        "identifier of the human who approved this activation, "
+                        "or disable require_manual_approval in evolution config."
+                    ),
+                )
+
             metadata = self._read_activation_metadata(artifact_digest)
             if metadata and metadata.get("status") == "active":
                 event = self._append_activation_event(
@@ -725,6 +753,18 @@ class EvolutionModuleActivator:
     def _locked(self) -> FileLock:
         self.memory_dir.mkdir(parents=True, exist_ok=True)
         return FileLock(str(self._lock_path))
+
+    def _load_config(self) -> dict | None:
+        """Load evolution config if a loader is available."""
+        if self._config_loader is not None:
+            try:
+                config = self._config_loader()
+                if hasattr(config, "model_dump"):
+                    return config.model_dump()
+                return config
+            except Exception:
+                return None
+        return None
 
 
 def _copy_skill_artifact(source: Path, target: Path) -> None:

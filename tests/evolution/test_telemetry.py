@@ -333,7 +333,7 @@ def test_active_artifact_proof_bundle_contains_activation_and_capability_digest(
         workspace,
         _write_skill_package(tmp_path / "source", {"permissions": {"read_files": True}}),
     )
-    activated = manager.activate_module(digest)
+    activated = manager.activate_module(digest, approved_by="test")
     assert activated.ok, activated.error
 
     result = manager.build_proof_bundle(digest)

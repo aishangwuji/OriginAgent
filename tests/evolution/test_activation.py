@@ -107,7 +107,7 @@ def test_unverified_digest_activation_fails(tmp_path: Path) -> None:
     staged = manager.stage(_write_skill_package(tmp_path / "source"))
     assert staged.ok
 
-    result = manager.activate_module(staged.artifact_digest)
+    result = manager.activate_module(staged.artifact_digest, approved_by="test")
 
     assert result.ok is False
     assert result.status == "unverified"
@@ -119,7 +119,7 @@ def test_verified_skill_activation_creates_active_skill(tmp_path: Path) -> None:
     manager = EvolutionModuleManager(workspace)
     staged = _stage_and_verify(manager, _write_skill_package(tmp_path / "source"))
 
-    result = manager.activate_module(staged.artifact_digest)
+    result = manager.activate_module(staged.artifact_digest, approved_by="test")
 
     assert result.ok is True
     assert result.status == "active"
@@ -140,7 +140,7 @@ def test_invalid_skill_module_id_fails(tmp_path: Path) -> None:
     manager = EvolutionModuleManager(workspace)
     staged = _stage_and_verify(manager, _write_skill_package(tmp_path / "source", module_id="Bad_Name"))
 
-    result = manager.activate_module(staged.artifact_digest)
+    result = manager.activate_module(staged.artifact_digest, approved_by="test")
 
     assert result.ok is False
     assert result.status == "invalid_skill_name"
@@ -155,7 +155,7 @@ def test_skill_target_conflict_does_not_overwrite(tmp_path: Path) -> None:
     manager = EvolutionModuleManager(workspace)
     staged = _stage_and_verify(manager, _write_skill_package(tmp_path / "source"))
 
-    result = manager.activate_module(staged.artifact_digest)
+    result = manager.activate_module(staged.artifact_digest, approved_by="test")
 
     assert result.ok is False
     assert result.status == "skill_exists"
@@ -167,7 +167,7 @@ def test_skill_verify_transition_failure_deletes_copied_skill(tmp_path: Path) ->
     manager = EvolutionModuleManager(workspace)
     staged = _stage_and_verify(manager, _write_skill_package(tmp_path / "source", proposed=False))
 
-    result = manager.activate_module(staged.artifact_digest)
+    result = manager.activate_module(staged.artifact_digest, approved_by="test")
 
     assert result.ok is False
     assert result.status == "skill_verify_failed"
@@ -195,7 +195,7 @@ def test_skill_activate_transition_failure_attempts_deprecate(
 
     monkeypatch.setattr("OriginAgent.evolution.activation.SkillLifecycleStore", FakeLifecycle)
 
-    result = manager.activate_module(staged.artifact_digest)
+    result = manager.activate_module(staged.artifact_digest, approved_by="test")
 
     assert result.ok is False
     assert result.status == "skill_activate_failed"
@@ -207,7 +207,7 @@ def test_skill_rollback_deprecates_without_deleting_files(tmp_path: Path) -> Non
     workspace = tmp_path / "workspace"
     manager = EvolutionModuleManager(workspace)
     staged = _stage_and_verify(manager, _write_skill_package(tmp_path / "source"))
-    assert manager.activate_module(staged.artifact_digest).ok
+    assert manager.activate_module(staged.artifact_digest, approved_by="test").ok
 
     result = manager.rollback_module(staged.artifact_digest)
 
@@ -232,7 +232,7 @@ def test_domain_pack_activation_and_rollback_use_governance(tmp_path: Path) -> N
     )
     staged = _stage_and_verify(manager, _write_domain_pack_package(tmp_path / "domain-source"))
 
-    activated = manager.activate_module(staged.artifact_digest)
+    activated = manager.activate_module(staged.artifact_digest, approved_by="test")
 
     assert activated.ok is True
     assert (workspace / "domain_packs" / "research" / "domain_pack.yaml").exists()
@@ -266,7 +266,7 @@ def test_domain_pack_existing_target_fails_without_upgrade(tmp_path: Path) -> No
     manager = EvolutionModuleManager(workspace, config_loader=config_loader, config_saver=config_saver)
     staged = _stage_and_verify(manager, _write_domain_pack_package(tmp_path / "domain-source"))
 
-    result = manager.activate_module(staged.artifact_digest)
+    result = manager.activate_module(staged.artifact_digest, approved_by="test")
 
     assert result.ok is False
     assert result.status == "domain_pack_exists"
@@ -283,7 +283,7 @@ def test_workflow_and_tool_activation_are_unsupported(tmp_path: Path) -> None:
             _write_unsupported_package(tmp_path / module_type / "source", module_type=module_type),
         )
 
-        result = manager.activate_module(staged.artifact_digest)
+        result = manager.activate_module(staged.artifact_digest, approved_by="test")
 
         assert result.ok is False
         assert result.status == "unsupported"
@@ -298,7 +298,7 @@ def test_active_state_branch_blocks_activation(tmp_path: Path) -> None:
     branch = manager.create_state_branch(staged.artifact_digest)
     assert branch.ok
 
-    result = manager.activate_module(staged.artifact_digest)
+    result = manager.activate_module(staged.artifact_digest, approved_by="test")
 
     assert result.ok is False
     assert result.status == "active_state_branch"
@@ -308,9 +308,9 @@ def test_repeated_activate_and_rollback_are_idempotent(tmp_path: Path) -> None:
     workspace = tmp_path / "workspace"
     manager = EvolutionModuleManager(workspace)
     staged = _stage_and_verify(manager, _write_skill_package(tmp_path / "source"))
-    assert manager.activate_module(staged.artifact_digest).ok
+    assert manager.activate_module(staged.artifact_digest, approved_by="test").ok
 
-    repeated_activate = manager.activate_module(staged.artifact_digest)
+    repeated_activate = manager.activate_module(staged.artifact_digest, approved_by="test")
     rolled_back = manager.rollback_module(staged.artifact_digest)
     repeated_rollback = manager.rollback_module(staged.artifact_digest)
 
@@ -327,7 +327,7 @@ def test_activation_events_do_not_record_absolute_paths(tmp_path: Path) -> None:
     manager = EvolutionModuleManager(workspace)
     staged = _stage_and_verify(manager, source)
 
-    manager.activate_module(staged.artifact_digest)
+    manager.activate_module(staged.artifact_digest, approved_by="test")
     manager.rollback_module(staged.artifact_digest)
 
     event_text = (workspace / "memory" / "evolution_events.jsonl").read_text(encoding="utf-8")

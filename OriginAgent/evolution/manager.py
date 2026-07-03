@@ -312,13 +312,14 @@ class EvolutionModuleManager:
         artifact_digest: str,
         *,
         actor: str = "user",
+        approved_by: str | None = None,
     ) -> EvolutionActivationResult:
         return EvolutionModuleActivator(
             self.workspace,
             ledger=self.ledger,
             config_loader=self._config_loader,
             config_saver=self._config_saver,
-        ).activate(artifact_digest, actor=actor)
+        ).activate(artifact_digest, actor=actor, approved_by=approved_by)
 
     def rollback_module(
         self,

@@ -805,6 +805,11 @@ class EvolutionConfig(Base):
         validation_alias=AliasChoices("allowManualOverride", "allow_manual_override"),
         serialization_alias="allowManualOverride",
     )
+    require_manual_approval: bool = Field(
+        default=True,
+        validation_alias=AliasChoices("requireManualApproval", "require_manual_approval"),
+        serialization_alias="requireManualApproval",
+    )
     dry_run: bool = Field(
         default=True,
         validation_alias=AliasChoices("dryRun", "dry_run"),
