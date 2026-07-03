@@ -1941,8 +1941,6 @@ class Dream:
 
     async def run(self) -> bool:
         """Process unprocessed history entries. Returns True if work was done."""
-        from OriginAgent.agent.skills import BUILTIN_SKILLS_DIR
-
         started_at = now_iso()
         forgetting_execution = self._execute_forgetting_maintenance(started_at=started_at)
         queue_result = self._consume_governed_fact_candidates()
@@ -2034,169 +2032,34 @@ class Dream:
             )
             facts_context = self._format_current_facts()
 
-            # Phase 1: propose structured facts.
-            phase1_prompt = (
-                f"## Conversation History\n{history_text}\n\n"
-                f"## Current Facts\n{facts_context}\n\n"
-                f"{file_context}"
+            # Phase 1: propose structured facts (extracted to memory_phases.py).
+            from OriginAgent.agent.memory_phases import run_phase1, run_phase2
+
+            phase1 = await run_phase1(
+                self,
+                started_at=started_at,
+                history_text=history_text,
+                file_context=file_context,
+                facts_context=facts_context,
+                batch=batch,
+                snapshot=snapshot,
             )
-
-            try:
-                phase1_response = await call_llm(
-                    task="dream_phase1",
-                    router=self.auxiliary_router,
-                    provider=self.provider,
-                    model=self.model,
-                    messages=[
-                        {
-                            "role": "system",
-                            "content": render_template(
-                                "agent/dream_phase1.md",
-                                strip=True,
-                                stale_threshold_days=_STALE_THRESHOLD_DAYS,
-                            ),
-                        },
-                        {"role": "user", "content": phase1_prompt},
-                    ],
-                    tools=None,
-                    tool_choice=None,
-                )
-                proposal_json = phase1_response.content or ""
-                logger.debug(
-                    "Dream Phase 1 fact proposal JSON ({} chars): {}",
-                    len(proposal_json),
-                    proposal_json[:500],
-                )
-            except Exception:
-                logger.exception("Dream Phase 1 failed")
-                self._remember_report(build_task_report(
-                    task_name="dream",
-                    status="error",
-                    phase="phase1",
-                    fault_class="external",
-                    retryable=True,
-                    reason="phase1_failed",
-                    started_at=started_at,
-                    finished_at=now_iso(),
-                ))
-                return False
-
-            try:
-                proposal_batch = parse_fact_proposal_response(proposal_json)
-            except Exception:
-                logger.exception("Dream Phase 1 returned invalid fact proposal JSON")
-                if not snapshot.restore():
-                    logger.error("Dream parse failure: snapshot restore failed")
-                    self._remember_report(build_task_report(
-                        task_name="dream",
-                        status="blocked",
-                        phase="phase1_parse",
-                        fault_class="restore",
-                        reason="phase1_parse_restore_failed",
-                        started_at=started_at,
-                        finished_at=now_iso(),
-                    ))
-                else:
-                    self._remember_report(build_task_report(
-                        task_name="dream",
-                        status="error",
-                        phase="phase1_parse",
-                        fault_class="invariant",
-                        reason="phase1_invalid_json",
-                        started_at=started_at,
-                        finished_at=now_iso(),
-                    ))
+            if not phase1.success:
                 return False
 
             decayed_fact_count = int(self._last_forgetting_execution.get("fact_confidence_decayed_count", 0) or 0)
             if decayed_fact_count:
                 logger.info("Dream decayed confidence for {} active fact(s)", decayed_fact_count)
 
-            try:
-                apply_result = self.store.apply_fact_proposals_and_rebuild_memory(
-                    proposal_batch,
-                    history_entries=batch,
-                )
-            except Exception:
-                logger.exception("Dream fact proposal apply failed")
-                if not snapshot.restore():
-                    logger.error("Dream fact apply failure: snapshot restore failed")
-                    self._remember_report(build_task_report(
-                        task_name="dream",
-                        status="blocked",
-                        phase="apply",
-                        fault_class="restore",
-                        reason="fact_apply_restore_failed",
-                        started_at=started_at,
-                        finished_at=now_iso(),
-                    ))
-                else:
-                    self._remember_report(build_task_report(
-                        task_name="dream",
-                        status="error",
-                        phase="apply",
-                        fault_class="io",
-                        reason="fact_apply_failed",
-                        started_at=started_at,
-                        finished_at=now_iso(),
-                    ))
-                return False
-            logger.info(
-                "Dream fact proposals: active={} pending={} rejected={} deprecated={}",
-                len(apply_result.accepted),
-                len(apply_result.pending),
-                len(apply_result.rejected) + len(apply_result.parse_rejected),
-                len(apply_result.deprecated),
-            )
-            post_apply_hashes = self._memory_fact_hashes()
-
             # Phase 2: Delegate to AgentRunner for non-MEMORY maintenance only.
-            existing_skills = self._list_existing_skills()
-            skills_section = ""
-            if existing_skills:
-                skills_section = (
-                    "\n\n## Existing Skills\n"
-                    + "\n".join(f"- {s}" for s in existing_skills)
-                )
-            phase2_prompt = (
-                f"## Fact Proposal Apply Result\n"
-                f"{self._format_apply_result(apply_result)}\n\n"
-                f"## Fact Proposal JSON\n{proposal_json}\n\n"
-                f"{file_context}{skills_section}"
+            phase2 = await run_phase2(
+                self,
+                started_at=started_at,
+                file_context=file_context,
+                proposal_json=phase1.proposal_json,
+                apply_result=phase1.apply_result,
             )
-
-            tools = self._tools
-            skill_creator_path = BUILTIN_SKILLS_DIR / "skill-creator" / "SKILL.md"
-            messages: list[dict[str, Any]] = [
-                {
-                    "role": "system",
-                    "content": render_template(
-                        "agent/dream_phase2.md",
-                        strip=True,
-                        skill_creator_path=str(skill_creator_path),
-                    ),
-                },
-                {"role": "user", "content": phase2_prompt},
-            ]
-
-            try:
-                result = await self._runner.run(AgentRunSpec(
-                    initial_messages=messages,
-                    tools=tools,
-                    model=self.model,
-                    max_iterations=self.max_iterations,
-                    max_tool_result_chars=self.max_tool_result_chars,
-                    fail_on_tool_error=False,
-                ))
-                logger.debug(
-                    "Dream Phase 2 complete: stop_reason={}, tool_events={}",
-                    result.stop_reason, len(result.tool_events),
-                )
-                for ev in (result.tool_events or []):
-                    logger.info("Dream tool_event: name={}, status={}, detail={}", ev.get("name"), ev.get("status"), ev.get("detail", "")[:200])
-            except Exception:
-                logger.exception("Dream Phase 2 failed")
-                result = None
+            result = phase2.result  # None on failure (already logged)
 
             # Build changelog from tool events
             changelog: list[str] = []
@@ -2205,20 +2068,20 @@ class Dream:
                     if event["status"] == "ok":
                         changelog.append(f"{event['name']}: {event['detail']}")
             fact_changes = (
-                len(apply_result.accepted)
-                + len(apply_result.pending)
-                + len(apply_result.deprecated)
+                len(phase1.apply_result.accepted)
+                + len(phase1.apply_result.pending)
+                + len(phase1.apply_result.deprecated)
                 + decayed_fact_count
             )
             if fact_changes:
-                fact_summary = self._format_apply_result(apply_result)
+                fact_summary = self._format_apply_result(phase1.apply_result)
                 if decayed_fact_count:
                     fact_summary = f"{fact_summary} decayed={decayed_fact_count}"
                 changelog.insert(0, f"facts: {fact_summary}")
 
             # Only advance cursor on successful completion to prevent silent loss
             if result and result.stop_reason == "completed":
-                if self._memory_fact_hashes() != post_apply_hashes:
+                if self._memory_fact_hashes() != phase1.post_apply_hashes:
                     if not snapshot.restore():
                         logger.error(
                             "Dream Phase 2 modified generated memory state and "
@@ -2307,7 +2170,7 @@ class Dream:
             if changelog and self.store.git.is_initialized():
                 ts = batch[-1]["timestamp"]
                 summary = f"dream: {ts}, {len(changelog)} change(s)"
-                commit_msg = f"{summary}\n\n{proposal_json.strip()}"
+                commit_msg = f"{summary}\n\n{phase1.proposal_json.strip()}"
                 sha = self.store.git.auto_commit(commit_msg)
                 if sha:
                     logger.info("Dream commit: {}", sha)
