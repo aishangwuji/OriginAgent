@@ -902,7 +902,7 @@ class WebSocketChannel(BaseChannel):
                 return self._gateway_auth.handle_token_issue_http(connection, request)
 
         # 2. REST API and /webui/bootstrap handlers (extracted to gateway/rest_api.py).
-        result = self._rest_api.dispatch(request, connection)
+        result = await self._rest_api.dispatch(request, connection)
         if result is not None:
             return result
 

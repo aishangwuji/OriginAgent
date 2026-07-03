@@ -439,7 +439,7 @@ class RestApi:
 
     # ── Routing ────────────────────────────────────────────────────────────
 
-    def dispatch(self, request: WsRequest, connection: Any = None) -> Response | None:
+    async def dispatch(self, request: WsRequest, connection: Any = None) -> Response | None:
         """Route an inbound REST API request to the appropriate handler.
 
         Returns ``None`` when the path does not match a known REST route —
@@ -480,7 +480,7 @@ class RestApi:
             return self._handle_settings_provider_update(request)
 
         if got == "/api/settings/provider/models":
-            return self._handle_settings_provider_models(request)
+            return await self._handle_settings_provider_models(request)
 
         if got == "/api/settings/web-search/update":
             return self._handle_settings_web_search_update(request)
