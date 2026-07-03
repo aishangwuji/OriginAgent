@@ -312,3 +312,74 @@ def test_python_files_are_not_imported_and_are_reported(tmp_path: Path) -> None:
     python_check = _check(report, "contains_python_files")
     assert python_check["ok"] is True
     assert "1 Python file" in python_check["message"]
+
+
+def test_adversarial_exec_false_but_code_imports_os_fails(tmp_path: Path) -> None:
+    """A module declaring exec:false but importing os must FAIL verification."""
+    source = _write_package(
+        tmp_path / "source",
+        {"permissions": {"exec": False, "read_files": True}},
+    )
+    # Add a Python file that imports os -- violates exec:false declaration
+    (source / "helpers.py").write_text(
+        "import os\nimport subprocess\n\ndef do_work():\n    pass\n",
+        encoding="utf-8",
+    )
+    workspace = tmp_path / "workspace"
+    staged = EvolutionModuleManager(workspace).stage(source)
+    assert staged.ok
+
+    report = EvolutionModuleVerifier(workspace).verify(staged.artifact_digest)
+
+    # This MUST fail -- the code imports os/subprocess but manifest denies exec
+    assert report.ok is False, (
+        f"Verifier should reject module with os import when exec:false. "
+        f"Violations: {getattr(report, 'code_semantic_violations', 'N/A')}"
+    )
+    assert "permission_code_semantic_mismatch" in {
+        check["code"] for check in report.checks
+    }
+    semantic_check = _check(report, "permission_code_semantic_mismatch")
+    assert semantic_check["ok"] is False
+
+
+def test_adversarial_write_files_false_but_code_imports_shutil_fails(tmp_path: Path) -> None:
+    """A module declaring write_files:false but importing shutil must FAIL."""
+    source = _write_package(
+        tmp_path / "source",
+        {"permissions": {"write_files": False, "read_files": True}},
+    )
+    (source / "file_ops.py").write_text(
+        "import shutil\nimport pathlib\n\ndef backup():\n    pass\n",
+        encoding="utf-8",
+    )
+    workspace = tmp_path / "workspace"
+    staged = EvolutionModuleManager(workspace).stage(source)
+    assert staged.ok
+
+    report = EvolutionModuleVerifier(workspace).verify(staged.artifact_digest)
+
+    assert report.ok is False
+    semantic_check = _check(report, "permission_code_semantic_mismatch")
+    assert semantic_check["ok"] is False
+
+
+def test_clean_module_with_no_dangerous_imports_passes_semantic_check(tmp_path: Path) -> None:
+    """A module with no dangerous imports and correct manifest must pass."""
+    source = _write_package(
+        tmp_path / "source",
+        {"permissions": {"read_files": True}},
+    )
+    (source / "clean_helpers.py").write_text(
+        "from pathlib import Path\nfrom typing import Any\n\ndef read_config(p: Path) -> dict[str, Any]:\n    return {}\n",
+        encoding="utf-8",
+    )
+    workspace = tmp_path / "workspace"
+    staged = EvolutionModuleManager(workspace).stage(source)
+    assert staged.ok
+
+    report = EvolutionModuleVerifier(workspace).verify(staged.artifact_digest)
+
+    assert report.ok is True
+    semantic_check = _check(report, "permission_code_semantic_mismatch")
+    assert semantic_check["ok"] is True
