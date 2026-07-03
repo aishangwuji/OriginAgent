@@ -1572,6 +1572,39 @@ class BDIConfig(Base):
     )
 
 
+class TenantChannelBinding(Base):
+    """Map a channel+sender pair to a tenant."""
+    channel: str                                    # "telegram", "websocket", "cli"
+    sender_id: str                                  # raw sender from channel
+    label: str = ""                                 # "爸爸的手机", "姐姐的手表"
+
+
+class TenantConfig(Base):
+    """A person in the household."""
+    tenant_id: str                                  # "dad", "mom", "sister"
+    display_name: str = ""                          # "爸爸", "妈妈", "姐姐"
+    bindings: list[TenantChannelBinding] = Field(default_factory=list)
+    bdi_enabled: bool = True
+    permissions: dict[str, bool] = Field(default_factory=lambda: {
+        "exec": False, "write_files": False, "device_control": True,
+    })
+
+
+class TenantsConfig(Base):
+    """All tenants known to this OriginAgent instance."""
+    tenants: list[TenantConfig] = Field(default_factory=list)
+    default_tenant_id: str = ""                     # fallback for unmatched senders
+    guest_tenant_enabled: bool = True               # unmatched → "guest" tenant?
+
+
+class SpeakerRecognitionConfig(Base):
+    """Reserved interface for speaker recognition (voice/face)."""
+    enabled: bool = False
+    plugin: str = ""                                # fully qualified Python class path
+    config: dict[str, Any] = Field(default_factory=dict)
+    confidence_threshold: float = 0.7
+
+
 class ApiConfig(Base):
     """OpenAI-compatible API server configuration."""
 
@@ -1587,6 +1620,10 @@ class GatewayConfig(Base):
     port: int = 18790
     heartbeat: HeartbeatConfig = Field(default_factory=HeartbeatConfig)
     bdi: BDIConfig = Field(default_factory=BDIConfig)
+    tenants: TenantsConfig = Field(default_factory=TenantsConfig)
+    speaker_recognition: SpeakerRecognitionConfig = Field(
+        default_factory=SpeakerRecognitionConfig
+    )
     tiered_router: TieredRouterConfig = Field(default_factory=TieredRouterConfig)
 
 
