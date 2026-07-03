@@ -428,7 +428,7 @@ class CronService:
     async def _execute_job(self, job: CronJob) -> None:
         """Execute a single job."""
         start_ms = _now_ms()
-        logger.info("Cron: executing job '{}' ({})", job.name, job.id)
+        logger.debug("Cron: executing job '{}' ({})", job.name, job.id)
 
         try:
             if self.on_job:
@@ -436,7 +436,7 @@ class CronService:
 
             job.state.last_status = "ok"
             job.state.last_error = None
-            logger.info("Cron: job '{}' completed", job.name)
+            logger.debug("Cron: job '{}' completed", job.name)
 
         except Exception as e:
             job.state.last_status = "error"
