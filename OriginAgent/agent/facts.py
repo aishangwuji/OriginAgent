@@ -24,6 +24,8 @@ from typing import Any, Callable
 from filelock import FileLock
 from loguru import logger
 
+from OriginAgent.storage.jsonl_migration import AppendOnlyMigrator
+from OriginAgent.storage.sqlite_helpers import connect as sqlite_connect, ensure_schema
 from OriginAgent.utils.helpers import ensure_dir
 
 
@@ -621,6 +623,94 @@ class FactEventStore:
                     except (json.JSONDecodeError, ValueError, TypeError):
                         logger.warning("Skipping invalid fact event line in {}", self.path)
         return records
+
+
+class FactEventStoreSqlite(AppendOnlyMigrator):
+    """SQLite-backed fact event store.
+
+    Migrates from OriginAgent's JSONL audit trail into a local SQLite database
+    for faster querying and built-in deduplication via INSERT OR IGNORE.
+    """
+
+    def __init__(self, workspace: Path, db_path: Path | None = None) -> None:
+        memory_dir = workspace / "memory"
+        super().__init__(
+            workspace=workspace,
+            db_path=db_path or memory_dir / "fact_events.sqlite3",
+            jsonl_path=memory_dir / "audit" / "fact_events.jsonl",
+        )
+
+    def table_ddl(self) -> str:
+        return """
+            CREATE TABLE IF NOT EXISTS fact_events (
+                event_id TEXT PRIMARY KEY,
+                fact_id TEXT NOT NULL,
+                event_type TEXT NOT NULL,
+                actor TEXT NOT NULL DEFAULT '',
+                payload_json TEXT NOT NULL DEFAULT '{}',
+                created_at TEXT NOT NULL DEFAULT (datetime('now'))
+            ) STRICT;
+            CREATE INDEX IF NOT EXISTS idx_fact_events_fact
+                ON fact_events(fact_id, created_at);
+        """
+
+    def validate_line(self, line: dict[str, Any]) -> bool:
+        return bool(line.get("event_id") and line.get("fact_id"))
+
+    def insert_row(self, conn, line: dict[str, Any]) -> None:
+        conn.execute(
+            """INSERT OR IGNORE INTO fact_events
+               (event_id, fact_id, event_type, actor, payload_json, created_at)
+               VALUES (?, ?, ?, ?, ?, ?)""",
+            (
+                line.get("event_id", ""),
+                line.get("fact_id", ""),
+                line.get("event_type", ""),
+                line.get("actor", ""),
+                json.dumps(line, ensure_ascii=False),
+                line.get("created_at", ""),
+            ),
+        )
+
+    # ------------------------------------------------------------------
+    # Schema management
+    # ------------------------------------------------------------------
+
+    def _ensure_schema(self) -> None:
+        """Create the fact_events table if it does not exist."""
+        conn = sqlite_connect(self.db_path)
+        try:
+            ensure_schema(conn, self.table_ddl())
+        finally:
+            conn.close()
+
+    # ------------------------------------------------------------------
+    # Query helpers
+    # ------------------------------------------------------------------
+
+    def events_for_fact(self, fact_id: str, *, limit: int = 100) -> list[dict[str, Any]]:
+        """Return events for *fact_id* ordered newest-first."""
+        self._ensure_schema()
+        conn = sqlite_connect(self.db_path)
+        try:
+            rows = conn.execute(
+                "SELECT payload_json FROM fact_events WHERE fact_id = ? "
+                "ORDER BY created_at DESC LIMIT ?",
+                (fact_id, limit),
+            ).fetchall()
+            return [json.loads(row[0]) for row in rows]
+        finally:
+            conn.close()
+
+    def count_events(self) -> int:
+        """Return the total number of events in the store."""
+        self._ensure_schema()
+        conn = sqlite_connect(self.db_path)
+        try:
+            row = conn.execute("SELECT COUNT(*) FROM fact_events").fetchone()
+            return row[0] if row else 0
+        finally:
+            conn.close()
 
 
 class FactSemanticResolver:
