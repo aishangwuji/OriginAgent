@@ -27,18 +27,115 @@ def _trim_text(value: Any, *, max_chars: int = 240) -> str:
     return text
 
 
+# ── Sub-container dataclasses (Strangler Fig — incremental migration) ──
+# Each group bundles related services with real type annotations.
+# As call sites are migrated, Any → concrete type.
+
+
+@dataclass(frozen=True)
+class CoreServices:
+    """Primary runtime services."""
+    tools: Any = None  # TODO(migrate): ToolRegistry
+    provider: Any = None  # TODO(migrate): LLMProvider
+    runner: Any = None  # TODO(migrate): AgentRunner
+    context: Any = None  # TODO(migrate): ContextBuilder
+    sessions: Any = None  # TODO(migrate): SessionManager
+    bus: Any = None  # TODO(migrate): MessageBus
+    workspace: Any = None  # TODO(migrate): Path
+    subagents: Any = None
+
+
+@dataclass(frozen=True)
+class MetaCognitionServices:
+    """Meta-cognition runtime components."""
+    runtime: Any = None  # TODO(migrate): MetaCognitionRuntime
+    reflector: Any = None  # TODO(migrate): MetaCognitionReflector
+    regulator: Any = None  # TODO(migrate): MetaCognitionRegulator
+    config: Any = None
+    coordinator: Any = None  # TODO(migrate): MetaCognitionCoordinator
+    perception_fusion: Any = None
+
+
+@dataclass(frozen=True)
+class MemoryServices:
+    """Session memory and persistence."""
+    working_memory: Any = None
+    nearline_memory: Any = None
+    session_search_index: Any = None
+    consolidator: Any = None
+    dream: Any = None
+    session_cold_archive: Any = None
+    rolling_episode_compaction: Any = None
+    memory_governance: Any = None
+    auto_compact: Any = None
+    state_holder: Any = None  # TODO(migrate): SessionStateHolder
+
+
+@dataclass(frozen=True)
+class BackgroundServices:
+    """Background processing services."""
+    background_review: Any = None
+    curator: Any = None
+    cognitive_loop: Any = None
+    cognitive_scheduler: Any = None
+    cognitive_audit: Any = None
+    cron_service: Any = None
+
+
+@dataclass(frozen=True)
+class StoreServices:
+    """Persistent stores."""
+    file_state_store: Any = None
+    confirmation_store: Any = None
+    confirmation_manager: Any = None
+    grant_store: Any = None
+
+
+@dataclass(frozen=True)
+class RuntimeConfig:
+    """Scalar runtime configuration (already typed)."""
+    model: str | None = None
+    max_iterations: int = 10
+    context_window_tokens: int = 0
+    context_block_limit: int = 0
+    max_tool_result_chars: int = 0
+    provider_retry_mode: str = "standard"
+    tool_hint_max_length: int | None = None
+    restrict_to_workspace: bool = False
+    unified_session: bool = False
+    runtime_profile: str = "default"
+    consolidation_ratio: float = 0.5
+    max_messages: int = 120
+
+
 @dataclass(frozen=True)
 class RuntimeDependencies:
     """Immutable dependency bundle for AgentRuntime.
 
     All dependencies are injected at construction time.  AgentRuntime
     never reaches back to AgentLoop — every method receives context
-    explicitly.  Fields are added incrementally as methods are moved.
+    explicitly.
+
+    Fields are being migrated from flat Any-typed entries into typed
+    sub-containers via Strangler Fig pattern.  During migration:
+    - New code accesses ``deps.core.tools`` instead of ``deps.tools``
+    - Old flat fields remain as compat aliases
+    - Sub-containers are populated in AgentLoop.__init__ alongside
+      flat fields (same values, two access paths)
     """
 
+    # ── New: grouped sub-containers (migration target) ──────────────────────
+    core: CoreServices = CoreServices()
+    meta: MetaCognitionServices = MetaCognitionServices()
+    memory: MemoryServices = MemoryServices()
+    background: BackgroundServices = BackgroundServices()
+    stores: StoreServices = StoreServices()
+    config: RuntimeConfig = RuntimeConfig()
+
+    # ── Existing flat fields (keep for backward compat) ────────────────────
     # Infrastructure
-    state_holder: Any  # SessionStateHolder
-    host: Any  # AgentHost
+    state_holder: Any = None  # SessionStateHolder
+    host: Any = None  # AgentHost
 
     # Core services (Task 3)
     tools: Any = None  # ToolRegistry

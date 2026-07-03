@@ -12,7 +12,16 @@ from loguru import logger
 
 from OriginAgent.agent import model_presets as preset_helpers
 from OriginAgent.agent.agent_host import AgentHost, AgentHostDependencies
-from OriginAgent.agent.agent_runtime import AgentRuntime, RuntimeDependencies
+from OriginAgent.agent.agent_runtime import (
+    AgentRuntime,
+    BackgroundServices,
+    CoreServices,
+    MemoryServices,
+    MetaCognitionServices,
+    RuntimeConfig,
+    RuntimeDependencies,
+    StoreServices,
+)
 from OriginAgent.agent.agent_runtime_context import (
     build_bus_progress_callback,
     build_retry_wait_callback,
@@ -422,6 +431,67 @@ class AgentLoop:
 
         # ── AgentRuntime: stateless message router ────────────────────────
         self._runtime = AgentRuntime(RuntimeDependencies(
+            # ── New: grouped sub-containers ────────────────────────────
+            core=CoreServices(
+                tools=self.tools,
+                provider=self.provider,
+                runner=self.runner,
+                context=self.context,
+                sessions=self.sessions,
+                bus=self.bus,
+                workspace=self.workspace,
+                subagents=self.subagents,
+            ),
+            meta=MetaCognitionServices(
+                runtime=getattr(self, "_meta_cognition_runtime", None),
+                reflector=getattr(self, "_meta_cognition_reflector", None),
+                regulator=getattr(self, "_meta_cognition_regulator", None),
+                config=getattr(self, "_meta_cognition_config", None),
+                coordinator=self._meta_coordinator,
+                perception_fusion=getattr(self, "_perception_fusion", None),
+            ),
+            memory=MemoryServices(
+                state_holder=self._state_holder,
+                working_memory=self.working_memory,
+                nearline_memory=self.nearline_memory,
+                session_search_index=self.session_search_index,
+                consolidator=self.consolidator,
+                dream=self.dream,
+                session_cold_archive=self.session_cold_archive,
+                rolling_episode_compaction=self.rolling_episode_compaction,
+                memory_governance=self.memory_governance,
+                auto_compact=self.auto_compact,
+            ),
+            background=BackgroundServices(
+                background_review=self.background_review,
+                curator=self.curator,
+                cognitive_loop=self.cognitive_loop,
+                cognitive_scheduler=self.cognitive_scheduler,
+                cognitive_audit=self._cognitive_audit,
+                cron_service=self.cron_service,
+            ),
+            stores=StoreServices(
+                file_state_store=self._file_state_store,
+                confirmation_store=self._confirmation_store,
+                confirmation_manager=self._confirmation_manager,
+                grant_store=self._grant_store,
+            ),
+            config=RuntimeConfig(
+                model=self.model,
+                max_iterations=self.max_iterations,
+                context_window_tokens=self.context_window_tokens,
+                context_block_limit=self.context_block_limit,
+                max_tool_result_chars=self.max_tool_result_chars,
+                provider_retry_mode=self.provider_retry_mode,
+                tool_hint_max_length=self.tool_hint_max_length,
+                restrict_to_workspace=self.restrict_to_workspace,
+                unified_session=self._unified_session,
+                runtime_profile=self._runtime_profile,
+                consolidation_ratio=0.5,
+                max_messages=self._max_messages,
+            ),
+
+            # ── Existing flat fields (keep ALL, unchanged) ──────────────
             state_holder=self._state_holder,
             host=self._host,
             tools=self.tools,
