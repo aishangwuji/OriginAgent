@@ -6,11 +6,11 @@ never contain raw payloads, prompts, source excerpts, or private evidence.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
 import uuid
-import hashlib
 from contextlib import suppress
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from filelock import FileLock
+from loguru import logger
 
 from OriginAgent.agent.action_privacy import FORBIDDEN_METADATA_KEYS
 from OriginAgent.utils.helpers import ensure_dir, truncate_text
@@ -146,6 +147,7 @@ class AuditLogger:
         lock_factory: Callable[[], FileLock] | None = None,
         redactor: Callable[[str], str] | None = None,
         scope_redactor: ScopeRedactor | None = None,
+        sqlite_store: Any = None,
     ):
         self.workspace = Path(workspace)
         self.memory_dir = ensure_dir(self.workspace / "memory")
@@ -155,6 +157,7 @@ class AuditLogger:
         self._redactor = redactor
         self._scope_redactor = scope_redactor or _default_scope_redactor
         self._last_hash_by_file: dict[str, str | None] = {}
+        self._sqlite = sqlite_store
 
     def log_action_decision(
         self,
@@ -317,12 +320,18 @@ class AuditLogger:
             event.prev_hash = self._last_hash(filename, path)
             event.event_hash = None
             event.event_hash = _hash_audit_event(event.to_dict())
-            line = json.dumps(event.to_dict(), ensure_ascii=False, sort_keys=True) + "\n"
+            event_dict = event.to_dict()
+            line = json.dumps(event_dict, ensure_ascii=False, sort_keys=True) + "\n"
             with path.open("a", encoding="utf-8") as handle:
                 handle.write(line)
                 handle.flush()
                 os.fsync(handle.fileno())
             _fsync_parent(path)
+        if self._sqlite is not None:
+            try:
+                self._sqlite.log(event_dict)
+            except Exception:
+                logger.opt(exception=True).warning("audit: sqlite log failed")
             self._last_hash_by_file[filename] = event.event_hash
         return event
 

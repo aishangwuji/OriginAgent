@@ -13,11 +13,11 @@ from pathlib import Path
 from typing import Any
 
 from filelock import FileLock
+from loguru import logger
 
-from OriginAgent.agent.facts import ValidationIssue
 from OriginAgent.agent.evolution_outcomes import EvolutionOutcomeStore, safe_append_outcome
+from OriginAgent.agent.facts import ValidationIssue
 from OriginAgent.utils.helpers import ensure_dir, truncate_text
-
 
 SIGNAL_KIND_WORKFLOW = "workflow_candidate"
 SIGNAL_KIND_SKILL = "skill_candidate"
@@ -172,13 +172,20 @@ class OpportunitySignalCandidate:
 class OpportunitySignalStore:
     """JSONL store for non-actionable self-evolution signals."""
 
-    def __init__(self, workspace: Path):
+    def __init__(self, workspace: Path, *, sqlite_store: Any = None):
         self.workspace = Path(workspace)
         self.memory_dir = ensure_dir(self.workspace / "memory")
         self.path = self.memory_dir / "opportunity_signals.jsonl"
         self._lock = FileLock(str(self.memory_dir / ".opportunity_signals.lock"))
+        self._sqlite = sqlite_store
 
     def read_all(self) -> list[OpportunitySignal]:
+        if self._sqlite is not None:
+            try:
+                raw = self._sqlite.read_all(limit=10000)
+                return [OpportunitySignal.from_record(r) for r in raw if r.get("opportunity_id")]
+            except Exception:
+                pass
         records: list[OpportunitySignal] = []
         with suppress(FileNotFoundError):
             with open(self.path, "r", encoding="utf-8") as f:
@@ -583,6 +590,12 @@ class OpportunitySignalStore:
         except BaseException:
             tmp_path.unlink(missing_ok=True)
             raise
+        if self._sqlite is not None:
+            try:
+                for signal in records:
+                    self._sqlite.append(signal.to_record())
+            except Exception:
+                logger.opt(exception=True).warning("signals: sqlite sync failed")
 
     def _trace_signal_changes(self, signals: list[OpportunitySignal], *, created_ids: set[str]) -> None:
         if not signals:

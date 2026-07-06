@@ -14,6 +14,7 @@ from loguru import logger
 
 # ── Specialized stores ──────────────────────────────────────────────
 from OriginAgent.agent.active_intents_sqlite import ActiveIntentLedgerSqlite
+from OriginAgent.agent.audit_sqlite_store import AuditSqliteStore, OpportunitySignalSqliteStore
 from OriginAgent.agent.cognitive_audit_sqlite import (
     CognitiveDecisionsSqlite,
     CognitiveEventsSqlite,
@@ -146,6 +147,10 @@ class SqliteStoreRegistry:
     plans: PlanLibrarySqlite
     nearline_memory: NearlineMemoryStoreSqlite
 
+    # Audit & signals
+    audit_events: AuditSqliteStore
+    opportunity_signals: OpportunitySignalSqliteStore
+
     # Misc specialized
     active_intents: ActiveIntentLedgerSqlite
     tool_audit: ToolCallAuditSqlite
@@ -216,6 +221,8 @@ class SqliteStoreFactory:
         desires = DesireStoreSqlite(w)
         plans = PlanLibrarySqlite(w)
         nearline_memory = NearlineMemoryStoreSqlite(w)
+        audit_events = AuditSqliteStore(w)
+        opportunity_signals = OpportunitySignalSqliteStore(w)
 
         registry = SqliteStoreRegistry(
             thought_frames=thought_frames,
@@ -259,14 +266,18 @@ class SqliteStoreFactory:
             desires=desires,
             plans=plans,
             nearline_memory=nearline_memory,
+            audit_events=audit_events,
+            opportunity_signals=opportunity_signals,
         )
 
         # Run all migrations (idempotent — safe on every startup)
         _migrate_one(fact_store, "fact_store")
         _migrate_one(desires, "desires")
         _migrate_one(plans, "plans")
-        # nearline_memory uses its own schema, not AppendOnlyMigrator
+        # Non-migrator stores: ensure schema created
         nearline_memory._ensure_schema()
+        audit_events._ensure_schema()
+        opportunity_signals._ensure_schema()
         _migrate_one(thought_frames, "thought_frames")
         _migrate_one(thought_journals, "thought_journals")
         _migrate_one(causal_edges, "causal_edges")

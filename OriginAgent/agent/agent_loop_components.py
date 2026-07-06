@@ -394,7 +394,10 @@ def build_loop_components(
     values["_persist"] = TurnPersistManager(values["max_tool_result_chars"], values["sessions"])
     values["_tool_audit_config"] = ToolAuditConfig.from_config(tool_audit_config or tools_config.audit)
     values["_grant_store"] = CapabilityGrantStore(workspace)
-    values["_audit_logger"] = AuditLogger(workspace)
+    values["_audit_logger"] = AuditLogger(
+        workspace,
+        sqlite_store=values["_sqlite_stores"].audit_events,
+    )
     values["_confirmation_store"] = PendingConfirmationStore(workspace)
     values["_confirmation_manager"] = ConfirmationManager(
         workspace,
