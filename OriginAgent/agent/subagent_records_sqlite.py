@@ -12,7 +12,23 @@ from pathlib import Path
 from typing import Any
 
 from OriginAgent.storage.jsonl_migration import AppendOnlyMigrator
-from OriginAgent.storage.sqlite_helpers import connect as sqlite_connect, ensure_schema
+from OriginAgent.storage.sqlite_helpers import connect as sqlite_connect
+from OriginAgent.storage.sqlite_helpers import ensure_schema
+
+
+def _ensure(store) -> None:
+    conn = sqlite_connect(store.db_path)
+    try: ensure_schema(conn, store.table_ddl())
+    finally: conn.close()
+
+def _append_one(store, data: dict[str, Any]) -> None:
+    _ensure(store)
+    conn = sqlite_connect(store.db_path)
+    try:
+        store.insert_row(conn, data)
+        conn.commit()
+    finally:
+        conn.close()
 
 
 class SubagentTaskStoreSqlite(AppendOnlyMigrator):
@@ -105,6 +121,9 @@ class SubagentTaskStoreSqlite(AppendOnlyMigrator):
         finally:
             conn.close()
 
+    def append(self, data: dict[str, Any]) -> None:
+        _append_one(self, data)
+
     def recent(self, *, limit: int = 10) -> list[dict[str, Any]]:
         self._ensure_schema()
         conn = sqlite_connect(self.db_path)
@@ -178,6 +197,9 @@ class SubagentLifecycleStoreSqlite(AppendOnlyMigrator):
             ensure_schema(conn, self.DDL)
         finally:
             conn.close()
+
+    def append(self, data: dict[str, Any]) -> None:
+        _append_one(self, data)
 
     def for_subagent(self, subagent_id: str) -> list[dict[str, Any]]:
         self._ensure_schema()
@@ -272,6 +294,9 @@ class SubagentToolStoreSqlite(AppendOnlyMigrator):
             ensure_schema(conn, self.DDL)
         finally:
             conn.close()
+
+    def append(self, data: dict[str, Any]) -> None:
+        _append_one(self, data)
 
     def for_subagent(self, subagent_id: str) -> list[dict[str, Any]]:
         self._ensure_schema()
