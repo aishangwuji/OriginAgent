@@ -590,10 +590,11 @@ class FactRelationStore:
 
 
 class FactEventStore:
-    def __init__(self, workspace: Path, *, path: Path | None = None) -> None:
+    def __init__(self, workspace: Path, *, path: Path | None = None, sqlite_store: Any = None) -> None:
         self.workspace = Path(workspace)
         self.path = path or (self.workspace / "memory" / "audit" / "fact_events.jsonl")
         self._lock_path = self.path.parent / ".fact_events.lock"
+        self._sqlite = sqlite_store
 
     def _locked(self) -> FileLock:
         self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -606,9 +607,20 @@ class FactEventStore:
                 handle.write(json.dumps(event.to_dict(), ensure_ascii=False, sort_keys=True) + "\n")
                 handle.flush()
                 os.fsync(handle.fileno())
+        if self._sqlite is not None:
+            try:
+                self._sqlite.append(event.to_dict())
+            except Exception:
+                logger.opt(exception=True).warning("fact_events: sqlite append failed")
         return event
 
     def read_all(self) -> list[FactEventRecord]:
+        if self._sqlite is not None:
+            try:
+                raw = self._sqlite.read_all()
+                return [FactEventRecord.from_dict(r) for r in raw]
+            except Exception:
+                pass
         records: list[FactEventRecord] = []
         with suppress(FileNotFoundError):
             with self.path.open("r", encoding="utf-8") as handle:
@@ -682,6 +694,21 @@ class FactEventStoreSqlite(AppendOnlyMigrator):
         try:
             self.insert_row(conn, data)
             conn.commit()
+        finally:
+            conn.close()
+
+    # ------------------------------------------------------------------
+    # Query API
+    # ------------------------------------------------------------------
+
+    def read_all(self) -> list[dict[str, Any]]:
+        self._ensure_schema()
+        conn = sqlite_connect(self.db_path)
+        try:
+            rows = conn.execute(
+                "SELECT payload_json FROM fact_events ORDER BY created_at"
+            ).fetchall()
+            return [json.loads(row["payload_json"]) for row in rows]
         finally:
             conn.close()
 
