@@ -78,8 +78,17 @@ from OriginAgent.storage.jsonl_migration import MigrationResult
 
 
 def _migrate_one(store: object, label: str) -> None:
-    """Run migrate() on *store* and log the result."""
+    """Run migrate() on *store* and log the result.
+
+    Skips if the SQLite DB file already exists and has content (idempotent
+    fast path — avoids re-reading the JSONL on every startup).
+    """
     if not hasattr(store, "migrate"):
+        return
+    # Fast skip: if SQLite DB exists and has size > 4KB (header only),
+    # the migration has already run on a previous startup.
+    db_path = getattr(store, "db_path", None)
+    if db_path is not None and db_path.exists() and db_path.stat().st_size > 4096:
         return
     try:
         result: MigrationResult = store.migrate()
