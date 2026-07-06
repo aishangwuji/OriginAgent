@@ -115,6 +115,20 @@ class ToolCallAuditSqlite(AppendOnlyMigrator):
             conn.close()
 
     # ------------------------------------------------------------------
+    # Write API
+    # ------------------------------------------------------------------
+
+    def append(self, data: dict[str, Any]) -> None:
+        """Append one audit event record."""
+        self._ensure_schema()
+        conn = sqlite_connect(self.db_path)
+        try:
+            self.insert_row(conn, data)
+            conn.commit()
+        finally:
+            conn.close()
+
+    # ------------------------------------------------------------------
     # Query helpers
     # ------------------------------------------------------------------
 

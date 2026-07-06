@@ -10,7 +10,7 @@ import uuid
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Literal, Protocol
+from typing import Any, Literal, Protocol
 
 from loguru import logger
 
@@ -100,11 +100,12 @@ class InMemoryToolAuditSink:
 class JsonlToolAuditSink:
     """Best-effort file sink for generic tool audit events."""
 
-    def __init__(self, workspace: Path):
+    def __init__(self, workspace: Path, *, sqlite_audit: Any = None):
         self.workspace = Path(workspace)
         self.path = self.workspace / "memory" / "audit" / "tool_calls.jsonl"
         self._last_hash: str | None = self._load_last_hash()
         self._lock = threading.Lock()
+        self._sqlite = sqlite_audit
 
     def _load_last_hash(self) -> str | None:
         try:
@@ -142,5 +143,11 @@ class JsonlToolAuditSink:
                     handle.flush()
                     os.fsync(handle.fileno())
                 self._last_hash = str(event_data["event_hash"])
+            # dual-write to SQLite
+            if self._sqlite is not None:
+                try:
+                    self._sqlite.append(event_data)
+                except Exception:
+                    logger.opt(exception=True).warning("tool_audit: sqlite append failed")
         except Exception as exc:
             logger.debug("Tool audit write failed: {}", exc)

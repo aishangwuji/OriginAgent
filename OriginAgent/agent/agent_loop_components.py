@@ -419,7 +419,10 @@ def build_loop_components(
     )
     values["action_planner"] = UnifiedActionPlanner()
     values["tools"] = ToolRegistry(
-        audit_sink=JsonlToolAuditSink(workspace),
+        audit_sink=JsonlToolAuditSink(
+            workspace,
+            sqlite_audit=values["_sqlite_stores"].tool_audit,
+        ),
         audit_config=values["_tool_audit_config"],
         confirmation_manager=values["_confirmation_manager"],
         grant_store=values["_grant_store"],
