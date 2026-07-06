@@ -412,6 +412,7 @@ def build_loop_components(
     values["_reminder_store"] = ReminderStore(
         workspace,
         sqlite_store=values["_sqlite_stores"].reminders,
+        jsonl_fallback_enabled=False,
     )
 
     # Step 3: registry, subagents, runtime contributions.

@@ -116,12 +116,13 @@ class ReminderRecord:
 class ReminderStore:
     """Durable JSONL-backed store for one-shot reminders."""
 
-    def __init__(self, workspace: Path, *, sqlite_store: Any = None):
+    def __init__(self, workspace: Path, *, sqlite_store: Any = None, jsonl_fallback_enabled: bool = True):
         self.workspace = Path(workspace)
         self.root = ensure_dir(self.workspace / "memory" / "active_intents")
         self.path = self.root / "reminders.jsonl"
         self.lock = FileLock(str(self.root / ".lock"))
         self._sqlite = sqlite_store
+        self._jsonl_fallback_enabled = jsonl_fallback_enabled
 
     def read_all(self) -> list[ReminderRecord]:
         if self._sqlite is not None:
@@ -130,7 +131,8 @@ class ReminderStore:
                 return [ReminderRecord.from_dict(r) for r in raw]
             except Exception:
                 pass
-        with self.lock:
+        from OriginAgent.storage.jsonl_fallback import locked as _locked
+        with _locked(self._sqlite, self.root / ".lock"):
             return self.read_all_unlocked()
 
     def read_all_unlocked(self) -> list[ReminderRecord]:
@@ -154,6 +156,23 @@ class ReminderStore:
         return records
 
     def upsert(self, record: ReminderRecord) -> ReminderRecord:
+        if self._sqlite is not None:
+            try:
+                self._sqlite.upsert(record)
+            except Exception:
+                logger.opt(exception=True).warning("reminders: sqlite upsert failed, falling back to JSONL")
+                self._jsonl_upsert(record)
+                return record
+            if self._jsonl_fallback_enabled:
+                try:
+                    self._jsonl_upsert(record)
+                except Exception:
+                    logger.opt(exception=True).warning("reminders: jsonl cold backup failed")
+            return record
+        self._jsonl_upsert(record)
+        return record
+
+    def _jsonl_upsert(self, record: ReminderRecord) -> None:
         with self.lock:
             records = self.read_all_unlocked()
             replaced = False
@@ -165,12 +184,6 @@ class ReminderStore:
             if not replaced:
                 records.append(record)
             self._write_all_unlocked(records)
-        if self._sqlite is not None:
-            try:
-                self._sqlite.upsert(record)
-            except Exception:
-                logger.opt(exception=True).warning("reminders: sqlite upsert failed")
-        return record
 
     def get(self, reminder_id: str) -> ReminderRecord | None:
         if self._sqlite is not None:
