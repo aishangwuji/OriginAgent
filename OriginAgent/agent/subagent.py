@@ -9,13 +9,15 @@ from contextlib import suppress
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Callable
+from typing import TYPE_CHECKING, Any, Callable
 
 from loguru import logger
 
 from OriginAgent.agent.agent_tool_setup import register_default_tools
+from OriginAgent.agent.error_classifier import ErrorKind, classify_exception
 from OriginAgent.agent.hook import AgentHook, AgentHookContext
 from OriginAgent.agent.runner import AgentRunner, AgentRunSpec
+from OriginAgent.agent.soar_models import SoarObstacle
 from OriginAgent.agent.subagent_policy import SubagentPolicy
 from OriginAgent.agent.subagent_provider import SubagentProviderSelector
 from OriginAgent.agent.subagent_records import (
@@ -37,6 +39,10 @@ from OriginAgent.security.grants import CapabilityGrantStore
 from OriginAgent.security.policy import PolicyDeniedError
 from OriginAgent.utils.prompt_templates import render_template
 from OriginAgent.utils.tracing import log_event
+
+if TYPE_CHECKING:
+    # 仅用于类型注解，避免运行时循环导入
+    from OriginAgent.agent.soar_chunker import SoarChunker
 
 _GRANT_ERROR_MESSAGE = "Capability grant is missing, expired, or revoked."
 
@@ -115,6 +121,7 @@ class SubagentManager:
         delegated_model_preset: str | None = None,
         subagent_policy_mode: str = "normal",
         sqlite_stores: Any = None,
+        soar_chunker: "SoarChunker | None" = None,
     ):
         defaults = AgentDefaults()
         self.provider = provider
@@ -158,6 +165,7 @@ class SubagentManager:
         self._last_live_write_at: dict[str, float] = {}
         self._lost_since_restart_count = 0
         self._stale_entries: list[dict[str, Any]] = []
+        self._soar_chunker = soar_chunker
         self.reconcile_live_state()
 
     def set_provider(self, provider: LLMProvider, model: str) -> None:
@@ -532,6 +540,12 @@ class SubagentManager:
 
             if result.stop_reason == "tool_error":
                 status.tool_events = list(result.tool_events)
+                failure_summary = self._format_partial_progress(result)
+                obstacle = self._detect_obstacle(
+                    stop_reason=result.stop_reason,
+                    failure_summary=failure_summary,
+                    tool_events=result.tool_events if hasattr(result, 'tool_events') else [],
+                )
                 self._record_terminal_task(
                     task_id=task_id,
                     label=label,
@@ -540,17 +554,24 @@ class SubagentManager:
                     origin_message_id=origin_message_id,
                     terminal_status="failed",
                     stop_reason=result.stop_reason,
-                    failure_summary=self._format_partial_progress(result),
+                    failure_summary=failure_summary,
                     policy=policy,
                     provider_summary=provider_selection.provider_summary,
                 )
                 await self._announce_result(
                     task_id, label, task,
-                    self._format_partial_progress(result),
+                    failure_summary,
                     origin, "error", origin_message_id,
+                    obstacle_type=obstacle.obstacle_type if obstacle else None,
                 )
                 log_event("subagent.completed", agent_id=task_id, status="tool_error", session_key=origin.get("session_key"))
             elif result.stop_reason == "error":
+                failure_summary = result.error or "subagent execution failed"
+                obstacle = self._detect_obstacle(
+                    stop_reason=result.stop_reason,
+                    failure_summary=failure_summary,
+                    tool_events=result.tool_events if hasattr(result, 'tool_events') else [],
+                )
                 self._record_terminal_task(
                     task_id=task_id,
                     label=label,
@@ -559,7 +580,7 @@ class SubagentManager:
                     origin_message_id=origin_message_id,
                     terminal_status="failed",
                     stop_reason=result.stop_reason,
-                    failure_summary=result.error or "subagent execution failed",
+                    failure_summary=failure_summary,
                     policy=policy,
                     provider_summary=provider_selection.provider_summary,
                 )
@@ -567,6 +588,7 @@ class SubagentManager:
                     task_id, label, task,
                     result.error or "Error: subagent execution failed.",
                     origin, "error", origin_message_id,
+                    obstacle_type=obstacle.obstacle_type if obstacle else None,
                 )
                 log_event("subagent.completed", agent_id=task_id, status="error", session_key=origin.get("session_key"))
             else:
@@ -594,6 +616,31 @@ class SubagentManager:
                     provider_summary=provider_selection.provider_summary,
                 )
                 await self._announce_result(task_id, label, task, final_result, origin, "ok", origin_message_id)
+                # ── Soar 在线块化钩子 ─────────────────────────────────────
+                # 当 soar_chunker 可用且该子代理任务有关联的障碍时，触发块化。
+                # parent_obstacle 由父代理在 task metadata 中传入（TurnOrchestrator 集成），
+                # 正常操作下该钩子为 no-op。
+                if self._soar_chunker is not None:
+                    try:
+                        task_status = self._task_statuses.get(task_id)
+                        parent_obstacle_json = None
+                        if task_status:
+                            metadata = getattr(task_status, "metadata", None)
+                            if metadata:
+                                parent_obstacle_json = metadata.get("parent_obstacle")
+
+                        if parent_obstacle_json:
+                            parent_obstacle = SoarObstacle.from_json(parent_obstacle_json)
+                            await self._soar_chunker.chunk_from_success(
+                                subagent_task_id=task_id,
+                                obstacle=parent_obstacle,
+                                result_summary=final_result[:200] if final_result else "",
+                                session_key=origin.get("session_key") or "",
+                            )
+                    except Exception:
+                        logger.opt(exception=True).debug(
+                            "SubagentManager: Soar chunking hook failed for task={}", task_id,
+                        )
                 log_event("subagent.completed", agent_id=task_id, status="ok", session_key=origin.get("session_key"))
 
         except asyncio.CancelledError:
@@ -665,12 +712,81 @@ class SubagentManager:
                 ended_at=self._utcnow(),
             ))
             logger.exception("Subagent [{}] failed", task_id)
-            await self._announce_result(task_id, label, task, f"Error: {e}", origin, "error", origin_message_id)
+            obstacle = self._detect_obstacle(
+                stop_reason=None,
+                failure_summary=f"Error: {e}",
+                tool_events=[],
+                exc=e,
+            )
+            await self._announce_result(
+                task_id, label, task, f"Error: {e}", origin, "error", origin_message_id,
+                obstacle_type=obstacle.obstacle_type if obstacle else None,
+            )
             log_event("subagent.completed", agent_id=task_id, status="exception", session_key=origin.get("session_key"))
         finally:
             if status.phase in {"done", "error"}:
                 self._delete_live_state(task_id)
             self.runner.provider = self.provider
+
+    def _detect_obstacle(
+        self,
+        stop_reason: str | None,
+        failure_summary: str,
+        tool_events: list[dict[str, Any]],
+        exc: Exception | None = None,
+    ) -> SoarObstacle | None:
+        """从子代理失败信号构造结构化 SoarObstacle。
+
+        成功路径（stop_reason 为 None 或正常完成）返回 None。
+        """
+        import uuid
+
+        # 确定障碍类型
+        if exc is not None:
+            obstacle_type = "internal_error"
+            root_cause = str(exc)[:240]
+        elif stop_reason == "tool_error":
+            obstacle_type = "tool_failure"
+            root_cause = (failure_summary or "tool error")[:240]
+        elif stop_reason == "error":
+            obstacle_type = "internal_error"
+            root_cause = (failure_summary or "internal error")[:240]
+        else:
+            # 成功路径或未知 stop_reason
+            return None
+
+        # 提取已尝试的工具名列表
+        attempted_tools: list[str] = []
+        for event in tool_events or []:
+            name = event.get("name") or event.get("tool_name")
+            if name and name not in attempted_tools:
+                attempted_tools.append(name)
+
+        # 基于异常分类填充 recoverable_hint
+        recoverable_hint = "unknown"
+        if exc is not None:
+            try:
+                error_kind = classify_exception(exc)
+                hint_map = {
+                    ErrorKind.NETWORK_TIMEOUT: "retry",
+                    ErrorKind.AUTHENTICATION: "reauth",
+                    ErrorKind.RATE_LIMIT: "retry",
+                    ErrorKind.CONTEXT_OVERFLOW: "replan",
+                    ErrorKind.CONTENT_FILTER: "replan",
+                    ErrorKind.TOOL_FAILURE: "retry",
+                    ErrorKind.INTERNAL: "unknown",
+                }
+                recoverable_hint = hint_map.get(error_kind, "unknown")
+            except Exception:
+                pass
+
+        return SoarObstacle(
+            obstacle_id=f"obs_{uuid.uuid4().hex[:8]}",
+            obstacle_type=obstacle_type,
+            root_cause=root_cause,
+            attempted_tools=attempted_tools,
+            recoverable_hint=recoverable_hint,
+        )
 
     async def _announce_result(
         self,
@@ -681,6 +797,7 @@ class SubagentManager:
         origin: dict[str, str],
         status: str,
         origin_message_id: str | None = None,
+        obstacle_type: str | None = None,
     ) -> None:
         """Announce the subagent result to the main agent via the message bus."""
         status_text = "completed successfully" if status == "ok" else "failed"
@@ -706,6 +823,8 @@ class SubagentManager:
         }
         if origin_message_id:
             metadata["origin_message_id"] = origin_message_id
+        if obstacle_type is not None:
+            metadata["obstacle_type"] = obstacle_type
         msg = InboundMessage(
             channel="system",
             sender_id="subagent",

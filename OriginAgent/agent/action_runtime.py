@@ -11,7 +11,7 @@ import uuid
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable, Protocol
+from typing import TYPE_CHECKING, Any, Callable, Protocol
 
 from filelock import FileLock
 from loguru import logger
@@ -32,6 +32,11 @@ from OriginAgent.agent.permissions import (
 from OriginAgent.agent.action_privacy import FORBIDDEN_METADATA_KEYS
 from OriginAgent.agent.world_simulator import SimulationTrace
 from OriginAgent.utils.helpers import ensure_dir
+
+if TYPE_CHECKING:
+    # 仅类型检查时导入，避免与 epic_motor 的循环导入
+    # （epic_motor 顶部 import ActionIntent，故 action_runtime 不能在运行时反向 import EpicActionQueue）
+    from OriginAgent.agent.epic_motor import EpicActionQueue
 
 ACTION_FORBIDDEN_PAYLOAD_KEYS = {
     *FORBIDDEN_METADATA_KEYS,
@@ -64,6 +69,9 @@ class ActionIntent:
     continuity_origin: str | None = None
     continuity_proposal_digest: str | None = None
     simulation_trace_id: str | None = None
+    # Epic 字段：执行时长与并行调度提示，默认值保持向后兼容
+    duration_ms: int = 0
+    requires_parallel: bool = False
 
     def to_request(self) -> ActionRequest:
         return ActionRequest(
@@ -209,6 +217,7 @@ class SafeActionExecutor:
         scope_redactor: Callable[[str | None], str | None] | None = None,
         resume_precheck: Callable[[ActionIntent, ConfirmationRequest, datetime], ActionDecision | None] | None = None,
         simulation_hook: ActionSimulationHook | None = None,
+        motor_queue: "EpicActionQueue | None" = None,
     ):
         self.gate = gate
         self.confirmation_manager = confirmation_manager
@@ -218,6 +227,7 @@ class SafeActionExecutor:
         self._scope_redactor = scope_redactor or _default_scope_redactor
         self._resume_precheck = resume_precheck
         self._simulation_hook = simulation_hook
+        self._motor_queue = motor_queue
         self.records: list[ActionExecutionRecord] = []
         workspace = getattr(confirmation_manager, "workspace", None)
         self._successful_key_store = (
@@ -300,16 +310,26 @@ class SafeActionExecutor:
                     result = self._permission_result(action_id, decision, permission)
                     self._record(action_id, sanitized_intent, decision, result, current_time)
                     return result
-                result = self._execute_allowed(
-                    action_id,
-                    sanitized_intent,
-                    decision,
-                    current_time,
-                )
+                # ── EPIC 运动队列模式：motor_queue 启用时入队而非直接执行 ──
+                if self._motor_queue is not None:
+                    result = self._enqueue_motor_command(
+                        action_id, sanitized_intent, decision, current_time
+                    )
+                else:
+                    result = self._execute_allowed(
+                        action_id,
+                        sanitized_intent,
+                        decision,
+                        current_time,
+                    )
                 result.permission_status = permission.decision
                 self._attach_simulation_metadata(result, simulation_precheck)
                 self._record(action_id, sanitized_intent, decision, result, current_time)
-                self._remember_successful_idempotency(sanitized_intent, result)
+                # 仅在同步执行成功时记忆幂等键；queued 状态尚未真正执行，不记忆
+                # （真正的执行在 motor processor tick 中，那时由 _execute_allowed 返回 executed 后再记忆；
+                #  该记忆逻辑属于 motor processor 侧，本 spec 不实现，留作 Out of Scope）
+                if result.status != "queued":
+                    self._remember_successful_idempotency(sanitized_intent, result)
                 self._record_simulation_feedback(sanitized_intent, result, now=current_time)
                 return result
 
@@ -697,6 +717,37 @@ class SafeActionExecutor:
             is_real_execution=not is_dry_run,
             backend_kind=backend_kind or ("dry_run" if is_dry_run else None),
             physical_target_domain=physical_target_domain,
+        )
+
+    def _enqueue_motor_command(
+        self,
+        action_id: str,
+        intent: ActionIntent,
+        decision: ActionDecision,
+        now: datetime,
+    ) -> ActionExecutionResult:
+        """将已通过门禁的可执行意图入队，返回 queued 状态。
+
+        由 EpicMotorProcessor 在 tick 中调用 _execute_allowed 完成实际派发。
+        ready_at 设为 now（立即就绪）；duration_ms / requires_parallel 从 intent 取。
+        """
+        from OriginAgent.agent.epic_motor import EpicMotorCommand
+
+        cmd = EpicMotorCommand(
+            action_id=action_id,
+            intent=intent,
+            decision=decision,
+            enqueued_at=now,
+            ready_at=now,
+            duration_ms=intent.duration_ms,
+            requires_parallel=intent.requires_parallel,
+        )
+        self._motor_queue.enqueue(cmd)  # 同步入队
+        return ActionExecutionResult(
+            status="queued",
+            action_id=action_id,
+            reason="queued for motor processor dispatch",
+            decision=decision,
         )
 
     def _record(

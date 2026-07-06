@@ -182,6 +182,7 @@ class DeliberationEngine:
         self._audit_dir = self.workspace / "memory" / "bdi"
         self._audit_path = self._audit_dir / "cycles.jsonl"
         ensure_dir(self._audit_dir)
+        self._intention_stack_path = self._audit_dir / "intention_stack.jsonl"
 
         # ── BDI-native primitives ──────────────────────────────────────
         self._intention_stack = IntentionStack(max_depth=10)
@@ -218,6 +219,12 @@ class DeliberationEngine:
         if self._running:
             logger.warning("BDI: DeliberationEngine already running")
             return
+
+        # 从磁盘重建 IntentionStack（服务重启后恢复 SUSPENDED 状态）
+        self._intention_stack = IntentionStack.load_from(self._intention_stack_path)
+        if not self._intention_stack.is_empty:
+            logger.info("BDI: restored IntentionStack with {} frame(s) from {}",
+                        self._intention_stack.depth, self._intention_stack_path)
 
         self._running = True
         self._task = asyncio.create_task(self._run_loop())
@@ -298,11 +305,6 @@ class DeliberationEngine:
             return result
 
         desires_before = len(desires)
-
-        # 3. Re-sync foresights (now with dedup against existing desires)
-        if self._auto_create_from_foresight:
-            await self._sync_foresights(desires)
-            desires = self._store.list_deliberable()
 
         # 3. Cap to max per cycle, prioritize by priority and deadline
         desires = self._prioritize(desires)[:self._max_desires_per_cycle]
@@ -428,6 +430,7 @@ class DeliberationEngine:
                         updated_ids.append(did)
                         # Pop from intention stack if it was suspended
                         self._intention_stack.pop()
+                        self._intention_stack.persist_to(self._intention_stack_path)
                 except ValueError:
                     logger.warning("BDI: invalid transition for desire {} (SATISFIED)", did)
 
@@ -450,6 +453,7 @@ class DeliberationEngine:
                             self._intention_stack.push(frame)
                             logger.info("BDI: pushed desire {} to intention stack (depth={})",
                                         did, self._intention_stack.depth)
+                            self._intention_stack.persist_to(self._intention_stack_path)
                 except (ValueError, OverflowError) as e:
                     logger.warning("BDI: suspend failed for desire {} — {}", did, e)
 
@@ -474,13 +478,19 @@ class DeliberationEngine:
         # ── 8. Merge cached + LLM intentions, emit ─────────────────────
         all_intentions = cached_intentions + llm_intentions
 
-        # Also handle cache-hit desires: mark them as having been acted on
+        # 缓存命中：递增评估计数（不触发 ACTIVE→ACTIVE 非法转换）
+        # 使缓存命中的 Desire 参与 ACT-R 效用更新回路
         for intent in cached_intentions:
             try:
-                self._store.update(intent.desire_id, status=DesireStatus.ACTIVE,
-                                    reasoning="Plan cache execution")
-            except ValueError:
-                pass
+                updated = self._store.update(
+                    intent.desire_id,
+                    increment_eval=True,
+                    reasoning="Plan cache execution",
+                )
+                if updated:
+                    updated_ids.append(intent.desire_id)
+            except Exception:
+                logger.debug("BDI: cache-hit update skipped for desire {}", intent.desire_id)
 
         if all_intentions and self._on_intention:
             for intent in all_intentions:
@@ -504,7 +514,10 @@ class DeliberationEngine:
         self._persist_cycle(cycle_id, started_at, result, "completed",
                             desires_before=desires_before)
 
-        # ── 9. Fire on_cycle_complete callback (CS-004) ─────────────
+        # ── 9. ACT-R utility update ────────────────────────────────
+        await self._update_utilities(desires, updated_ids)
+
+        # ── 10. Fire on_cycle_complete callback (CS-004) ────────────
         if self._on_cycle_complete is not None:
             try:
                 await self._on_cycle_complete(result)
@@ -541,6 +554,7 @@ class DeliberationEngine:
             if desire is None:
                 # Orphaned stack entry — remove it
                 self._intention_stack.pop()
+                self._intention_stack.persist_to(self._intention_stack_path)
                 logger.info("BDI: removed orphaned stack entry for desire {}", candidate.desire_id)
                 continue
 
@@ -559,6 +573,7 @@ class DeliberationEngine:
                                             status=DesireStatus.ACTIVE,
                                             reasoning="Resumed from IntentionStack")
                         self._intention_stack.pop()
+                        self._intention_stack.persist_to(self._intention_stack_path)
                         logger.info("BDI: resumed desire {} from IntentionStack (depth={})",
                                     candidate.desire_id, self._intention_stack.depth)
                     except ValueError:
@@ -646,7 +661,8 @@ class DeliberationEngine:
             # 计算 softmax 概率，减去最大值保证数值稳定
             utilities = [d.utility for d in pool]
             max_u = max(utilities)
-            exp_utils = [math.exp((u - max_u) / temp) for u in utilities]
+            # clip 指数参数到 [-50, 50] 防止极端温度下 math.exp 溢出
+            exp_utils = [math.exp(max(-50.0, min((u - max_u) / temp, 50.0))) for u in utilities]
             total = sum(exp_utils)
             if total <= 0:
                 # 退化情况：回退为均匀分布
@@ -674,6 +690,80 @@ class DeliberationEngine:
             overdue_bonus = -1000 if d.is_overdue else 0
             return (overdue_bonus - d.priority.value, 0)
         return sorted(desires, key=sort_key)
+
+    async def _update_utilities(
+        self,
+        cycle_desires: list[Desire],
+        updated_ids: list[str],
+    ) -> None:
+        """Update Desire utilities using ACT-R reward signals.
+
+        Combines status transition rewards with reflection-based rewards,
+        then applies the ACT-R utility update formula:
+            U_new = U_old + α * (R - U_old)
+
+        Skipped entirely when use_actr_utility is False or no reward bridge.
+        """
+        if not self._use_actr_utility or self._reward_bridge is None:
+            return
+
+        # 重新读取当前 Desire 状态（可能在本周期内已发生状态转换）
+        desires_to_check: dict[str, Desire] = {}
+        for d in cycle_desires:
+            current = self._store.get(d.desire_id)
+            if current is not None:
+                desires_to_check[d.desire_id] = current
+        for did in updated_ids:
+            if did not in desires_to_check:
+                current = self._store.get(did)
+                if current is not None:
+                    desires_to_check[did] = current
+
+        if not desires_to_check:
+            self._last_utility_update_at = now_iso()
+            return
+
+        desires_list = list(desires_to_check.values())
+
+        # 提取状态转换奖励信号
+        status_rewards = self._reward_bridge.extract_status_rewards(desires_list)
+
+        # 提取反思奖励信号
+        session_keys = list({d.session_key for d in desires_list if d.session_key})
+        desire_id_lookup = set(desires_to_check.keys())
+        reflection_rewards = self._reward_bridge.extract_reflection_rewards(
+            since=self._last_utility_update_at,
+            session_keys=session_keys,
+            desire_id_lookup=desire_id_lookup,
+        )
+
+        # 合并奖励信号
+        merged_rewards = self._reward_bridge.merge_rewards(
+            status_rewards, reflection_rewards,
+        )
+
+        if not merged_rewards:
+            self._last_utility_update_at = now_iso()
+            return
+
+        # 应用 ACT-R 效用更新公式
+        alpha = self._utility_learning_rate
+        for did, reward in merged_rewards.items():
+            desire = desires_to_check.get(did)
+            if desire is None:
+                continue
+            old_utility = desire.utility
+            new_utility = old_utility + alpha * (reward - old_utility)
+            try:
+                self._store.update(did, utility=new_utility)
+                logger.debug(
+                    "BDI: ACT-R utility update — desire={} {:.3f} -> {:.3f} (reward={:.3f})",
+                    did, old_utility, new_utility, reward,
+                )
+            except Exception:
+                logger.exception("BDI: ACT-R utility update failed for desire {}", did)
+
+        self._last_utility_update_at = now_iso()
 
     async def _sync_foresights(self, existing: list[Desire]) -> None:
         """Create Desire records from unlinked ForesightRecords."""

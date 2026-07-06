@@ -26,9 +26,9 @@
   - [x] SubTask 4.4: 实现 `_stochastic_prioritize(desires) -> list[Desire]`：overdue 优先 + softmax 无放回采样
   - [x] SubTask 4.5: 修改 `_prioritize()` 根据 `use_actr_utility` 路由到 `_stochastic_prioritize` 或原有逻辑
 
-- [ ] Task 5: 在 run_cycle() 末尾增加效用更新
-  - [ ] SubTask 5.1: 在 `run_cycle()` 步骤 8 之后增加步骤 9 调用 `_update_utilities()`
-  - [ ] SubTask 5.2: 实现 `_update_utilities(cycle_desires, updated_ids)`：
+- [x] Task 5: 在 run_cycle() 末尾增加效用更新
+  - [x] SubTask 5.1: 在 `run_cycle()` 步骤 8 之后增加步骤 9 调用 `_update_utilities()`
+  - [x] SubTask 5.2: 实现 `_update_utilities(cycle_desires, updated_ids)`：
     - 当 `use_actr_utility=False` 或 `reward_bridge=None` 时直接返回
     - 收集本周期状态转换奖励（status_rewards）
     - 查询近期反思奖励（reflection_rewards，since=`_last_utility_update_at`）
@@ -36,16 +36,16 @@
     - 使用 ACT-R 公式 `U_new = U_old + α*(R-U_old)` 更新 utility
     - 调用 `self._store.update(did, utility=new_utility)` 持久化
     - 更新 `_last_utility_update_at = now_iso()`
-  - [ ] SubTask 5.3: 在审计日志 `BDICycleRecord` 的 token_usage 或新字段中记录 utility 更新数量（可选，用于可观测性）
+  - [x] SubTask 5.3: 在审计日志 `BDICycleRecord` 的 token_usage 或新字段中记录 utility 更新数量（可选，用于可观测性）
 
-- [ ] Task 6: 编写测试
-  - [ ] SubTask 6.1: `test_desire_utility_field` — 验证默认值 0.5、`with_utility()` clamp、`from_json` 旧数据兼容
-  - [ ] SubTask 6.2: `test_desire_store_update_utility` — 验证 `update(utility=...)` 持久化、`utility=None` 不变更
-  - [ ] SubTask 6.3: `test_utility_reward_bridge` — 验证状态奖励提取、反思奖励提取、合并逻辑
-  - [ ] SubTask 6.4: `test_stochastic_prioritize` — 验证 softmax 选择概率分布、overdue 优先、单 desire 直接返回、temperature 极端值
-  - [ ] SubTask 6.5: `test_run_cycle_utility_update` — 集成测试：SATISFIED 增 utility、CANCELLED 减 utility、`use_actr_utility=False` 不更新
-  - [ ] SubTask 6.6: `test_backward_compatibility` — `use_actr_utility=False` 时 `run_cycle()` 行为与改动前一致
-  - [ ] SubTask 6.7: 运行全量回归 `.\.venv\Scripts\python.exe -m pytest OriginAgent/bdi/ OriginAgent/agent/test_meta_cognition_reflector.py -v`
+- [x] Task 6: 编写测试
+  - [x] SubTask 6.1: `test_desire_utility_field` — 验证默认值 0.5、`with_utility()` clamp、`from_json` 旧数据兼容
+  - [x] SubTask 6.2: `test_desire_store_update_utility` — 验证 `update(utility=...)` 持久化、`utility=None` 不变更
+  - [x] SubTask 6.3: `test_utility_reward_bridge` — 验证状态奖励提取、反思奖励提取、合并逻辑
+  - [x] SubTask 6.4: `test_stochastic_prioritize` — 验证 softmax 选择概率分布、overdue 优先、单 desire 直接返回、temperature 极端值
+  - [x] SubTask 6.5: `test_run_cycle_utility_update` — 集成测试：SATISFIED 增 utility、CANCELLED 减 utility、`use_actr_utility=False` 不更新
+  - [x] SubTask 6.6: `test_backward_compatibility` — `use_actr_utility=False` 时 `run_cycle()` 行为与改动前一致
+  - [x] SubTask 6.7: 运行全量回归 `.\.venv\Scripts\python.exe -m pytest tests/agent/bdi/ -v`（44 新增 + 69 原有 = 113 全部通过）
 
 # Task Dependencies
 - Task 2 depends on Task 1（需要 `with_utility()` 方法）

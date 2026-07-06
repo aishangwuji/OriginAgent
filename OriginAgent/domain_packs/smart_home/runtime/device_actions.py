@@ -51,6 +51,9 @@ class TypedDeviceAction:
     requested_by: str | None = None
     trigger: str = "user_initiated"
     idempotency_key: str | None = None
+    # Epic 字段：执行时长与并行调度提示，默认值保持向后兼容
+    duration_ms: int = 0
+    requires_parallel: bool = False
 
 
 class DeviceActionSchemaRegistry:
@@ -195,6 +198,8 @@ class TypedActionPlanner:
             requires_presence_empty=self.registry.requires_presence_empty(validated),
             payload=payload,
             idempotency_key=validated.idempotency_key,
+            duration_ms=validated.duration_ms,
+            requires_parallel=validated.requires_parallel,
         )
 
 

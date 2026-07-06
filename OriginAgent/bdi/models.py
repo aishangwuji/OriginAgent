@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass, field, replace
 from datetime import datetime, timezone
 from enum import Enum
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
@@ -378,6 +379,61 @@ class IntentionStack:
         for frame_data in data.get("frames", []):
             stack._frames.append(StackFrame.from_json(frame_data))
         return stack
+
+    def persist_to(self, path: Path) -> None:
+        """Atomically persist the stack to a JSON file.
+
+        Uses temp-file + rename pattern for crash safety.
+        Silently logs and continues on failure (stack persistence is best-effort).
+        """
+        import json
+        import os
+        import tempfile
+        from loguru import logger
+
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            tmp = tempfile.NamedTemporaryFile(
+                mode="w", encoding="utf-8", dir=str(path.parent),
+                delete=False, suffix=".tmp",
+            )
+            try:
+                json.dump(self.to_json(), tmp, ensure_ascii=False)
+                tmp.flush()
+                os.fsync(tmp.fileno())
+                tmp.close()
+                os.replace(tmp.name, str(path))
+            except Exception:
+                Path(tmp.name).unlink(missing_ok=True)
+                raise
+        except Exception:
+            logger.opt(exception=True).warning("IntentionStack: persist failed to {}", path)
+
+    @classmethod
+    def load_from(cls, path: Path) -> "IntentionStack":
+        """Load stack from a JSON file.
+
+        Returns an empty stack if:
+        - The file does not exist (first start)
+        - The file is corrupted (logs warning)
+
+        This ensures the engine never crashes on startup due to stack state.
+        """
+        import json
+        from loguru import logger
+
+        if not path.exists():
+            return cls()
+
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            return cls.from_json(data)
+        except Exception:
+            logger.opt(exception=True).warning(
+                "IntentionStack: corrupt stack file {}, starting with empty stack", path,
+            )
+            return cls()
 
 
 # ---------------------------------------------------------------------------

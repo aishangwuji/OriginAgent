@@ -1,0 +1,53 @@
+- [x] `OriginAgent/agent/epic_motor.py` 文件存在
+- [x] `EpicMotorCommand` dataclass 定义存在，含 `action_id, intent, decision, enqueued_at, ready_at, duration_ms, requires_parallel` 字段
+- [x] `EpicMotorCommand.to_json()` 与 `from_json()` 实现序列化往返
+- [x] `EpicActionQueue` 类存在
+- [x] `EpicActionQueue.enqueue(command)` 方法存在（async）
+- [x] `EpicActionQueue.dequeue_ready(now, max_parallel)` 方法存在（async）
+- [x] `EpicActionQueue.is_empty` 属性存在
+- [x] `EpicActionQueue.pending_count` 属性存在
+- [x] `EpicActionQueue` 内部使用 `asyncio.Lock` 保证线程安全
+- [x] `dequeue_ready` 仅返回 `ready_at <= now` 的命令
+- [x] `dequeue_ready` 在 `max_parallel=1` 时仅返回 1 个就绪命令
+- [x] `dequeue_ready` 在 `max_parallel=N` 且就绪 ≤ N 时返回全部
+- [x] `dequeue_ready` 遇到 `requires_parallel=False` 命令时最多返回 1 个非并行命令，其后并行命令可填充至 max_parallel
+- [x] `EpicMotorProcessor` 类存在
+- [x] `EpicMotorProcessor.__init__` 含 `executor, queue, max_parallel_per_tick, tick_interval_ms` 参数
+- [x] `EpicMotorProcessor.tick()` 方法存在（async）
+- [x] `EpicMotorProcessor.tick()` 通过 `executor._execute_allowed` 派发命令
+- [x] `EpicMotorProcessor.tick()` 使用 `asyncio.gather` 并发派发并行命令
+- [x] `EpicMotorProcessor.tick()` 单个命令异常不影响其他命令
+- [x] `EpicMotorProcessor.run_forever(is_running)` 方法存在
+- [x] `EpicMotorProcessor.run_forever` 在 `is_running()=False` 时退出
+- [x] `EpicMotorProcessor.run_forever` 异常后 `logger.exception` 并继续下一 tick
+- [x] `ActionIntent` dataclass 含 `duration_ms: int = 0` 字段
+- [x] `ActionIntent` dataclass 含 `requires_parallel: bool = False` 字段
+- [x] `TypedDeviceAction` dataclass 含 `duration_ms: int = 0` 字段
+- [x] `TypedDeviceAction` dataclass 含 `requires_parallel: bool = False` 字段
+- [x] `TypedActionPlanner.to_intent()` 透传 `duration_ms` 到 `ActionIntent`
+- [x] `TypedActionPlanner.to_intent()` 透传 `requires_parallel` 到 `ActionIntent`
+- [x] `DeviceActionSchemaRegistry.validate()` 处理带新字段的 action 不抛异常
+- [x] `DeviceActionSchemaRegistry._normalize_action` 的 `replace(...)` 调用保留新字段
+- [x] `SafeActionExecutor.__init__` 含 `motor_queue: EpicActionQueue | None = None` 参数
+- [x] `SafeActionExecutor.submit()` 在 `motor_queue=None` 时保持同步 `_execute_allowed` 行为
+- [x] `SafeActionExecutor.submit()` 在 `motor_queue` 启用且 allow 分支时返回 `status="queued"`
+- [x] `SafeActionExecutor.submit()` 在 `motor_queue` 启用时不直接调用 `backend.execute()`
+- [x] `SafeActionExecutor.submit()` 在 `motor_queue` 启用且 deny 时不入队
+- [x] `SafeActionExecutor.submit()` 在 `motor_queue` 启用且幂等命中时不入队
+- [x] `SafeActionExecutor.submit()` 在 `motor_queue` 启用且 ask_confirmation 时走原 confirmation 路径
+- [x] `CognitiveLoopConfig` 含 `motor_tick_interval_ms: int = 50` 字段
+- [x] `CognitiveLoop.__init__` 含 `motor_processor: EpicMotorProcessor | None = None` 参数
+- [x] `CognitiveLoop.run_forever` 在 `motor_processor=None` 时仅运行审议循环
+- [x] `CognitiveLoop.run_forever` 在 `motor_processor` 启用时用 `asyncio.gather` 并发两循环
+- [x] `CognitiveLoop._run_deliberation_loop` 方法存在（从原 `run_forever` 提取）
+- [x] `CognitiveLoop._run_motor_loop` 方法存在
+- [x] `CognitiveLoop._run_motor_loop` 异常 `logger.exception` 后继续，不影响审议循环
+- [x] 新增测试 `tests/agent/test_epic_action_queue.py` 全部通过（≥6 测试）
+- [x] 新增测试 `tests/agent/test_epic_motor_processor.py` 全部通过（≥6 测试）
+- [x] 新增测试 `tests/agent/test_typed_device_action_epic_fields.py` 全部通过（≥4 测试）
+- [x] 新增测试 `tests/agent/test_safe_executor_motor_queue.py` 全部通过（≥6 测试）
+- [x] 新增测试 `tests/agent/test_cognitive_loop_motor.py` 全部通过（≥4 测试）
+- [x] `tests/agent/test_action_runtime.py` 与 `tests/agent/test_action_runtime_resume.py` 无回归
+- [x] `tests/agent/test_device_actions.py` / `test_device_backends.py` / `tests/tools/test_device_tools.py` 无回归
+- [x] BDI 测试无回归：`.\.venv\Scripts\python.exe -m pytest tests/agent/bdi/ -v`
+- [x] Soar 专项测试无回归：`.\.venv\Scripts\python.exe -m pytest tests/agent/test_soar_models.py tests/agent/test_soar_chunker.py tests/agent/test_subagent_obstacle_detection.py tests/agent/test_subagent_soar_callback.py tests/agent/test_skill_bootstrapper_online.py -v`

@@ -1,0 +1,24 @@
+- [x] `cron_desire_bridge.py` 不再使用 `DesirePriority.NORMAL`，改为 `MEDIUM`
+- [x] `on_cron_job_created` 不抛 `AttributeError`，创建的 Desire priority 为 MEDIUM
+- [x] `IntentionStack` 有 `persist_to(path)` 方法，原子写入 JSONL
+- [x] `IntentionStack` 有 `load_from(path)` 类方法，从 JSONL 重建栈
+- [x] `intention_stack.jsonl` 不存在时 `load_from` 返回空栈，不抛异常
+- [x] `intention_stack.jsonl` 损坏时 `load_from` 记 warning 并返回空栈
+- [x] `DeliberationEngine.start()` 启动时从 `intention_stack.jsonl` 重建栈
+- [x] `run_cycle()` 中所有 `push`/`pop` 调用点在操作后持久化栈
+- [x] `DesireStore.update()` 接受 `increment_eval: bool = False` 参数
+- [x] `increment_eval=True` 时 `evaluation_count` 递增
+- [x] `increment_eval=False`（默认）时 `evaluation_count` 不变
+- [x] "魔法默认对象"比较逻辑被移除
+- [x] PlanLibrary 缓存命中路径使用 `increment_eval=True` 而非 `status=ACTIVE`
+- [x] 缓存命中 Desire 不触发 `ACTIVE→ACTIVE` 非法转换
+- [x] 缓存命中 Desire 的 `evaluation_count` 能递增到 >3（停滞检测可生效）
+- [x] 缓存命中 Desire 进入 `updated_ids`，参与 `_update_utilities`
+- [x] `run_cycle()` 不再第二次调用 `_sync_foresights(desires)`
+- [x] 冷启动时 foresight 仍能创建首个 Desire（第一次调用保留）
+- [x] `_stochastic_prioritize` 的 softmax 指数被 clip 到 [-50, 50]
+- [x] `selection_temperature=0.001` + utility 差 1.0 不抛 `OverflowError`
+- [x] 默认温度 0.1 下 softmax 行为不变
+- [x] 全量 BDI 测试通过：`.\.venv\Scripts\python.exe -m pytest tests/agent/bdi/ -v`
+- [x] ACT-R Phase 1 测试无回归
+- [x] 新增测试覆盖 cron bridge、IntentionStack 持久化、increment_eval、Softmax 溢出

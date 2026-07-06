@@ -1,0 +1,34 @@
+- [x] `soar_models.py` 存在且定义了 `SoarObstacle`、`SoarSubgoal`、`SoarSubgoalStack` 三个类型
+- [x] `SoarObstacle` 含字段：`obstacle_id, obstacle_type, root_cause, attempted_tools, recoverable_hint, created_at`
+- [x] `SoarObstacle` 支持 `to_json()`/`from_json()` 序列化往返
+- [x] `SoarSubgoal` 含字段：`subgoal_id, parent_goal_id, obstacle, working_state_snapshot, subagent_task_id, created_at, solution_path`
+- [x] `SoarSubgoal` 支持 `to_json()`/`from_json()` 序列化往返
+- [x] `SoarSubgoalStack` 提供 `push/pop/peek/depth/is_empty` LIFO 语义
+- [x] `SoarSubgoalStack.persist_to(path)` 原子写入 JSON 文件
+- [x] `SoarSubgoalStack.load_from(path)` 从文件重建栈
+- [x] `SoarSubgoalStack.load_from` 文件不存在时返回空栈，不抛异常
+- [x] `SoarSubgoalStack.load_from` 文件损坏时记 warning 并返回空栈
+- [x] `SubagentManager._detect_obstacle` 方法存在
+- [x] `stop_reason == "tool_error"` 产出 `SoarObstacle(obstacle_type="tool_failure")`
+- [x] 未捕获异常产出 `SoarObstacle(obstacle_type="internal_error")`
+- [x] 成功路径不产出 `SoarObstacle`
+- [x] `SoarObstacle` 存入 `SubagentTaskRecord.metadata["soar_obstacle"]`
+- [x] `_announce_result` 签名含 `obstacle_type: str | None = None` 参数
+- [x] 失败时 `InboundMessage.metadata["obstacle_type"]` 被设置
+- [x] 成功时 `InboundMessage.metadata` 不含 `obstacle_type` 键
+- [x] `SkillBootstrapper` 类存在（有状态，封装 scanner + compiler）
+- [x] `SkillBootstrapper.ingest_chunk(digest)` 方法存在
+- [x] 单次 ingest 不触发 compile（返回 None）
+- [x] 累计 `min_repeats` 次且含 `correction_flag=True` 触发 compile
+- [x] 累计 `min_repeats` 次但无 `correction_flag` 不触发 compile
+- [x] 窗口容量超 `max_window_size` 时 FIFO 淘汰最旧 digest
+- [x] compile 后该 fingerprint 从窗口移除
+- [x] `SoarChunker` 类存在
+- [x] `SoarChunker.chunk(subgoal)` 产出 `ActionTraceDigest(correction_flag=True)` 并调用 `ingest_chunk`
+- [x] `SoarChunker` 从 `SubagentToolRecord` 提取按时间排序的 `tool_sequence`
+- [x] `param_preview` 被截断到 200 字符
+- [x] `SubagentManager.__init__` 含 `soar_chunker: SoarChunker | None = None` 参数
+- [x] `soar_chunker=None` 时成功路径不调用 chunk
+- [x] 现有 `test_skill_bootstrapper.py` 离线 scan 路径无回归
+- [x] 全量 agent 测试通过：`.\.venv\Scripts\python.exe -m pytest tests/agent/ -v`
+- [x] BDI 测试无回归：`.\.venv\Scripts\python.exe -m pytest tests/agent/bdi/ -v`

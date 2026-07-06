@@ -76,7 +76,7 @@ class CronDesireBridge:
             session_key=session_key,
             content=content,
             status=DesireStatus.PENDING,
-            priority=DesirePriority.NORMAL,
+            priority=DesirePriority.MEDIUM,
             deadline_at=deadline or None,
             source_foresight_id=None,
             source_episode_id=None,

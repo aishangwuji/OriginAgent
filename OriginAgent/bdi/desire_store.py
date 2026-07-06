@@ -6,6 +6,7 @@ import json
 import os
 import tempfile
 from contextlib import contextmanager
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -141,6 +142,7 @@ class DesireStore:
         reasoning: str = "",
         metadata: dict[str, Any] | None = None,
         utility: float | None = None,
+        increment_eval: bool = False,
     ) -> Desire | None:
         with self._read_modify_write() as desires:
             current = desires.get(desire_id)
@@ -150,28 +152,23 @@ class DesireStore:
             if status is not None:
                 current = current.transition_to(status, reasoning=reasoning)
             if priority is not None:
-                current = current.__replace__(
+                current = replace(
+                    current,
                     priority=priority,
                     updated_at=now_iso(),
                     last_reasoning=reasoning or current.last_reasoning,
                 )
             if metadata is not None:
                 merged = {**current.metadata, **metadata}
-                current = current.__replace__(metadata=merged, updated_at=now_iso())
+                current = replace(current, metadata=merged, updated_at=now_iso())
             if utility is not None:
                 current = current.with_utility(utility)
 
-            if current.evaluation_count == current.__class__(
-                desire_id=current.desire_id,
-                owner_id=current.owner_id,
-                session_key=current.session_key,
-                content=current.content,
-                status=current.status,
-                priority=current.priority,
-            ).evaluation_count:
+            if increment_eval:
                 current = current.with_evaluation(reasoning=reasoning)
             else:
-                current = current.__replace__(
+                current = replace(
+                    current,
                     updated_at=now_iso(),
                     last_reasoning=reasoning or current.last_reasoning,
                 )
@@ -353,6 +350,7 @@ class DesireStoreSqlite(ReadModifyWriteMigrator):
         priority: int | None = None,
         last_reasoning: str = "",
         utility: float | None = None,
+        increment_eval: bool = False,
     ) -> dict[str, Any] | None:
         """Update one or more fields on *desire_id* and return the updated row."""
         self._ensure_schema()
@@ -376,6 +374,8 @@ class DesireStoreSqlite(ReadModifyWriteMigrator):
                 if utility is not None:
                     clamped = max(0.0, min(float(utility), 1.0))
                     data["utility"] = clamped
+                if increment_eval:
+                    data["evaluation_count"] = int(data.get("evaluation_count", 0)) + 1
                 from datetime import datetime, timezone
                 data["updated_at"] = datetime.now(timezone.utc).isoformat()
                 self.upsert_row(conn, data)
