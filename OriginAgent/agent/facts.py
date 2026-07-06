@@ -8,6 +8,7 @@ file. Fact `content` is the remembered human-readable fact and is not redacted;
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
 import os
@@ -1229,11 +1230,13 @@ class FactStore:
         config: FactStoreConfig | None = None,
         feature_flags: dict[str, bool] | None = None,
         sqlite_facts: Any = None,
+        jsonl_fallback_enabled: bool = True,
     ):
         self.workspace = workspace
         self.memory_dir = ensure_dir(workspace / "memory")
         self.facts_file = facts_file or self.memory_dir / "facts.jsonl"
         self._sqlite_facts = sqlite_facts
+        self._jsonl_fallback_enabled = jsonl_fallback_enabled
         self.calibration_file = self.memory_dir / "confidence_calibration.json"
         self.relations_file = self.memory_dir / "fact_relations.jsonl"
         self.semantic_index_file = self.memory_dir / "semantic_index.json"
@@ -1262,7 +1265,9 @@ class FactStore:
     def flag_enabled(self, name: str) -> bool:
         return bool(self.feature_flags.get(str(name or "").strip(), False))
 
-    def _locked(self) -> FileLock:
+    def _locked(self) -> Any:
+        if self._sqlite_facts is not None:
+            return contextlib.nullcontext()
         if self._lock_factory is not None:
             return self._lock_factory()
         return FileLock(str(self._lock_file))
@@ -2043,18 +2048,32 @@ class FactStore:
         return render_memory_md(self.read_all_unlocked())
 
     def _write_records_unlocked(self, records: list[FactRecord]) -> None:
-        text = "".join(
-            json.dumps(record.to_dict(), ensure_ascii=False, sort_keys=True) + "\n"
-            for record in records
-        )
-        _write_text_atomic(self.facts_file, text)
+        raw = [record.to_dict() for record in records]
         if self._sqlite_facts is not None:
+            # Primary: SQLite (crash-safe via commit fsync)
             try:
-                for record in records:
-                    self._sqlite_facts.upsert(record.to_dict())
+                for r in raw:
+                    self._sqlite_facts.upsert(r)
             except Exception:
-                logger.opt(exception=True).warning("facts: sqlite upsert failed")
-        self._refresh_cache_from_raw([record.to_dict() for record in records])
+                logger.opt(exception=True).warning("facts: sqlite upsert failed, falling back to JSONL")
+                text = "".join(json.dumps(r, ensure_ascii=False, sort_keys=True) + "\n" for r in raw)
+                _write_text_atomic(self.facts_file, text)
+                self._refresh_cache_from_raw(raw)
+                return
+            # Cold backup: JSONL with buffered I/O only (no fsync)
+            from OriginAgent.storage.jsonl_fallback import should_write_jsonl
+            if should_write_jsonl(self._jsonl_fallback_enabled, self._sqlite_facts):
+                text = "".join(json.dumps(r, ensure_ascii=False, sort_keys=True) + "\n" for r in raw)
+                path = self.facts_file
+                path.parent.mkdir(parents=True, exist_ok=True)
+                with path.open("w", encoding="utf-8") as f:
+                    f.write(text)
+                    f.flush()
+        else:
+            # No SQLite: fall back to JSONL with full crash safety
+            text = "".join(json.dumps(r, ensure_ascii=False, sort_keys=True) + "\n" for r in raw)
+            _write_text_atomic(self.facts_file, text)
+        self._refresh_cache_from_raw(raw)
 
     def _new_fact_id(self, records: list[FactRecord]) -> str:
         existing = {record.fact_id for record in records}
