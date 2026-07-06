@@ -394,6 +394,11 @@ def build_loop_components(
     values["_persist"] = TurnPersistManager(values["max_tool_result_chars"], values["sessions"])
     values["_tool_audit_config"] = ToolAuditConfig.from_config(tool_audit_config or tools_config.audit)
     values["_grant_store"] = CapabilityGrantStore(workspace)
+
+    # ── SQLite stores (create + migrate from JSONL) ────────────────
+    # Must be created early — downstream services wire in SQLite fallback.
+    values["_sqlite_stores"] = SqliteStoreFactory.create_all(workspace)
+
     values["_audit_logger"] = AuditLogger(
         workspace,
         sqlite_store=values["_sqlite_stores"].audit_events,
@@ -405,10 +410,6 @@ def build_loop_components(
         audit_logger=values["_audit_logger"],
         config=defaults.confirmation,
     )
-    # ── SQLite stores (create + migrate from JSONL) ────────────────
-    # Created early so downstream services can wire in SQLite fallback.
-    values["_sqlite_stores"] = SqliteStoreFactory.create_all(workspace)
-
     values["_reminder_store"] = ReminderStore(
         workspace,
         sqlite_store=values["_sqlite_stores"].reminders,
