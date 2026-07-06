@@ -10,6 +10,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Literal
 
+from loguru import logger
+
 from OriginAgent.agent.memory import redact_memory_text
 from OriginAgent.utils.helpers import ensure_dir, truncate_text
 
@@ -131,24 +133,55 @@ class SubagentToolRecord:
 class JsonlSubagentRecordStore:
     """Append-only JSONL store for subagent execution records."""
 
-    def __init__(self, workspace: Path):
+    def __init__(
+        self,
+        workspace: Path,
+        *,
+        sqlite_tasks: Any = None,
+        sqlite_lifecycle: Any = None,
+        sqlite_tools: Any = None,
+    ):
         root = Path(workspace) / "memory" / "subagents"
         self._tasks_path = root / "tasks.jsonl"
         self._lifecycle_path = root / "lifecycle.jsonl"
         self._tools_path = root / "tools.jsonl"
         self._lock = threading.Lock()
+        self._sqlite_tasks = sqlite_tasks
+        self._sqlite_lifecycle = sqlite_lifecycle
+        self._sqlite_tools = sqlite_tools
+
+    def _sqlite_append(self, store: Any, payload: dict[str, Any], label: str) -> None:
+        if store is not None:
+            try:
+                store.append(payload)
+            except Exception:
+                logger.opt(exception=True).warning("subagent_records: sqlite {} append failed", label)
 
     def append_task(self, record: SubagentTaskRecord) -> None:
-        self._append(self._tasks_path, record.to_dict())
+        payload = record.to_dict()
+        self._append(self._tasks_path, payload)
+        self._sqlite_append(self._sqlite_tasks, payload, "tasks")
 
     def append_lifecycle(self, record: SubagentLifecycleRecord) -> None:
-        self._append(self._lifecycle_path, record.to_dict())
+        payload = record.to_dict()
+        self._append(self._lifecycle_path, payload)
+        self._sqlite_append(self._sqlite_lifecycle, payload, "lifecycle")
 
     def append_tool(self, record: SubagentToolRecord) -> None:
-        self._append(self._tools_path, record.to_dict())
+        payload = record.to_dict()
+        self._append(self._tools_path, payload)
+        self._sqlite_append(self._sqlite_tools, payload, "tools")
+
+    def _task_records(self) -> list[dict[str, Any]]:
+        if self._sqlite_tasks is not None:
+            try:
+                return self._sqlite_tasks.recent(limit=10000)
+            except Exception:
+                pass
+        return list(self._iter_jsonl(self._tasks_path))
 
     def recent_task_summary(self, limit: int = _RECENT_TASK_LIMIT) -> dict[str, Any]:
-        records = list(self._iter_jsonl(self._tasks_path))
+        records = self._task_records()
         if not records:
             return {
                 "subagent_task_total": 0,

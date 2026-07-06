@@ -469,6 +469,7 @@ def build_loop_components(
         subagent_policy_mode=defaults.subagent_policy.mode,
         grant_store=values["_grant_store"],
         preset_snapshot_loader=preset_snapshot_loader,
+        sqlite_stores=values.get("_sqlite_stores"),
     )
 
     # Step 4: loop runtime scaffolding and context wiring.

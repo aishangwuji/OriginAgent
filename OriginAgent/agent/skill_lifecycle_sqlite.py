@@ -11,7 +11,8 @@ from pathlib import Path
 from typing import Any
 
 from OriginAgent.storage.jsonl_migration import AppendOnlyMigrator
-from OriginAgent.storage.sqlite_helpers import connect as sqlite_connect, ensure_schema
+from OriginAgent.storage.sqlite_helpers import connect as sqlite_connect
+from OriginAgent.storage.sqlite_helpers import ensure_schema
 
 
 class SkillLifecycleStoreSqlite(AppendOnlyMigrator):
@@ -144,6 +145,18 @@ class SkillLifecycleStoreSqlite(AppendOnlyMigrator):
                    )"""
             ).fetchall()
             return {row["skill_name"]: json.loads(row["payload_json"]) for row in rows}
+        finally:
+            conn.close()
+
+    def read_all(self) -> list[dict[str, Any]]:
+        """Return all events, oldest first."""
+        self._ensure_schema()
+        conn = sqlite_connect(self.db_path)
+        try:
+            rows = conn.execute(
+                "SELECT payload_json FROM skill_lifecycle_events ORDER BY created_at"
+            ).fetchall()
+            return [json.loads(row["payload_json"]) for row in rows]
         finally:
             conn.close()
 

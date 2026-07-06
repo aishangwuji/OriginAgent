@@ -14,6 +14,7 @@ from typing import Any, Callable
 
 import yaml
 from filelock import FileLock
+from loguru import logger
 
 from OriginAgent.agent.domain_packs import (
     DomainEvalDeclaration,
@@ -27,7 +28,12 @@ from OriginAgent.agent.domain_packs import (
     DomainWorkflowDeclaration,
 )
 from OriginAgent.agent.metadata import read_originagent_metadata, set_originagent_metadata
-from OriginAgent.agent.skill_lifecycle import _metadata_originagent, _read_skill_markdown, _set_metadata_originagent, _write_skill_markdown
+from OriginAgent.agent.skill_lifecycle import (
+    _metadata_originagent,
+    _read_skill_markdown,
+    _set_metadata_originagent,
+    _write_skill_markdown,
+)
 from OriginAgent.agent.tools.base import Tool
 from OriginAgent.agent.workflow_artifacts import validate_workflow_artifact_dir
 from OriginAgent.utils.helpers import truncate_text
@@ -88,6 +94,7 @@ class DomainPackGovernanceService:
         config_loader: Callable[[], Any] | None = None,
         config_saver: Callable[[Any], None] | None = None,
         event_path: Path | None = None,
+        sqlite_store: Any = None,
     ) -> None:
         self.workspace = Path(workspace)
         self._domain_pack_manager = domain_pack_manager
@@ -95,6 +102,7 @@ class DomainPackGovernanceService:
         self._config_saver = config_saver
         self.event_path = event_path or (self.workspace / DOMAIN_PACK_EVENTS_RELATIVE)
         self._lock_path = self.event_path.parent / ".domain_pack_governance.lock"
+        self._sqlite = sqlite_store
 
     def _locked(self) -> FileLock:
         self.event_path.parent.mkdir(parents=True, exist_ok=True)
@@ -140,6 +148,11 @@ class DomainPackGovernanceService:
         return self._manager(config)
 
     def _read_events_unlocked(self) -> list[dict[str, Any]]:
+        if self._sqlite is not None:
+            try:
+                return self._sqlite.read_all()
+            except Exception:
+                pass
         rows: list[dict[str, Any]] = []
         try:
             with self.event_path.open("r", encoding="utf-8") as handle:
@@ -196,6 +209,11 @@ class DomainPackGovernanceService:
         self.event_path.parent.mkdir(parents=True, exist_ok=True)
         with self.event_path.open("a", encoding="utf-8") as handle:
             handle.write(json.dumps(event, ensure_ascii=False) + "\n")
+        if self._sqlite is not None:
+            try:
+                self._sqlite.append_event(event)
+            except Exception:
+                logger.opt(exception=True).warning("domain_pack: sqlite append_event failed")
         return event
 
     def list_records(

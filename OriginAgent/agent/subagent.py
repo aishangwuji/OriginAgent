@@ -14,7 +14,6 @@ from typing import Any, Callable
 from loguru import logger
 
 from OriginAgent.agent.agent_tool_setup import register_default_tools
-from OriginAgent.utils.tracing import log_event
 from OriginAgent.agent.hook import AgentHook, AgentHookContext
 from OriginAgent.agent.runner import AgentRunner, AgentRunSpec
 from OriginAgent.agent.subagent_policy import SubagentPolicy
@@ -27,8 +26,8 @@ from OriginAgent.agent.subagent_records import (
     summarize_payload,
     summarize_text,
 )
-from OriginAgent.agent.tools.registry import ToolRegistry
 from OriginAgent.agent.tools.audit import JsonlToolAuditSink, ToolAuditConfig
+from OriginAgent.agent.tools.registry import ToolRegistry
 from OriginAgent.bus.events import InboundMessage
 from OriginAgent.bus.queue import MessageBus
 from OriginAgent.config.schema import AgentDefaults, ExecToolConfig, ToolsConfig, WebToolsConfig
@@ -37,6 +36,7 @@ from OriginAgent.security.capabilities import CapabilitySnapshot, intersect_capa
 from OriginAgent.security.grants import CapabilityGrantStore
 from OriginAgent.security.policy import PolicyDeniedError
 from OriginAgent.utils.prompt_templates import render_template
+from OriginAgent.utils.tracing import log_event
 
 _GRANT_ERROR_MESSAGE = "Capability grant is missing, expired, or revoked."
 
@@ -114,6 +114,7 @@ class SubagentManager:
         preset_snapshot_loader: Callable[[str], Any] | None = None,
         delegated_model_preset: str | None = None,
         subagent_policy_mode: str = "normal",
+        sqlite_stores: Any = None,
     ):
         defaults = AgentDefaults()
         self.provider = provider
@@ -143,7 +144,12 @@ class SubagentManager:
             delegated_preset=delegated_model_preset,
         )
         self.runner = AgentRunner(provider)
-        self.records = JsonlSubagentRecordStore(workspace)
+        self.records = JsonlSubagentRecordStore(
+            workspace,
+            sqlite_tasks=sqlite_stores.subagent_tasks if sqlite_stores else None,
+            sqlite_lifecycle=sqlite_stores.subagent_lifecycle if sqlite_stores else None,
+            sqlite_tools=sqlite_stores.subagent_tools if sqlite_stores else None,
+        )
         self._live_dir = self.workspace / "memory" / "subagents" / "live"
         self._running_tasks: dict[str, asyncio.Task[None]] = {}
         self._task_statuses: dict[str, SubagentStatus] = {}

@@ -14,8 +14,8 @@ import yaml
 from filelock import FileLock
 from loguru import logger
 
-from OriginAgent.agent.metadata import read_originagent_metadata, set_originagent_metadata
 from OriginAgent.agent.memory import redact_memory_text
+from OriginAgent.agent.metadata import read_originagent_metadata, set_originagent_metadata
 from OriginAgent.utils.helpers import truncate_text
 
 SKILL_LIFECYCLE_EVENTS_RELATIVE = Path("memory") / "skill_lifecycle_events.jsonl"
@@ -66,10 +66,11 @@ class SkillLifecycleResult:
 class SkillLifecycleStore:
     """Append-only lifecycle store plus deterministic frontmatter updates."""
 
-    def __init__(self, workspace: Path, *, event_path: Path | None = None) -> None:
+    def __init__(self, workspace: Path, *, event_path: Path | None = None, sqlite_store: Any = None) -> None:
         self.workspace = Path(workspace)
         self.event_path = event_path or (self.workspace / SKILL_LIFECYCLE_EVENTS_RELATIVE)
         self._lock_path = self.event_path.parent / ".skill_lifecycle.lock"
+        self._sqlite = sqlite_store
 
     def _locked(self) -> FileLock:
         self.event_path.parent.mkdir(parents=True, exist_ok=True)
@@ -369,6 +370,11 @@ class SkillLifecycleStore:
         return latest
 
     def _iter_events_unlocked(self) -> list[dict[str, Any]]:
+        if self._sqlite is not None:
+            try:
+                return self._sqlite.read_all()
+            except Exception:
+                pass
         rows: list[dict[str, Any]] = []
         try:
             with self.event_path.open("r", encoding="utf-8") as handle:
@@ -393,6 +399,11 @@ class SkillLifecycleStore:
         self.event_path.parent.mkdir(parents=True, exist_ok=True)
         with self.event_path.open("a", encoding="utf-8") as handle:
             handle.write(json.dumps(event, ensure_ascii=False) + "\n")
+        if self._sqlite is not None:
+            try:
+                self._sqlite.append_event(event)
+            except Exception:
+                logger.opt(exception=True).warning("skill_lifecycle: sqlite append_event failed")
 
 
 def summarize_skill_lifecycle(workspace: Path, entries: list[dict[str, str]]) -> dict[str, Any]:
