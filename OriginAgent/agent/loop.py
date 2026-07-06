@@ -1149,6 +1149,7 @@ class AgentLoop:
             domain_runtime_overrides=self._domain_runtime_overrides,
             evolution_config=self.evolution_config,
             domain_runtime_contributions=self._domain_runtime_contributions,
+            cron_bridge=getattr(self._host, "_cron_bridge", None),
         )
 
     def _build_tool_context(self):

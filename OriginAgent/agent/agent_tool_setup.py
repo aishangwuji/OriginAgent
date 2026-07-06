@@ -11,15 +11,21 @@ from OriginAgent.agent.audit import AuditLogger
 from OriginAgent.agent.confirmation import ConfirmationManager, PendingConfirmationStore
 from OriginAgent.agent.skills import BUILTIN_SKILLS_DIR
 from OriginAgent.agent.tools.ask import AskUserTool
+from OriginAgent.agent.tools.close_episode import CloseEpisodeTool
 from OriginAgent.agent.tools.content_read import ContentReadTool
 from OriginAgent.agent.tools.context import ToolContext
 from OriginAgent.agent.tools.cron import CronTool
 from OriginAgent.agent.tools.domain_loader import DomainToolLoader
+from OriginAgent.agent.tools.episode_context import EpisodeContextTool
 from OriginAgent.agent.tools.evolution_control import EvolutionControlTool
-from OriginAgent.agent.tools.filesystem import EditFileTool, ListDirTool, ReadFileTool, WriteFileTool
+from OriginAgent.agent.tools.filesystem import (
+    EditFileTool,
+    ListDirTool,
+    ReadFileTool,
+    WriteFileTool,
+)
 from OriginAgent.agent.tools.image_generation import ImageGenerationTool
 from OriginAgent.agent.tools.loader import ToolLoader
-from OriginAgent.agent.tools.long_task import CompleteGoalTool, LongTaskTool
 from OriginAgent.agent.tools.local_awareness import (
     BindDeviceTool,
     CaptureCameraFrameTool,
@@ -35,6 +41,7 @@ from OriginAgent.agent.tools.local_awareness import (
     SpeakTextTool,
     TranscribeAudioSampleTool,
 )
+from OriginAgent.agent.tools.long_task import CompleteGoalTool, LongTaskTool
 from OriginAgent.agent.tools.message import MessageTool
 from OriginAgent.agent.tools.notebook import NotebookEditTool
 from OriginAgent.agent.tools.registry import ToolRegistry
@@ -52,8 +59,6 @@ from OriginAgent.agent.tools.search import GlobTool, GrepTool
 from OriginAgent.agent.tools.session_search import SessionSearchTool
 from OriginAgent.agent.tools.shell import ExecTool
 from OriginAgent.agent.tools.spawn import SpawnTool
-from OriginAgent.agent.tools.close_episode import CloseEpisodeTool
-from OriginAgent.agent.tools.episode_context import EpisodeContextTool
 from OriginAgent.agent.tools.web import WebFetchTool, WebSearchTool
 from OriginAgent.security.grants import CapabilityGrantStore
 
@@ -172,6 +177,7 @@ def register_default_tools(
     domain_runtime_overrides: dict[str, Any] | None = None,
     evolution_config: Any | None = None,
     allowed_tool_names: set[str] | frozenset[str] | None = None,
+    cron_bridge: Any | None = None,
     domain_runtime_contributions: list[Any] | None = None,
 ) -> None:
     """Register all default tools with the registry."""
@@ -537,7 +543,7 @@ def register_default_tools(
     if cron_service:
         _register_named(
             "cron",
-            lambda: CronTool(cron_service, default_timezone=timezone or "UTC"),
+            lambda: CronTool(cron_service, default_timezone=timezone or "UTC", cron_bridge=cron_bridge),
         )
 
     if allowed_tool_names is not None:

@@ -61,8 +61,9 @@ class CronTool(Tool):
 
     security_class = ToolSecurityClass.SENSITIVE_CAPABILITY
 
-    def __init__(self, cron_service: CronService, default_timezone: str = "UTC"):
+    def __init__(self, cron_service: CronService, default_timezone: str = "UTC", *, cron_bridge: Any = None):
         self._cron = cron_service
+        self._cron_bridge = cron_bridge
         self._default_timezone = default_timezone
         self._channel: ContextVar[str] = ContextVar("cron_channel", default="")
         self._chat_id: ContextVar[str] = ContextVar("cron_chat_id", default="")
@@ -322,6 +323,12 @@ class CronTool(Tool):
             session_key=self._session_key.get() or None,
             capability_snapshot=CapabilitySnapshot.scheduled_default().to_dict(),
         )
+        if self._cron_bridge is not None:
+            self._cron_bridge.on_cron_job_created(
+                job,
+                session_key=self._session_key.get() or "",
+                owner_id="user",
+            )
         return f"Created job '{job.name}' (id: {job.id})"
 
     @staticmethod
