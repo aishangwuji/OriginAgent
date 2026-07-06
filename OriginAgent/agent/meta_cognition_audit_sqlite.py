@@ -34,6 +34,15 @@ def _recent(store, table: str, *, limit: int = 200) -> list[dict[str, Any]]:
         return [json.loads(r["payload_json"]) for r in rows]
     finally: conn.close()
 
+def _append_one(store, data: dict[str, Any]) -> None:
+    _ensure(store)
+    conn = sqlite_connect(store.db_path)
+    try:
+        store.insert_row(conn, data)
+        conn.commit()
+    finally:
+        conn.close()
+
 
 # ==========================================================================
 # Triggers
@@ -64,6 +73,7 @@ class MetaTriggersSqlite(AppendOnlyMigrator):
             (line.get("trigger_id",""), line.get("session_key",""), line.get("trigger_type",""),
              line.get("source_reference",""), line.get("created_at",""), json.dumps(line, ensure_ascii=False)))
     def recent(self, *, limit=200): return _recent(self, "meta_triggers", limit=limit)
+    def append(self, data: dict[str, Any]) -> None: _append_one(self, data)
 
 # ==========================================================================
 # Decisions
@@ -101,6 +111,7 @@ class MetaDecisionsSqlite(AppendOnlyMigrator):
              1 if line.get("accepted") else 0, line.get("suppression_reason",""), line.get("turn_id"),
              line.get("created_at",""), json.dumps(line, ensure_ascii=False)))
     def recent(self, *, limit=200): return _recent(self, "meta_decisions", limit=limit)
+    def append(self, data: dict[str, Any]) -> None: _append_one(self, data)
 
 # ==========================================================================
 # Journals
@@ -128,6 +139,7 @@ class MetaJournalsSqlite(AppendOnlyMigrator):
             "INSERT OR IGNORE INTO meta_journals (entry_id, session_key, created_at, payload_json) VALUES (?,?,?,?)",
             (line.get("entry_id",""), line.get("session_key",""), line.get("created_at",""), json.dumps(line, ensure_ascii=False)))
     def recent(self, *, limit=200): return _recent(self, "meta_journals", limit=limit)
+    def append(self, data: dict[str, Any]) -> None: _append_one(self, data)
 
 # ==========================================================================
 # Reflections
@@ -155,6 +167,7 @@ class MetaReflectionsSqlite(AppendOnlyMigrator):
             "INSERT OR IGNORE INTO meta_reflections (reflection_id, session_key, created_at, payload_json) VALUES (?,?,?,?)",
             (line.get("reflection_id",""), line.get("session_key",""), line.get("created_at",""), json.dumps(line, ensure_ascii=False)))
     def recent(self, *, limit=200): return _recent(self, "meta_reflections", limit=limit)
+    def append(self, data: dict[str, Any]) -> None: _append_one(self, data)
 
 # ==========================================================================
 # Confidence traces
@@ -182,6 +195,7 @@ class MetaConfidenceTracesSqlite(AppendOnlyMigrator):
             "INSERT OR IGNORE INTO meta_confidence_traces (trace_id, session_key, created_at, payload_json) VALUES (?,?,?,?)",
             (line.get("trace_id",""), line.get("session_key",""), line.get("created_at",""), json.dumps(line, ensure_ascii=False)))
     def recent(self, *, limit=200): return _recent(self, "meta_confidence_traces", limit=limit)
+    def append(self, data: dict[str, Any]) -> None: _append_one(self, data)
 
 # ==========================================================================
 # Patterns
@@ -209,6 +223,7 @@ class MetaPatternsSqlite(AppendOnlyMigrator):
             "INSERT OR IGNORE INTO meta_patterns (pattern_id, session_key, created_at, payload_json) VALUES (?,?,?,?)",
             (line.get("pattern_id",""), line.get("session_key",""), line.get("created_at",""), json.dumps(line, ensure_ascii=False)))
     def recent(self, *, limit=200): return _recent(self, "meta_patterns", limit=limit)
+    def append(self, data: dict[str, Any]) -> None: _append_one(self, data)
 
 # ==========================================================================
 # Evolution seeds
@@ -236,3 +251,4 @@ class MetaEvolutionSeedsSqlite(AppendOnlyMigrator):
             "INSERT OR IGNORE INTO meta_evolution_seeds (seed_id, session_key, created_at, payload_json) VALUES (?,?,?,?)",
             (line.get("seed_id",""), line.get("session_key",""), line.get("created_at",""), json.dumps(line, ensure_ascii=False)))
     def recent(self, *, limit=200): return _recent(self, "meta_evolution_seeds", limit=limit)
+    def append(self, data: dict[str, Any]) -> None: _append_one(self, data)

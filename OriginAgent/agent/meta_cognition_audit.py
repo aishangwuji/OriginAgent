@@ -8,6 +8,8 @@ import threading
 from pathlib import Path
 from typing import Any
 
+from loguru import logger
+
 from OriginAgent.agent.meta_cognition_models import (
     ConfidenceTrace,
     ErrorPattern,
@@ -25,7 +27,12 @@ _RECENT_SCAN_LIMIT = 200
 class JsonlMetaCognitionAuditLedger:
     """Append-only ledger for meta-cognition triggers, artifacts, and runtime decisions."""
 
-    def __init__(self, workspace: Path):
+    def __init__(
+        self,
+        workspace: Path,
+        *,
+        sqlite: Any = None,  # optional SqliteStoreRegistry
+    ):
         root = Path(workspace) / "memory" / "meta_cognition"
         self._triggers_path = root / "triggers.jsonl"
         self._decisions_path = root / "decisions.jsonl"
@@ -35,9 +42,20 @@ class JsonlMetaCognitionAuditLedger:
         self._patterns_path = root / "patterns.jsonl"
         self._evolution_seeds_path = root / "evolution_seeds.jsonl"
         self._lock = threading.Lock()
+        self._sqlite = sqlite
+
+    @staticmethod
+    def _sqlite_append(store: Any, payload: dict[str, Any], label: str) -> None:
+        if store is not None:
+            try:
+                store.append(payload)
+            except Exception:
+                logger.opt(exception=True).warning("meta_audit: sqlite {} append failed", label)
 
     def append_trigger(self, trigger: MetaTrigger) -> None:
-        self._append(self._triggers_path, trigger.to_json())
+        payload = trigger.to_json()
+        self._append(self._triggers_path, payload)
+        self._sqlite_append(self._sqlite.meta_triggers if self._sqlite else None, payload, "meta_triggers")
 
     def append_runtime_decision(
         self,
@@ -57,42 +75,75 @@ class JsonlMetaCognitionAuditLedger:
             "turn_id": turn_id,
         }
         self._append(self._decisions_path, payload)
+        self._sqlite_append(self._sqlite.meta_decisions if self._sqlite else None, payload, "meta_decisions")
 
     def append_journal(self, journal: ThoughtJournalEntry) -> None:
-        self._append(self._journals_path, journal.to_json())
+        payload = journal.to_json()
+        self._append(self._journals_path, payload)
+        self._sqlite_append(self._sqlite.meta_journals if self._sqlite else None, payload, "meta_journals")
 
     def append_reflection(self, reflection: ReflectionRecord) -> None:
-        self._append(self._reflections_path, reflection.to_json())
+        payload = reflection.to_json()
+        self._append(self._reflections_path, payload)
+        self._sqlite_append(self._sqlite.meta_reflections if self._sqlite else None, payload, "meta_reflections")
 
     def append_confidence_trace(self, trace: ConfidenceTrace) -> None:
-        self._append(self._confidence_traces_path, trace.to_json())
+        payload = trace.to_json()
+        self._append(self._confidence_traces_path, payload)
+        self._sqlite_append(self._sqlite.meta_confidence_traces if self._sqlite else None, payload, "meta_confidence_traces")
 
     def append_pattern(self, pattern: ErrorPattern) -> None:
-        self._append(self._patterns_path, pattern.to_json())
+        payload = pattern.to_json()
+        self._append(self._patterns_path, payload)
+        self._sqlite_append(self._sqlite.meta_patterns if self._sqlite else None, payload, "meta_patterns")
 
     def append_evolution_seed(self, seed: EvolutionSeed) -> None:
-        self._append(self._evolution_seeds_path, seed.to_json())
+        payload = seed.to_json()
+        self._append(self._evolution_seeds_path, payload)
+        self._sqlite_append(self._sqlite.meta_evolution_seeds if self._sqlite else None, payload, "meta_evolution_seeds")
+
+    def _recent_sqlite(self, store: Any, fallback_path: Path, limit: int) -> list[dict[str, Any]]:
+        if store is not None:
+            try:
+                return store.recent(limit=limit)
+            except Exception:
+                pass
+        return self._recent(fallback_path, limit=limit)
 
     def recent_triggers(self, limit: int = _RECENT_SCAN_LIMIT) -> list[dict[str, Any]]:
-        return self._recent(self._triggers_path, limit=limit)
+        return self._recent_sqlite(
+            self._sqlite.meta_triggers if self._sqlite else None,
+            self._triggers_path, limit)
 
     def recent_decisions(self, limit: int = _RECENT_SCAN_LIMIT) -> list[dict[str, Any]]:
-        return self._recent(self._decisions_path, limit=limit)
+        return self._recent_sqlite(
+            self._sqlite.meta_decisions if self._sqlite else None,
+            self._decisions_path, limit)
 
     def recent_journals(self, limit: int = _RECENT_SCAN_LIMIT) -> list[dict[str, Any]]:
-        return self._recent(self._journals_path, limit=limit)
+        return self._recent_sqlite(
+            self._sqlite.meta_journals if self._sqlite else None,
+            self._journals_path, limit)
 
     def recent_reflections(self, limit: int = _RECENT_SCAN_LIMIT) -> list[dict[str, Any]]:
-        return self._recent(self._reflections_path, limit=limit)
+        return self._recent_sqlite(
+            self._sqlite.meta_reflections if self._sqlite else None,
+            self._reflections_path, limit)
 
     def recent_confidence_traces(self, limit: int = _RECENT_SCAN_LIMIT) -> list[dict[str, Any]]:
-        return self._recent(self._confidence_traces_path, limit=limit)
+        return self._recent_sqlite(
+            self._sqlite.meta_confidence_traces if self._sqlite else None,
+            self._confidence_traces_path, limit)
 
     def recent_patterns(self, limit: int = _RECENT_SCAN_LIMIT) -> list[dict[str, Any]]:
-        return self._recent(self._patterns_path, limit=limit)
+        return self._recent_sqlite(
+            self._sqlite.meta_patterns if self._sqlite else None,
+            self._patterns_path, limit)
 
     def recent_evolution_seeds(self, limit: int = _RECENT_SCAN_LIMIT) -> list[dict[str, Any]]:
-        return self._recent(self._evolution_seeds_path, limit=limit)
+        return self._recent_sqlite(
+            self._sqlite.meta_evolution_seeds if self._sqlite else None,
+            self._evolution_seeds_path, limit)
 
     def summary(self, *, limit: int = 20) -> dict[str, Any]:
         triggers = self.recent_triggers(limit=limit)

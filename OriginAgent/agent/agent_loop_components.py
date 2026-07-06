@@ -567,7 +567,10 @@ def build_loop_components(
         cognitive_audit=values["_cognitive_audit"],
         nearline_memory_config=values["_nearline_memory_config"],
     )
-    values["_meta_cognition_audit"] = JsonlMetaCognitionAuditLedger(workspace)
+    values["_meta_cognition_audit"] = JsonlMetaCognitionAuditLedger(
+        workspace,
+        sqlite=values["_sqlite_stores"],
+    )
     # ── MetaCognitionRegulator (CS-007) ─────────────────────────────
     _regulator_enabled = getattr(values.get("_meta_cognition_config"), "regulator_enabled", True)
     values["_meta_cognition_regulator"] = MetaCognitionRegulator() if _regulator_enabled else None
