@@ -497,6 +497,12 @@ class FactRelationStore:
         return _locked(self._sqlite, self._lock_path)
 
     def read_all(self) -> list[FactRelationRecord]:
+        if self._sqlite is not None:
+            try:
+                raw = self._sqlite.read_all()
+                return [FactRelationRecord.from_dict(r) for r in raw]
+            except Exception:
+                pass
         with self._locked():
             return self.read_all_unlocked()
 
@@ -518,6 +524,12 @@ class FactRelationStore:
         return records
 
     def upsert(self, relation: FactRelationRecord) -> FactRelationRecord:
+        if self._sqlite is not None:
+            try:
+                self._sqlite.upsert(relation.to_dict())
+                return relation
+            except Exception:
+                logger.opt(exception=True).warning("fact_relations: sqlite upsert failed, falling back to JSONL")
         with self._locked():
             records = self.read_all_unlocked()
             updated = self.upsert_unlocked(records, relation)
