@@ -158,6 +158,7 @@ class AuditLogger:
         self._scope_redactor = scope_redactor or _default_scope_redactor
         self._last_hash_by_file: dict[str, str | None] = {}
         self._sqlite = sqlite_store
+        self._jsonl_fallback_enabled = True
 
     def log_action_decision(
         self,
@@ -321,19 +322,35 @@ class AuditLogger:
             event.event_hash = None
             event.event_hash = _hash_audit_event(event.to_dict())
             event_dict = event.to_dict()
+        if self._sqlite is not None:
+            try:
+                self._sqlite.log(event_dict)
+            except Exception:
+                logger.opt(exception=True).warning("audit: sqlite log failed, falling back to JSONL")
+                self._jsonl_log(path, event_dict)
+                return event
+            if self._jsonl_fallback_enabled:
+                try:
+                    self._jsonl_log(path, event_dict)
+                except Exception:
+                    pass
+            self._last_hash_by_file[filename] = event.event_hash
+        else:
+            self._jsonl_log(path, event_dict)
+        return event
+
+    def _jsonl_log(self, path: Path, event_dict: dict[str, Any]) -> None:
+        """Atomic JSONL append with fsync (crash-safe fallback)."""
+        with self._locked():
+            if not self.audit_dir.exists():
+                self.audit_dir.mkdir(parents=True, exist_ok=True)
+                _fsync_parent(self.audit_dir)
             line = json.dumps(event_dict, ensure_ascii=False, sort_keys=True) + "\n"
             with path.open("a", encoding="utf-8") as handle:
                 handle.write(line)
                 handle.flush()
                 os.fsync(handle.fileno())
             _fsync_parent(path)
-        if self._sqlite is not None:
-            try:
-                self._sqlite.log(event_dict)
-            except Exception:
-                logger.opt(exception=True).warning("audit: sqlite log failed")
-            self._last_hash_by_file[filename] = event.event_hash
-        return event
 
     def _last_hash(self, filename: str, path: Path) -> str | None:
         if filename in self._last_hash_by_file:
