@@ -589,11 +589,14 @@ def build_loop_components(
     substrate_enabled = getattr(meta_config, "thought_substrate_enabled", True)
     _thought_substrate: ThoughtSubstrate | None = None
     if substrate_enabled:
+        _sqlite = values["_sqlite_stores"]
         _thought_substrate = ThoughtSubstrate(
             workspace=workspace,
             max_frames_per_session=getattr(meta_config, "thought_substrate_max_frames_per_session", 500),
             sampling_rate=getattr(meta_config, "thought_substrate_sampling_rate", 1.0),
             audit=values["_meta_cognition_audit"],
+            sqlite_frames=_sqlite.thought_frames,
+            sqlite_journals=_sqlite.thought_journals,
         )
     values["_thought_substrate"] = _thought_substrate
     values["_meta_cognition_reflector"] = MetaCognitionReflector(

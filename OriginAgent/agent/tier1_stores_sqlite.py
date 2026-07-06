@@ -11,8 +11,8 @@ from pathlib import Path
 from typing import Any
 
 from OriginAgent.storage.jsonl_migration import AppendOnlyMigrator
-from OriginAgent.storage.sqlite_helpers import connect as sqlite_connect, ensure_schema
-
+from OriginAgent.storage.sqlite_helpers import connect as sqlite_connect
+from OriginAgent.storage.sqlite_helpers import ensure_schema
 
 # ==========================================================================
 # Shared helpers
@@ -69,6 +69,14 @@ class ThoughtFramesSqlite(AppendOnlyMigrator):
                 (session_key, limit)).fetchall()
             return [json.loads(r["payload_json"]) for r in rows]
         finally: conn.close()
+    def append(self, data: dict[str, Any]) -> None:
+        _ensure(self)
+        conn = sqlite_connect(self.db_path)
+        try:
+            self.insert_row(conn, data)
+            conn.commit()
+        finally:
+            conn.close()
 
 
 # ==========================================================================
@@ -97,6 +105,14 @@ class ThoughtJournalsSqlite(AppendOnlyMigrator):
             "INSERT OR IGNORE INTO thought_journals (entry_id,session_key,created_at,payload_json) VALUES (?,?,?,?)",
             (line.get("entry_id",""), line.get("session_key",""), line.get("created_at",""), json.dumps(line, ensure_ascii=False)))
     def recent(self, *, limit=200): return _recent(self, "thought_journals", limit=limit)
+    def append(self, data: dict[str, Any]) -> None:
+        _ensure(self)
+        conn = sqlite_connect(self.db_path)
+        try:
+            self.insert_row(conn, data)
+            conn.commit()
+        finally:
+            conn.close()
 
 
 # ==========================================================================

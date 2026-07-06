@@ -64,6 +64,8 @@ class ThoughtSubstrate:
         max_frames_per_session: int = _DEFAULT_MAX_FRAMES_PER_SESSION,
         sampling_rate: float = _DEFAULT_SAMPLING_RATE,
         audit: Any = None,
+        sqlite_frames: Any = None,
+        sqlite_journals: Any = None,
     ) -> None:
         root = Path(workspace) / _SUBSTRATE_DIR
         self._frames_path = root / _FRAMES_FILE
@@ -71,6 +73,8 @@ class ThoughtSubstrate:
         self._max_frames = max(1, int(max_frames_per_session))
         self._sampling_rate = max(0.0, min(1.0, float(sampling_rate)))
         self._audit = audit  # optional JsonlMetaCognitionAuditLedger
+        self._sqlite_frames = sqlite_frames  # optional ThoughtFramesSqlite
+        self._sqlite_journals = sqlite_journals  # optional ThoughtJournalsSqlite
 
         self._open_frames: dict[str, ThoughtFrame] = {}
         self._lock = threading.Lock()
@@ -156,6 +160,10 @@ class ThoughtSubstrate:
         limit: int = 20,
     ) -> list[dict[str, Any]]:
         """Return the most recent frame rows, optionally filtered by session."""
+        if self._sqlite_frames is not None:
+            if session_key is not None:
+                return self._sqlite_frames.by_session(session_key, limit=limit)[:limit]
+            return self._sqlite_frames.recent(limit=limit)
         return self._recent(self._frames_path, session_key=session_key, limit=limit)
 
     def recent_journals(
@@ -164,6 +172,8 @@ class ThoughtSubstrate:
         limit: int = 20,
     ) -> list[dict[str, Any]]:
         """Return the most recent journal rows, optionally filtered by session."""
+        if self._sqlite_journals is not None:
+            return self._sqlite_journals.recent(limit=limit)
         return self._recent(self._journals_path, session_key=session_key, limit=limit)
 
     def summary(self, *, limit: int = 20) -> dict[str, Any]:
@@ -246,8 +256,21 @@ class ThoughtSubstrate:
         enrichment: dict[str, Any] | None,
     ) -> ThoughtJournalEntry:
         journal = self._build_journal_from_frame(frame, enrichment=enrichment)
-        self._append(self._frames_path, frame.to_json())
-        self._append(self._journals_path, journal.to_json())
+        frame_json = frame.to_json()
+        journal_json = journal.to_json()
+        self._append(self._frames_path, frame_json)
+        self._append(self._journals_path, journal_json)
+        # dual-write to SQLite
+        if self._sqlite_frames is not None:
+            try:
+                self._sqlite_frames.append(frame_json)
+            except Exception:
+                logger.opt(exception=True).warning("thought_substrate: sqlite frames append failed")
+        if self._sqlite_journals is not None:
+            try:
+                self._sqlite_journals.append(journal_json)
+            except Exception:
+                logger.opt(exception=True).warning("thought_substrate: sqlite journals append failed")
         # mirror to the existing audit ledger when available
         if self._audit is not None:
             try:
