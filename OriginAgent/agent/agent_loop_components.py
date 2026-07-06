@@ -51,6 +51,7 @@ from OriginAgent.memory.rolling import RollingEpisodeCompaction
 from OriginAgent.security.grants import CapabilityGrantStore
 from OriginAgent.session.cold_archive import SessionColdArchiveStore
 from OriginAgent.session.search_index import SessionSearchIndexService
+from OriginAgent.storage.sqlite_stores import SqliteStoreFactory
 
 
 @dataclass
@@ -402,6 +403,9 @@ def build_loop_components(
         config=defaults.confirmation,
     )
     values["_reminder_store"] = ReminderStore(workspace)
+
+    # ── SQLite stores (create + migrate from JSONL) ────────────────
+    values["_sqlite_stores"] = SqliteStoreFactory.create_all(workspace)
 
     # Step 3: registry, subagents, runtime contributions.
     values["working_memory"] = WorkingMemoryManager(
