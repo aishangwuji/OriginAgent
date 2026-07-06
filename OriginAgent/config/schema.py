@@ -2026,6 +2026,12 @@ class ToolsConfig(Base):
     ssrf_whitelist: list[str] = Field(default_factory=list)  # CIDR ranges to exempt from SSRF blocking (e.g. ["100.64.0.0/10"] for Tailscale)
 
 
+class StorageConfig(Base):
+    """Storage backend configuration."""
+
+    jsonl_fallback_enabled: bool = True
+
+
 class Config(BaseSettings):
     """Root configuration for OriginAgent."""
 
@@ -2037,6 +2043,7 @@ class Config(BaseSettings):
     runtime: RuntimeConfig = Field(default_factory=RuntimeConfig)
     security: SecurityConfig = Field(default_factory=SecurityConfig)
     tools: ToolsConfig = Field(default_factory=ToolsConfig)
+    storage: StorageConfig = Field(default_factory=StorageConfig)
     model_presets: dict[str, ModelPresetConfig] = Field(
         default_factory=dict,
         validation_alias=AliasChoices("modelPresets", "model_presets"),
