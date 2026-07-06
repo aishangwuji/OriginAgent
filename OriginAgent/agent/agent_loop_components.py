@@ -513,6 +513,9 @@ def build_loop_components(
     )
     values["context"].working_memory = values["working_memory"]
     values["context"].world_state = values["world_state"]
+    # Inject SQLite fact store into the context's memory
+    if hasattr(values["context"].memory, "fact_store"):
+        values["context"].memory.fact_store._sqlite_facts = values["_sqlite_stores"].fact_store
     values["memory_governance"] = MemoryGovernance(
         workspace=workspace,
         memory=values["context"].memory,

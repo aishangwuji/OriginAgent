@@ -1228,10 +1228,12 @@ class FactStore:
         redactor: Callable[[str], str] | None = None,
         config: FactStoreConfig | None = None,
         feature_flags: dict[str, bool] | None = None,
+        sqlite_facts: Any = None,
     ):
         self.workspace = workspace
         self.memory_dir = ensure_dir(workspace / "memory")
         self.facts_file = facts_file or self.memory_dir / "facts.jsonl"
+        self._sqlite_facts = sqlite_facts
         self.calibration_file = self.memory_dir / "confidence_calibration.json"
         self.relations_file = self.memory_dir / "fact_relations.jsonl"
         self.semantic_index_file = self.memory_dir / "semantic_index.json"
@@ -1278,6 +1280,14 @@ class FactStore:
         return records
 
     def _load_raw_records_unlocked(self) -> list[dict[str, Any]]:
+        if self._sqlite_facts is not None:
+            try:
+                raw = self._sqlite_facts.read_all()
+                self._cached_raw_records = [dict(item) for item in raw]
+                self._cached_signature = None
+                return [dict(item) for item in self._cached_raw_records]
+            except Exception:
+                pass
         signature = self._file_signature()
         if signature is not None and signature == self._cached_signature:
             return [dict(item) for item in self._cached_raw_records]
@@ -2038,6 +2048,12 @@ class FactStore:
             for record in records
         )
         _write_text_atomic(self.facts_file, text)
+        if self._sqlite_facts is not None:
+            try:
+                for record in records:
+                    self._sqlite_facts.upsert(record.to_dict())
+            except Exception:
+                logger.opt(exception=True).warning("facts: sqlite upsert failed")
         self._refresh_cache_from_raw([record.to_dict() for record in records])
 
     def _new_fact_id(self, records: list[FactRecord]) -> str:

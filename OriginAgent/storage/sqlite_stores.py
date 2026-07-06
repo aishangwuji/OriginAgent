@@ -20,6 +20,7 @@ from OriginAgent.agent.cognitive_audit_sqlite import (
 )
 from OriginAgent.agent.domain_pack_events_sqlite import DomainPackEventsSqlite
 from OriginAgent.agent.facts import FactEventStoreSqlite
+from OriginAgent.agent.facts_sqlite import FactStoreSqlite
 from OriginAgent.agent.meta_cognition_audit_sqlite import (
     MetaConfidenceTracesSqlite,
     MetaDecisionsSqlite,
@@ -136,6 +137,9 @@ class SqliteStoreRegistry:
     subagent_lifecycle: SubagentLifecycleStoreSqlite
     subagent_tools: SubagentToolStoreSqlite
 
+    # Core stores
+    fact_store: FactStoreSqlite
+
     # Misc specialized
     active_intents: ActiveIntentLedgerSqlite
     tool_audit: ToolCallAuditSqlite
@@ -202,6 +206,7 @@ class SqliteStoreFactory:
         skill_lifecycle = SkillLifecycleStoreSqlite(w)
         reminders = ReminderStoreSqlite(w)
         fact_events = FactEventStoreSqlite(w)
+        fact_store = FactStoreSqlite(w)
 
         registry = SqliteStoreRegistry(
             thought_frames=thought_frames,
@@ -241,9 +246,11 @@ class SqliteStoreFactory:
             skill_lifecycle=skill_lifecycle,
             reminders=reminders,
             fact_events=fact_events,
+            fact_store=fact_store,
         )
 
         # Run all migrations (idempotent — safe on every startup)
+        _migrate_one(fact_store, "fact_store")
         _migrate_one(thought_frames, "thought_frames")
         _migrate_one(thought_journals, "thought_journals")
         _migrate_one(causal_edges, "causal_edges")
