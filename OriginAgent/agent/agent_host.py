@@ -428,6 +428,13 @@ class AgentHost:
                     )
                     if self._deps.bus:
                         await self._deps.bus.publish_outbound(msg)
+            elif intent.action == "system":
+                sys_payload = intent.payload or {}
+                sys_action = sys_payload.get("action")
+                if sys_action == "disable_cron":
+                    cron_job_id = sys_payload.get("cron_job_id", "")
+                    if cron_job_id and hasattr(self, "_cron_bridge") and self._cron_bridge is not None:
+                        self._cron_bridge.disable_cron_job(cron_job_id)
         return handler
 
     async def _on_bdi_intention(self, intent: Any) -> None:
@@ -454,6 +461,22 @@ class AgentHost:
                         "BDI: Failed to publish intention message for desire={}",
                         intent.desire_id,
                     )
+        elif intent.action == "system":
+            sys_payload = intent.payload or {}
+            sys_action = sys_payload.get("action")
+            if sys_action == "disable_cron":
+                cron_job_id = sys_payload.get("cron_job_id", "")
+                if cron_job_id and hasattr(self, "_cron_bridge") and self._cron_bridge is not None:
+                    self._cron_bridge.disable_cron_job(
+                        cron_job_id,
+                        cron_service=getattr(self._deps, "cron_service", None),
+                    )
+                    logger.info(
+                        "BDI: disabled cron job {} for desire {}",
+                        cron_job_id, intent.desire_id,
+                    )
+            else:
+                logger.warning("BDI: unknown system action {!r}", sys_action)
 
     def _init_bdi_engine(self) -> None:
         """Initialise the BDI deliberation engine if configured."""

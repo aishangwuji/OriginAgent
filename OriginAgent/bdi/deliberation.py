@@ -648,6 +648,27 @@ class DeliberationEngine:
             lines.append("")
             lines.append(f"## Shared Device Domains ({', '.join(shared_devices)})")
 
+        # Show cron observation data if available
+        cron = beliefs.get("cron")
+        if cron and cron.get("bridge_enabled"):
+            lines.append("")
+            lines.append("## Cron Job Observations")
+            lines.append(f"Active linked jobs: {cron.get('active_jobs', 0)}")
+            failing = cron.get("failing_jobs", [])
+            if failing:
+                lines.append(f"Failing jobs (consecutive_failures >= 2): {cron.get('failing_count', 0)}")
+                for fj in failing:
+                    lines.append(
+                        f"- cron job {fj.get('cron_job_id')} linked to desire "
+                        f"{fj.get('desire_id')} — {fj.get('consecutive_failures')} failures"
+                    )
+                lines.append("")
+                lines.append(
+                    "To disable a failing cron job, form a system intention with "
+                    'payload={"action": "disable_cron", "cron_job_id": "<id>"}. '
+                    "BDI will then manage the linked desire directly."
+                )
+
         if not desires:
             lines.append("(no active desires)")
 
