@@ -25,9 +25,9 @@ from telegram.request import HTTPXRequest
 
 from OriginAgent.bus.events import OutboundMessage
 from OriginAgent.bus.queue import MessageBus
-from OriginAgent.channels.base import BaseChannel, ChannelNotReadyError
-from OriginAgent.channels._text_utils import strip_markdown_inline
 from OriginAgent.channels._stream_buffer import StreamBuffer
+from OriginAgent.channels._text_utils import strip_markdown_inline
+from OriginAgent.channels.base import BaseChannel, ChannelNotReadyError
 from OriginAgent.command.builtin import build_help_text
 from OriginAgent.config.paths import get_media_dir
 from OriginAgent.config.schema import Base
@@ -628,7 +628,7 @@ class TelegramChannel(BaseChannel):
 
         if meta.get("_stream_end"):
             buf = self._stream_bufs.get(chat_id)
-            if not buf or not buf.message_id or not buf.text:
+            if not buf or not buf.message_ref or not buf.text:
                 return
             if stream_id is not None and buf.stream_id is not None and buf.stream_id != stream_id:
                 return
@@ -651,7 +651,7 @@ class TelegramChannel(BaseChannel):
             try:
                 await self._call_with_retry(
                     self._app.bot.edit_message_text,
-                    chat_id=int_chat_id, message_id=buf.message_id,
+                    chat_id=int_chat_id, message_id=buf.message_ref,
                     text=primary_html, parse_mode="HTML",
                 )
             except BadRequest as e:
@@ -668,7 +668,7 @@ class TelegramChannel(BaseChannel):
                 try:
                     await self._call_with_retry(
                         self._app.bot.edit_message_text,
-                        chat_id=int_chat_id, message_id=buf.message_id,
+                        chat_id=int_chat_id, message_id=buf.message_ref,
                         text=primary_plain,
                     )
                 except Exception as e2:
@@ -706,7 +706,7 @@ class TelegramChannel(BaseChannel):
         thread_kwargs = {}
         if message_thread_id := meta.get("message_thread_id"):
             thread_kwargs["message_thread_id"] = message_thread_id
-        if buf.message_id is None:
+        if buf.message_ref is None:
             preview = strip_markdown_block(buf.text)
             try:
                 sent = await self._call_with_retry(
@@ -714,7 +714,7 @@ class TelegramChannel(BaseChannel):
                     chat_id=int_chat_id, text=preview,
                     **thread_kwargs,
                 )
-                buf.message_id = sent.message_id
+                buf.message_ref = sent.message_id
                 buf.last_edit = now
             except Exception as e:
                 self.logger.warning("Stream initial send failed: {}", e)
@@ -728,7 +728,7 @@ class TelegramChannel(BaseChannel):
             try:
                 await self._call_with_retry(
                     self._app.bot.edit_message_text,
-                    chat_id=int_chat_id, message_id=buf.message_id,
+                    chat_id=int_chat_id, message_id=buf.message_ref,
                     text=preview,
                 )
                 buf.last_edit = now
@@ -757,7 +757,7 @@ class TelegramChannel(BaseChannel):
         try:
             await self._call_with_retry(
                 self._app.bot.edit_message_text,
-                chat_id=chat_id, message_id=buf.message_id,
+                chat_id=chat_id, message_id=buf.message_ref,
                 text=chunks[0],
             )
         except Exception as e:
@@ -774,7 +774,7 @@ class TelegramChannel(BaseChannel):
             self._app.bot.send_message,
             chat_id=chat_id, text=tail, **thread_kwargs,
         )
-        buf.message_id = sent.message_id
+        buf.message_ref = sent.message_id
         buf.text = tail
 
     async def _on_start(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
