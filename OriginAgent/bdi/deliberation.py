@@ -181,6 +181,7 @@ class DeliberationEngine:
         self._plan_library = PlanLibrary(
             self.workspace,
             sqlite_store=sqlite_stores.plans if sqlite_stores else None,
+            jsonl_fallback_enabled=False,
         )
         self._shared_space = shared_space
 

@@ -390,7 +390,7 @@ class AgentHost:
 
         workspace = tenant.workspace_dir
         _sqlite = getattr(self._deps, "sqlite_stores", None)
-        desire_store = DesireStore(workspace, sqlite_store=_sqlite.desires if _sqlite else None)
+        desire_store = DesireStore(workspace, sqlite_store=_sqlite.desires if _sqlite else None, jsonl_fallback_enabled=False)
         engine = DeliberationEngine(
             workspace=workspace,
             store=desire_store,
@@ -460,6 +460,7 @@ class AgentHost:
         self._desire_store = DesireStore(
             self._deps.workspace,
             sqlite_store=_sqlite.desires if _sqlite else None,
+            jsonl_fallback_enabled=False,
         )
 
         self._legacy_bdi_engine = DeliberationEngine(
