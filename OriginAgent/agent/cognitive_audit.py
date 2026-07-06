@@ -8,6 +8,8 @@ import threading
 from pathlib import Path
 from typing import Any
 
+from loguru import logger
+
 from OriginAgent.agent.cognitive_events import CognitiveDecision, CognitiveEvent
 from OriginAgent.utils.helpers import ensure_dir
 
@@ -17,23 +19,51 @@ _RECENT_SCAN_LIMIT = 200
 class JsonlCognitiveAuditLedger:
     """Append-only ledger for cognitive events and bounded policy decisions."""
 
-    def __init__(self, workspace: Path):
+    def __init__(
+        self,
+        workspace: Path,
+        *,
+        sqlite_events: Any = None,
+        sqlite_decisions: Any = None,
+    ):
         root = Path(workspace) / "memory" / "cognitive"
         self._events_path = root / "events.jsonl"
         self._decisions_path = root / "decisions.jsonl"
         self._lock = threading.Lock()
+        self._sqlite_events = sqlite_events
+        self._sqlite_decisions = sqlite_decisions
+
+    @staticmethod
+    def _sqlite_append(store: Any, payload: dict[str, Any], label: str) -> None:
+        if store is not None:
+            try:
+                store.append(payload)
+            except Exception:
+                logger.opt(exception=True).warning("cognitive_audit: sqlite {} append failed", label)
 
     def append_event(self, event: CognitiveEvent) -> None:
-        self._append(self._events_path, event.to_json())
+        payload = event.to_json()
+        self._append(self._events_path, payload)
+        self._sqlite_append(self._sqlite_events, payload, "cognitive_events")
 
     def append_decision(self, decision: CognitiveDecision) -> None:
-        self._append(self._decisions_path, decision.to_json())
+        payload = decision.to_json()
+        self._append(self._decisions_path, payload)
+        self._sqlite_append(self._sqlite_decisions, payload, "cognitive_decisions")
+
+    def _recent_sqlite(self, store: Any, fallback_path: Path, limit: int) -> list[dict[str, Any]]:
+        if store is not None:
+            try:
+                return store.recent(limit=limit)
+            except Exception:
+                pass
+        return self._recent(fallback_path, limit=limit)
 
     def recent_events(self, limit: int = _RECENT_SCAN_LIMIT) -> list[dict[str, Any]]:
-        return self._recent(self._events_path, limit=limit)
+        return self._recent_sqlite(self._sqlite_events, self._events_path, limit)
 
     def recent_decisions(self, limit: int = _RECENT_SCAN_LIMIT) -> list[dict[str, Any]]:
-        return self._recent(self._decisions_path, limit=limit)
+        return self._recent_sqlite(self._sqlite_decisions, self._decisions_path, limit)
 
     def summary(self, *, limit: int = 20) -> dict[str, Any]:
         events = self.recent_events(limit=limit)

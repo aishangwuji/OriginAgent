@@ -11,7 +11,8 @@ from pathlib import Path
 from typing import Any
 
 from OriginAgent.storage.jsonl_migration import AppendOnlyMigrator
-from OriginAgent.storage.sqlite_helpers import connect as sqlite_connect, ensure_schema
+from OriginAgent.storage.sqlite_helpers import connect as sqlite_connect
+from OriginAgent.storage.sqlite_helpers import ensure_schema
 
 
 class CognitiveEventsSqlite(AppendOnlyMigrator):
@@ -58,6 +59,15 @@ class CognitiveEventsSqlite(AppendOnlyMigrator):
         conn = sqlite_connect(self.db_path)
         try: ensure_schema(conn, self.DDL)
         finally: conn.close()
+
+    def append(self, data: dict[str, Any]) -> None:
+        self._ensure_schema()
+        conn = sqlite_connect(self.db_path)
+        try:
+            self.insert_row(conn, data)
+            conn.commit()
+        finally:
+            conn.close()
 
     def recent(self, *, limit: int = 200) -> list[dict[str, Any]]:
         self._ensure_schema()
@@ -125,6 +135,15 @@ class CognitiveDecisionsSqlite(AppendOnlyMigrator):
         conn = sqlite_connect(self.db_path)
         try: ensure_schema(conn, self.DDL)
         finally: conn.close()
+
+    def append(self, data: dict[str, Any]) -> None:
+        self._ensure_schema()
+        conn = sqlite_connect(self.db_path)
+        try:
+            self.insert_row(conn, data)
+            conn.commit()
+        finally:
+            conn.close()
 
     def recent(self, *, limit: int = 200) -> list[dict[str, Any]]:
         self._ensure_schema()

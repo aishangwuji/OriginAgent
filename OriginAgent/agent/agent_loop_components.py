@@ -556,7 +556,12 @@ def build_loop_components(
         if enable_backend_cognition is None
         else enable_backend_cognition
     )
-    values["_cognitive_audit"] = JsonlCognitiveAuditLedger(workspace)
+    _sqlite = values["_sqlite_stores"]
+    values["_cognitive_audit"] = JsonlCognitiveAuditLedger(
+        workspace,
+        sqlite_events=_sqlite.cognitive_events,
+        sqlite_decisions=_sqlite.cognitive_decisions,
+    )
     values["active_intents"] = ActiveIntentService(
         workspace=workspace,
         bus=bus,
