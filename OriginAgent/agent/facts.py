@@ -484,14 +484,17 @@ class FactResolution:
 
 
 class FactRelationStore:
-    def __init__(self, workspace: Path, *, path: Path | None = None) -> None:
+    def __init__(self, workspace: Path, *, path: Path | None = None, sqlite_store: Any = None, jsonl_fallback_enabled: bool = True) -> None:
         self.workspace = Path(workspace)
         self.path = path or (self.workspace / "memory" / "fact_relations.jsonl")
         self._lock_path = self.path.parent / ".fact_relations.lock"
+        self._sqlite = sqlite_store
+        self._jsonl_fallback_enabled = jsonl_fallback_enabled
 
-    def _locked(self) -> FileLock:
+    def _locked(self) -> Any:
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        return FileLock(str(self._lock_path))
+        from OriginAgent.storage.jsonl_fallback import locked as _locked
+        return _locked(self._sqlite, self._lock_path)
 
     def read_all(self) -> list[FactRelationRecord]:
         with self._locked():
@@ -597,9 +600,10 @@ class FactEventStore:
         self._lock_path = self.path.parent / ".fact_events.lock"
         self._sqlite = sqlite_store
 
-    def _locked(self) -> FileLock:
+    def _locked(self) -> Any:
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        return FileLock(str(self._lock_path))
+        from OriginAgent.storage.jsonl_fallback import locked as _locked
+        return _locked(self._sqlite, self._lock_path)
 
     def append(self, event: FactEventRecord) -> FactEventRecord:
         payload = event.to_dict()

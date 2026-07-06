@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 from loguru import logger
 
@@ -92,6 +93,35 @@ def _migrate_one(store: object, label: str) -> None:
             )
     except Exception:
         logger.exception("SQLite migration [{}] failed", label)
+
+
+def _validate_count(store: Any, jsonl_path: Path | None, label: str) -> None:
+    """Compare JSONL line count vs SQLite row count for *store*.
+
+    Logs a WARNING if the counts diverge by more than 0.1 %, which may
+    indicate a migration or dual-write inconsistency.
+    """
+    if jsonl_path is None or not jsonl_path.exists():
+        return
+    try:
+        jsonl_count = sum(1 for _ in open(jsonl_path, encoding="utf-8") if _.strip())
+    except Exception:
+        return
+    if not hasattr(store, "count"):
+        return
+    try:
+        sqlite_count = store.count()
+    except Exception:
+        return
+    if jsonl_count == 0 and sqlite_count == 0:
+        return
+    if jsonl_count != sqlite_count:
+        ratio = abs(jsonl_count - sqlite_count) / max(jsonl_count, sqlite_count)
+        if ratio > 0.001:  # > 0.1 % divergence
+            logger.warning(
+                "SQLite/JSONL count mismatch [{}]: SQLite={} JSONL={} (Δ={:.1%})",
+                label, sqlite_count, jsonl_count, ratio,
+            )
 
 
 @dataclass
@@ -315,6 +345,12 @@ class SqliteStoreFactory:
         _migrate_one(skill_lifecycle, "skill_lifecycle")
         _migrate_one(reminders, "reminders")
         _migrate_one(fact_events, "fact_events")
+
+        # ── Startup validation: compare SQLite vs JSONL counts ─────────
+        _validate_count(fact_store, fact_store.jsonl_path, "fact_store")
+        _validate_count(desires, desires.jsonl_path, "desires")
+        _validate_count(plans, plans.jsonl_path, "plans")
+        # remianders, fact_events checked via migrator counts above
 
         return registry
 

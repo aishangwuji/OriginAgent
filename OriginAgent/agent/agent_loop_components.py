@@ -517,10 +517,12 @@ def build_loop_components(
     )
     values["context"].working_memory = values["working_memory"]
     values["context"].world_state = values["world_state"]
-    # Inject SQLite fact store into the context's memory
+    # Inject SQLite fact store + relation store into the context's memory
     if hasattr(values["context"].memory, "fact_store"):
         values["context"].memory.fact_store._sqlite_facts = values["_sqlite_stores"].fact_store
         values["context"].memory.fact_store._jsonl_fallback_enabled = False
+        values["context"].memory.fact_store.relation_store._sqlite = values["_sqlite_stores"].fact_relations
+        values["context"].memory.fact_store.relation_store._jsonl_fallback_enabled = False
     values["memory_governance"] = MemoryGovernance(
         workspace=workspace,
         memory=values["context"].memory,
