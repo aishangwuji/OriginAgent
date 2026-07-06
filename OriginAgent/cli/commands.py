@@ -5,6 +5,7 @@ import os
 import select
 import signal
 import sys
+import time
 from collections.abc import Callable
 from contextlib import nullcontext, suppress
 from pathlib import Path
@@ -831,7 +832,28 @@ def _run_gateway(
                 )
         return response
 
-    cron.on_job = on_cron_job
+    # ── Cron-BDI bridge: record delivery outcome ──────────────────
+    async def _on_cron_bridge(job: CronJob) -> str | None:
+        started = time.monotonic()
+        error = ""
+        try:
+            result = await on_cron_job(job)
+            return result
+        except Exception as exc:
+            error = str(exc)[:500]
+            raise
+        finally:
+            elapsed_ms = int((time.monotonic() - started) * 1000)
+            cron_bridge = getattr(getattr(agent, "_host", None), "_cron_bridge", None)
+            if cron_bridge is not None:
+                try:
+                    await cron_bridge.on_job_completed(
+                        job, success=not bool(error), error=error, duration_ms=elapsed_ms,
+                    )
+                except Exception:
+                    pass
+
+    cron.on_job = _on_cron_bridge
 
     def _webui_runtime_model_name() -> str | None:
         try:
