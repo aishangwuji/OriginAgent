@@ -157,20 +157,27 @@ class JsonlSubagentRecordStore:
             except Exception:
                 logger.opt(exception=True).warning("subagent_records: sqlite {} append failed", label)
 
+    def _append_sqlite_primary(self, store: Any, payload: dict[str, Any], path: Path, label: str) -> None:
+        if store is not None:
+            try:
+                store.append(payload)
+            except Exception:
+                logger.opt(exception=True).warning("subagent_records: sqlite {} append failed, falling back to JSONL", label)
+                self._append(path, payload)
+                return
+        self._append(path, payload)
+
     def append_task(self, record: SubagentTaskRecord) -> None:
         payload = record.to_dict()
-        self._append(self._tasks_path, payload)
-        self._sqlite_append(self._sqlite_tasks, payload, "tasks")
+        self._append_sqlite_primary(self._sqlite_tasks, payload, self._tasks_path, "tasks")
 
     def append_lifecycle(self, record: SubagentLifecycleRecord) -> None:
         payload = record.to_dict()
-        self._append(self._lifecycle_path, payload)
-        self._sqlite_append(self._sqlite_lifecycle, payload, "lifecycle")
+        self._append_sqlite_primary(self._sqlite_lifecycle, payload, self._lifecycle_path, "lifecycle")
 
     def append_tool(self, record: SubagentToolRecord) -> None:
         payload = record.to_dict()
-        self._append(self._tools_path, payload)
-        self._sqlite_append(self._sqlite_tools, payload, "tools")
+        self._append_sqlite_primary(self._sqlite_tools, payload, self._tools_path, "tools")
 
     def _task_records(self) -> list[dict[str, Any]]:
         if self._sqlite_tasks is not None:

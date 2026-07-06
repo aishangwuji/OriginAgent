@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import uuid
 from dataclasses import asdict, dataclass
@@ -396,14 +397,21 @@ class SkillLifecycleStore:
         return rows
 
     def _append_event_unlocked(self, event: dict[str, Any]) -> None:
-        self.event_path.parent.mkdir(parents=True, exist_ok=True)
-        with self.event_path.open("a", encoding="utf-8") as handle:
-            handle.write(json.dumps(event, ensure_ascii=False) + "\n")
         if self._sqlite is not None:
             try:
                 self._sqlite.append_event(event)
             except Exception:
-                logger.opt(exception=True).warning("skill_lifecycle: sqlite append_event failed")
+                logger.opt(exception=True).warning("skill_lifecycle: sqlite append failed, falling back to JSONL")
+                self._jsonl_append_event(event)
+                return
+        self._jsonl_append_event(event)
+
+    def _jsonl_append_event(self, event: dict[str, Any]) -> None:
+        self.event_path.parent.mkdir(parents=True, exist_ok=True)
+        with self.event_path.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(event, ensure_ascii=False) + "\n")
+            handle.flush()
+            os.fsync(handle.fileno())
 
 
 def summarize_skill_lifecycle(workspace: Path, entries: list[dict[str, str]]) -> dict[str, Any]:

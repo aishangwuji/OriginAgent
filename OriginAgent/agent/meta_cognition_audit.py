@@ -52,10 +52,19 @@ class JsonlMetaCognitionAuditLedger:
             except Exception:
                 logger.opt(exception=True).warning("meta_audit: sqlite {} append failed", label)
 
+    def _append_primary(self, store: Any, payload: dict[str, Any], path: Path, label: str) -> None:
+        if store is not None:
+            try:
+                store.append(payload)
+            except Exception:
+                logger.opt(exception=True).warning("meta_audit: sqlite {} append failed, falling back to JSONL", label)
+                self._append(path, payload)
+                return
+        self._append(path, payload)
+
     def append_trigger(self, trigger: MetaTrigger) -> None:
         payload = trigger.to_json()
-        self._append(self._triggers_path, payload)
-        self._sqlite_append(self._sqlite.meta_triggers if self._sqlite else None, payload, "meta_triggers")
+        self._append_primary(self._sqlite.meta_triggers if self._sqlite else None, payload, self._triggers_path, "meta_triggers")
 
     def append_runtime_decision(
         self,
@@ -74,33 +83,27 @@ class JsonlMetaCognitionAuditLedger:
             "suppression_reason": result.suppression_reason,
             "turn_id": turn_id,
         }
-        self._append(self._decisions_path, payload)
-        self._sqlite_append(self._sqlite.meta_decisions if self._sqlite else None, payload, "meta_decisions")
+        self._append_primary(self._sqlite.meta_decisions if self._sqlite else None, payload, self._decisions_path, "meta_decisions")
 
     def append_journal(self, journal: ThoughtJournalEntry) -> None:
         payload = journal.to_json()
-        self._append(self._journals_path, payload)
-        self._sqlite_append(self._sqlite.meta_journals if self._sqlite else None, payload, "meta_journals")
+        self._append_primary(self._sqlite.meta_journals if self._sqlite else None, payload, self._journals_path, "meta_journals")
 
     def append_reflection(self, reflection: ReflectionRecord) -> None:
         payload = reflection.to_json()
-        self._append(self._reflections_path, payload)
-        self._sqlite_append(self._sqlite.meta_reflections if self._sqlite else None, payload, "meta_reflections")
+        self._append_primary(self._sqlite.meta_reflections if self._sqlite else None, payload, self._reflections_path, "meta_reflections")
 
     def append_confidence_trace(self, trace: ConfidenceTrace) -> None:
         payload = trace.to_json()
-        self._append(self._confidence_traces_path, payload)
-        self._sqlite_append(self._sqlite.meta_confidence_traces if self._sqlite else None, payload, "meta_confidence_traces")
+        self._append_primary(self._sqlite.meta_confidence_traces if self._sqlite else None, payload, self._confidence_traces_path, "meta_confidence_traces")
 
     def append_pattern(self, pattern: ErrorPattern) -> None:
         payload = pattern.to_json()
-        self._append(self._patterns_path, payload)
-        self._sqlite_append(self._sqlite.meta_patterns if self._sqlite else None, payload, "meta_patterns")
+        self._append_primary(self._sqlite.meta_patterns if self._sqlite else None, payload, self._patterns_path, "meta_patterns")
 
     def append_evolution_seed(self, seed: EvolutionSeed) -> None:
         payload = seed.to_json()
-        self._append(self._evolution_seeds_path, payload)
-        self._sqlite_append(self._sqlite.meta_evolution_seeds if self._sqlite else None, payload, "meta_evolution_seeds")
+        self._append_primary(self._sqlite.meta_evolution_seeds if self._sqlite else None, payload, self._evolution_seeds_path, "meta_evolution_seeds")
 
     def _recent_sqlite(self, store: Any, fallback_path: Path, limit: int) -> list[dict[str, Any]]:
         if store is not None:

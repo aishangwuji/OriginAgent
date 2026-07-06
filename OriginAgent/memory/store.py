@@ -252,6 +252,11 @@ class NearlineMemoryStore:
         payloads = [self._normalize_record(record) for record in records]
         if not payloads:
             return 0
+        if sqlite_kind is not None and self._sqlite is not None:
+            try:
+                return self._sqlite.append(sqlite_kind, payloads)
+            except Exception:
+                logger.opt(exception=True).warning("nearline: sqlite {} append failed, falling back to JSONL", sqlite_kind)
         with self._locked():
             known_identities = self._read_existing_identities(path, identity_keys)
             new_payloads: list[dict[str, Any]] = []
@@ -271,11 +276,6 @@ class NearlineMemoryStore:
                 handle.flush()
                 os.fsync(handle.fileno())
             self._fsync_parent(path)
-        if sqlite_kind is not None and self._sqlite is not None and new_payloads:
-            try:
-                self._sqlite.append(sqlite_kind, new_payloads)
-            except Exception:
-                logger.opt(exception=True).warning("nearline: sqlite {} append failed", sqlite_kind)
         return len(new_payloads)
 
     @staticmethod

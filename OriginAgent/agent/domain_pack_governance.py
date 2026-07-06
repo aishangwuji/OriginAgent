@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
 import shutil
 import sys
 import uuid
@@ -206,15 +207,22 @@ class DomainPackGovernanceService:
             artifact_paths=artifact_paths or [],
             review_proposal_id=_clean_text(review_proposal_id, 256),
         ).to_json()
-        self.event_path.parent.mkdir(parents=True, exist_ok=True)
-        with self.event_path.open("a", encoding="utf-8") as handle:
-            handle.write(json.dumps(event, ensure_ascii=False) + "\n")
         if self._sqlite is not None:
             try:
                 self._sqlite.append_event(event)
             except Exception:
-                logger.opt(exception=True).warning("domain_pack: sqlite append_event failed")
+                logger.opt(exception=True).warning("domain_pack: sqlite append_event failed, falling back to JSONL")
+                self._jsonl_append_event(event)
+                return event
+        self._jsonl_append_event(event)
         return event
+
+    def _jsonl_append_event(self, event: dict[str, Any]) -> None:
+        self.event_path.parent.mkdir(parents=True, exist_ok=True)
+        with self.event_path.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(event, ensure_ascii=False) + "\n")
+            handle.flush()
+            os.fsync(handle.fileno())
 
     def list_records(
         self,

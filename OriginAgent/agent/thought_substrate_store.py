@@ -258,19 +258,25 @@ class ThoughtSubstrate:
         journal = self._build_journal_from_frame(frame, enrichment=enrichment)
         frame_json = frame.to_json()
         journal_json = journal.to_json()
-        self._append(self._frames_path, frame_json)
-        self._append(self._journals_path, journal_json)
-        # dual-write to SQLite
+        # Primary: SQLite
         if self._sqlite_frames is not None:
             try:
                 self._sqlite_frames.append(frame_json)
             except Exception:
-                logger.opt(exception=True).warning("thought_substrate: sqlite frames append failed")
+                logger.opt(exception=True).warning("thought_substrate: sqlite frames append failed, falling back to JSONL")
+                self._append(self._frames_path, frame_json)
+                self._append(self._journals_path, journal_json)
+                return journal
+        else:
+            self._append(self._frames_path, frame_json)
         if self._sqlite_journals is not None:
             try:
                 self._sqlite_journals.append(journal_json)
             except Exception:
-                logger.opt(exception=True).warning("thought_substrate: sqlite journals append failed")
+                logger.opt(exception=True).warning("thought_substrate: sqlite journals append failed, falling back to JSONL")
+                self._append(self._journals_path, journal_json)
+        else:
+            self._append(self._journals_path, journal_json)
         # mirror to the existing audit ledger when available
         if self._audit is not None:
             try:
