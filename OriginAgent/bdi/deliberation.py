@@ -158,6 +158,7 @@ class DeliberationEngine:
         event_bus: Any | None = None,      # MessageBus for WorldStateWatcher
         shared_space: Any = None,          # SharedSpace | None — cross-tenant shared state
         sqlite_stores: Any = None,
+        cron_bridge: Any = None,            # CronDesireBridge | None
     ) -> None:
         self.workspace = Path(workspace)
         self._store = store
@@ -184,6 +185,7 @@ class DeliberationEngine:
             jsonl_fallback_enabled=False,
         )
         self._shared_space = shared_space
+        self._cron_bridge = cron_bridge
 
         self._watcher = WorldStateWatcher(
             engine=self,
@@ -557,6 +559,10 @@ class DeliberationEngine:
         if self._shared_space is not None:
             beliefs["shared_facts"] = self._shared_space.shared_facts()
             beliefs["shared_devices"] = self._shared_space.device_domains
+
+        # Pull cron observation data if CronDesireBridge is wired
+        if self._cron_bridge is not None:
+            beliefs["cron"] = self._cron_bridge.get_observation_beliefs()
 
         return beliefs
 

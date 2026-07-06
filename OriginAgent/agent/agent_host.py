@@ -387,10 +387,19 @@ class AgentHost:
             return
 
         from OriginAgent.bdi import DeliberationEngine, DesireStore
+        from OriginAgent.bdi.cron_desire_bridge import CronDesireBridge
+        from OriginAgent.bdi.cron_observation_store import CronObservationStore
 
         workspace = tenant.workspace_dir
         _sqlite = getattr(self._deps, "sqlite_stores", None)
         desire_store = DesireStore(workspace, sqlite_store=_sqlite.desires if _sqlite else None, jsonl_fallback_enabled=False)
+        _cron_obs = CronObservationStore(workspace)
+        _cron_obs._ensure_schema()
+        _cron_bridge = CronDesireBridge(
+            desire_store=desire_store,
+            observation_store=_cron_obs,
+            enabled=True,
+        )
         engine = DeliberationEngine(
             workspace=workspace,
             store=desire_store,
@@ -400,6 +409,7 @@ class AgentHost:
             enabled=True,
             interval_s=getattr(self._deps.bdi_config, "interval_s", 120),
             on_intention=self._on_bdi_intention_for(tenant),
+            cron_bridge=_cron_bridge,
         )
         self._bdi_engines[tenant.tenant_id] = engine
 
@@ -455,12 +465,23 @@ class AgentHost:
             return
 
         from OriginAgent.bdi import DeliberationEngine, DesireStore
+        from OriginAgent.bdi.cron_desire_bridge import CronDesireBridge
+        from OriginAgent.bdi.cron_observation_store import CronObservationStore
 
         _sqlite = getattr(self._deps, "sqlite_stores", None)
         self._desire_store = DesireStore(
             self._deps.workspace,
             sqlite_store=_sqlite.desires if _sqlite else None,
             jsonl_fallback_enabled=False,
+        )
+
+        # ── Cron-BDI bridge ───────────────────────────────────────
+        _cron_obs = CronObservationStore(self._deps.workspace)
+        _cron_obs._ensure_schema()
+        self._cron_bridge = CronDesireBridge(
+            desire_store=self._desire_store,
+            observation_store=_cron_obs,
+            enabled=bool(bdi_config.enabled),
         )
 
         self._legacy_bdi_engine = DeliberationEngine(
@@ -473,6 +494,7 @@ class AgentHost:
             max_desires_per_cycle=bdi_config.max_desires_per_cycle,
             auto_create_from_foresight=bdi_config.auto_create_from_foresight,
             on_intention=self._on_bdi_intention,
+            cron_bridge=self._cron_bridge,
         )
 
         # InnerMonologueEngine
