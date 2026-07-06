@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 import uuid
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
@@ -27,12 +28,12 @@ from OriginAgent.agent.evolution_config_overlay import (
     EvolutionConfigOverlayStore,
     apply_config_overlay,
 )
+from OriginAgent.agent.evolution_dependencies import EvolutionDependencyStore
 from OriginAgent.agent.evolution_outcomes import (
     EvolutionOutcomeStore,
     proposal_outcome_context,
     safe_append_outcome,
 )
-from OriginAgent.agent.evolution_dependencies import EvolutionDependencyStore
 from OriginAgent.agent.evolution_snapshots import snapshot_artifact_if_governed
 from OriginAgent.agent.facts import (
     HIGH_RISK_CATEGORIES,
@@ -47,13 +48,13 @@ from OriginAgent.agent.facts import (
 )
 from OriginAgent.agent.memory import MemoryStore, redact_memory_text
 from OriginAgent.agent.runtime_models import TaskRunReport, now_iso
+from OriginAgent.agent.skill_artifacts import write_skill_artifact
 from OriginAgent.agent.task_runtime import (
     build_task_report,
     maybe_retry_once,
     remember_report,
     report_to_status_payload,
 )
-from OriginAgent.agent.skill_artifacts import write_skill_artifact
 from OriginAgent.agent.workflow_artifacts import write_workflow_artifact
 from OriginAgent.config.loader import load_config
 from OriginAgent.config.schema import BackgroundReviewConfig, TaskRuntimeConfig
@@ -2121,8 +2122,16 @@ def _load_json_payload(text: str) -> Any:
     try:
         return json.loads(text)
     except json.JSONDecodeError:
-        logger.warning("Background review returned invalid JSON")
-        return None
+        pass
+    # Last resort: extract the first balanced JSON object from noisy text
+    match = re.search(r'\{.*\}', text, re.DOTALL)
+    if match:
+        try:
+            return json.loads(match.group(0))
+        except json.JSONDecodeError:
+            pass
+    logger.warning("Background review returned invalid JSON")
+    return None
 
 
 def _clean_text(value: Any, max_chars: int) -> str:

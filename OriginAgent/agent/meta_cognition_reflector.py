@@ -901,7 +901,15 @@ class MetaCognitionReflector:
         try:
             return json.loads(payload)
         except json.JSONDecodeError:
-            return None
+            pass
+        # Last resort: extract the first balanced JSON object from noisy text
+        match = re.search(r'\{.*\}', payload, re.DOTALL)
+        if match:
+            try:
+                return json.loads(match.group(0))
+            except json.JSONDecodeError:
+                pass
+        return None
 
     def recent_artifacts(self, *, limit: int = 10) -> dict[str, list[dict[str, Any]]]:
         return {
