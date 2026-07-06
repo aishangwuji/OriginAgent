@@ -402,10 +402,14 @@ def build_loop_components(
         audit_logger=values["_audit_logger"],
         config=defaults.confirmation,
     )
-    values["_reminder_store"] = ReminderStore(workspace)
-
     # ── SQLite stores (create + migrate from JSONL) ────────────────
+    # Created early so downstream services can wire in SQLite fallback.
     values["_sqlite_stores"] = SqliteStoreFactory.create_all(workspace)
+
+    values["_reminder_store"] = ReminderStore(
+        workspace,
+        sqlite_store=values["_sqlite_stores"].reminders,
+    )
 
     # Step 3: registry, subagents, runtime contributions.
     values["working_memory"] = WorkingMemoryManager(

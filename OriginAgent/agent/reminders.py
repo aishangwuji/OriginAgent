@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 from filelock import FileLock
+from loguru import logger
 
 from OriginAgent.utils.helpers import ensure_dir, truncate_text
 
@@ -115,13 +116,20 @@ class ReminderRecord:
 class ReminderStore:
     """Durable JSONL-backed store for one-shot reminders."""
 
-    def __init__(self, workspace: Path):
+    def __init__(self, workspace: Path, *, sqlite_store: Any = None):
         self.workspace = Path(workspace)
         self.root = ensure_dir(self.workspace / "memory" / "active_intents")
         self.path = self.root / "reminders.jsonl"
         self.lock = FileLock(str(self.root / ".lock"))
+        self._sqlite = sqlite_store
 
     def read_all(self) -> list[ReminderRecord]:
+        if self._sqlite is not None:
+            try:
+                raw = self._sqlite.read_all()
+                return [ReminderRecord.from_dict(r) for r in raw]
+            except Exception:
+                pass
         with self.lock:
             return self.read_all_unlocked()
 
@@ -157,9 +165,21 @@ class ReminderStore:
             if not replaced:
                 records.append(record)
             self._write_all_unlocked(records)
+        if self._sqlite is not None:
+            try:
+                self._sqlite.upsert(record)
+            except Exception:
+                logger.opt(exception=True).warning("reminders: sqlite upsert failed")
         return record
 
     def get(self, reminder_id: str) -> ReminderRecord | None:
+        if self._sqlite is not None:
+            try:
+                raw = self._sqlite.get(reminder_id)
+                if raw is not None:
+                    return ReminderRecord.from_dict(raw)
+            except Exception:
+                pass
         with self.lock:
             for record in self.read_all_unlocked():
                 if record.reminder_id == reminder_id:
@@ -168,6 +188,12 @@ class ReminderStore:
 
     def list_due(self, *, now: datetime | None = None) -> list[ReminderRecord]:
         current = now or _utcnow()
+        if self._sqlite is not None:
+            try:
+                raw = self._sqlite.list_due(now=now)
+                return [ReminderRecord.from_dict(r) for r in raw]
+            except Exception:
+                pass
         due: list[ReminderRecord] = []
         for record in self.read_all():
             if record.status not in {"pending", "due"}:
