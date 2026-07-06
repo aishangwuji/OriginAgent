@@ -1,0 +1,6 @@
+schema_version: originagent.evolution.module.v1
+module_id: calendar-helper
+module_type: skill
+version: 1.0.0
+permissions:
+  create_cron: true

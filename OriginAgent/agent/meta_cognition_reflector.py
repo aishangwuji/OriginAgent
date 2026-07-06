@@ -880,6 +880,8 @@ class MetaCognitionReflector:
     @staticmethod
     def _load_json_payload(text: str) -> Any:
         payload = str(text or "").strip()
+        if not payload:
+            return None
         if payload.startswith("```"):
             lines = payload.splitlines()
             if lines and lines[0].startswith("```"):
@@ -887,7 +889,12 @@ class MetaCognitionReflector:
             if lines and lines[-1].strip().startswith("```"):
                 lines = lines[:-1]
             payload = "\n".join(lines).strip()
-        return json.loads(payload)
+            if not payload:
+                return None
+        try:
+            return json.loads(payload)
+        except json.JSONDecodeError:
+            return None
 
     def recent_artifacts(self, *, limit: int = 10) -> dict[str, list[dict[str, Any]]]:
         return {

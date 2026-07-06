@@ -1,0 +1,4 @@
+schema_version: originagent.evolution.module.v1
+module_id: tool-module
+module_type: tool
+version: 1.0.0

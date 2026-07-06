@@ -1,0 +1,17 @@
+{
+  "cooldowns": {},
+  "feedback_trends": {},
+  "last_calibrated_at": "2026-07-03T09:47:30.432637+00:00",
+  "last_result": {
+    "cooldown_skipped_events": 0,
+    "feedback_applied": 0,
+    "last_calibrated_at": "2026-07-03T09:47:30.432637+00:00",
+    "last_event_id": "",
+    "negative_feedback_applied": 0,
+    "positive_feedback_applied": 0,
+    "processed_events": 0,
+    "skipped_events": 0,
+    "suppressed_signals": 0
+  },
+  "processed_event_ids": []
+}

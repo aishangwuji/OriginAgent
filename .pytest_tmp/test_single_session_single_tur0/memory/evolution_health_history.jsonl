@@ -1,0 +1,1 @@
+{"level": "healthy", "metadata": {"source": "evolution_maintenance"}, "reasons": ["+ no successful rollbacks", "+ no dependency conflicts", "+ trial isolation enforced"], "schema_version": "originagent.evolution.health_history.v1", "score": 100, "snapshot_id": "evo_health_7c7ff0f7c1c847a28db062a950423ba3", "timestamp": "2026-07-03T09:47:30.474732+00:00"}

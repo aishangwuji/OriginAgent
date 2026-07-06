@@ -1,0 +1,4 @@
+schema_version: originagent.evolution.module.v1
+module_id: workflow-module
+module_type: workflow
+version: 1.0.0

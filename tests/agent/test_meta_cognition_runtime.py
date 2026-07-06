@@ -923,3 +923,53 @@ async def test_meta_cognition_prompt_includes_historical_similar_sections(tmp_pa
     assert "## Historical Similar Reflections" in prompt
     assert "Retry grep-like tool calls with rg fallback" in prompt
     assert "Repeated fallback issue" in prompt
+
+
+# ── _load_json_payload empty/blank handling ───────────────────────
+
+
+def test_load_json_payload_empty_string_returns_none() -> None:
+    assert MetaCognitionReflector._load_json_payload("") is None
+
+
+def test_load_json_payload_whitespace_returns_none() -> None:
+    assert MetaCognitionReflector._load_json_payload("   ") is None
+
+
+def test_load_json_payload_backtick_only_returns_none() -> None:
+    assert MetaCognitionReflector._load_json_payload("```") is None
+
+
+def test_load_json_payload_backtick_empty_body_returns_none() -> None:
+    assert MetaCognitionReflector._load_json_payload("```\n   \n```") is None
+
+
+@pytest.mark.asyncio
+async def test_reflect_turn_empty_llm_response_does_not_crash(tmp_path: Path) -> None:
+    """LLM returns finish_reason=stop with empty content — should not crash."""
+    router = MagicMock()
+    router.call_llm = AsyncMock(
+        return_value=SimpleNamespace(finish_reason="stop", content=""),
+    )
+    reflector = _reflector(
+        tmp_path,
+        config=_config(structured_reflection_enabled=True),
+        router=router,
+    )
+    trigger = MetaTrigger(
+        trigger_id="mc_empty",
+        session_key="cli:direct",
+        trigger_type="tool_failure",
+        source_type="tool_execution_observer",
+        source_reference="grep:empty",
+        evidence_refs=["tool:grep"],
+        payload={"status": "error"},
+    )
+    result = await reflector.reflect_turn(
+        session_key="cli:direct",
+        turn_id="turn-empty",
+        turn_snapshot={"user_message": "test", "assistant_final_content": "test"},
+        accepted_triggers=[trigger],
+        runtime_context=SimpleNamespace(identity=None, user_id="user-1"),
+    )
+    assert result.status == "error"

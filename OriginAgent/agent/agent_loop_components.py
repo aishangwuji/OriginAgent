@@ -11,16 +11,18 @@ from types import SimpleNamespace
 from typing import Any, Callable
 
 from OriginAgent.agent import model_presets as preset_helpers
-from OriginAgent.agent.active_intents import ActiveIntentConfig, ActiveIntentService
 from OriginAgent.agent.action_planning import UnifiedActionPlanner
 from OriginAgent.agent.action_summary import normalize_action_summary
+from OriginAgent.agent.active_intents import ActiveIntentConfig, ActiveIntentService
 from OriginAgent.agent.agent_turn_persist import TurnPersistManager
+from OriginAgent.agent.audit import AuditLogger
 from OriginAgent.agent.autocompact import AutoCompact
 from OriginAgent.agent.auxiliary_llm import AuxiliaryLLMRouter
 from OriginAgent.agent.background_review import BackgroundReviewService
 from OriginAgent.agent.cognitive_audit import JsonlCognitiveAuditLedger
 from OriginAgent.agent.cognitive_loop import CognitiveLoop, CognitiveLoopConfig
 from OriginAgent.agent.cognitive_scheduler import CognitiveScheduler, CognitiveSchedulerConfig
+from OriginAgent.agent.confirmation import ConfirmationManager, PendingConfirmationStore
 from OriginAgent.agent.curator import CuratorService
 from OriginAgent.agent.domain_packs import DomainPackManager
 from OriginAgent.agent.introspection.service import RuntimeIntrospectionService
@@ -31,21 +33,19 @@ from OriginAgent.agent.meta_cognition_reflector import MetaCognitionReflector
 from OriginAgent.agent.meta_cognition_regulator import MetaCognitionRegulator
 from OriginAgent.agent.meta_cognition_runtime import MetaCognitionRuntime
 from OriginAgent.agent.perception_event_fusion import PerceptionEventFusion
+from OriginAgent.agent.reminders import ReminderStore
+from OriginAgent.agent.roaming_prewarm import RoamingPrewarmService
+from OriginAgent.agent.runner import AgentRunner
 from OriginAgent.agent.skill_bootstrapper import (
     SkillBootstrapperScanner,
     SkillCandidateCompiler,
 )
 from OriginAgent.agent.thought_substrate_store import ThoughtSubstrate
-from OriginAgent.agent.reminders import ReminderStore
-from OriginAgent.agent.roaming_prewarm import RoamingPrewarmService
-from OriginAgent.agent.runner import AgentRunner
 from OriginAgent.agent.tools.audit import JsonlToolAuditSink, ToolAuditConfig
 from OriginAgent.agent.tools.file_state import FileStateStore
 from OriginAgent.agent.tools.registry import ToolRegistry
 from OriginAgent.agent.working_memory import WorkingMemoryManager
 from OriginAgent.agent.world_state import WorldStateManager
-from OriginAgent.agent.confirmation import ConfirmationManager, PendingConfirmationStore
-from OriginAgent.agent.audit import AuditLogger
 from OriginAgent.memory.pipeline import NearlineMemoryPipeline
 from OriginAgent.memory.rolling import RollingEpisodeCompaction
 from OriginAgent.security.grants import CapabilityGrantStore

@@ -207,6 +207,7 @@ class RuntimeDependencies:
     cron_service: Any = None
 
     # Misc
+    turn_orchestrator: Any = None
     introspection: Any = None
     actor_resolver: Any = None
     auxiliary_router: Any = None
@@ -270,7 +271,7 @@ class AgentRuntime:
     def _tool_hint(self, tool_calls: list) -> str:
         """Format tool calls as concise hints with smart abbreviation."""
         from OriginAgent.utils.tool_hints import format_tool_hints
-        return format_tool_hints(tool_calls, max_length=self._deps.tool_hint_max_length)
+        return format_tool_hints(tool_calls, max_length=self._deps.tool_hint_max_length or 40)
 
     def _set_tool_context(
         self, channel: str, chat_id: str,
@@ -352,8 +353,8 @@ class AgentRuntime:
             if ":" in session_key
             else ("cli", session_key)
         )
-        from OriginAgent.bus.events import InboundMessage
         from OriginAgent.agent.message_metadata import build_origin_metadata
+        from OriginAgent.bus.events import InboundMessage
 
         msg = InboundMessage(
             channel="system",
@@ -406,9 +407,9 @@ class AgentRuntime:
                 f"Reminder: {record.content}\n"
                 "If helpful, continue from this due reminder and keep the follow-up bounded."
             )
-            from OriginAgent.bus.events import InboundMessage
             from OriginAgent.agent.cognitive_events import CognitiveEvent
             from OriginAgent.agent.message_metadata import build_origin_metadata
+            from OriginAgent.bus.events import InboundMessage
 
             message = InboundMessage(
                 channel="system", sender_id="agent_cognitive",
@@ -460,7 +461,7 @@ class AgentRuntime:
         return CognitiveEvent(
             event_id=str(getattr(candidate, "intent_id", "")),
             session_key=session_key,
-            event_type=str(getattr(candidate, "intent_type", "goal_nudge")),
+            event_type=getattr(candidate, "intent_type", "goal_nudge"),  # type: ignore[arg-type]
             source_type=str(getattr(candidate, "source_type", "active_intent")),
             source_reference=str(getattr(candidate, "source_reference", "")),
             summary=_trim_text(getattr(candidate, "summary", "") or getattr(candidate, "content", ""), max_chars=160),
@@ -708,8 +709,8 @@ class AgentRuntime:
         on_stream: Any = None,
     ) -> Any | None:
         """Assemble the final outbound message from turn results."""
-        from OriginAgent.agent.tools.message import MessageTool
         from OriginAgent.agent.tools.ask import ask_user_options_from_messages, ask_user_outbound
+        from OriginAgent.agent.tools.message import MessageTool
         from OriginAgent.bus.events import OutboundMessage
         from OriginAgent.session.goal_state import goal_state_ws_blob
 
@@ -736,7 +737,7 @@ class AgentRuntime:
 
         return OutboundMessage(
             channel=msg.channel, chat_id=msg.chat_id,
-            content=content, media=generated_media,
+            content=content or "", media=generated_media,
             metadata=meta, buttons=buttons,
         )
 
@@ -771,7 +772,11 @@ class AgentRuntime:
         import asyncio as _asyncio
 
         from OriginAgent.agent.agent_runtime_context import snapshot_for_trigger
-        from OriginAgent.agent.error_classifier import ClassifiedError, ErrorKind, user_facing_message
+        from OriginAgent.agent.error_classifier import (
+            ClassifiedError,
+            ErrorKind,
+            user_facing_message,
+        )
         from OriginAgent.agent.hook import AgentHook, CompositeHook
         from OriginAgent.agent.progress_hook import AgentProgressHook
         from OriginAgent.agent.runner import _MAX_INJECTIONS_PER_TURN, AgentRunSpec
@@ -780,8 +785,8 @@ class AgentRuntime:
         from OriginAgent.session.goal_state import runner_wall_llm_timeout_s
         from OriginAgent.utils.document import extract_documents
 
-        _SENSITIVE_NAMES: frozenset[str] = frozenset({"exec", "message", "web_fetch"})
-        _SENSITIVE_PREFIXES: tuple[str, ...] = ("originagent_device_",)
+        _sensitive_names: frozenset[str] = frozenset({"exec", "message", "web_fetch"})
+        _sensitive_prefixes: tuple[str, ...] = ("originagent_device_",)
 
         d = self._deps
         self._sync_subagent_runtime_limits()
@@ -807,17 +812,17 @@ class AgentRuntime:
             message_id=message_id,
             metadata=metadata,
             session_key=session_key,
-            tool_hint_max_length=d.tool_hint_max_length,
+            tool_hint_max_length=d.tool_hint_max_length or 40,
             set_tool_context=self._set_tool_context,
             on_iteration=_on_iteration,
             actor_id=actor_id,
             trigger=trigger,
             capability_snapshot=_cap_snapshot,
-            sensitive_tool_log_names=_SENSITIVE_NAMES,
-            sensitive_tool_log_prefixes=_SENSITIVE_PREFIXES,
+            sensitive_tool_log_names=_sensitive_names,
+            sensitive_tool_log_prefixes=_sensitive_prefixes,
         )
         hook: AgentHook = (
-            CompositeHook([loop_hook] + (d.extra_hooks or []))
+            CompositeHook([loop_hook] + (d.extra_hooks or []))  # type: ignore[arg-type]
             if d.extra_hooks else loop_hook
         )
 
@@ -878,7 +883,7 @@ class AgentRuntime:
             result = await d.runner.run(AgentRunSpec(
                 initial_messages=initial_messages,
                 tools=d.tools,
-                model=d.model,
+                model=d.model or "",
                 max_iterations=d.max_iterations,
                 max_tool_result_chars=d.max_tool_result_chars,
                 hook=hook,
@@ -1023,11 +1028,15 @@ class AgentRuntime:
         reflector = d.meta_cognition_reflector
         if reflector is None:
             return
-        result = await reflector.reflect_turn(
-            session_key=session_key, turn_id=turn_id,
-            turn_snapshot=turn_snapshot, accepted_triggers=accepted_triggers,
-            runtime_context=runtime_context,
-        )
+        try:
+            result = await reflector.reflect_turn(
+                session_key=session_key, turn_id=turn_id,
+                turn_snapshot=turn_snapshot, accepted_triggers=accepted_triggers,
+                runtime_context=runtime_context,
+            )
+        except Exception:
+            logger.exception("Meta cognition reflection crashed for turn {}", turn_id)
+            return
         d.meta_coordinator.on_reflection_complete(reflector)
         logger.debug("Meta cognition reflection finished for turn {} with status {} ({})",
                      turn_id, result.status, result.reason)
@@ -1120,8 +1129,8 @@ class AgentRuntime:
     def _write_continuity_runtime_identity(self, session: Any, runtime_context: Any) -> None:
         if runtime_context is None:
             return
-        CONTINUITY_RUNTIME_IDENTITY_KEY = "continuity_runtime_identity_v1"
-        session.metadata[CONTINUITY_RUNTIME_IDENTITY_KEY] = {
+        _continuity_runtime_identity_key = "continuity_runtime_identity_v1"
+        session.metadata[_continuity_runtime_identity_key] = {
             "user_id": runtime_context.user_id, "device_id": runtime_context.device_id,
             "session_id": runtime_context.session_id, "scope": runtime_context.default_scope,
             "updated_at": _utcnow_iso(),
@@ -1204,8 +1213,8 @@ class AgentRuntime:
         recovered_continuity_block: dict | None = None,
     ) -> list[dict]:
         """Build the initial message list for the LLM turn."""
-        from OriginAgent.utils.image_generation_intent import image_generation_prompt
         from OriginAgent.agent.tools.ask import ask_user_tool_result_messages
+        from OriginAgent.utils.image_generation_intent import image_generation_prompt
 
         d = self._deps
         self_model_payload = self._build_prompt_self_model()
