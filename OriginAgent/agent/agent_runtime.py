@@ -224,6 +224,7 @@ class RuntimeDependencies:
     domain_runtime_overrides: dict | None = None
     domain_runtime_contributions: list | None = None
     bdi_engine: Any = None
+    sqlite_stores: Any = None  # SqliteStoreRegistry
 
 
 class AgentRuntime:

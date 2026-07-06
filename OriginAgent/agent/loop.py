@@ -11,7 +11,11 @@ from typing import TYPE_CHECKING, Any, Awaitable, Callable
 from loguru import logger
 
 from OriginAgent.agent import model_presets as preset_helpers
+from OriginAgent.agent.action_safety import ActionDecision
+from OriginAgent.agent.action_summary import normalize_action_summary
+from OriginAgent.agent.agent_cognitive_runtime import AgentCognitiveRuntime, CognitiveRuntimeDeps
 from OriginAgent.agent.agent_host import AgentHost, AgentHostDependencies
+from OriginAgent.agent.agent_loop_components import build_loop_components
 from OriginAgent.agent.agent_runtime import (
     AgentRuntime,
     BackgroundServices,
@@ -26,8 +30,10 @@ from OriginAgent.agent.agent_runtime_context import (
     build_bus_progress_callback,
     build_retry_wait_callback,
     runtime_chat_id,
-    set_tool_context as set_tools_runtime_context,
     snapshot_for_trigger,
+)
+from OriginAgent.agent.agent_runtime_context import (
+    set_tool_context as set_tools_runtime_context,
 )
 from OriginAgent.agent.agent_tool_setup import (
     build_domain_tool_context_extras,
@@ -37,33 +43,22 @@ from OriginAgent.agent.agent_tool_setup import (
     register_plugin_tools,
     should_register_exec,
 )
-from OriginAgent.agent.action_summary import normalize_action_summary
-from OriginAgent.agent.agent_cognitive_runtime import AgentCognitiveRuntime, CognitiveRuntimeDeps
-from OriginAgent.agent.agent_loop_components import build_loop_components
+from OriginAgent.agent.agent_turn_persist import TurnPersistManager
 from OriginAgent.agent.agent_turn_pipeline import (
-    AgentTurnPipeline,
     TURN_PIPELINE_TRANSITIONS,
+    AgentTurnPipeline,
     TurnContext,
     TurnEvent,
     TurnPipelineDeps,
     TurnState,
 )
-from OriginAgent.agent.services import AgentServiceContainer
-from OriginAgent.agent.turn_orchestrator import TurnOrchestrator, TurnOrchestratorDeps
-from OriginAgent.agent.message_dispatcher import MessageDispatcher, MessageDispatcherDeps
-from OriginAgent.agent.system_turn_handler import (
-    SystemTurnHandler,
-    SystemTurnHandlerDeps,
-    SystemTurnLoopContext,
-)
-from OriginAgent.domain_packs.robot.runtime.robot_actions import TypedRobotAction
-from OriginAgent.agent.agent_turn_persist import TurnPersistManager
 from OriginAgent.agent.cognitive_events import CognitiveDecision, CognitiveEvent
+from OriginAgent.agent.confirmation import classify_confirmation_reply
 from OriginAgent.agent.context import ContextBuilder
-from OriginAgent.agent.action_safety import ActionDecision
 from OriginAgent.agent.domain_packs import DomainPackManager
 from OriginAgent.agent.hook import AgentHook
 from OriginAgent.agent.identity import ActorResolver, RuntimeContext
+from OriginAgent.agent.message_dispatcher import MessageDispatcher, MessageDispatcherDeps
 from OriginAgent.agent.meta_cognition_coordinator import MetaCognitionCoordinator
 from OriginAgent.agent.meta_cognition_models import MetaTrigger
 from OriginAgent.agent.meta_cognition_triggers import (
@@ -72,8 +67,14 @@ from OriginAgent.agent.meta_cognition_triggers import (
     build_tool_failure_trigger,
 )
 from OriginAgent.agent.self_model import SelfModelService
+from OriginAgent.agent.services import AgentServiceContainer
 from OriginAgent.agent.session_state import SessionStateHolder
 from OriginAgent.agent.subagent import SubagentManager
+from OriginAgent.agent.system_turn_handler import (
+    SystemTurnHandler,
+    SystemTurnHandlerDeps,
+    SystemTurnLoopContext,
+)
 from OriginAgent.agent.tools.ask import (
     ask_user_options_from_messages,
     ask_user_outbound,
@@ -81,13 +82,14 @@ from OriginAgent.agent.tools.ask import (
     pending_ask_user_id,
 )
 from OriginAgent.agent.tools.audit import ToolAuditConfig
-from OriginAgent.agent.confirmation import classify_confirmation_reply
 from OriginAgent.agent.tools.message import MessageTool
 from OriginAgent.agent.tools.self import MyTool
+from OriginAgent.agent.turn_orchestrator import TurnOrchestrator, TurnOrchestratorDeps
 from OriginAgent.bus.events import InboundMessage, OutboundMessage
 from OriginAgent.bus.queue import MessageBus
 from OriginAgent.command import CommandContext, CommandRouter, register_builtin_commands
 from OriginAgent.config.schema import AgentDefaults
+from OriginAgent.domain_packs.robot.runtime.robot_actions import TypedRobotAction
 from OriginAgent.providers.base import LLMProvider
 from OriginAgent.providers.factory import ProviderSnapshot
 from OriginAgent.security.capabilities import CapabilitySnapshot
@@ -99,15 +101,16 @@ from OriginAgent.utils.webui_titles import mark_webui_session
 from OriginAgent.utils.webui_transcript import append_transcript_object, delete_webui_transcript
 
 if TYPE_CHECKING:
+    from OriginAgent.agent.loop_options import LoopOptions
     from OriginAgent.config.schema import (
         AuxiliaryConfig,
+        BackgroundReviewConfig,
         ChannelsConfig,
         Config,
-        DomainPacksConfig,
-        ExecToolConfig,
-        BackgroundReviewConfig,
         CuratorConfig,
+        DomainPacksConfig,
         EvolutionConfig,
+        ExecToolConfig,
         ModelPresetConfig,
         NearlineMemoryConfig,
         ProviderConfig,
@@ -115,7 +118,6 @@ if TYPE_CHECKING:
         WebToolsConfig,
     )
     from OriginAgent.cron.service import CronService
-    from OriginAgent.agent.loop_options import LoopOptions
 
 
 UNIFIED_SESSION_KEY = "unified:default"
@@ -392,8 +394,8 @@ class AgentLoop:
         _tenants_cfg = getattr(gw, "tenants", None) if gw is not None else None
         _speaker_cfg = getattr(gw, "speaker_recognition", None) if gw is not None else None
 
-        from OriginAgent.identity.tenant import TenantRegistry
         from OriginAgent.identity.resolver import IdentityResolver
+        from OriginAgent.identity.tenant import TenantRegistry
         self._tenant_registry = TenantRegistry(self.workspace, _tenants_cfg)
         self._identity_resolver = IdentityResolver.from_config(
             self._tenant_registry, _speaker_cfg
@@ -570,6 +572,7 @@ class AgentLoop:
             domain_runtime_overrides=self._domain_runtime_overrides,
             domain_runtime_contributions=self._domain_runtime_contributions,
             bdi_engine=self._bdi_engine,
+            sqlite_stores=getattr(self, "_sqlite_stores", None),
         ))
 
     @classmethod
@@ -1932,7 +1935,7 @@ class AgentLoop:
                                 trigger,
                                 turn_id=tool_runtime_context.turn_id,
                             )
-                        
+
 
                 if existing is not None:
                     existing.on_tool_result(
