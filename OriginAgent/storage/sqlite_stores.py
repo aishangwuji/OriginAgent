@@ -71,6 +71,7 @@ from OriginAgent.agent.tier3_stores_sqlite import (
 from OriginAgent.agent.tools.audit_sqlite import ToolCallAuditSqlite
 from OriginAgent.bdi.desire_store import DesireStoreSqlite
 from OriginAgent.bdi.plan_library_sqlite import PlanLibrarySqlite
+from OriginAgent.memory.store_sqlite import NearlineMemoryStoreSqlite
 from OriginAgent.storage.jsonl_migration import MigrationResult
 
 
@@ -143,6 +144,7 @@ class SqliteStoreRegistry:
     fact_store: FactStoreSqlite
     desires: DesireStoreSqlite
     plans: PlanLibrarySqlite
+    nearline_memory: NearlineMemoryStoreSqlite
 
     # Misc specialized
     active_intents: ActiveIntentLedgerSqlite
@@ -213,6 +215,7 @@ class SqliteStoreFactory:
         fact_store = FactStoreSqlite(w)
         desires = DesireStoreSqlite(w)
         plans = PlanLibrarySqlite(w)
+        nearline_memory = NearlineMemoryStoreSqlite(w)
 
         registry = SqliteStoreRegistry(
             thought_frames=thought_frames,
@@ -255,12 +258,15 @@ class SqliteStoreFactory:
             fact_store=fact_store,
             desires=desires,
             plans=plans,
+            nearline_memory=nearline_memory,
         )
 
         # Run all migrations (idempotent — safe on every startup)
         _migrate_one(fact_store, "fact_store")
         _migrate_one(desires, "desires")
         _migrate_one(plans, "plans")
+        # nearline_memory uses its own schema, not AppendOnlyMigrator
+        nearline_memory._ensure_schema()
         _migrate_one(thought_frames, "thought_frames")
         _migrate_one(thought_journals, "thought_journals")
         _migrate_one(causal_edges, "causal_edges")

@@ -662,6 +662,7 @@ def build_loop_components(
     values["nearline_memory"] = NearlineMemoryPipeline(
         workspace=workspace,
         config=values["_nearline_memory_config"],
+        sqlite_store=values["_sqlite_stores"].nearline_memory,
     )
     values["rolling_episode_compaction"] = RollingEpisodeCompaction(
         workspace,

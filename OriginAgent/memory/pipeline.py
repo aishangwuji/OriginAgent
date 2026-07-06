@@ -16,7 +16,11 @@ from filelock import FileLock
 from loguru import logger
 
 from OriginAgent.agent.runtime_models import TaskRunReport, now_iso
-from OriginAgent.agent.task_runtime import build_task_report, remember_report, report_to_status_payload
+from OriginAgent.agent.task_runtime import (
+    build_task_report,
+    remember_report,
+    report_to_status_payload,
+)
 from OriginAgent.config.schema import NearlineMemoryConfig
 from OriginAgent.memory.events import (
     AgentCaseExtracted,
@@ -26,7 +30,12 @@ from OriginAgent.memory.events import (
     MemoryEvent,
     ProfileRefreshRequested,
 )
-from OriginAgent.memory.models import AgentCaseRecord, EpisodeRecord, ForesightRecord, ProfileSnapshot
+from OriginAgent.memory.models import (
+    AgentCaseRecord,
+    EpisodeRecord,
+    ForesightRecord,
+    ProfileSnapshot,
+)
 from OriginAgent.memory.profile import NearlineProfileService
 from OriginAgent.memory.segmenter import canonicalize_session_messages, segment_memcells
 from OriginAgent.memory.store import NearlineMemoryStore
@@ -101,10 +110,11 @@ class NearlineMemoryPipeline:
         *,
         config: NearlineMemoryConfig | None = None,
         store: NearlineMemoryStore | None = None,
+        sqlite_store: Any = None,
     ) -> None:
         self.workspace = Path(workspace)
         self.config = config or NearlineMemoryConfig()
-        self.store = store or NearlineMemoryStore(self.workspace)
+        self.store = store or NearlineMemoryStore(self.workspace, sqlite_store=sqlite_store)
         self.profile_service = NearlineProfileService(
             self.workspace,
             store=self.store,

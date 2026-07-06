@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from filelock import FileLock
+from loguru import logger
 
 from OriginAgent.memory.models import (
     AgentCaseRecord,
@@ -24,10 +25,11 @@ from OriginAgent.memory.models import (
 class NearlineMemoryStore:
     """Filesystem helper for nearline memory artifacts and cursors."""
 
-    def __init__(self, workspace: Path):
+    def __init__(self, workspace: Path, *, sqlite_store: Any = None):
         self.workspace = Path(workspace)
         self.root = self.workspace / "memory" / "nearline"
         self.lock_path = self.root / ".lock"
+        self._sqlite = sqlite_store
         self.memcells_path = self.root / "memcells.jsonl"
         self.episodes_path = self.root / "episodes.jsonl"
         self.foresights_path = self.root / "foresights.jsonl"
@@ -93,41 +95,54 @@ class NearlineMemoryStore:
             return cursor
 
     def append_memcells(self, memcells: list[MemCell]) -> int:
-        return self._append_jsonl(self.memcells_path, memcells, identity_keys=("memcell_id",))
+        return self._append_jsonl(self.memcells_path, memcells, identity_keys=("memcell_id",), sqlite_kind="memcell")
 
     def append_episodes(self, episodes: list[EpisodeRecord]) -> int:
-        return self._append_jsonl(self.episodes_path, episodes, identity_keys=("episode_id",))
+        return self._append_jsonl(self.episodes_path, episodes, identity_keys=("episode_id",), sqlite_kind="episode")
 
     def append_foresights(self, foresights: list[ForesightRecord]) -> int:
-        return self._append_jsonl(self.foresights_path, foresights, identity_keys=("foresight_id",))
+        return self._append_jsonl(self.foresights_path, foresights, identity_keys=("foresight_id",), sqlite_kind="foresight")
 
     def append_agent_cases(self, agent_cases: list[AgentCaseRecord]) -> int:
-        return self._append_jsonl(self.agent_cases_path, agent_cases, identity_keys=("case_id",))
+        return self._append_jsonl(self.agent_cases_path, agent_cases, identity_keys=("case_id",), sqlite_kind="agent_case")
 
     def append_profiles(self, profiles: list[ProfileSnapshot]) -> int:
-        return self._append_jsonl(self.profiles_path, profiles, identity_keys=("profile_id",))
+        return self._append_jsonl(self.profiles_path, profiles, identity_keys=("profile_id",), sqlite_kind="profile")
 
     def append_events(self, events: list[Any]) -> int:
-        return self._append_jsonl(self.events_path, events, identity_keys=("event_id",))
+        return self._append_jsonl(self.events_path, events, identity_keys=("event_id",), sqlite_kind="event")
+
+    def _read_sqlite(self, kind: str, limit: int | None = None) -> list[dict[str, Any]] | None:
+        if self._sqlite is not None:
+            try:
+                return self._sqlite.read_all(kind, limit=limit)
+            except Exception:
+                pass
+        return None
 
     def read_memcells(self, *, limit: int | None = None) -> list[MemCell]:
-        payloads = self._read_jsonl(self.memcells_path, limit=limit)
+        sqlite_rows = self._read_sqlite("memcell", limit=limit)
+        payloads = sqlite_rows if sqlite_rows is not None else self._read_jsonl(self.memcells_path, limit=limit)
         return [self._memcell_from_payload(payload) for payload in payloads]
 
     def read_episodes(self, *, limit: int | None = None) -> list[EpisodeRecord]:
-        payloads = self._read_jsonl(self.episodes_path, limit=limit)
+        sqlite_rows = self._read_sqlite("episode", limit=limit)
+        payloads = sqlite_rows if sqlite_rows is not None else self._read_jsonl(self.episodes_path, limit=limit)
         return [self._episode_from_payload(payload) for payload in payloads]
 
     def read_foresights(self, *, limit: int | None = None) -> list[ForesightRecord]:
-        payloads = self._read_jsonl(self.foresights_path, limit=limit)
+        sqlite_rows = self._read_sqlite("foresight", limit=limit)
+        payloads = sqlite_rows if sqlite_rows is not None else self._read_jsonl(self.foresights_path, limit=limit)
         return [self._foresight_from_payload(payload) for payload in payloads]
 
     def read_agent_cases(self, *, limit: int | None = None) -> list[AgentCaseRecord]:
-        payloads = self._read_jsonl(self.agent_cases_path, limit=limit)
+        sqlite_rows = self._read_sqlite("agent_case", limit=limit)
+        payloads = sqlite_rows if sqlite_rows is not None else self._read_jsonl(self.agent_cases_path, limit=limit)
         return [self._agent_case_from_payload(payload) for payload in payloads]
 
     def read_profiles(self, *, limit: int | None = None) -> list[ProfileSnapshot]:
-        payloads = self._read_jsonl(self.profiles_path, limit=limit)
+        sqlite_rows = self._read_sqlite("profile", limit=limit)
+        payloads = sqlite_rows if sqlite_rows is not None else self._read_jsonl(self.profiles_path, limit=limit)
         return [self._profile_from_payload(payload) for payload in payloads]
 
     def read_session_cursor(self, session_key: str) -> int:
@@ -232,6 +247,7 @@ class NearlineMemoryStore:
         records: list[Any],
         *,
         identity_keys: tuple[str, ...] = (),
+        sqlite_kind: str | None = None,
     ) -> int:
         payloads = [self._normalize_record(record) for record in records]
         if not payloads:
@@ -255,6 +271,11 @@ class NearlineMemoryStore:
                 handle.flush()
                 os.fsync(handle.fileno())
             self._fsync_parent(path)
+        if sqlite_kind is not None and self._sqlite is not None and new_payloads:
+            try:
+                self._sqlite.append(sqlite_kind, new_payloads)
+            except Exception:
+                logger.opt(exception=True).warning("nearline: sqlite {} append failed", sqlite_kind)
         return len(new_payloads)
 
     @staticmethod
