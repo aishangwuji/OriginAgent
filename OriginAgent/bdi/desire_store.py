@@ -9,7 +9,6 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
-from filelock import FileLock
 from loguru import logger
 
 from OriginAgent.bdi.models import Desire, DesirePriority, DesireStatus, now_iso
@@ -26,13 +25,14 @@ class DesireStore:
     temp-file + fsync + rename + dir-fsync.
     """
 
-    def __init__(self, workspace: Path, *, sqlite_store: Any = None) -> None:
+    def __init__(self, workspace: Path, *, sqlite_store: Any = None, jsonl_fallback_enabled: bool = True) -> None:
         self.workspace = Path(workspace)
         self._dir = self.workspace / "memory" / "bdi"
         self._path = self._dir / "desires.jsonl"
         self._lock_path = self._dir / ".desires.lock"
         ensure_dir(self._dir)
         self._sqlite = sqlite_store
+        self._jsonl_fallback_enabled = jsonl_fallback_enabled
 
     # ------------------------------------------------------------------
     # Atomic I/O
@@ -62,29 +62,38 @@ class DesireStore:
         return result
 
     def _write_all_unlocked(self, desires: dict[str, Desire]) -> None:
-        """Atomically write all desires WITHOUT locking (caller must hold the lock)."""
+        """Write all desires — SQLite primary, JSONL optional cold backup."""
+        raw = [d.to_json() for d in desires.values()]
+        if self._sqlite is not None:
+            try:
+                for d in desires.values():
+                    self._sqlite.add(d.to_json())
+            except Exception:
+                logger.opt(exception=True).warning("desires: sqlite write failed, falling back to JSONL")
+                self._jsonl_write_all(raw)
+                return
+            if self._jsonl_fallback_enabled:
+                try:
+                    self._jsonl_write_all(raw)
+                except Exception:
+                    logger.opt(exception=True).warning("desires: jsonl cold backup failed")
+        else:
+            self._jsonl_write_all(raw)
+
+    def _jsonl_write_all(self, raw: list[dict[str, Any]]) -> None:
+        """Full atomic JSONL rewrite with fsync (crash-safe fallback)."""
         ensure_dir(self._dir)
         tmp = tempfile.NamedTemporaryFile(
-            mode="w",
-            encoding="utf-8",
-            dir=str(self._dir),
-            delete=False,
-            suffix=".tmp",
+            mode="w", encoding="utf-8", dir=str(self._dir),
+            delete=False, suffix=".tmp",
         )
         try:
-            for d in desires.values():
-                tmp.write(json.dumps(d.to_json(), ensure_ascii=False) + "\n")
+            for d in raw:
+                tmp.write(json.dumps(d, ensure_ascii=False) + "\n")
             tmp.flush()
             os.fsync(tmp.fileno())
             tmp.close()
             os.replace(tmp.name, str(self._path))
-            if self._sqlite is not None:
-                try:
-                    for d in desires.values():
-                        self._sqlite.add(d.to_json())
-                except Exception:
-                    logger.opt(exception=True).warning("desires: sqlite sync failed")
-            # Directory fsync for durability
             try:
                 dir_fd = os.open(str(self._dir), os.O_RDONLY)
                 os.fsync(dir_fd)
@@ -97,13 +106,15 @@ class DesireStore:
 
     def _read_all(self) -> dict[str, Desire]:
         """Read all desires into a dict keyed by desire_id (thread-safe)."""
-        with FileLock(str(self._lock_path)):
+        from OriginAgent.storage.jsonl_fallback import locked as _locked
+        with _locked(self._sqlite, self._lock_path):
             return self._read_all_unlocked()
 
     @contextmanager
     def _read_modify_write(self):
         """Context manager holding the lock across the full read-modify-write cycle."""
-        with FileLock(str(self._lock_path)):
+        from OriginAgent.storage.jsonl_fallback import locked as _locked
+        with _locked(self._sqlite, self._lock_path):
             desires = self._read_all_unlocked()
             yield desires
             self._write_all_unlocked(desires)

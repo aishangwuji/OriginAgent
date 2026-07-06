@@ -10,7 +10,6 @@ from collections import Counter
 from pathlib import Path
 from typing import Any
 
-from filelock import FileLock
 from loguru import logger
 
 from OriginAgent.bdi.models import (
@@ -40,7 +39,7 @@ _STOP_WORDS = {
 class PlanLibrary:
     """Pattern-matching cache for means-ends reasoning."""
 
-    def __init__(self, workspace: Path, *, sqlite_store: Any = None) -> None:
+    def __init__(self, workspace: Path, *, sqlite_store: Any = None, jsonl_fallback_enabled: bool = True) -> None:
         self.workspace = Path(workspace)
         self._dir = self.workspace / "memory" / "bdi"
         self._path = self._dir / "plans.jsonl"
@@ -48,6 +47,7 @@ class PlanLibrary:
         ensure_dir(self._dir)
         self._plans: dict[str, PlanTemplate] = {}
         self._sqlite = sqlite_store
+        self._jsonl_fallback_enabled = jsonl_fallback_enabled
         self._load()
 
     def add(self, plan: PlanTemplate) -> None:
@@ -151,7 +151,8 @@ class PlanLibrary:
                 pass
         if not self._path.exists():
             return
-        with FileLock(str(self._lock_path)):
+        from OriginAgent.storage.jsonl_fallback import locked as _locked
+        with _locked(self._sqlite, self._lock_path):
             with open(self._path, "r", encoding="utf-8") as f:
                 for line in f:
                     line = line.strip()
@@ -165,7 +166,27 @@ class PlanLibrary:
 
     def _save(self) -> None:
         ensure_dir(self._dir)
-        with FileLock(str(self._lock_path)):
+        if self._sqlite is not None:
+            try:
+                for plan in self._plans.values():
+                    self._sqlite.add(plan)
+            except Exception:
+                logger.opt(exception=True).warning("plans: sqlite write failed, falling back to JSONL")
+                self._jsonl_save()
+                return
+            if self._jsonl_fallback_enabled:
+                try:
+                    self._jsonl_save()
+                except Exception:
+                    logger.opt(exception=True).warning("plans: jsonl cold backup failed")
+        else:
+            self._jsonl_save()
+
+    def _jsonl_save(self) -> None:
+        """Full atomic JSONL rewrite with fsync (crash-safe fallback)."""
+        ensure_dir(self._dir)
+        from OriginAgent.storage.jsonl_fallback import locked as _locked
+        with _locked(self._sqlite, self._lock_path):
             tmp = tempfile.NamedTemporaryFile(
                 mode="w", encoding="utf-8", dir=str(self._dir),
                 delete=False, suffix=".tmp",
@@ -177,12 +198,6 @@ class PlanLibrary:
                 os.fsync(tmp.fileno())
                 tmp.close()
                 os.replace(tmp.name, str(self._path))
-                if self._sqlite is not None:
-                    try:
-                        for plan in self._plans.values():
-                            self._sqlite.add(plan)
-                    except Exception:
-                        logger.opt(exception=True).warning("plans: sqlite sync failed")
                 try:
                     dir_fd = os.open(str(self._dir), os.O_RDONLY)
                     os.fsync(dir_fd)

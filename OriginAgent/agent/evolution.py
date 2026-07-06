@@ -172,12 +172,13 @@ class OpportunitySignalCandidate:
 class OpportunitySignalStore:
     """JSONL store for non-actionable self-evolution signals."""
 
-    def __init__(self, workspace: Path, *, sqlite_store: Any = None):
+    def __init__(self, workspace: Path, *, sqlite_store: Any = None, jsonl_fallback_enabled: bool = True):
         self.workspace = Path(workspace)
         self.memory_dir = ensure_dir(self.workspace / "memory")
         self.path = self.memory_dir / "opportunity_signals.jsonl"
         self._lock = FileLock(str(self.memory_dir / ".opportunity_signals.lock"))
         self._sqlite = sqlite_store
+        self._jsonl_fallback_enabled = jsonl_fallback_enabled
 
     def read_all(self) -> list[OpportunitySignal]:
         if self._sqlite is not None:
@@ -579,6 +580,24 @@ class OpportunitySignalStore:
         return sorted(retained, key=lambda signal: (signal.kind, signal.target_key))
 
     def _write_all_unlocked(self, records: list[OpportunitySignal]) -> None:
+        if self._sqlite is not None:
+            try:
+                for signal in records:
+                    self._sqlite.append(signal.to_record())
+            except Exception:
+                logger.opt(exception=True).warning("signals: sqlite write failed, falling back to JSONL")
+                self._jsonl_write_all(records)
+                return
+            if self._jsonl_fallback_enabled:
+                try:
+                    self._jsonl_write_all(records)
+                except Exception:
+                    logger.opt(exception=True).warning("signals: jsonl cold backup failed")
+        else:
+            self._jsonl_write_all(records)
+
+    def _jsonl_write_all(self, records: list[OpportunitySignal]) -> None:
+        """Full atomic JSONL rewrite with fsync (crash-safe fallback)."""
         tmp_path = self.path.with_suffix(self.path.suffix + ".tmp")
         try:
             with open(tmp_path, "w", encoding="utf-8") as f:
@@ -590,12 +609,6 @@ class OpportunitySignalStore:
         except BaseException:
             tmp_path.unlink(missing_ok=True)
             raise
-        if self._sqlite is not None:
-            try:
-                for signal in records:
-                    self._sqlite.append(signal.to_record())
-            except Exception:
-                logger.opt(exception=True).warning("signals: sqlite sync failed")
 
     def _trace_signal_changes(self, signals: list[OpportunitySignal], *, created_ids: set[str]) -> None:
         if not signals:
