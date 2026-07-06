@@ -10,9 +10,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Literal
 
-from OriginAgent.agent.confirmation import PendingConfirmationStore
+from loguru import logger
+
 from OriginAgent.agent.cognitive_audit import JsonlCognitiveAuditLedger
 from OriginAgent.agent.cognitive_events import CognitiveDecision
+from OriginAgent.agent.confirmation import PendingConfirmationStore
 from OriginAgent.agent.facts import FactStore
 from OriginAgent.agent.message_metadata import build_origin_metadata
 from OriginAgent.bus.events import InboundMessage
@@ -95,21 +97,33 @@ class ActiveIntentRecord:
 class JsonlActiveIntentLedger:
     """Append-only ledger for proactive emission and suppression decisions."""
 
-    def __init__(self, workspace: Path):
+    def __init__(self, workspace: Path, *, sqlite_store: Any = None):
         root = Path(workspace) / "memory" / "active_intents"
         self._records_path = root / "records.jsonl"
         self._lock = threading.Lock()
+        self._sqlite = sqlite_store
 
     def append(self, record: ActiveIntentRecord) -> None:
+        payload = record.to_dict()
         with self._lock:
             ensure_dir(self._records_path.parent)
             with self._records_path.open("a", encoding="utf-8") as handle:
-                handle.write(json.dumps(record.to_dict(), ensure_ascii=False, sort_keys=True))
+                handle.write(json.dumps(payload, ensure_ascii=False, sort_keys=True))
                 handle.write("\n")
                 handle.flush()
                 os.fsync(handle.fileno())
+        if self._sqlite is not None:
+            try:
+                self._sqlite.append(payload)
+            except Exception:
+                logger.opt(exception=True).warning("active_intents: sqlite append failed")
 
     def recent(self, limit: int = _RECENT_SCAN_LIMIT) -> list[dict[str, Any]]:
+        if self._sqlite is not None:
+            try:
+                return self._sqlite.recent(limit=limit)
+            except Exception:
+                pass
         if not self._records_path.exists():
             return []
         items: list[dict[str, Any]] = []
@@ -146,6 +160,7 @@ class ActiveIntentService:
         config: ActiveIntentConfig,
         cognitive_audit: JsonlCognitiveAuditLedger,
         nearline_memory_config: Any | None = None,
+        sqlite_store: Any = None,
     ) -> None:
         self.workspace = Path(workspace)
         self.bus = bus
@@ -156,7 +171,7 @@ class ActiveIntentService:
         self.config = config
         self._cognitive_audit = cognitive_audit
         self._nearline_memory_config = nearline_memory_config
-        self.ledger = JsonlActiveIntentLedger(workspace)
+        self.ledger = JsonlActiveIntentLedger(workspace, sqlite_store=sqlite_store)
 
     def session_keys(self) -> list[str]:
         seen: set[str] = set()

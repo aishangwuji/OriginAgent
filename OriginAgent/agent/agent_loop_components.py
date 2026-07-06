@@ -578,6 +578,7 @@ def build_loop_components(
         config=values["_active_intent_config"],
         cognitive_audit=values["_cognitive_audit"],
         nearline_memory_config=values["_nearline_memory_config"],
+        sqlite_store=values["_sqlite_stores"].active_intents,
     )
     values["_meta_cognition_audit"] = JsonlMetaCognitionAuditLedger(
         workspace,
