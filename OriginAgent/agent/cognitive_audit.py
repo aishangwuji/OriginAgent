@@ -43,13 +43,25 @@ class JsonlCognitiveAuditLedger:
 
     def append_event(self, event: CognitiveEvent) -> None:
         payload = event.to_json()
-        self._append(self._events_path, payload)
-        self._sqlite_append(self._sqlite_events, payload, "cognitive_events")
+        if self._sqlite_events is not None:
+            try:
+                self._sqlite_events.append(payload)
+            except Exception:
+                logger.opt(exception=True).warning("cognitive_audit: sqlite event append failed")
+                self._jsonl_append(self._events_path, payload)
+                return
+        self._jsonl_append(self._events_path, payload)
 
     def append_decision(self, decision: CognitiveDecision) -> None:
         payload = decision.to_json()
-        self._append(self._decisions_path, payload)
-        self._sqlite_append(self._sqlite_decisions, payload, "cognitive_decisions")
+        if self._sqlite_decisions is not None:
+            try:
+                self._sqlite_decisions.append(payload)
+            except Exception:
+                logger.opt(exception=True).warning("cognitive_audit: sqlite decision append failed")
+                self._jsonl_append(self._decisions_path, payload)
+                return
+        self._jsonl_append(self._decisions_path, payload)
 
     def _recent_sqlite(self, store: Any, fallback_path: Path, limit: int) -> list[dict[str, Any]]:
         if store is not None:
@@ -87,7 +99,7 @@ class JsonlCognitiveAuditLedger:
             "suppression_reason_counts": suppression_counts,
         }
 
-    def _append(self, path: Path, payload: dict[str, Any]) -> None:
+    def _jsonl_append(self, path: Path, payload: dict[str, Any]) -> None:
         with self._lock:
             ensure_dir(path.parent)
             with path.open("a", encoding="utf-8") as handle:

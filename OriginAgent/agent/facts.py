@@ -602,18 +602,29 @@ class FactEventStore:
         return FileLock(str(self._lock_path))
 
     def append(self, event: FactEventRecord) -> FactEventRecord:
-        with self._locked():
-            self.path.parent.mkdir(parents=True, exist_ok=True)
-            with self.path.open("a", encoding="utf-8") as handle:
-                handle.write(json.dumps(event.to_dict(), ensure_ascii=False, sort_keys=True) + "\n")
-                handle.flush()
-                os.fsync(handle.fileno())
+        payload = event.to_dict()
         if self._sqlite is not None:
             try:
-                self._sqlite.append(event.to_dict())
+                self._sqlite.append(payload)
             except Exception:
-                logger.opt(exception=True).warning("fact_events: sqlite append failed")
+                logger.opt(exception=True).warning("fact_events: sqlite append failed, falling back to JSONL")
+                self._jsonl_append(payload)
+                return event
+            if getattr(self, "_jsonl_fallback_enabled", True):
+                try:
+                    self._jsonl_append(payload)
+                except Exception:
+                    pass
+        else:
+            self._jsonl_append(payload)
         return event
+
+    def _jsonl_append(self, payload: dict[str, Any]) -> None:
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        with self.path.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(payload, ensure_ascii=False, sort_keys=True) + "\n")
+            handle.flush()
+            os.fsync(handle.fileno())
 
     def read_all(self) -> list[FactEventRecord]:
         if self._sqlite is not None:

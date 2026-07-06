@@ -105,6 +105,16 @@ class JsonlActiveIntentLedger:
 
     def append(self, record: ActiveIntentRecord) -> None:
         payload = record.to_dict()
+        if self._sqlite is not None:
+            try:
+                self._sqlite.append(payload)
+            except Exception:
+                logger.opt(exception=True).warning("active_intents: sqlite append failed, falling back to JSONL")
+                self._jsonl_append(payload)
+                return
+        self._jsonl_append(payload)
+
+    def _jsonl_append(self, payload: dict[str, Any]) -> None:
         with self._lock:
             ensure_dir(self._records_path.parent)
             with self._records_path.open("a", encoding="utf-8") as handle:
@@ -112,11 +122,6 @@ class JsonlActiveIntentLedger:
                 handle.write("\n")
                 handle.flush()
                 os.fsync(handle.fileno())
-        if self._sqlite is not None:
-            try:
-                self._sqlite.append(payload)
-            except Exception:
-                logger.opt(exception=True).warning("active_intents: sqlite append failed")
 
     def recent(self, limit: int = _RECENT_SCAN_LIMIT) -> list[dict[str, Any]]:
         if self._sqlite is not None:

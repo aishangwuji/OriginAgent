@@ -137,17 +137,22 @@ class JsonlToolAuditSink:
                 event_data["prev_hash"] = self._last_hash
                 event_data["event_hash"] = None
                 event_data["event_hash"] = self._hash_event(event_data)
-                with self.path.open("a", encoding="utf-8") as handle:
-                    handle.write(json.dumps(event_data, ensure_ascii=False, sort_keys=True))
-                    handle.write("\n")
-                    handle.flush()
-                    os.fsync(handle.fileno())
                 self._last_hash = str(event_data["event_hash"])
-            # dual-write to SQLite
             if self._sqlite is not None:
                 try:
                     self._sqlite.append(event_data)
                 except Exception:
-                    logger.opt(exception=True).warning("tool_audit: sqlite append failed")
+                    logger.opt(exception=True).warning("tool_audit: sqlite append failed, falling back to JSONL")
+                    self._jsonl_append(event_data)
+                    return
+            self._jsonl_append(event_data)
         except Exception as exc:
             logger.debug("Tool audit write failed: {}", exc)
+
+    def _jsonl_append(self, event_data: dict[str, object]) -> None:
+        with self._lock:
+            with self.path.open("a", encoding="utf-8") as handle:
+                handle.write(json.dumps(event_data, ensure_ascii=False, sort_keys=True))
+                handle.write("\n")
+                handle.flush()
+                os.fsync(handle.fileno())
