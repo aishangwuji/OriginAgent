@@ -316,6 +316,31 @@ class DeliberationEngine:
             else:
                 llm_desires.append(desire)
 
+        # ── 4.5 Auto-override failing cron jobs (Phase 4) ─────────────
+        if self._cron_bridge is not None and desires:
+            cron_beliefs = self._gather_beliefs().get("cron", {})
+            for fj in cron_beliefs.get("failing_jobs", []):
+                if fj.get("consecutive_failures", 0) >= 3:
+                    cid = fj.get("cron_job_id", "")
+                    did = fj.get("desire_id", "")
+                    for d in desires:
+                        if d.desire_id == did:
+                            logger.info(
+                                "BDI: auto-override cron {} (desire={}, {} failures)",
+                                cid, did, fj.get("consecutive_failures"),
+                            )
+                            self._cron_bridge.disable_cron_job(cid)
+                            cached_intentions.append(DeliberationIntention(
+                                desire_id=did,
+                                action="send_message",
+                                scope="system",
+                                trigger="deliberation:cron_override",
+                                risk="low",
+                                reasoning=f"Cron {cid} failed {fj.get('consecutive_failures')} times; BDI overriding.",
+                                payload={"text": d.content, "alternative_to_cron": True},
+                            ))
+                            break
+
         # ── 5. LLM deliberation for unmatched desires ──────────────────
         llm_intentions: list[DeliberationIntention] = []
         reasoning = ""
