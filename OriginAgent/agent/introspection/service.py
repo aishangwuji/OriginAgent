@@ -8,15 +8,15 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from OriginAgent.agent.confirmation import PendingConfirmationStore
+from OriginAgent.agent.action_summary import action_summary_from_loop
 from OriginAgent.agent.cognitive_audit import JsonlCognitiveAuditLedger
 from OriginAgent.agent.cognitive_scheduler import JsonlCognitiveSchedulerLedger
-from OriginAgent.agent.action_summary import action_summary_from_loop
-from OriginAgent.agent.local_awareness import normalize_local_awareness_summary
-from OriginAgent.agent.runtime_mode import build_runtime_mode_summary
+from OriginAgent.agent.confirmation import PendingConfirmationStore
 from OriginAgent.agent.domain_pack_governance import summarize_domain_pack_governance
 from OriginAgent.agent.facts import FactStore, summarize_facts
+from OriginAgent.agent.local_awareness import normalize_local_awareness_summary
 from OriginAgent.agent.memory import MemoryStore
+from OriginAgent.agent.runtime_mode import build_runtime_mode_summary
 from OriginAgent.agent.runtime_models import RuntimeContextSnapshot
 from OriginAgent.agent.scope import ScopeResolver
 from OriginAgent.agent.self_model import SelfModelService, _workspace_memory_state
@@ -674,6 +674,53 @@ class RuntimeIntrospectionService:
             "task_count": len([value for value in tasks.values() if value]),
             "tasks": tasks,
         }
+
+    def cron_desire_status(self) -> list[dict[str, Any]]:
+        """Return a unified view of cron-desire links.
+
+        Each entry joins:
+        - cron job metadata (from CronService)
+        - linked desire (from DesireStore)
+        - delivery observation state (from CronObservationStore)
+        """
+        bridge = getattr(getattr(self._loop, "_host", None) if self._loop else None, "_cron_bridge", None)
+        if bridge is None:
+            return []
+        obs = getattr(bridge, "_observation_store", None)
+        if obs is None:
+            return []
+        try:
+            links = obs.list_active_links()
+        except Exception:
+            return []
+        cron_svc = self._cron_service
+        results: list[dict[str, Any]] = []
+        for link in links:
+            entry: dict[str, Any] = {
+                "cron_job_id": link["cron_job_id"],
+                "desire_id": link["desire_id"],
+                "created_at": link.get("created_at"),
+                "last_delivery_at": link.get("last_delivery_at"),
+                "last_delivery_status": link.get("last_delivery_status"),
+                "consecutive_failures": link.get("consecutive_failures", 0),
+                "cron_disabled": bool(link.get("cron_disabled", 0)),
+            }
+            if cron_svc is not None:
+                job = cron_svc.get_job(link["cron_job_id"])
+                if job is not None:
+                    entry["cron_job_name"] = job.name
+                    entry["cron_job_enabled"] = job.enabled
+                    sched = job.schedule
+                    if sched.kind == "at":
+                        entry["timing"] = f"at {sched.at_ms}"
+                    elif sched.kind == "every":
+                        entry["timing"] = f"every {sched.every_ms}ms"
+                    elif sched.kind == "cron":
+                        entry["timing"] = f"cron {sched.expr}"
+                    entry["last_status"] = job.state.last_status
+                    entry["last_error"] = job.state.last_error
+            results.append(entry)
+        return results
 
     def _confirmation_snapshot(self) -> dict[str, Any]:
         store = self._confirmation_store
