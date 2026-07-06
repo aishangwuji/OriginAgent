@@ -31,7 +31,12 @@ from OriginAgent.agent.meta_cognition_redact import (
     redact_rule_candidate,
 )
 from OriginAgent.agent.runtime_models import TaskRunReport, now_iso
-from OriginAgent.agent.task_runtime import build_task_report, maybe_retry_once, remember_report, report_to_status_payload
+from OriginAgent.agent.task_runtime import (
+    build_task_report,
+    maybe_retry_once,
+    remember_report,
+    report_to_status_payload,
+)
 from OriginAgent.memory.candidates import GovernedMemoryWriter, MemoryCandidate
 from OriginAgent.session.goal_state import goal_state_raw, parse_goal_state
 from OriginAgent.utils.prompt_templates import render_template
@@ -576,6 +581,8 @@ class MetaCognitionReflector:
     ) -> tuple[ThoughtJournalEntry | None, ReflectionRecord | None, ConfidenceTrace | None]:
         payload = self._load_json_payload(text)
         if not isinstance(payload, dict):
+            preview = (text or "").strip()[:300]
+            logger.warning("Meta cognition reflection returned invalid JSON ({} chars). First 300 chars: {}", len(text or ""), preview)
             raise ValueError("meta cognition reflection returned invalid JSON")
         latest_journal = journals[-1]
         journal_raw = payload.get("journal_enrichment")
