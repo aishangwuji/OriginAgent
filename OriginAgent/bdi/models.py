@@ -83,6 +83,9 @@ class Desire:
     # How many deliberation cycles has this been evaluated?
     evaluation_count: int = 0
 
+    # ACT-R utility value for learning (clamped to [0.0, 1.0])
+    utility: float = 0.5
+
     # Last deliberation reasoning about this desire
     last_reasoning: str = ""
 
@@ -115,6 +118,15 @@ class Desire:
             updated_at=now_iso(),
         )
 
+    def with_utility(self, utility: float) -> "Desire":
+        """Update the utility value, clamped to [0.0, 1.0]."""
+        clamped = max(0.0, min(float(utility), 1.0))
+        return replace(
+            self,
+            utility=clamped,
+            updated_at=now_iso(),
+        )
+
     @property
     def is_terminal(self) -> bool:
         return self.status in (DesireStatus.SATISFIED, DesireStatus.CANCELLED)
@@ -140,6 +152,7 @@ class Desire:
         data = dict(data)
         data["status"] = DesireStatus(data["status"])
         data["priority"] = DesirePriority(data["priority"])
+        data.setdefault("utility", 0.5)
         return cls(**data)
 
 

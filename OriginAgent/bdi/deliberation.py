@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import asyncio
 import json
+import math
 import os
+import random
 import tempfile
 import uuid
 from pathlib import Path
@@ -159,6 +161,10 @@ class DeliberationEngine:
         shared_space: Any = None,          # SharedSpace | None — cross-tenant shared state
         sqlite_stores: Any = None,
         cron_bridge: Any = None,            # CronDesireBridge | None
+        use_actr_utility: bool = False,
+        utility_learning_rate: float = 0.2,
+        selection_temperature: float = 0.1,
+        reward_bridge: Any = None,  # UtilityRewardBridge | None
     ) -> None:
         self.workspace = Path(workspace)
         self._store = store
@@ -186,6 +192,13 @@ class DeliberationEngine:
         )
         self._shared_space = shared_space
         self._cron_bridge = cron_bridge
+
+        # ── ACT-R utility learning ─────────────────────────────────────
+        self._use_actr_utility = use_actr_utility
+        self._utility_learning_rate = utility_learning_rate
+        self._selection_temperature = max(0.001, selection_temperature)  # avoid div-by-zero
+        self._reward_bridge = reward_bridge
+        self._last_utility_update_at: str = ""
 
         self._watcher = WorldStateWatcher(
             engine=self,
@@ -595,8 +608,68 @@ class DeliberationEngine:
     # Helpers
     # ------------------------------------------------------------------
 
+    def _stochastic_prioritize(self, desires: list[Desire]) -> list[Desire]:
+        """ACT-R stochastic selection via softmax over utility.
+
+        Overdue desires are always selected first (deterministic).
+        Remaining slots are filled via softmax(utility / temperature)
+        sampling without replacement.
+        """
+        if not desires:
+            return []
+        if len(desires) == 1:
+            return list(desires)
+
+        # 过期 desire 优先级最高，确定性选择
+        overdue = [d for d in desires if d.is_overdue]
+        non_overdue = [d for d in desires if not d.is_overdue]
+
+        selected = list(overdue)
+        remaining_slots = self._max_desires_per_cycle - len(selected)
+
+        if remaining_slots <= 0:
+            return selected[:self._max_desires_per_cycle]
+
+        if not non_overdue:
+            return selected
+
+        # 对非过期 desire 执行 softmax 无放回采样
+        pool = list(non_overdue)
+        temp = self._selection_temperature
+
+        while remaining_slots > 0 and pool:
+            if len(pool) == 1:
+                selected.append(pool.pop(0))
+                remaining_slots -= 1
+                break
+
+            # 计算 softmax 概率，减去最大值保证数值稳定
+            utilities = [d.utility for d in pool]
+            max_u = max(utilities)
+            exp_utils = [math.exp((u - max_u) / temp) for u in utilities]
+            total = sum(exp_utils)
+            if total <= 0:
+                # 退化情况：回退为均匀分布
+                probs = [1.0 / len(pool)] * len(pool)
+            else:
+                probs = [e / total for e in exp_utils]
+
+            # 依概率抽取一个 desire
+            idx = random.choices(range(len(pool)), weights=probs, k=1)[0]
+            selected.append(pool.pop(idx))
+            remaining_slots -= 1
+
+        return selected[:self._max_desires_per_cycle]
+
     def _prioritize(self, desires: list[Desire]) -> list[Desire]:
-        """Sort desires by priority (highest first), then by deadline urgency."""
+        """Sort desires by priority (highest first), then by deadline urgency.
+
+        When use_actr_utility is enabled, delegates to stochastic softmax
+        selection based on utility values.
+        """
+        if self._use_actr_utility:
+            return self._stochastic_prioritize(desires)
+
         def sort_key(d: Desire) -> tuple[int, int]:
             overdue_bonus = -1000 if d.is_overdue else 0
             return (overdue_bonus - d.priority.value, 0)

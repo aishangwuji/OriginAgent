@@ -1,0 +1,26 @@
+- [ ] Desire 模型包含 `utility: float = 0.5` 字段
+- [ ] `Desire.from_json()` 兼容不含 utility 的旧数据（setdefault 0.5）
+- [ ] `Desire.with_utility()` 方法将值 clamp 到 [0.0, 1.0]
+- [ ] `DesireStore.update()` 支持 `utility` 参数
+- [ ] `DesireStoreSqlite.update()` 支持 `utility` 参数
+- [ ] `utility=None` 时现有调用方行为不变（向后兼容）
+- [ ] `UtilityRewardBridge` 能从 Desire 状态转换提取奖励（SATISFIED/CANCELLED/STAGNANT）
+- [ ] `UtilityRewardBridge` 能从 ReflectionRecord 的 outcome_class + confidence 提取奖励
+- [ ] `UtilityRewardBridge` 能加权合并状态奖励与反思奖励
+- [ ] `UtilityRewardBridge` 仅查询 `last_utility_update_at` 之后的反思记录
+- [ ] `DeliberationEngine` 支持 `use_actr_utility` 特性开关（默认 False）
+- [ ] `DeliberationEngine` 支持 `utility_learning_rate` 和 `selection_temperature` 参数
+- [ ] `use_actr_utility=False` 时 `_prioritize()` 行为与当前一致（确定性排序）
+- [ ] `use_actr_utility=True` 时 `_prioritize()` 使用 softmax 无放回采样
+- [ ] softmax 选择中 overdue desires 优先保留在列表顶部
+- [ ] `selection_temperature` 趋近 0 时退化为贪心选择
+- [ ] `run_cycle()` 末尾执行效用更新逻辑（步骤 9）
+- [ ] 效用更新使用 ACT-R 公式 `U_new = U_old + α*(R-U_old)`
+- [ ] Desire SATISFIED 时获得正向奖励 R = +1.0
+- [ ] Desire CANCELLED 时获得负向惩罚 R = -0.5
+- [ ] Desire 停滞（evaluation_count > 3 且 ACTIVE）时获得微负奖励 R = -0.1
+- [ ] utility 更新后持久化到 DesireStore（JSONL + SQLite）
+- [ ] `last_utility_update_at` 在每次效用更新后被刷新
+- [ ] `use_actr_utility=False` 时跳过效用更新逻辑
+- [ ] 全量测试通过：`.\.venv\Scripts\python.exe -m pytest OriginAgent/bdi/ -v`
+- [ ] 无破坏性变更（旧 Desire 数据可正常加载与运行）

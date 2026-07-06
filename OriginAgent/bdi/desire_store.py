@@ -140,6 +140,7 @@ class DesireStore:
         priority: DesirePriority | None = None,
         reasoning: str = "",
         metadata: dict[str, Any] | None = None,
+        utility: float | None = None,
     ) -> Desire | None:
         with self._read_modify_write() as desires:
             current = desires.get(desire_id)
@@ -157,6 +158,8 @@ class DesireStore:
             if metadata is not None:
                 merged = {**current.metadata, **metadata}
                 current = current.__replace__(metadata=merged, updated_at=now_iso())
+            if utility is not None:
+                current = current.with_utility(utility)
 
             if current.evaluation_count == current.__class__(
                 desire_id=current.desire_id,
@@ -349,6 +352,7 @@ class DesireStoreSqlite(ReadModifyWriteMigrator):
         status: str | None = None,
         priority: int | None = None,
         last_reasoning: str = "",
+        utility: float | None = None,
     ) -> dict[str, Any] | None:
         """Update one or more fields on *desire_id* and return the updated row."""
         self._ensure_schema()
@@ -369,6 +373,9 @@ class DesireStoreSqlite(ReadModifyWriteMigrator):
                     data["priority"] = _normalize_priority(priority)
                 if last_reasoning:
                     data["last_reasoning"] = last_reasoning
+                if utility is not None:
+                    clamped = max(0.0, min(float(utility), 1.0))
+                    data["utility"] = clamped
                 from datetime import datetime, timezone
                 data["updated_at"] = datetime.now(timezone.utc).isoformat()
                 self.upsert_row(conn, data)
