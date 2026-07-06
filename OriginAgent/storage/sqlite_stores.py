@@ -69,6 +69,8 @@ from OriginAgent.agent.tier3_stores_sqlite import (
     ReviewProposalStoreSqlite,
 )
 from OriginAgent.agent.tools.audit_sqlite import ToolCallAuditSqlite
+from OriginAgent.bdi.desire_store import DesireStoreSqlite
+from OriginAgent.bdi.plan_library_sqlite import PlanLibrarySqlite
 from OriginAgent.storage.jsonl_migration import MigrationResult
 
 
@@ -139,6 +141,8 @@ class SqliteStoreRegistry:
 
     # Core stores
     fact_store: FactStoreSqlite
+    desires: DesireStoreSqlite
+    plans: PlanLibrarySqlite
 
     # Misc specialized
     active_intents: ActiveIntentLedgerSqlite
@@ -207,6 +211,8 @@ class SqliteStoreFactory:
         reminders = ReminderStoreSqlite(w)
         fact_events = FactEventStoreSqlite(w)
         fact_store = FactStoreSqlite(w)
+        desires = DesireStoreSqlite(w)
+        plans = PlanLibrarySqlite(w)
 
         registry = SqliteStoreRegistry(
             thought_frames=thought_frames,
@@ -247,10 +253,14 @@ class SqliteStoreFactory:
             reminders=reminders,
             fact_events=fact_events,
             fact_store=fact_store,
+            desires=desires,
+            plans=plans,
         )
 
         # Run all migrations (idempotent — safe on every startup)
         _migrate_one(fact_store, "fact_store")
+        _migrate_one(desires, "desires")
+        _migrate_one(plans, "plans")
         _migrate_one(thought_frames, "thought_frames")
         _migrate_one(thought_journals, "thought_journals")
         _migrate_one(causal_edges, "causal_edges")

@@ -14,7 +14,8 @@ from loguru import logger
 
 from OriginAgent.bdi.models import Desire, DesirePriority, DesireStatus, now_iso
 from OriginAgent.storage.jsonl_migration import ReadModifyWriteMigrator
-from OriginAgent.storage.sqlite_helpers import connect as sqlite_connect, ensure_schema
+from OriginAgent.storage.sqlite_helpers import connect as sqlite_connect
+from OriginAgent.storage.sqlite_helpers import ensure_schema
 from OriginAgent.utils.helpers import ensure_dir
 
 
@@ -25,12 +26,13 @@ class DesireStore:
     temp-file + fsync + rename + dir-fsync.
     """
 
-    def __init__(self, workspace: Path) -> None:
+    def __init__(self, workspace: Path, *, sqlite_store: Any = None) -> None:
         self.workspace = Path(workspace)
         self._dir = self.workspace / "memory" / "bdi"
         self._path = self._dir / "desires.jsonl"
         self._lock_path = self._dir / ".desires.lock"
         ensure_dir(self._dir)
+        self._sqlite = sqlite_store
 
     # ------------------------------------------------------------------
     # Atomic I/O
@@ -38,6 +40,12 @@ class DesireStore:
 
     def _read_all_unlocked(self) -> dict[str, Desire]:
         """Read all desires WITHOUT locking (caller must hold the lock)."""
+        if self._sqlite is not None:
+            try:
+                raw = self._sqlite.list_all()
+                return {d["desire_id"]: Desire.from_json(d) for d in raw if d.get("desire_id")}
+            except Exception:
+                pass
         if not self._path.exists():
             return {}
         result: dict[str, Desire] = {}
@@ -70,6 +78,12 @@ class DesireStore:
             os.fsync(tmp.fileno())
             tmp.close()
             os.replace(tmp.name, str(self._path))
+            if self._sqlite is not None:
+                try:
+                    for d in desires.values():
+                        self._sqlite.add(d.to_json())
+                except Exception:
+                    logger.opt(exception=True).warning("desires: sqlite sync failed")
             # Directory fsync for durability
             try:
                 dir_fd = os.open(str(self._dir), os.O_RDONLY)

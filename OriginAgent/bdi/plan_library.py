@@ -8,6 +8,7 @@ import re
 import tempfile
 from collections import Counter
 from pathlib import Path
+from typing import Any
 
 from filelock import FileLock
 from loguru import logger
@@ -39,13 +40,14 @@ _STOP_WORDS = {
 class PlanLibrary:
     """Pattern-matching cache for means-ends reasoning."""
 
-    def __init__(self, workspace: Path) -> None:
+    def __init__(self, workspace: Path, *, sqlite_store: Any = None) -> None:
         self.workspace = Path(workspace)
         self._dir = self.workspace / "memory" / "bdi"
         self._path = self._dir / "plans.jsonl"
         self._lock_path = self._dir / ".plans.lock"
         ensure_dir(self._dir)
         self._plans: dict[str, PlanTemplate] = {}
+        self._sqlite = sqlite_store
         self._load()
 
     def add(self, plan: PlanTemplate) -> None:
@@ -135,6 +137,18 @@ class PlanLibrary:
         return tuple(k for k, _ in counter.most_common(5))
 
     def _load(self) -> None:
+        if self._sqlite is not None:
+            try:
+                raw = self._sqlite.list_plans()
+                for d in raw:
+                    try:
+                        plan = PlanTemplate.from_json(d)
+                        self._plans[plan.plan_id] = plan
+                    except Exception:
+                        continue
+                return
+            except Exception:
+                pass
         if not self._path.exists():
             return
         with FileLock(str(self._lock_path)):
@@ -163,6 +177,12 @@ class PlanLibrary:
                 os.fsync(tmp.fileno())
                 tmp.close()
                 os.replace(tmp.name, str(self._path))
+                if self._sqlite is not None:
+                    try:
+                        for plan in self._plans.values():
+                            self._sqlite.add(plan)
+                    except Exception:
+                        logger.opt(exception=True).warning("plans: sqlite sync failed")
                 try:
                     dir_fd = os.open(str(self._dir), os.O_RDONLY)
                     os.fsync(dir_fd)

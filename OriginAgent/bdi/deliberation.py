@@ -12,6 +12,7 @@ from typing import Any
 
 from loguru import logger
 
+from OriginAgent.bdi.desire_store import DesireStore
 from OriginAgent.bdi.models import (
     BDICycleRecord,
     DeliberationIntention,
@@ -23,11 +24,9 @@ from OriginAgent.bdi.models import (
     StackFrame,
     now_iso,
 )
-from OriginAgent.bdi.desire_store import DesireStore
 from OriginAgent.bdi.plan_library import PlanLibrary
 from OriginAgent.bdi.world_state_watcher import WorldStateWatcher
 from OriginAgent.utils.helpers import ensure_dir
-
 
 _DELIBERATION_SYSTEM_PROMPT = """You are the BDI Deliberation Engine of OriginAgent.
 Your job is to evaluate the agent's active desires and decide what to do next.
@@ -158,6 +157,7 @@ class DeliberationEngine:
         on_intention: Any | None = None,   # Callable[[DeliberationIntention], Awaitable[None]]
         event_bus: Any | None = None,      # MessageBus for WorldStateWatcher
         shared_space: Any = None,          # SharedSpace | None — cross-tenant shared state
+        sqlite_stores: Any = None,
     ) -> None:
         self.workspace = Path(workspace)
         self._store = store
@@ -178,7 +178,10 @@ class DeliberationEngine:
 
         # ── BDI-native primitives ──────────────────────────────────────
         self._intention_stack = IntentionStack(max_depth=10)
-        self._plan_library = PlanLibrary(self.workspace)
+        self._plan_library = PlanLibrary(
+            self.workspace,
+            sqlite_store=sqlite_stores.plans if sqlite_stores else None,
+        )
         self._shared_space = shared_space
 
         self._watcher = WorldStateWatcher(

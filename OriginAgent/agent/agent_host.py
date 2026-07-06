@@ -15,7 +15,10 @@ from typing import Any
 
 from loguru import logger
 
-from OriginAgent.agent.local_awareness import LocalAwarenessBackend, normalize_local_awareness_summary
+from OriginAgent.agent.local_awareness import (
+    LocalAwarenessBackend,
+    normalize_local_awareness_summary,
+)
 
 
 @dataclass(frozen=True)
@@ -383,13 +386,15 @@ class AgentHost:
         if not tenant.bdi_enabled or tenant.tenant_id in self._bdi_engines:
             return
 
-        from OriginAgent.bdi import DesireStore, DeliberationEngine
+        from OriginAgent.bdi import DeliberationEngine, DesireStore
 
         workspace = tenant.workspace_dir
-        desire_store = DesireStore(workspace)
+        _sqlite = getattr(self._deps, "sqlite_stores", None)
+        desire_store = DesireStore(workspace, sqlite_store=_sqlite.desires if _sqlite else None)
         engine = DeliberationEngine(
             workspace=workspace,
             store=desire_store,
+            sqlite_stores=_sqlite,
             provider=self._deps.provider,
             model=self._deps.model or "",
             enabled=True,
@@ -449,9 +454,13 @@ class AgentHost:
             self._inner_monologue_engine = None
             return
 
-        from OriginAgent.bdi import DesireStore, DeliberationEngine
+        from OriginAgent.bdi import DeliberationEngine, DesireStore
 
-        self._desire_store = DesireStore(self._deps.workspace)
+        _sqlite = getattr(self._deps, "sqlite_stores", None)
+        self._desire_store = DesireStore(
+            self._deps.workspace,
+            sqlite_store=_sqlite.desires if _sqlite else None,
+        )
 
         self._legacy_bdi_engine = DeliberationEngine(
             workspace=self._deps.workspace,
