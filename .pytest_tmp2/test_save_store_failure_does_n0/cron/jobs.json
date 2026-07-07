@@ -1,0 +1,38 @@
+{
+  "version": 1,
+  "jobs": [
+    {
+      "id": "069bb221",
+      "name": "Daily Loving Message",
+      "enabled": true,
+      "schedule": {
+        "kind": "cron",
+        "atMs": null,
+        "everyMs": null,
+        "expr": "0 10 * * *",
+        "tz": "Asia/Kuwait"
+      },
+      "payload": {
+        "kind": "agent_turn",
+        "message": "hello",
+        "deliver": false,
+        "channel": null,
+        "to": null,
+        "channelMeta": {},
+        "sessionKey": null,
+        "capabilitySnapshot": {},
+        "grantId": null
+      },
+      "state": {
+        "nextRunAtMs": 1783407600000,
+        "lastRunAtMs": null,
+        "lastStatus": null,
+        "lastError": null,
+        "runHistory": []
+      },
+      "createdAtMs": 1783405501605,
+      "updatedAtMs": 1783405501605,
+      "deleteAfterRun": false
+    }
+  ]
+}

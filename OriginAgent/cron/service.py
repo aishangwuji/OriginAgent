@@ -455,15 +455,16 @@ class CronService:
         ))
         job.state.run_history = job.state.run_history[-self._MAX_RUN_HISTORY:]
 
-        # Handle one-shot jobs
-        if job.schedule.kind == "at":
-            if job.delete_after_run:
-                self._store.jobs = [j for j in self._store.jobs if j.id != job.id]
-            else:
-                job.enabled = False
-                job.state.next_run_at_ms = None
+        # 执行后清理：delete_after_run 对所有 schedule kind 生效
+        # 避免一次性 cron/every 任务执行后变成死任务堆积在列表中
+        if job.delete_after_run:
+            self._store.jobs = [j for j in self._store.jobs if j.id != job.id]
+        elif job.schedule.kind == "at":
+            # at 任务未设 delete_after，禁用而非删除（保持向后兼容）
+            job.enabled = False
+            job.state.next_run_at_ms = None
         else:
-            # Compute next run
+            # 重复任务计算下次运行
             job.state.next_run_at_ms = _compute_next_run(job.schedule, _now_ms())
 
     def _append_action(self, action: Literal["add", "del", "update"], params: dict):

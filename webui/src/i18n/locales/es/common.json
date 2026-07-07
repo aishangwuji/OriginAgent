@@ -51,6 +51,39 @@
       "mcp": "MCP",
       "skills": "Skills"
     },
+    "tieredRouter": {
+      "overview": "Enrutamiento LLM por niveles",
+      "enable": "Activar enrutamiento por niveles",
+      "enableHelp": "Dirige las tareas en segundo plano a modelos más económicos manteniendo el modelo insignia para razonamiento y decisiones.",
+      "tiers": "Niveles disponibles",
+      "mapping": "Mapeo Tarea → Nivel",
+      "default": "Predeterminado",
+      "setAsDefault": "Establecer como predeterminado",
+      "providerLabel": "Provider",
+      "providerPlaceholder": "Seleccionar un proveedor configurado",
+      "modelLabel": "Modelo",
+      "modelPlaceholder": "Escribir o seleccionar un nombre de modelo",
+      "refreshModels": "Actualizar lista de modelos",
+      "catalogFetchFailed": "Error al obtener la lista de modelos",
+      "tier": {
+        "economy": "🟢 Económico",
+        "standard": "🔵 Equilibrado",
+        "premium": "🟣 Insignia"
+      },
+      "task": {
+        "web_search": "Búsqueda web",
+        "consolidation": "Consolidación de memoria",
+        "webui_title": "Título de conversación",
+        "snapshot_inspection": "Inspección de instantánea",
+        "dream_phase1": "Fase de sueño 1",
+        "background_review": "Revisión en segundo plano",
+        "meta_cognition": "Reflexión meta-cognitiva",
+        "dream_phase2": "Fase de sueño 2",
+        "bdi_deliberation": "Deliberación BDI",
+        "heartbeat": "Latido",
+        "evaluator": "Evaluador"
+      }
+    },
     "sections": {
       "interface": "Interfaz",
       "ai": "IA",
@@ -62,19 +95,22 @@
       "provider": "Proveedor",
       "model": "Modelo",
       "restart": "Reiniciar OriginAgent",
-      "configPath": "Ruta de configuración"
+      "configPath": "Ruta de configuración",
+      "outputLanguage": "Idioma de salida del Agent"
     },
     "help": {
       "theme": "Cambia entre apariencia clara y oscura.",
       "language": "Elige el idioma usado por la WebUI.",
       "provider": "Selecciona el proveedor para nuevas solicitudes de modelo.",
       "model": "Define el nombre del modelo predeterminado que usa OriginAgent.",
-      "configPath": "El archivo de configuración que usa actualmente el gateway."
+      "configPath": "El archivo de configuración que usa actualmente el gateway.",
+      "outputLanguage": "Elige el idioma del contenido generado por el Agent (respuestas, metacognición, sueños, etc.). Déjalo vacío para que el LLM decida."
     },
     "values": {
       "light": "Claro",
       "dark": "Oscuro",
-      "notAvailable": "No disponible"
+      "notAvailable": "No disponible",
+      "outputLanguageAuto": "Automático (lo decide el LLM)"
     },
     "status": {
       "loading": "Cargando configuración...",
@@ -82,9 +118,11 @@
       "unsaved": "Hay cambios sin guardar.",
       "savedRestart": "Guardado. Reinicia OriginAgent para aplicar."
     },
+    "unsavedConfirm": "Tiene cambios sin guardar. ¿Salir de esta sección sin guardar?",
     "actions": {
       "save": "Guardar",
       "saving": "Guardando",
+      "saveAll": "Guardar todo",
       "edit": "Editar",
       "cancel": "Cancelar"
     },

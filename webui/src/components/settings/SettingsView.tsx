@@ -20,7 +20,7 @@ import {
   GraduationCap,
   Hexagon,
   Loader2,
-  LogOut,
+  // LogOut 预留：未来多租户登录/登出功能启用时恢复
   KeyRound,
   Layers,
   Moon,
@@ -36,6 +36,7 @@ import {
 import { useTranslation } from "react-i18next";
 
 import { LanguageSwitcher } from "@/components/LanguageSwitcher";
+import { supportedLocales } from "@/i18n/config";
 import { ModelInputWithFetch } from "@/components/settings/ModelInputWithFetch";
 import { Button } from "@/components/ui/button";
 import { LearningSettings } from "@/components/settings/LearningSettings";
@@ -327,14 +328,17 @@ export function SettingsView({
     return JSON.stringify(voiceForm) !== JSON.stringify(defaultVoiceSettings(settings.voice));
   }, [settings, voiceForm]);
 
+  // 切换 section 时若有未保存更改，提示用户（不强制丢弃，保留草稿）
+  // 不再自动保存——让用户通过显式保存按钮控制保存时机
   const handleSectionChange = useCallback(
     (next: SettingsSectionKey) => {
+      if (next === activeSection) return;
       if (dirty || runtimeDirty || voiceDirty) {
-        if (!window.confirm("You have unsaved changes. Discard them and switch sections?")) return;
+        if (!window.confirm(t("settings.unsavedConfirm"))) return;
       }
       setActiveSection(next);
     },
-    [dirty, runtimeDirty, voiceDirty, setActiveSection],
+    [activeSection, dirty, runtimeDirty, voiceDirty, setActiveSection, t],
   );
 
   useEffect(() => {
@@ -362,8 +366,8 @@ export function SettingsView({
     });
   };
 
-  const save = async () => {
-    if (!dirty || saving) return;
+  const save = async (): Promise<boolean> => {
+    if (!dirty || saving) return true; // 非脏或保存中视为成功
     setSaving(true);
     try {
       const update = {
@@ -376,8 +380,10 @@ export function SettingsView({
       applyPayload(payload);
       onModelNameChange(payload.agent.model || null);
       setError(null);
+      return true;
     } catch (err) {
       setError(userFriendlyError(err));
+      return false;
     } finally {
       setSaving(false);
     }
@@ -481,8 +487,8 @@ export function SettingsView({
     }
   };
 
-  const saveRuntimeSettings = async () => {
-    if (!settings || !runtimeForm || !runtimeDirty || runtimeSaving) return;
+  const saveRuntimeSettings = async (): Promise<boolean> => {
+    if (!settings || !runtimeForm || !runtimeDirty || runtimeSaving) return true;
     setRuntimeSaving(true);
     try {
       const payload = await withTokenRefresh(token, refreshToken, (freshToken) =>
@@ -490,8 +496,10 @@ export function SettingsView({
       );
       applyPayload(payload);
       setError(null);
+      return true;
     } catch (err) {
       setError(userFriendlyError(err));
+      return false;
     } finally {
       setRuntimeSaving(false);
     }
@@ -545,8 +553,8 @@ export function SettingsView({
     }
   };
 
-  const saveVoiceSettings = async () => {
-    if (!settings || !voiceForm || !voiceDirty || voiceSaving) return;
+  const saveVoiceSettings = async (): Promise<boolean> => {
+    if (!settings || !voiceForm || !voiceDirty || voiceSaving) return true;
     setVoiceSaving(true);
     try {
       const payload = await withTokenRefresh(token, refreshToken, (freshToken) =>
@@ -554,12 +562,34 @@ export function SettingsView({
       );
       applyPayload(payload);
       setError(null);
+      return true;
     } catch (err) {
       setError(userFriendlyError(err));
+      return false;
     } finally {
       setVoiceSaving(false);
     }
   };
+
+  // 全局保存：串行保存所有有改动的部分（model/provider、runtime、voice）
+  // 串行而非并行，避免 applyPayload 互相覆盖未保存的草稿
+  const saveAll = async (): Promise<void> => {
+    if (dirty) {
+      const ok = await save();
+      if (!ok) return;
+    }
+    if (runtimeDirty) {
+      const ok = await saveRuntimeSettings();
+      if (!ok) return;
+    }
+    if (voiceDirty) {
+      const ok = await saveVoiceSettings();
+      if (!ok) return;
+    }
+  };
+
+  const anyDirty = dirty || runtimeDirty || voiceDirty;
+  const anySaving = saving || runtimeSaving || voiceSaving;
 
   const resetProviderDraft = useCallback((providerName: string) => {
     const provider = settings?.providers.find((item) => item.name === providerName);
@@ -763,13 +793,31 @@ export function SettingsView({
 
       <main className="min-w-0 flex-1 overflow-y-auto [scrollbar-gutter:stable]">
         <div className="mx-auto w-full max-w-[840px] px-6 py-10 sm:px-10 lg:py-14">
-          <div className="mb-8">
-            <p className="mb-2 text-[13px] font-medium text-muted-foreground">
-              {t("settings.sidebar.title")}
-            </p>
-            <h1 className="text-[28px] font-semibold leading-tight tracking-[-0.035em] text-foreground sm:text-[34px]">
-              {t(`settings.nav.${activeSection}`)}
-            </h1>
+          <div className="mb-8 flex items-end justify-between gap-4">
+            <div>
+              <p className="mb-2 text-[13px] font-medium text-muted-foreground">
+                {t("settings.sidebar.title")}
+              </p>
+              <h1 className="text-[28px] font-semibold leading-tight tracking-[-0.035em] text-foreground sm:text-[34px]">
+                {t(`settings.nav.${activeSection}`)}
+              </h1>
+            </div>
+            {/* 全局保存按钮：统一保存所有未保存的更改，无改动时禁用 */}
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              onClick={saveAll}
+              disabled={!anyDirty || anySaving}
+              className="shrink-0 rounded-full"
+            >
+              {anySaving ? (
+                <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" aria-hidden />
+              ) : (
+                <Check className="mr-1.5 h-3.5 w-3.5" aria-hidden />
+              )}
+              {anySaving ? t("settings.actions.saving") : t("settings.actions.saveAll")}
+            </Button>
           </div>
 
           {loading ? (
@@ -894,9 +942,17 @@ export function SettingsView({
                 />
               ) : activeSection === "routing" ? (
                 <TieredRoutingSettings
-                  enabled={settings?.runtime_controls?.tiered_router?.enabled ?? false}
-                  defaultTier={settings?.runtime_controls?.tiered_router?.default_tier ?? "economy"}
+                  enabled={(runtimeForm ?? settings?.runtime_controls)?.tiered_router?.enabled ?? false}
+                  defaultTier={(runtimeForm ?? settings?.runtime_controls)?.tiered_router?.default_tier ?? "economy"}
+                  tiers={(runtimeForm ?? settings?.runtime_controls)?.tiered_router?.tiers ?? {}}
+                  providers={settings?.providers ?? []}
                   onChange={(patch) => updateSection("tiered_router", patch)}
+                  onFetchProviderModels={async (providerName: string) => {
+                    const payload = await withTokenRefresh(token, refreshToken, (freshToken) =>
+                      fetchProviderModels(freshToken, { provider: providerName }),
+                    );
+                    return (payload.models ?? []).map((m) => m.id);
+                  }}
                 />
               ) : (
                 <McpSettings
@@ -950,7 +1006,8 @@ function SettingsSidebar({
   activeSection,
   onSelectSection,
   onBackToChat,
-  onLogout,
+  // onLogout 预留：未来多租户登录/登出功能启用时恢复按钮 UI（下划线前缀避免 tsc 未使用报错）
+  onLogout: _onLogout,
 }: {
   activeSection: SettingsSectionKey;
   onSelectSection: (section: SettingsSectionKey) => void;
@@ -997,19 +1054,7 @@ function SettingsSidebar({
         })}
       </nav>
 
-      <div className="mt-auto pt-4">
-        {onLogout ? (
-          <Button
-            type="button"
-            variant="ghost"
-            onClick={onLogout}
-            className="h-9 w-full justify-start gap-2 rounded-[10px] px-2.5 text-[13px] font-medium text-muted-foreground hover:bg-destructive/8 hover:text-destructive"
-          >
-            <LogOut className="h-4 w-4" aria-hidden />
-            {t("app.account.logout")}
-          </Button>
-        ) : null}
-      </div>
+      <div className="mt-auto pt-4" />
     </aside>
   );
 }
@@ -1205,6 +1250,23 @@ function GeneralSettings({
           >
             <LanguageSwitcher />
           </SettingsRow>
+
+          <SettingsRow
+            title={t("settings.rows.outputLanguage")}
+            description={t("settings.help.outputLanguage")}
+          >
+            <SimpleSelect
+              value={controls.agent.output_language ?? ""}
+              options={[
+                { value: "", label: t("settings.values.outputLanguageAuto") },
+                ...supportedLocales.map((locale) => ({
+                  value: locale.code,
+                  label: locale.nativeLabel,
+                })),
+              ]}
+              onChange={(value) => updateSection("agent", { output_language: value || null })}
+            />
+          </SettingsRow>
         </SettingsGroup>
       </section>
 
@@ -1246,14 +1308,13 @@ function GeneralSettings({
             />
           </SettingsRow>
 
-          {(dirty || saving || settings.requires_restart) ? (
-            <SettingsFooter
-              dirty={dirty}
-              saving={saving}
-              saved={settings.requires_restart && !dirty}
-              onSave={onSave}
-            />
-          ) : null}
+          {/* 保存按钮始终显示：无改动时禁用，让用户始终能看到保存入口 */}
+          <SettingsFooter
+            dirty={dirty}
+            saving={saving}
+            saved={settings.requires_restart && !dirty}
+            onSave={onSave}
+          />
           {configuredProviders.length === 0 ? (
             <SettingsRow title={t("settings.byok.configureFirst")}>
               <Button size="sm" variant="outline" onClick={onOpenByok} className="rounded-full">
@@ -1384,14 +1445,12 @@ function GeneralSettings({
               className="h-9 w-[280px] rounded-full text-[13px]"
             />
           </SettingsRow>
-          {(voiceDirty || voiceSaving || settings.requires_restart) ? (
-            <SettingsFooter
-              dirty={voiceDirty}
-              saving={voiceSaving}
-              saved={settings.requires_restart && !voiceDirty}
-              onSave={onSaveVoice}
-            />
-          ) : null}
+          <SettingsFooter
+            dirty={voiceDirty}
+            saving={voiceSaving}
+            saved={settings.requires_restart && !voiceDirty}
+            onSave={onSaveVoice}
+          />
         </SettingsGroup>
       </section>
 
@@ -1471,7 +1530,7 @@ function GeneralSettings({
               onChange={(checked) => updateSection("search", { session_search_enabled: checked })}
             />
           </SettingsRow>
-          <SettingsRow title="会话搜索后端" description="选择本地历史检索使用的实现方式。不同后端在速度、兼容性和能力上有所差异。">
+          <SettingsRow title={t("settings.rows.sessionSearchBackend")} description={t("settings.help.sessionSearchBackend")}>
             <SimpleSelect
               value={controls.search.session_search_backend}
               options={optionLabels.sessionSearchBackend}
@@ -1708,14 +1767,12 @@ function GeneralSettings({
               onChange={(value) => updateSection("devices", { device_backend: value })}
             />
           </SettingsRow>
-          {(runtimeDirty || runtimeSaving || settings.requires_restart) ? (
-            <SettingsFooter
-              dirty={runtimeDirty}
-              saving={runtimeSaving}
-              saved={settings.requires_restart && !runtimeDirty}
-              onSave={onSaveRuntime}
-            />
-          ) : null}
+          <SettingsFooter
+            dirty={runtimeDirty}
+            saving={runtimeSaving}
+            saved={settings.requires_restart && !runtimeDirty}
+            onSave={onSaveRuntime}
+          />
         </SettingsGroup>
       </section>
 
@@ -3158,72 +3215,83 @@ function HomeAssistantMcpQuickConfig({
   onSave: () => void;
 }) {
   const { t } = useTranslation();
+  // 用原生 <details> 折叠，默认收起，避免占据 MCP 页面大部分空间
   return (
     <section>
-      <SettingsSectionTitle>{t("settings.mcp.quickConfig")}</SettingsSectionTitle>
-      <SettingsGroup>
-        <SettingsRow
-          title={t("settings.mcp.homeAssistant.title")}
-          description={t("settings.mcp.homeAssistant.description")}
-        >
-          <Server className="h-5 w-5 text-muted-foreground" aria-hidden />
-        </SettingsRow>
-        <SettingsRow title={t("settings.mcp.name")}>
-          <Input
-            value={form.name}
-            onChange={(event) => onChange({ name: event.target.value })}
-            placeholder="home_assistant"
-            className="h-9 w-[280px] rounded-full text-[13px]"
+      <details className="group rounded-[18px] border border-border/60 bg-card/60">
+        <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-4 py-3 text-[13px] font-medium text-foreground sm:px-5">
+          <span className="flex items-center gap-2">
+            <Server className="h-4 w-4 text-muted-foreground" aria-hidden />
+            {t("settings.mcp.homeAssistant.title")}
+            <span className="text-[12px] font-normal text-muted-foreground">
+              {t("settings.mcp.homeAssistant.description")}
+            </span>
+          </span>
+          <ChevronDown
+            className="h-4 w-4 shrink-0 text-muted-foreground transition-transform group-open:rotate-180"
+            aria-hidden
           />
-        </SettingsRow>
-        <SettingsRow
-          title={t("settings.mcp.homeAssistant.address")}
-          description={t("settings.mcp.homeAssistant.addressHelp")}
-        >
-          <Input
-            value={form.address}
-            onChange={(event) => onChange({ address: event.target.value })}
-            placeholder="http://localhost:8123"
-            className="h-9 w-[280px] rounded-full text-[13px]"
-          />
-        </SettingsRow>
-        <SettingsRow
-          title={t("settings.mcp.homeAssistant.token")}
-          description={
-            hasExistingToken
-              ? t("settings.mcp.homeAssistant.tokenHelpExisting")
-              : t("settings.mcp.homeAssistant.tokenHelp")
-          }
-        >
-          <Input
-            type="password"
-            value={form.token}
-            onChange={(event) => onChange({ token: event.target.value })}
-            placeholder={hasExistingToken ? "••••" : t("settings.mcp.homeAssistant.tokenPlaceholder")}
-            className="h-9 w-[280px] rounded-full text-[13px]"
-          />
-        </SettingsRow>
-        <div className="flex min-h-[58px] items-center justify-between gap-4 px-4 py-3 sm:px-5">
-          <div className="max-w-[28rem] text-[13px] leading-5 text-muted-foreground">
-            {t("settings.mcp.homeAssistant.saveHint")}
-          </div>
-          <Button
-            type="button"
-            size="sm"
-            variant="outline"
-            onClick={onSave}
-            disabled={saving}
-            className="shrink-0 rounded-full"
-          >
-            {saving ? (
-              <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" aria-hidden />
-            ) : (
-              <Check className="mr-1.5 h-3.5 w-3.5" aria-hidden />
-            )}
-            {saving ? t("settings.actions.saving") : t("settings.mcp.homeAssistant.save")}
-          </Button>
+        </summary>
+        <div className="border-t border-border/60 px-4 pb-2 pt-3 sm:px-5">
+          <SettingsGroup>
+            <SettingsRow title={t("settings.mcp.name")}>
+              <Input
+                value={form.name}
+                onChange={(event) => onChange({ name: event.target.value })}
+                placeholder="home_assistant"
+                className="h-9 w-[280px] rounded-full text-[13px]"
+              />
+            </SettingsRow>
+            <SettingsRow
+              title={t("settings.mcp.homeAssistant.address")}
+              description={t("settings.mcp.homeAssistant.addressHelp")}
+            >
+              <Input
+                value={form.address}
+                onChange={(event) => onChange({ address: event.target.value })}
+                placeholder="http://localhost:8123"
+                className="h-9 w-[280px] rounded-full text-[13px]"
+              />
+            </SettingsRow>
+            <SettingsRow
+              title={t("settings.mcp.homeAssistant.token")}
+              description={
+                hasExistingToken
+                  ? t("settings.mcp.homeAssistant.tokenHelpExisting")
+                  : t("settings.mcp.homeAssistant.tokenHelp")
+              }
+            >
+              <Input
+                type="password"
+                value={form.token}
+                onChange={(event) => onChange({ token: event.target.value })}
+                placeholder={hasExistingToken ? "••••" : t("settings.mcp.homeAssistant.tokenPlaceholder")}
+                className="h-9 w-[280px] rounded-full text-[13px]"
+              />
+            </SettingsRow>
+            <div className="flex min-h-[58px] items-center justify-between gap-4 px-4 py-3 sm:px-5">
+              <div className="max-w-[28rem] text-[13px] leading-5 text-muted-foreground">
+                {t("settings.mcp.homeAssistant.saveHint")}
+              </div>
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                onClick={onSave}
+                disabled={saving}
+                className="shrink-0 rounded-full"
+              >
+                {saving ? (
+                  <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" aria-hidden />
+                ) : (
+                  <Check className="mr-1.5 h-3.5 w-3.5" aria-hidden />
+                )}
+                {saving ? t("settings.actions.saving") : t("settings.mcp.homeAssistant.save")}
+              </Button>
+            </div>
+          </SettingsGroup>
         </div>
-      </SettingsGroup>
+      </details>
     </section>
   );
 }

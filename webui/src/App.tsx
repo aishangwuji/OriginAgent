@@ -1,14 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Button as IslandButton, Card as IslandCard, Input as IslandInput, Typewriter } from "animal-island-ui";
 import { useTranslation } from "react-i18next";
-import { DeleteConfirm } from "@/components/DeleteConfirm";
 import { ReviewsView } from "@/components/reviews/ReviewsView";
 import { MetaCognitionView } from "@/components/cognition/MetaCognitionView";
 import { SignalsView } from "@/components/signals/SignalsView";
 import { Sidebar } from "@/components/Sidebar";
 import { SettingsView } from "@/components/settings/SettingsView";
 import { ThreadShell } from "@/components/thread/ThreadShell";
-import { Sheet, SheetContent } from "@/components/ui/sheet";
+import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
 
 import { useSessions } from "@/hooks/useSessions";
 import { useTheme } from "@/hooks/useTheme";
@@ -298,8 +297,9 @@ function Shell({ onModelNameChange, onLogout }: { onModelNameChange: (modelName:
   const { t, i18n } = useTranslation();
   const { client } = useClient();
   const { theme, toggle } = useTheme();
-  const { sessions, loading, refresh, createChat, deleteChat } = useSessions();
-  const [activeKey, setActiveKey] = useState<string | null>(null);
+  const { sessions, loading, refresh } = useSessions();
+  // 会话已统一：固定使用单一 chat_id "default"，从始至终只有一个对话历史框
+  const [activeKey, setActiveKey] = useState<string | null>("websocket:default");
   const [view, setView] = useState<ShellView>("chat");
   const [desktopSidebarOpen, setDesktopSidebarOpen] =
     useState<boolean>(readSidebarOpen);
@@ -308,10 +308,6 @@ function Shell({ onModelNameChange, onLogout }: { onModelNameChange: (modelName:
   const sidebarDragRef = useRef<{
     startX: number;
     startWidth: number;
-  } | null>(null);
-  const [pendingDelete, setPendingDelete] = useState<{
-    key: string;
-    label: string;
   } | null>(null);
   const restartSawDisconnectRef = useRef(false);
   const [restartToast, setRestartToast] = useState<string | null>(null);
@@ -328,7 +324,7 @@ function Shell({ onModelNameChange, onLogout }: { onModelNameChange: (modelName:
     }
   }, [desktopSidebarOpen]);
 
-
+  // 会话已统一：activeKey 固定为 "websocket:default"，无需自动选择
 
   const activeSession = useMemo<ChatSummary | null>(() => {
     if (!activeKey) return null;
@@ -397,33 +393,13 @@ function Shell({ onModelNameChange, onLogout }: { onModelNameChange: (modelName:
     };
   }, [sidebarWidth]);
 
+  // 单一会话模式：不再创建新会话，直接返回固定的 "default"
   const onCreateChat = useCallback(async () => {
-    try {
-      const chatId = await createChat();
-      setActiveKey(`websocket:${chatId}`);
-      setView("chat");
-      setMobileSidebarOpen(false);
-      return chatId;
-    } catch (e) {
-      console.warn("Failed to create chat", e);
-      return null;
-    }
-  }, [createChat]);
-
-  const onNewChat = useCallback(() => {
-    setActiveKey(null);
+    setActiveKey("websocket:default");
     setView("chat");
     setMobileSidebarOpen(false);
+    return "default";
   }, []);
-
-  const onSelectChat = useCallback(
-    (key: string) => {
-      setActiveKey(key);
-      setView("chat");
-      setMobileSidebarOpen(false);
-    },
-    [],
-  );
 
   const onOpenSettings = useCallback(() => {
     setView("settings");
@@ -505,24 +481,6 @@ function Shell({ onModelNameChange, onLogout }: { onModelNameChange: (modelName:
     void refresh();
   }, [refresh]);
 
-  const onConfirmDelete = useCallback(async () => {
-    if (!pendingDelete) return;
-    const key = pendingDelete.key;
-    const deletingActive = activeKey === key;
-    const currentIndex = sessions.findIndex((s) => s.key === key);
-    const fallbackKey = deletingActive
-      ? (sessions[currentIndex + 1]?.key ?? sessions[currentIndex - 1]?.key ?? null)
-      : activeKey;
-    setPendingDelete(null);
-    if (deletingActive) setActiveKey(fallbackKey);
-    try {
-      await deleteChat(key);
-    } catch (e) {
-      if (deletingActive) setActiveKey(key);
-      console.warn("Failed to delete session", e);
-    }
-  }, [pendingDelete, deleteChat, activeKey, sessions]);
-
   const headerTitle = activeSession
     ? activeSession.title ||
       activeSession.preview ||
@@ -560,13 +518,6 @@ function Shell({ onModelNameChange, onLogout }: { onModelNameChange: (modelName:
   }, [activeSession, headerTitle, i18n.resolvedLanguage, t, view]);
 
   const sidebarProps = {
-    sessions,
-    activeKey,
-    loading,
-    onNewChat,
-    onSelect: onSelectChat,
-    onRequestDelete: (key: string, label: string) =>
-      setPendingDelete({ key, label }),
     onOpenSettings,
     onOpenReviews,
     onOpenCognition,
@@ -620,6 +571,8 @@ function Shell({ onModelNameChange, onLogout }: { onModelNameChange: (modelName:
             className="p-0 lg:hidden"
             style={{ width: sidebarWidth, maxWidth: SIDEBAR_MAX_WIDTH }}
           >
+            {/* 视觉隐藏的标题：满足 Radix Dialog 的 a11y 要求，供屏幕阅读器识别 */}
+            <SheetTitle className="sr-only">{t("sidebar.navigation")}</SheetTitle>
             <Sidebar {...sidebarProps} onCollapse={closeMobileSidebar} />
           </SheetContent>
         </Sheet>
@@ -636,7 +589,6 @@ function Shell({ onModelNameChange, onLogout }: { onModelNameChange: (modelName:
             session={activeSession}
             title={headerTitle}
             onToggleSidebar={toggleSidebar}
-            onNewChat={onNewChat}
             onCreateChat={onCreateChat}
             onTurnEnd={onTurnEnd}
             theme={theme}
@@ -674,12 +626,6 @@ function Shell({ onModelNameChange, onLogout }: { onModelNameChange: (modelName:
         )}
       </main>
 
-      <DeleteConfirm
-        open={!!pendingDelete}
-        title={pendingDelete?.label ?? ""}
-        onCancel={() => setPendingDelete(null)}
-        onConfirm={onConfirmDelete}
-      />
       {restartToast ? (
         <div
           role="status"

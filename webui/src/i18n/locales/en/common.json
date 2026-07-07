@@ -82,7 +82,32 @@
       "enableHelp": "Route background tasks to cheaper models while keeping the flagship model for reasoning and decisions.",
       "tiers": "Available Tiers",
       "mapping": "Task → Tier Mapping",
-      "default": "Default"
+      "default": "Default",
+      "setAsDefault": "Set as default",
+      "providerLabel": "Provider",
+      "providerPlaceholder": "Select a configured provider",
+      "modelLabel": "Model",
+      "modelPlaceholder": "Enter or select a model name",
+      "refreshModels": "Refresh model list",
+      "catalogFetchFailed": "Failed to fetch model list",
+      "tier": {
+        "economy": "🟢 Cost-effective",
+        "standard": "🔵 Balanced",
+        "premium": "🟣 Flagship"
+      },
+      "task": {
+        "web_search": "Web search",
+        "consolidation": "Memory consolidation",
+        "webui_title": "Conversation title",
+        "snapshot_inspection": "Snapshot inspection",
+        "dream_phase1": "Dream phase 1",
+        "background_review": "Background review",
+        "meta_cognition": "Meta-cognition reflection",
+        "dream_phase2": "Dream phase 2",
+        "bdi_deliberation": "BDI deliberation",
+        "heartbeat": "Heartbeat",
+        "evaluator": "Evaluator"
+      }
     },
     "sections": {
       "interface": "Interface",
@@ -139,6 +164,7 @@
       "pairing": "Pairing",
       "restart": "Restart OriginAgent",
       "configPath": "Config path",
+      "outputLanguage": "Agent output language",
       "auxiliaryEnabled": "Auxiliary routing",
       "providerRetryMode": "Model retry strategy",
       "webFetchUseJinaReader": "Enhanced web reading",
@@ -215,6 +241,7 @@
       "heartbeat": "Enable the gateway heartbeat service.",
       "pairing": "Require sender pairing/approval for channel access.",
       "configPath": "The gateway configuration file currently in use.",
+      "outputLanguage": "Choose the language for Agent-generated content (replies, meta-cognition, dreams, etc.). Leave empty to let the LLM decide.",
       "auxiliaryEnabled": "Route background tasks through a cheaper auxiliary model when available.",
       "providerRetryMode": "How model requests are retried when they fail.",
       "webFetchUseJinaReader": "Use Jina reader for better content extraction when fetching web pages.",
@@ -224,7 +251,7 @@
       "sessionSearchRebuildOnStart": "Rebuild the full session search index on every startup.",
       "contentReadUseJinaReader": "Prefer Jina reader for structured site readers when available.",
       "execAllowUnsafeExec": "Relax additional safety restrictions on the exec tool.",
-      "execShellSyntaxScope": "Control which shell syntax features the exec tool allows.",
+      "execShellSyntaxPolicy": "Control which shell syntax features the exec tool allows.",
       "myEnabled": "Register the my tool so the agent can inspect its own runtime state.",
       "myAllowSet": "Let the my tool modify runtime state, not just read it.",
       "restrictToWorkspace": "Restrict file access and command execution to the workspace directory.",
@@ -252,6 +279,7 @@
       "light": "Light",
       "dark": "Dark",
       "notAvailable": "Not available",
+      "outputLanguageAuto": "Auto (LLM decides)",
       "providerRetryMode.standard": "Standard",
       "providerRetryMode.persistent": "Persistent retry",
       "sessionSearchBackend.auto": "Auto",
@@ -288,9 +316,11 @@
       "unsaved": "Unsaved changes.",
       "savedRestart": "Saved. Restart OriginAgent to apply."
     },
+    "unsavedConfirm": "You have unsaved changes. Leave this section without saving?",
     "actions": {
       "save": "Save",
       "saving": "Saving",
+      "saveAll": "Save All",
       "edit": "Edit",
       "cancel": "Cancel"
     },

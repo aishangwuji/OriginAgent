@@ -178,6 +178,7 @@ function makeSettingsPayload(overrides: Record<string, unknown> = {}) {
         trial_read_only_tools_only: true,
       },
       gateway: { heartbeat_enabled: true },
+      tiered_router: { enabled: false, default_tier: "economy", tiers: {} },
       security: { pairing_enabled: false, pairing_allow_self_approve: false },
       search: {
         web_enabled: true,
@@ -262,58 +263,6 @@ describe("App layout", () => {
     );
     expect(asideClassNames.some((cls) => cls.includes("lg:block"))).toBe(true);
   });
-
-  it("switches to the next session when deleting the active chat", async () => {
-    mockSessions = [
-      {
-        key: "websocket:chat-a",
-        channel: "websocket",
-        chatId: "chat-a",
-        createdAt: "2026-04-16T10:00:00Z",
-        updatedAt: "2026-04-16T10:00:00Z",
-        preview: "First chat",
-      },
-      {
-        key: "websocket:chat-b",
-        channel: "websocket",
-        chatId: "chat-b",
-        createdAt: "2026-04-16T11:00:00Z",
-        updatedAt: "2026-04-16T11:00:00Z",
-        preview: "Second chat",
-      },
-    ];
-
-    render(<App />);
-
-    await waitFor(() => expect(connectSpy).toHaveBeenCalled());
-    const sidebar = screen.getByRole("navigation", { name: "Sidebar navigation" });
-    await waitFor(() =>
-      expect(
-        within(sidebar).getByRole("button", { name: /^First chat$/ }),
-      ).toBeInTheDocument(),
-    );
-
-    fireEvent.pointerDown(screen.getByLabelText("Chat actions for First chat"), {
-      button: 0,
-    });
-    fireEvent.click(await screen.findByRole("menuitem", { name: "Delete" }));
-
-    await waitFor(() =>
-      expect(screen.getByText("Delete this chat?")).toBeInTheDocument(),
-    );
-    fireEvent.click(screen.getByRole("button", { name: "Delete" }));
-
-    await waitFor(() =>
-      expect(deleteChatSpy).toHaveBeenCalledWith("websocket:chat-a"),
-    );
-    await waitFor(() =>
-      expect(
-        within(sidebar).getByRole("button", { name: /^Second chat$/ }),
-      ).toBeInTheDocument(),
-    );
-    expect(screen.queryByText("Delete this chat?")).not.toBeInTheDocument();
-    expect(document.body.style.pointerEvents).not.toBe("none");
-  }, 15_000);
 
   it("opens the settings view from the sidebar footer", async () => {
     mockSessions = [
@@ -721,6 +670,7 @@ describe("App layout", () => {
                   trial_read_only_tools_only: true,
                 },
                 gateway: { heartbeat_enabled: true },
+      tiered_router: { enabled: false, default_tier: "economy", tiers: {} },
                 security: {
                   pairing_enabled: false,
                   pairing_allow_self_approve: false,
@@ -1289,9 +1239,9 @@ describe("App layout", () => {
     await i18n.changeLanguage("zh-CN");
     mockSessions = [
       {
-        key: "websocket:1234567890",
+        key: "websocket:default",
         channel: "websocket",
-        chatId: "1234567890",
+        chatId: "default",
         createdAt: "2026-05-18T10:00:00Z",
         updatedAt: "2026-05-18T10:00:00Z",
         title: "",
@@ -1302,11 +1252,10 @@ describe("App layout", () => {
     render(<App />);
 
     await waitFor(() => expect(connectSpy).toHaveBeenCalled());
-    fireEvent.click(screen.getByRole("button", { name: "新对话" }));
 
-    await waitFor(() => expect(screen.getAllByText("新对话").length).toBeGreaterThanOrEqual(2));
+    await waitFor(() => expect(document.title).toBe("新对话 · OriginAgent"));
+    expect(screen.getAllByText("新对话").length).toBeGreaterThanOrEqual(1);
     expect(screen.queryByText(/对话 123456/)).not.toBeInTheDocument();
-    expect(document.title).toBe("新对话 · OriginAgent");
   });
 
   it("keeps settings in a loading state during transient API failures", async () => {
@@ -1376,6 +1325,7 @@ describe("App layout", () => {
                   trial_read_only_tools_only: true,
                 },
                 gateway: { heartbeat_enabled: true },
+      tiered_router: { enabled: false, default_tier: "economy", tiers: {} },
                 security: { pairing_enabled: false, pairing_allow_self_approve: false },
                 search: {
                   web_enabled: true,
@@ -1508,6 +1458,7 @@ describe("App layout", () => {
                   trial_read_only_tools_only: true,
                 },
                 gateway: { heartbeat_enabled: true },
+      tiered_router: { enabled: false, default_tier: "economy", tiers: {} },
                 security: { pairing_enabled: false, pairing_allow_self_approve: false },
                 search: {
                   web_enabled: true,
@@ -1562,9 +1513,9 @@ describe("App layout", () => {
   it("keeps the selected chat open when history loading refreshes an expired API token", async () => {
     mockSessions = [
       {
-        key: "websocket:chat-a",
+        key: "websocket:default",
         channel: "websocket",
-        chatId: "chat-a",
+        chatId: "default",
         createdAt: "2026-05-18T10:00:00Z",
         updatedAt: "2026-05-18T10:00:00Z",
         preview: "Idle chat",
@@ -1585,7 +1536,7 @@ describe("App layout", () => {
       "fetch",
       vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
         const url = String(input);
-        if (url.includes("websocket%3Achat-a/webui-thread")) {
+        if (url.includes("websocket%3Adefault/webui-thread")) {
           const auth = (init?.headers as Record<string, string> | undefined)?.Authorization;
           if (auth === "Bearer tok") {
             return { ok: false, status: 401, json: async () => ({}) };
@@ -1609,187 +1560,11 @@ describe("App layout", () => {
     render(<App />);
 
     await waitFor(() => expect(connectSpy).toHaveBeenCalled());
-    const sidebar = screen.getByRole("navigation", { name: "Sidebar navigation" });
-    fireEvent.click(within(sidebar).getByRole("button", { name: "Idle chat" }));
 
     expect(await screen.findByText("Recovered after idle")).toBeInTheDocument();
     expect(screen.queryByText("What can I do for you?")).not.toBeInTheDocument();
     expect(screen.getByPlaceholderText("Type your message…")).toBeInTheDocument();
     expect(fetchBootstrap).toHaveBeenCalledTimes(2);
-  });
-
-  it("returns from settings to the blank start page when no session was active", async () => {
-    mockSessions = [
-      {
-        key: "websocket:chat-a",
-        channel: "websocket",
-        chatId: "chat-a",
-        createdAt: "2026-04-16T10:00:00Z",
-        updatedAt: "2026-04-16T10:00:00Z",
-        preview: "First chat",
-      },
-      {
-        key: "websocket:chat-b",
-        channel: "websocket",
-        chatId: "chat-b",
-        createdAt: "2026-04-16T11:00:00Z",
-        updatedAt: "2026-04-16T11:00:00Z",
-        preview: "Second chat",
-      },
-    ];
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async (input: RequestInfo | URL) => {
-        if (String(input).includes("/api/settings")) {
-          return {
-            ok: true,
-            status: 200,
-            json: async () => ({
-              agent: {
-                model: "openai/gpt-4o",
-                provider: "openai",
-                resolved_provider: "openai",
-                has_api_key: true,
-              },
-              providers: [{ name: "openai", label: "OpenAI", configured: true, model_catalog_kind: "official" }],
-              web_search: {
-                provider: "duckduckgo",
-                api_key_hint: null,
-                base_url: null,
-                providers: [
-                  { name: "duckduckgo", label: "DuckDuckGo", credential: "none" },
-                  { name: "brave", label: "Brave Search", credential: "api_key" },
-                ],
-              },
-              mcp: { servers: [] },
-              runtime: {
-                config_path: "/tmp/config.json",
-              },
-              learning: {
-                background_review: { enabled: true },
-              },
-              runtime_controls: {
-                channels: { send_progress: true, send_tool_hints: false, show_reasoning: true },
-                agent: {
-                  unified_session: false,
-                  cold_archive_enabled: true,
-                  allow_agent_initiated_messages: true,
-                  auxiliary_enabled: true,
-                  domain_packs_enabled: true,
-                  provider_retry_mode: "standard",
-                  dream_annotate_line_ages: true,
-                },
-                learning: { background_review_enabled: true, curator_enabled: true },
-                evolution: {
-                  mode: "curated",
-                  allow_manual_override: false,
-                  dry_run: true,
-                  outcome_archive_enabled: true,
-                  dependency_stale_cleanup_enabled: true,
-                  auto_verify_workflows: false,
-                  skill_candidates_enabled: false,
-                  feedback_calibration_enabled: true,
-                  sandbox_enabled: true,
-                  trial_enabled: true,
-                  trial_isolated_workspace: true,
-                  trial_read_only_tools_only: true,
-                },
-                gateway: { heartbeat_enabled: true },
-                security: { pairing_enabled: false, pairing_allow_self_approve: false },
-                search: {
-                  web_enabled: true,
-                  web_fetch_use_jina_reader: true,
-                  session_search_enabled: true,
-                  session_search_backend: "auto",
-                  session_search_semantic_enabled: true,
-                  session_search_rebuild_on_start: false,
-                  content_read_enabled: false,
-                  content_read_use_jina_reader: true,
-                },
-                execution: {
-                  exec_enabled: true,
-                  exec_profile: "secure",
-                  exec_allow_unsafe_exec: false,
-                  exec_shell_syntax_policy: "restricted",
-                  my_enabled: true,
-                  my_allow_set: false,
-                  restrict_to_workspace: false,
-                },
-                media: { image_generation_enabled: false },
-                devices: {
-                  device_enabled: false,
-                  device_lighting_enabled: false,
-                  device_mode: "dry_run",
-                  device_backend: "none",
-                },
-                subagent: { mode: "normal" },
-                audit: { audit_mode: "minimal", audit_security_on_policy_denial: true },
-                runtime: { profile: "default" },
-              },
-              requires_restart: false,
-            }),
-          };
-        }
-        return { ok: false, status: 404, json: async () => ({}) };
-      }),
-    );
-
-    render(<App />);
-
-    await waitFor(() => expect(connectSpy).toHaveBeenCalled());
-    const sidebar = screen.getByRole("navigation", { name: "Sidebar navigation" });
-    fireEvent.click(within(sidebar).getByRole("button", { name: "New chat" }));
-    await waitFor(() => expect(document.title).toBe("OriginAgent"));
-
-    fireEvent.click(within(sidebar).getByRole("button", { name: "Settings" }));
-    expect(await screen.findByRole("heading", { name: "General" })).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "Back to chat" }));
-
-    await waitFor(() => expect(document.title).toBe("OriginAgent"));
-    expect(screen.getByText("What can I do for you?")).toBeInTheDocument();
-  });
-
-  it("filters sidebar sessions through the lightweight search row", async () => {
-    mockSessions = [
-      {
-        key: "websocket:chat-alpha",
-        channel: "websocket",
-        chatId: "chat-alpha",
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
-        title: "Q2 roadmap",
-        preview: "Project planning notes",
-      },
-      {
-        key: "websocket:chat-beta",
-        channel: "websocket",
-        chatId: "chat-beta",
-        createdAt: "2026-04-15T10:00:00Z",
-        updatedAt: "2026-04-15T10:00:00Z",
-        preview: "Travel ideas",
-      },
-    ];
-
-    render(<App />);
-
-    await waitFor(() => expect(connectSpy).toHaveBeenCalled());
-    const sidebar = screen.getByRole("navigation", { name: "Sidebar navigation" });
-    expect(within(sidebar).getByText("Q2 roadmap")).toBeInTheDocument();
-    expect(within(sidebar).getByText("Travel ideas")).toBeInTheDocument();
-
-    fireEvent.change(screen.getByRole("textbox", { name: "Search chats" }), {
-      target: { value: "planning" },
-    });
-
-    expect(within(sidebar).getByText("Q2 roadmap")).toBeInTheDocument();
-    expect(within(sidebar).queryByText("Travel ideas")).not.toBeInTheDocument();
-
-    fireEvent.change(screen.getByRole("textbox", { name: "Search chats" }), {
-      target: { value: "road q2" },
-    });
-
-    expect(within(sidebar).getByText("Q2 roadmap")).toBeInTheDocument();
-    expect(within(sidebar).queryByText("Travel ideas")).not.toBeInTheDocument();
   });
 
   it("opens a blank start page without creating an empty chat", async () => {
@@ -1827,27 +1602,20 @@ describe("App layout", () => {
     const desktopAside = container.querySelector("aside.lg\\:block") as HTMLElement;
     await waitFor(() => expect(desktopAside.style.width).toBe("0px"));
 
-    expect(screen.queryByRole("button", { name: "Start a new chat" })).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Toggle sidebar" }));
     await waitFor(() => expect(desktopAside.style.width).toBe("272px"));
 
     const sidebar = screen.getByRole("navigation", { name: "Sidebar navigation" });
-    fireEvent.click(within(sidebar).getByRole("button", { name: "New chat" }));
-    expect(createChatSpy).not.toHaveBeenCalled();
-    expect(screen.getByText("What can I do for you?")).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Start a new chat" })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Toggle theme from header" })).toBeInTheDocument();
     expect(within(sidebar).getByRole("button", { name: "Settings" })).toBeInTheDocument();
-
-    expect(within(sidebar).getByText("Existing chat")).toBeInTheDocument();
   });
 
   it("does not flash the blank start page while the selected chat list row is refreshing", async () => {
     mockSessions = [
       {
-        key: "websocket:chat-a",
+        key: "websocket:default",
         channel: "websocket",
-        chatId: "chat-a",
+        chatId: "default",
         createdAt: "2026-04-16T10:00:00Z",
         updatedAt: "2026-04-16T10:00:00Z",
         preview: "Existing chat",
@@ -1860,7 +1628,7 @@ describe("App layout", () => {
       "fetch",
       vi.fn((input: RequestInfo | URL) => {
         const url = String(input);
-        if (url.includes("websocket%3Achat-a/webui-thread")) {
+        if (url.includes("websocket%3Adefault/webui-thread")) {
           return new Promise((resolve) => {
             resolveHistory = resolve;
           });
@@ -1876,8 +1644,6 @@ describe("App layout", () => {
     const { rerender } = render(<App />);
 
     await waitFor(() => expect(connectSpy).toHaveBeenCalled());
-    const sidebar = screen.getByRole("navigation", { name: "Sidebar navigation" });
-    fireEvent.click(within(sidebar).getByRole("button", { name: "Existing chat" }));
     expect(screen.getByText("Loading conversation…")).toBeInTheDocument();
 
     mockSessions = [];
@@ -1981,6 +1747,7 @@ describe("App layout", () => {
                   trial_read_only_tools_only: true,
                 },
                 gateway: { heartbeat_enabled: true },
+      tiered_router: { enabled: false, default_tier: "economy", tiers: {} },
                 security: { pairing_enabled: false, pairing_allow_self_approve: false },
                 search: {
                   web_enabled: true,
@@ -2114,6 +1881,7 @@ describe("App layout", () => {
                   trial_read_only_tools_only: true,
                 },
                 gateway: { heartbeat_enabled: true },
+      tiered_router: { enabled: false, default_tier: "economy", tiers: {} },
                 security: { pairing_enabled: false, pairing_allow_self_approve: false },
                 search: {
                   web_enabled: true,

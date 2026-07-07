@@ -53,6 +53,39 @@
       "skills": "技能",
       "domains": "領域包"
     },
+    "tieredRouter": {
+      "overview": "分層 LLM 路由",
+      "enable": "啟用分層路由",
+      "enableHelp": "將背景任務路由到廉價模型，同時保留旗艦模型用於推理和決策。",
+      "tiers": "可用層級",
+      "mapping": "任務 → 層級映射",
+      "default": "預設",
+      "setAsDefault": "設為預設",
+      "providerLabel": "Provider",
+      "providerPlaceholder": "選擇已設定的 Provider",
+      "modelLabel": "模型",
+      "modelPlaceholder": "輸入或選擇模型名稱",
+      "refreshModels": "重新整理模型列表",
+      "catalogFetchFailed": "取得模型列表失敗",
+      "tier": {
+        "economy": "🟢 高性價比",
+        "standard": "🔵 均衡",
+        "premium": "🟣 旗艦"
+      },
+      "task": {
+        "web_search": "網頁搜尋",
+        "consolidation": "記憶整合",
+        "webui_title": "對話標題",
+        "snapshot_inspection": "快照檢查",
+        "dream_phase1": "夢境階段一",
+        "background_review": "背景審查",
+        "meta_cognition": "後設認知反思",
+        "dream_phase2": "夢境階段二",
+        "bdi_deliberation": "BDI 審議",
+        "heartbeat": "心跳服務",
+        "evaluator": "評估器"
+      }
+    },
     "sections": {
       "interface": "介面",
       "ai": "AI",
@@ -96,7 +129,8 @@
       "heartbeat": "心跳",
       "pairing": "配對",
       "restart": "重新啟動 OriginAgent",
-      "configPath": "設定檔路徑"
+      "configPath": "設定檔路徑",
+      "outputLanguage": "Agent 輸出語言"
     },
     "help": {
       "theme": "在淺色與深色外觀之間切換。",
@@ -132,12 +166,14 @@
       "domainPacks": "啟用領域包發現以及 prompt/tool 注入。",
       "heartbeat": "啟用閘道心跳服務。",
       "pairing": "要求通道存取前先完成發送者配對/核准。",
-      "configPath": "目前閘道正在使用的設定檔。"
+      "configPath": "目前閘道正在使用的設定檔。",
+      "outputLanguage": "選擇 Agent 產出內容（回覆、元認知、夢境等）使用的語言。留空則交由 LLM 自決。"
     },
     "values": {
       "light": "淺色",
       "dark": "深色",
-      "notAvailable": "不可用"
+      "notAvailable": "不可用",
+      "outputLanguageAuto": "自動（由 LLM 決定）"
     },
     "status": {
       "loading": "正在載入設定...",
@@ -145,9 +181,11 @@
       "unsaved": "有未儲存的變更。",
       "savedRestart": "已儲存。重新啟動 OriginAgent 後生效。"
     },
+    "unsavedConfirm": "有未儲存的變更。確定離開此頁面而不儲存嗎？",
     "actions": {
       "save": "儲存",
       "saving": "儲存中",
+      "saveAll": "全部儲存",
       "edit": "編輯",
       "cancel": "取消"
     },

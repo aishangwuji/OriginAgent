@@ -9,6 +9,11 @@ from urllib.parse import unquote
 from websockets.http11 import Request as WsRequest
 from websockets.http11 import Response
 
+# 复用 gateway 层的 HTTP 辅助函数：必须用 Headers 包装响应头，
+# 否则 websockets 在序列化时会因 dict 无 serialize 方法而崩溃。
+from OriginAgent.gateway._helpers import http_error as _http_error
+from OriginAgent.gateway._helpers import http_json_response as _http_json_response
+
 # -- helpers imported from the parent channel --------------------------------
 
 
@@ -23,19 +28,6 @@ def _query_first(query: dict[str, list[str]], key: str) -> str | None:
     """Return the first value for a query key, or None."""
     values = query.get(key)
     return values[0] if values else None
-
-
-def _http_error(status: int, message: str) -> Response:
-    """Return a plain-text HTTP error response."""
-    return Response(status, "OK", {}, message.encode("utf-8"))
-
-
-def _http_json_response(data: Any) -> Response:
-    """Return a JSON HTTP response."""
-    import json
-
-    body = json.dumps(data, ensure_ascii=False).encode("utf-8")
-    return Response(200, "OK", {"Content-Type": "application/json; charset=utf-8"}, body)
 
 
 # -- disabled payload (shared between handlers) ------------------------------

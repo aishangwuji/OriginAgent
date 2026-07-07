@@ -51,6 +51,39 @@
       "mcp": "MCP",
       "skills": "Skills"
     },
+    "tieredRouter": {
+      "overview": "階層型 LLM ルーティング",
+      "enable": "階層ルーティングを有効化",
+      "enableHelp": "バックグラウンドタスクを安価なモデルにルーティングし、推論と意思決定には旗艦モデルを維持します。",
+      "tiers": "利用可能な階層",
+      "mapping": "タスク → 階層マッピング",
+      "default": "デフォルト",
+      "setAsDefault": "デフォルトに設定",
+      "providerLabel": "Provider",
+      "providerPlaceholder": "設定済みのプロバイダーを選択",
+      "modelLabel": "モデル",
+      "modelPlaceholder": "モデル名を入力または選択",
+      "refreshModels": "モデル一覧を更新",
+      "catalogFetchFailed": "モデル一覧の取得に失敗",
+      "tier": {
+        "economy": "🟢 コスト重視",
+        "standard": "🔵 バランス",
+        "premium": "🟣 フラッグシップ"
+      },
+      "task": {
+        "web_search": "ウェブ検索",
+        "consolidation": "記憶統合",
+        "webui_title": "会話タイトル",
+        "snapshot_inspection": "スナップショット検査",
+        "dream_phase1": "ドリームフェーズ1",
+        "background_review": "バックグラウンドレビュー",
+        "meta_cognition": "メタ認知リフレクション",
+        "dream_phase2": "ドリームフェーズ2",
+        "bdi_deliberation": "BDI 審議",
+        "heartbeat": "ハートビート",
+        "evaluator": "評価器"
+      }
+    },
     "sections": {
       "interface": "インターフェース",
       "ai": "AI",
@@ -62,19 +95,22 @@
       "provider": "プロバイダー",
       "model": "モデル",
       "restart": "OriginAgent を再起動",
-      "configPath": "設定パス"
+      "configPath": "設定パス",
+      "outputLanguage": "Agent 出力言語"
     },
     "help": {
       "theme": "ライト表示とダーク表示を切り替えます。",
       "language": "WebUI で使用する言語を選択します。",
       "provider": "新しいモデルリクエストに使うプロバイダーを選択します。",
       "model": "OriginAgent が既定で使用するモデル名を設定します。",
-      "configPath": "現在ゲートウェイが使用している設定ファイルです。"
+      "configPath": "現在ゲートウェイが使用している設定ファイルです。",
+      "outputLanguage": "Agent が生成するコンテンツ（返信、メタ認知、夢など）の言語を選択。空欄なら LLM が決定します。"
     },
     "values": {
       "light": "ライト",
       "dark": "ダーク",
-      "notAvailable": "利用不可"
+      "notAvailable": "利用不可",
+      "outputLanguageAuto": "自動（LLM が決定）"
     },
     "status": {
       "loading": "設定を読み込んでいます...",
@@ -82,9 +118,11 @@
       "unsaved": "未保存の変更があります。",
       "savedRestart": "保存しました。反映するには OriginAgent を再起動してください。"
     },
+    "unsavedConfirm": "未保存の変更があります。保存せずにこのセクションを離れますか？",
     "actions": {
       "save": "保存",
       "saving": "保存中",
+      "saveAll": "すべて保存",
       "edit": "編集",
       "cancel": "キャンセル"
     },

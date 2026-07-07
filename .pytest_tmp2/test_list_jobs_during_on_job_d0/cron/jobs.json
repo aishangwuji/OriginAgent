@@ -1,0 +1,85 @@
+{
+  "version": 1,
+  "jobs": [
+    {
+      "id": "292b6f56",
+      "name": "job-a",
+      "enabled": true,
+      "schedule": {
+        "kind": "every",
+        "atMs": null,
+        "everyMs": 3600000,
+        "expr": null,
+        "tz": null
+      },
+      "payload": {
+        "kind": "agent_turn",
+        "message": "test",
+        "deliver": false,
+        "channel": null,
+        "to": null,
+        "channelMeta": {},
+        "sessionKey": null,
+        "capabilitySnapshot": {},
+        "grantId": null
+      },
+      "state": {
+        "nextRunAtMs": 1783409100791,
+        "lastRunAtMs": 1783405500791,
+        "lastStatus": "ok",
+        "lastError": null,
+        "runHistory": [
+          {
+            "runAtMs": 1783405500791,
+            "status": "ok",
+            "durationMs": 0,
+            "error": null
+          }
+        ]
+      },
+      "createdAtMs": 1783405500449,
+      "updatedAtMs": 1783405500791,
+      "deleteAfterRun": false
+    },
+    {
+      "id": "e1cfa32b",
+      "name": "job-b",
+      "enabled": true,
+      "schedule": {
+        "kind": "every",
+        "atMs": null,
+        "everyMs": 3600000,
+        "expr": null,
+        "tz": null
+      },
+      "payload": {
+        "kind": "agent_turn",
+        "message": "test",
+        "deliver": false,
+        "channel": null,
+        "to": null,
+        "channelMeta": {},
+        "sessionKey": null,
+        "capabilitySnapshot": {},
+        "grantId": null
+      },
+      "state": {
+        "nextRunAtMs": 1783409100791,
+        "lastRunAtMs": 1783405500791,
+        "lastStatus": "ok",
+        "lastError": null,
+        "runHistory": [
+          {
+            "runAtMs": 1783405500791,
+            "status": "ok",
+            "durationMs": 0,
+            "error": null
+          }
+        ]
+      },
+      "createdAtMs": 1783405500569,
+      "updatedAtMs": 1783405500791,
+      "deleteAfterRun": false
+    }
+  ]
+}

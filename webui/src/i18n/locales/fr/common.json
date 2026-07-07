@@ -51,6 +51,39 @@
       "mcp": "MCP",
       "skills": "Skills"
     },
+    "tieredRouter": {
+      "overview": "Routage LLM par niveaux",
+      "enable": "Activer le routage par niveaux",
+      "enableHelp": "Achemine les tâches en arrière-plan vers des modèles moins coûteux tout en conservant le modèle phare pour le raisonnement et les décisions.",
+      "tiers": "Niveaux disponibles",
+      "mapping": "Mappage Tâche → Niveau",
+      "default": "Par défaut",
+      "setAsDefault": "Définir par défaut",
+      "providerLabel": "Provider",
+      "providerPlaceholder": "Sélectionner un fournisseur configuré",
+      "modelLabel": "Modèle",
+      "modelPlaceholder": "Saisir ou sélectionner un nom de modèle",
+      "refreshModels": "Actualiser la liste des modèles",
+      "catalogFetchFailed": "Échec de récupération de la liste des modèles",
+      "tier": {
+        "economy": "🟢 Économique",
+        "standard": "🔵 Équilibré",
+        "premium": "🟣 Premium"
+      },
+      "task": {
+        "web_search": "Recherche web",
+        "consolidation": "Consolidation de la mémoire",
+        "webui_title": "Titre de conversation",
+        "snapshot_inspection": "Inspection d'instantané",
+        "dream_phase1": "Phase de rêve 1",
+        "background_review": "Examen en arrière-plan",
+        "meta_cognition": "Réflexion méta-cognitive",
+        "dream_phase2": "Phase de rêve 2",
+        "bdi_deliberation": "Délibération BDI",
+        "heartbeat": "Battement de cœur",
+        "evaluator": "Évaluateur"
+      }
+    },
     "sections": {
       "interface": "Interface",
       "ai": "IA",
@@ -62,19 +95,22 @@
       "provider": "Fournisseur",
       "model": "Modèle",
       "restart": "Redémarrer OriginAgent",
-      "configPath": "Chemin de configuration"
+      "configPath": "Chemin de configuration",
+      "outputLanguage": "Langue de sortie de l'Agent"
     },
     "help": {
       "theme": "Basculer entre les apparences claire et sombre.",
       "language": "Choisissez la langue utilisée par le WebUI.",
       "provider": "Sélectionnez le fournisseur des nouvelles requêtes de modèle.",
       "model": "Définissez le nom du modèle par défaut utilisé par OriginAgent.",
-      "configPath": "Le fichier de configuration actuellement utilisé par la passerelle."
+      "configPath": "Le fichier de configuration actuellement utilisé par la passerelle.",
+      "outputLanguage": "Choisissez la langue du contenu généré par l'Agent (réponses, méta-cognition, rêves, etc.). Laisser vide pour laisser le LLM décider."
     },
     "values": {
       "light": "Clair",
       "dark": "Sombre",
-      "notAvailable": "Indisponible"
+      "notAvailable": "Indisponible",
+      "outputLanguageAuto": "Auto (décidé par le LLM)"
     },
     "status": {
       "loading": "Chargement des paramètres...",
@@ -82,9 +118,11 @@
       "unsaved": "Modifications non enregistrées.",
       "savedRestart": "Enregistré. Redémarrez OriginAgent pour appliquer."
     },
+    "unsavedConfirm": "Vous avez des modifications non enregistrées. Quitter cette section sans enregistrer ?",
     "actions": {
       "save": "Enregistrer",
       "saving": "Enregistrement",
+      "saveAll": "Tout enregistrer",
       "edit": "Modifier",
       "cancel": "Annuler"
     },

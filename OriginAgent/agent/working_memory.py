@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
+
+from loguru import logger
 
 from OriginAgent.agent.reminders import ReminderStore
 from OriginAgent.agent.scope import IdentityDescriptor, ScopeResolver
@@ -108,6 +110,38 @@ class WorkingMemoryManager:
         return snapshot
 
     def save(self, session: Session, snapshot: WorkingMemorySnapshot) -> WorkingMemorySnapshot:
+        # 冲突验证：对比现有值，避免 LLM confabulated 的内容覆盖真实记忆，
+        # 形成自我强化的虚假记忆。仅在明确冲突时保守地保留现有值。
+        existing_raw = session.metadata.get(WORKING_MEMORY_METADATA_KEY)
+        if isinstance(existing_raw, dict):
+            existing = WorkingMemorySnapshot.from_json(session.key, existing_raw)
+            # current_goal 冲突：现有值非空且新值完全不同（非子串关系）时保留现有值
+            if (
+                existing.current_goal
+                and snapshot.current_goal
+                and existing.current_goal != snapshot.current_goal
+                and existing.current_goal not in snapshot.current_goal
+                and snapshot.current_goal not in existing.current_goal
+            ):
+                logger.warning(
+                    "Working memory current_goal conflict: existing='{}', new='{}'. Keeping existing value.",
+                    existing.current_goal[:100],
+                    snapshot.current_goal[:100],
+                )
+                snapshot.current_goal = existing.current_goal
+            # attention_items 冲突：现有列表非空且新列表完全无交集时保留现有值
+            if (
+                existing.attention_items
+                and snapshot.attention_items
+                and set(existing.attention_items) != set(snapshot.attention_items)
+                and not any(item in existing.attention_items for item in snapshot.attention_items)
+            ):
+                logger.warning(
+                    "Working memory attention_items conflict: keeping existing {} items.",
+                    len(existing.attention_items),
+                )
+                snapshot.attention_items = existing.attention_items
+
         snapshot.updated_at = _utcnow_iso()
         session.metadata[WORKING_MEMORY_METADATA_KEY] = snapshot.to_json()
         return snapshot
@@ -187,6 +221,26 @@ class WorkingMemoryManager:
         goal = parse_goal_state(goal_state_raw(session.metadata))
         if not isinstance(goal, dict) or goal.get("status") != "active":
             return
+
+        # 过期检查：goal_state 的 started_at 超过 30 分钟则不再注入，
+        # 避免陈旧 goal 被每轮重复注入形成自我强化的虚假记忆。
+        # 容错：时间字段缺失或解析失败时不阻塞，继续注入。
+        started_at = str(goal.get("started_at") or "").strip()
+        if started_at:
+            try:
+                goal_time = datetime.fromisoformat(started_at)
+                if goal_time.tzinfo is None:
+                    goal_time = goal_time.replace(tzinfo=timezone.utc)
+                if datetime.now(timezone.utc) - goal_time > timedelta(minutes=30):
+                    logger.debug(
+                        "Goal state expired (started_at={}), skipping hydration",
+                        started_at,
+                    )
+                    return
+            except (ValueError, TypeError):
+                # 解析失败时不阻塞，继续注入
+                pass
+
         if not snapshot.current_goal:
             snapshot.current_goal = str(goal.get("objective") or "").strip()[:1000]
         summary = str(goal.get("ui_summary") or "").strip()
@@ -206,6 +260,9 @@ class WorkingMemoryManager:
         for record in due:
             if record.session_key != snapshot.session_key:
                 continue
-            if record.content not in pending:
-                pending.append(record.content)
+            # 加 [reminder] 前缀，与 LLM confabulated 的 attention_items 区分，
+            # 避免 reminder 内容被误认为 LLM 生成内容而自我强化。
+            reminder_item = f"[reminder] {record.content}"
+            if reminder_item not in pending and record.content not in pending:
+                pending.append(reminder_item)
         snapshot.attention_items = _normalize_items(pending)

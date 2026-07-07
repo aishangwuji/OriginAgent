@@ -84,7 +84,7 @@ export function LearningSettings(props: LearningSettingsProps) {
           >
             <BooleanSwitch
               checked={props.enabled}
-              ariaLabel="Meta-Cognition"
+              ariaLabel={t("settings.rows.metaCognition")}
               onChange={props.onToggleMetaCognition}
             />
           </SettingsRow>
@@ -96,7 +96,7 @@ export function LearningSettings(props: LearningSettingsProps) {
               >
                 <BooleanSwitch
                   checked={props.triggerCollectionEnabled}
-                  ariaLabel="Trigger Collection"
+                  ariaLabel={t("settings.rows.triggerCollection")}
                   onChange={props.onToggleTriggerCollection}
                 />
               </SettingsRow>
@@ -106,7 +106,7 @@ export function LearningSettings(props: LearningSettingsProps) {
               >
                 <BooleanSwitch
                   checked={props.structuredReflectionEnabled}
-                  ariaLabel="Structured Reflection"
+                  ariaLabel={t("settings.rows.structuredReflection")}
                   onChange={props.onToggleStructuredReflection}
                 />
               </SettingsRow>
@@ -116,7 +116,7 @@ export function LearningSettings(props: LearningSettingsProps) {
               >
                 <BooleanSwitch
                   checked={props.patternConsolidationEnabled}
-                  ariaLabel="Pattern Consolidation"
+                  ariaLabel={t("settings.rows.patternConsolidation")}
                   onChange={props.onTogglePatternConsolidation}
                 />
               </SettingsRow>
@@ -126,7 +126,7 @@ export function LearningSettings(props: LearningSettingsProps) {
               >
                 <BooleanSwitch
                   checked={props.evolutionBridgeEnabled}
-                  ariaLabel="Evolution Bridge"
+                  ariaLabel={t("settings.rows.evolutionBridge")}
                   onChange={props.onToggleEvolutionBridge}
                 />
               </SettingsRow>
@@ -136,7 +136,7 @@ export function LearningSettings(props: LearningSettingsProps) {
               >
                 <BooleanSwitch
                   checked={props.workingMemoryBridgeEnabled}
-                  ariaLabel="Working Memory Bridge"
+                  ariaLabel={t("settings.rows.workingMemoryBridge")}
                   onChange={props.onToggleWorkingMemoryBridge}
                 />
               </SettingsRow>
@@ -146,7 +146,7 @@ export function LearningSettings(props: LearningSettingsProps) {
               >
                 <BooleanSwitch
                   checked={props.memoryCandidateBridgeEnabled}
-                  ariaLabel="Memory Candidate Bridge"
+                  ariaLabel={t("settings.rows.memoryCandidateBridge")}
                   onChange={props.onToggleMemoryCandidateBridge}
                 />
               </SettingsRow>
@@ -165,7 +165,7 @@ export function LearningSettings(props: LearningSettingsProps) {
           >
             <BooleanSwitch
               checked={props.backgroundReviewEnabled}
-              ariaLabel="Background Review"
+              ariaLabel={t("settings.rows.backgroundReview")}
               disabled={props.backgroundReviewSaving}
               onChange={props.onToggleBackgroundReview}
             />
@@ -176,7 +176,7 @@ export function LearningSettings(props: LearningSettingsProps) {
           >
             <BooleanSwitch
               checked={props.curatorEnabled}
-              ariaLabel="Curator"
+              ariaLabel={t("settings.rows.curator")}
               onChange={props.onToggleCurator}
             />
           </SettingsRow>
@@ -193,7 +193,7 @@ export function LearningSettings(props: LearningSettingsProps) {
           >
             <BooleanSwitch
               checked={props.dreamAnnotateLineAges}
-              ariaLabel="Dream Line-Age Annotation"
+              ariaLabel={t("settings.rows.dreamAnnotateLineAges")}
               onChange={props.onToggleDreamAnnotateLineAges}
             />
           </SettingsRow>

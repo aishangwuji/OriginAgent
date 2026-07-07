@@ -120,6 +120,7 @@ def _settings_runtime_controls_payload(config: Any) -> dict[str, Any]:
             "domain_packs_enabled": bool(defaults.domain_packs.enabled),
             "provider_retry_mode": defaults.provider_retry_mode,
             "dream_annotate_line_ages": bool(defaults.dream.annotate_line_ages),
+            "output_language": defaults.output_language,
         },
         "learning": {
             "background_review_enabled": bool(defaults.learning.background_review.enabled),
@@ -141,9 +142,17 @@ def _settings_runtime_controls_payload(config: Any) -> dict[str, Any]:
         },
         "gateway": {
             "heartbeat_enabled": bool(config.gateway.heartbeat.enabled),
-            "tiered_router": {
-                "enabled": bool(config.gateway.tiered_router.enabled),
-                "default_tier": config.gateway.tiered_router.default_tier,
+        },
+        "tiered_router": {
+            "enabled": bool(config.gateway.tiered_router.enabled),
+            "default_tier": config.gateway.tiered_router.default_tier,
+            # 输出每个层级的 provider+model，供前端编辑
+            "tiers": {
+                name: {
+                    "provider": tier.provider,
+                    "model": tier.model,
+                }
+                for name, tier in config.gateway.tiered_router.tiers.items()
             },
         },
         "security": {
@@ -907,9 +916,11 @@ class RestApi:
         proposal_id = unquote(proposal_id)
         store = self._review_store()
         proposal = store.get(proposal_id)
+        # store.get() 返回 dict[str, Any] | None（而非 ReviewProposal 对象），
+        # dict 本身已可 JSON 序列化，不能再调用 .to_json()
         if proposal is None:
             return http_error(404, "review proposal not found")
-        return http_json_response({"proposal": proposal.to_json()})
+        return http_json_response({"proposal": proposal})
 
     def _handle_review_action(self, request: WsRequest, proposal_id: str, action: str) -> Response:
         if not self._check_api_token(request):
@@ -1369,6 +1380,22 @@ class RestApi:
                 setattr(target, attr, candidate)
                 changed = True
 
+        def set_output_language(value: Any) -> None:
+            # Agent 产出语言：None 表示交由 LLM 自决；否则接受 BCP-47 标签（如 zh-CN、en、ja）
+            nonlocal changed
+            if value is None:
+                normalized = None
+            elif isinstance(value, str):
+                normalized = value.strip() or None
+                # BCP-47 简单校验：字母+数字+短横线，长度 2-16
+                if normalized is not None and not re.fullmatch(r"[A-Za-z0-9-]{2,16}", normalized):
+                    raise ValueError("output_language must be a BCP-47 tag like 'zh-CN' or 'en'")
+            else:
+                raise ValueError("output_language must be a string or null")
+            if defaults.output_language != normalized:
+                defaults.output_language = normalized
+                changed = True
+
         try:
             channels = data.get("channels")
             if isinstance(channels, dict):
@@ -1397,6 +1424,8 @@ class RestApi:
                     set_choice(defaults, "provider_retry_mode", agent["provider_retry_mode"], _PROVIDER_RETRY_MODE_OPTIONS)
                 if "dream_annotate_line_ages" in agent:
                     set_bool(defaults.dream, "annotate_line_ages", agent["dream_annotate_line_ages"])
+                if "output_language" in agent:
+                    set_output_language(agent["output_language"])
 
             learning = data.get("learning")
             if isinstance(learning, dict):
@@ -1447,6 +1476,34 @@ class RestApi:
                         if getattr(tr, "default_tier") != val:
                             setattr(tr, "default_tier", val)
                             changed = True
+                # 接收层级 → 模型映射的修改
+                # 仅更新 provider+model，保留已有的 max_tokens 等高级配置
+                if "tiers" in tiered_router_data:
+                    tiers_data = tiered_router_data["tiers"]
+                    if isinstance(tiers_data, dict):
+                        from OriginAgent.config.schema import ModelTierConfig
+
+                        for tier_name, tier_info in tiers_data.items():
+                            if not isinstance(tier_info, dict):
+                                continue
+                            tier_name = str(tier_name).strip()
+                            if not tier_name:
+                                continue
+                            provider = str(tier_info.get("provider", "")).strip()
+                            model = str(tier_info.get("model", "")).strip()
+                            if not provider or not model:
+                                continue
+                            existing = tr.tiers.get(tier_name)
+                            if existing is not None:
+                                if existing.provider != provider or existing.model != model:
+                                    existing.provider = provider
+                                    existing.model = model
+                                    changed = True
+                            else:
+                                tr.tiers[tier_name] = ModelTierConfig(
+                                    provider=provider, model=model
+                                )
+                                changed = True
 
             security = data.get("security")
             if isinstance(security, dict):

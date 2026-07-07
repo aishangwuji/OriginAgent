@@ -946,10 +946,12 @@ def test_load_json_payload_backtick_empty_body_returns_none() -> None:
 
 @pytest.mark.asyncio
 async def test_reflect_turn_empty_llm_response_does_not_crash(tmp_path: Path) -> None:
-    """LLM returns finish_reason=stop with empty content — should not crash."""
+    """LLM returns finish_reason=stop with empty content — should gracefully degrade."""
     router = MagicMock()
     router.call_llm = AsyncMock(
-        return_value=SimpleNamespace(finish_reason="stop", content=""),
+        return_value=SimpleNamespace(
+            finish_reason="stop", content="", reasoning_content=None,
+        ),
     )
     reflector = _reflector(
         tmp_path,
@@ -972,4 +974,9 @@ async def test_reflect_turn_empty_llm_response_does_not_crash(tmp_path: Path) ->
         accepted_triggers=[trigger],
         runtime_context=SimpleNamespace(identity=None, user_id="user-1"),
     )
-    assert result.status == "error"
+    # 空内容优雅降级：保留 minimal journal，不抛异常
+    assert result.status == "ok"
+    assert result.reason == "minimal_only"
+    journals = reflector.audit.recent_journals(limit=10)
+    assert len(journals) == 1
+    assert reflector.audit.recent_reflections(limit=10) == []

@@ -51,6 +51,39 @@
       "mcp": "MCP",
       "skills": "Skills"
     },
+    "tieredRouter": {
+      "overview": "계층형 LLM 라우팅",
+      "enable": "계층 라우팅 활성화",
+      "enableHelp": "백그라운드 작업을 더 저렴한 모델로 라우팅하고, 추론과 의사결정에는 플래그십 모델을 유지합니다.",
+      "tiers": "사용 가능한 계층",
+      "mapping": "작업 → 계층 매핑",
+      "default": "기본",
+      "setAsDefault": "기본값으로 설정",
+      "providerLabel": "Provider",
+      "providerPlaceholder": "설정된 프로바이더 선택",
+      "modelLabel": "모델",
+      "modelPlaceholder": "모델 이름 입력 또는 선택",
+      "refreshModels": "모델 목록 새로고침",
+      "catalogFetchFailed": "모델 목록 가져오기 실패",
+      "tier": {
+        "economy": "🟢 가성비",
+        "standard": "🔵 균형",
+        "premium": "🟣 플래그십"
+      },
+      "task": {
+        "web_search": "웹 검색",
+        "consolidation": "기억 통합",
+        "webui_title": "대화 제목",
+        "snapshot_inspection": "스냅샷 검사",
+        "dream_phase1": "드림 페이즈 1",
+        "background_review": "백그라운드 검토",
+        "meta_cognition": "메타인지 반성",
+        "dream_phase2": "드림 페이즈 2",
+        "bdi_deliberation": "BDI 심의",
+        "heartbeat": "하트비트",
+        "evaluator": "평가기"
+      }
+    },
     "sections": {
       "interface": "인터페이스",
       "ai": "AI",
@@ -62,19 +95,22 @@
       "provider": "제공자",
       "model": "모델",
       "restart": "OriginAgent 재시작",
-      "configPath": "설정 경로"
+      "configPath": "설정 경로",
+      "outputLanguage": "Agent 출력 언어"
     },
     "help": {
       "theme": "밝은 모드와 어두운 모드를 전환합니다.",
       "language": "WebUI에서 사용할 언어를 선택합니다.",
       "provider": "새 모델 요청에 사용할 제공자를 선택합니다.",
       "model": "OriginAgent이 기본으로 사용할 모델 이름을 설정합니다.",
-      "configPath": "현재 게이트웨이가 사용하는 설정 파일입니다."
+      "configPath": "현재 게이트웨이가 사용하는 설정 파일입니다.",
+      "outputLanguage": "Agent가 생성하는 콘텐츠(응답, 메타인지, 꿈 등)의 언어를 선택하세요. 비워두면 LLM이 결정합니다."
     },
     "values": {
       "light": "라이트",
       "dark": "다크",
-      "notAvailable": "사용할 수 없음"
+      "notAvailable": "사용할 수 없음",
+      "outputLanguageAuto": "자동 (LLM이 결정)"
     },
     "status": {
       "loading": "설정을 불러오는 중...",
@@ -82,9 +118,11 @@
       "unsaved": "저장되지 않은 변경 사항이 있습니다.",
       "savedRestart": "저장되었습니다. 적용하려면 OriginAgent을 재시작하세요."
     },
+    "unsavedConfirm": "저장하지 않은 변경 사항이 있습니다. 저장하지 않고 이 섹션을 나가시겠습니까?",
     "actions": {
       "save": "저장",
       "saving": "저장 중",
+      "saveAll": "모두 저장",
       "edit": "편집",
       "cancel": "취소"
     },

@@ -349,6 +349,17 @@ class AuxiliaryLLMRouter:
             return True
         return LLMProvider._is_transient_response(response)
 
+    @staticmethod
+    def _is_empty_response(response: LLMResponse) -> bool:
+        """检查响应内容是否为空：content 与 reasoning_content 均为空时视为空响应。
+
+        部分 reasoning 模型可能将有效 JSON 放在 reasoning_content 字段，
+        因此只有两个字段同时为空才认定为可降级的空响应。
+        """
+        content = (response.content or "").strip()
+        reasoning = (response.reasoning_content or "").strip()
+        return not content and not reasoning
+
     def _fallback_reason(self, response: LLMResponse) -> str | None:
         if self._is_payment_error(response):
             return "payment"
@@ -486,8 +497,23 @@ class AuxiliaryLLMRouter:
                     finish_reason="error",
                 )
 
-            if response.finish_reason != "error":
+            # 非错误且内容非空：直接返回
+            if response.finish_reason != "error" and not self._is_empty_response(response):
                 return response
+            # 非错误但内容为空：视为可降级错误，尝试下一个 candidate
+            if response.finish_reason != "error" and self._is_empty_response(response):
+                self._mark_unhealthy(
+                    candidate.key,
+                    self._cooldown_for(response, "transient"),
+                    "empty_content",
+                )
+                logger.warning(
+                    "Auxiliary LLM task '{}' returned empty content on '{}', trying fallback",
+                    task,
+                    candidate.key,
+                )
+                last_response = response
+                continue
 
             last_response = response
             reason = self._fallback_reason(response)

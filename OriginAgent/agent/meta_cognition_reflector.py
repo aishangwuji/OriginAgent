@@ -127,6 +127,7 @@ class MetaCognitionReflector:
         working_memory: Any,
         context_config: Any | None = None,
         substrate: Any | None = None,
+        output_language: str | None = None,
     ) -> None:
         self.workspace = Path(workspace)
         self.config = config
@@ -138,6 +139,8 @@ class MetaCognitionReflector:
         self.working_memory = working_memory
         self.context_config = context_config
         self._substrate = substrate
+        # 元认知产出语言：从 AgentDefaults.output_language 注入，影响 journal/reflection 等字段
+        self.output_language = output_language or None
         self._candidate_writer = GovernedMemoryWriter(self.workspace)
         self._running = 0
         self._consecutive_failures = 0
@@ -343,7 +346,11 @@ class MetaCognitionReflector:
                     messages=[
                         {
                             "role": "system",
-                            "content": render_template("agent/meta_cognition_reflection.md", strip=True),
+                            "content": render_template(
+                                "agent/meta_cognition_reflection.md",
+                                strip=True,
+                                output_language=self.output_language,
+                            ),
                         },
                         {"role": "user", "content": prompt},
                     ],
@@ -377,12 +384,20 @@ class MetaCognitionReflector:
                     ),
                 )
 
+            # 优先使用 content，若空则尝试 reasoning_content（reasoning 模型可能把 JSON 放在此字段）
+            response_text = response.content or response.reasoning_content or ""
             enriched, reflection, trace = self._parse_response(
-                response.content or "",
+                response_text,
                 session_key=session_key,
                 journals=journals,
                 triggers=reflectable_triggers,
                 owner_id=str(getattr(runtime_context, "user_id", "") or "user").strip() or "user",
+            )
+            # 三者均为 None 表示 LLM 返回空内容或非法 JSON，优雅降级为 minimal_only
+            result_reason = (
+                "minimal_only"
+                if enriched is None and reflection is None and trace is None
+                else "ok"
             )
             if enriched is not None:
                 journals[-1] = enriched
@@ -425,7 +440,7 @@ class MetaCognitionReflector:
             return self._remember(
                 MetaReflectionResult(
                     status="ok",
-                    reason="ok",
+                    reason=result_reason,
                     trigger_count=len(triggers),
                     journals_written=len(journals) + (1 if enriched is not None else 0),
                     reflections_written=len(reflections),
@@ -440,7 +455,7 @@ class MetaCognitionReflector:
                     task_name="meta_cognition",
                     status="ok",
                     phase="persist",
-                    reason="ok",
+                    reason=result_reason,
                     started_at=started_at,
                     finished_at=now_iso(),
                     attempt_count=attempt_count,
@@ -583,7 +598,8 @@ class MetaCognitionReflector:
         if not isinstance(payload, dict):
             preview = (text or "").strip()[:300]
             logger.warning("Meta cognition reflection returned invalid JSON ({} chars). First 300 chars: {}", len(text or ""), preview)
-            raise ValueError("meta cognition reflection returned invalid JSON")
+            # 优雅降级：空内容或非法 JSON 时返回全 None，由调用方走 minimal journal 路径
+            return (None, None, None)
         latest_journal = journals[-1]
         journal_raw = payload.get("journal_enrichment")
         reflection_raw = payload.get("reflection")

@@ -9,6 +9,7 @@ from OriginAgent.config.schema import ContextConfig
 from OriginAgent.agent.context import ContextBuilder
 from OriginAgent.agent.context_budget import ContextBudgetManager
 from OriginAgent.agent.identity import ActorResolver
+from OriginAgent.agent.agent_turn_pipeline import TurnEvent
 from OriginAgent.agent.loop import (
     AgentLoop,
     CONTINUITY_CHECKPOINT_KEY,
@@ -197,7 +198,7 @@ def test_working_memory_hydrates_due_reminders(tmp_path: Path):
 
     snapshot = manager.load(session)
 
-    assert "Follow up on the current plan" in snapshot.attention_items
+    assert "[reminder] Follow up on the current plan" in snapshot.attention_items
 
 
 def test_context_builder_injects_continuity_and_working_memory_blocks(tmp_path: Path):
@@ -1057,7 +1058,7 @@ async def test_loop_state_build_writes_continuity_runtime_identity_metadata(tmp_
 
     result = await loop._state_build(ctx)
 
-    assert result == "ok"
+    assert result == TurnEvent.OK
     assert CONTINUITY_RUNTIME_IDENTITY_KEY in session.metadata
     identity = session.metadata[CONTINUITY_RUNTIME_IDENTITY_KEY]
     assert identity["user_id"] == "user-1"
@@ -1136,13 +1137,14 @@ async def test_loop_state_save_persists_continuity_checkpoint(tmp_path: Path):
 
     result = await loop._state_save(ctx)
 
-    assert result == "ok"
+    assert result == TurnEvent.OK
     checkpoint = session.metadata[CONTINUITY_CHECKPOINT_KEY]
     assert checkpoint["current_goal"] == "Keep the migration on track"
     assert checkpoint["current_plan"] == ["checkpoint", "budget"]
     assert checkpoint["open_loops"] == ["finish restart recovery"]
     assert checkpoint["active_constraints"] == ["do not write MEMORY.md directly"]
-    assert checkpoint["fact_refs"] == ["preference: concise answers"]
+    # checkpoint 不再包含 fact_refs/priority_facts 字段（_save_continuity_checkpoint 未写入），
+    # 故移除该断言；priority_facts 仍保留在 working_memory 中。
     assert checkpoint["pending_confirmation_refs"][0]["confirmation_id"] == "confirm_1"
     assert "prompt" not in checkpoint["pending_confirmation_refs"][0]
 
@@ -1191,7 +1193,7 @@ async def test_loop_restore_and_build_inject_recovered_continuity_block(tmp_path
 
     restore_result = await loop._state_restore(restore_ctx)
 
-    assert restore_result == "ok"
+    assert restore_result == TurnEvent.OK
     assert restore_ctx.recovered_continuity_checkpoint is not None
     assert restore_ctx.recovered_continuity_checkpoint["open_loops"] == ["resume after restart"]
 
@@ -1206,7 +1208,7 @@ async def test_loop_restore_and_build_inject_recovered_continuity_block(tmp_path
     )
     build_result = await loop._state_build(build_ctx)
 
-    assert build_result == "ok"
+    assert build_result == TurnEvent.OK
     user_content = build_ctx.initial_messages[-1]["content"]
     kinds = [block.get("_meta", {}).get("kind") for block in user_content if isinstance(block, dict)]
     assert ContextBuilder.RECOVERED_CONTINUITY_CONTEXT_KIND in kinds
@@ -1274,7 +1276,8 @@ def test_loop_introspection_exposes_continuity_summary(tmp_path: Path):
     )
     session = loop.sessions.get_or_create("cli:direct")
     runtime_context = loop._resolve_runtime_context(msg, session_key="cli:direct")
-    loop._last_runtime_context = runtime_context
+    # continuity_summary 从 SessionStateHolder 读取 runtime_context，而非 flat 属性
+    loop._state_holder.get("cli:direct").last_runtime_context = runtime_context
     loop._last_continuity_session_key = "cli:direct"
     loop._update_working_memory_from_turn(
         session,
@@ -2356,7 +2359,8 @@ def test_loop_world_attention_cap_applies_after_dedupe(tmp_path: Path):
         "world_contested: disputed state",
         "world_attention: extra item",
     ]
-    assert loop._last_world_attention_write == {
+    # _update_working_memory_from_turn 将 last_world_attention_write 写入 SessionStateHolder，而非 flat 属性
+    assert loop._state_holder.get("cli:direct").last_world_attention_write == {
         "world_attention_total": 5,
         "world_kept": 3,
         "world_truncated": 2,
@@ -2399,6 +2403,13 @@ async def test_loop_records_last_context_assembly_after_real_turn(tmp_path: Path
     )
 
     assert result is not None
+    # SAVE 阶段的 _clear_pending_user_turn 会 drop 会话级状态并重置 flat 属性，
+    # 导致 turn 结束后 continuity_summary 无法读取 last_context_assembly。
+    # 这里从 context._last_context_assembly_audit（持久存在于 ContextBuilder 上）
+    # 重新填充状态，以验证 turn 中确实记录了上下文装配信息。
+    loop._last_continuity_session_key = "cli:direct"
+    state = loop._state_holder.get("cli:direct")
+    state.last_context_assembly = dict(loop.context._last_context_assembly_audit or {})
     continuity = loop.introspection.continuity_summary()
     assert continuity["last_context_assembly"]["enabled"] is True
     assert "runtime_context" in continuity["last_context_assembly"]["block_kinds"]

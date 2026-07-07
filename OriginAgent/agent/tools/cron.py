@@ -17,6 +17,12 @@ from OriginAgent.cron.types import CronJob, CronJobState, CronSchedule
 from OriginAgent.security.capabilities import CapabilitySnapshot
 from OriginAgent.security.policy import PolicyDeniedError
 
+# Turn-scoped 幂等键：防止同一 turn 内 LLM 重复创建相同 cron job。
+# 在 set_context（每个 turn 开始）时重置，确保不同 turn 之间不互相影响。
+_turn_idempotency_keys: ContextVar[dict[str, str]] = ContextVar(
+    "cron_turn_idempotency_keys", default={}
+)
+
 _CRON_PARAMETERS = tool_parameters_schema(
     action=StringSchema("Action to perform", enum=["add", "list", "remove"]),
     name=StringSchema(
@@ -41,6 +47,14 @@ _CRON_PARAMETERS = tool_parameters_schema(
     deliver=BooleanSchema(
         description="Whether to deliver the execution result to the user channel (default true)",
         default=True,
+    ),
+    delete_after_run=BooleanSchema(
+        description=(
+            "If true, the job is automatically deleted after its first execution. "
+            "Use this for one-shot cron/every tasks to avoid dead jobs piling up in the list. "
+            "Ignored for 'at' schedules (they always auto-delete)."
+        ),
+        default=False,
     ),
     job_id=StringSchema("REQUIRED when action='remove'. Job ID to remove (obtain via action='list')."),
     required=["action"],
@@ -84,6 +98,13 @@ class CronTool(Tool):
         self._chat_id.set(chat_id)
         self._metadata.set(metadata or {})
         self._session_key.set(session_key or f"{channel}:{chat_id}")
+        # 每个 turn 开始时重置幂等键，确保不同 turn 之间不互相影响
+        CronTool.reset_turn_idempotency()
+
+    @classmethod
+    def reset_turn_idempotency(cls) -> None:
+        """在新 turn 开始时重置幂等键。"""
+        _turn_idempotency_keys.set({})
 
     def set_cron_context(self, active: bool):
         """Mark whether the tool is executing inside a cron job callback."""
@@ -200,6 +221,7 @@ class CronTool(Tool):
         at: str | None = None,
         job_id: str | None = None,
         deliver: bool = True,
+        delete_after_run: bool | None = None,
         **kwargs: Any,
     ) -> str:
         params = dict(kwargs)
@@ -220,6 +242,8 @@ class CronTool(Tool):
             params["job_id"] = job_id
         if deliver is not True:
             params["deliver"] = deliver
+        if delete_after_run is not None:
+            params["delete_after_run"] = delete_after_run
 
         errors = self.validate_params(params)
         if errors:
@@ -228,7 +252,9 @@ class CronTool(Tool):
         if action == "add":
             if self._in_cron_context.get():
                 return "Error: cannot schedule new jobs from within a cron job execution"
-            return self._add_job(name, message, every_seconds, cron_expr, tz, at, deliver)
+            return self._add_job(
+                name, message, every_seconds, cron_expr, tz, at, deliver, delete_after_run
+            )
         elif action == "list":
             return self._list_jobs()
         elif action == "remove":
@@ -244,6 +270,7 @@ class CronTool(Tool):
         tz: str | None,
         at: str | None,
         deliver: bool = True,
+        delete_after_run: bool | None = None,
     ) -> str:
         if not message:
             return (
@@ -286,14 +313,18 @@ class CronTool(Tool):
                 return err
 
         # Build schedule
+        # at 任务天然是一次性的，强制 delete_after=True；
+        # cron/every 任务根据用户传入的 delete_after_run 决定
         delete_after = False
         if every_seconds:
             schedule = CronSchedule(kind="every", every_ms=every_seconds * 1000)
+            delete_after = bool(delete_after_run)
         elif cron_expr:
             effective_tz = tz or self._default_timezone
             if err := self._validate_timezone(effective_tz):
                 return err
             schedule = CronSchedule(kind="cron", expr=cron_expr, tz=effective_tz)
+            delete_after = bool(delete_after_run)
         elif at:
             from zoneinfo import ZoneInfo
 
@@ -310,6 +341,18 @@ class CronTool(Tool):
             delete_after = True
         else:
             return "Error: either every_seconds, cron_expr, or at is required"
+
+        # 计算 turn-scoped 幂等键：相同 name + schedule + message 视为重复
+        effective_name = name or message[:30]
+        schedule_key = (schedule.kind, schedule.at_ms, schedule.every_ms, schedule.expr, schedule.tz)
+        idempotency_key = f"{effective_name}|{schedule_key}|{message}"
+
+        existing = _turn_idempotency_keys.get()
+        if idempotency_key in existing:
+            return (
+                f"Job already created in this turn (id: {existing[idempotency_key]}). "
+                "已创建，勿重复。"
+            )
 
         job = self._cron.add_job(
             name=name or message[:30],
@@ -329,6 +372,10 @@ class CronTool(Tool):
                 session_key=self._session_key.get() or "",
                 owner_id="user",
             )
+        # 记录幂等键，防止同 turn 内重复创建
+        new_keys = dict(existing)
+        new_keys[idempotency_key] = job.id
+        _turn_idempotency_keys.set(new_keys)
         return f"Created job '{job.name}' (id: {job.id})"
 
     @staticmethod
@@ -393,7 +440,9 @@ class CronTool(Tool):
         lines = []
         for j in jobs:
             timing = self._format_timing(j.schedule)
-            parts = [f"- {j.name} (id: {j.id}, {timing})"]
+            # 标记一次性任务，方便识别哪些会执行后自动删除
+            one_shot_tag = " [one-shot: auto-delete after run]" if j.delete_after_run else ""
+            parts = [f"- {j.name} (id: {j.id}, {timing}){one_shot_tag}"]
             if j.payload.kind == "system_event":
                 parts.append(f"  Purpose: {self._system_job_purpose(j)}")
                 parts.append("  Protected: visible for inspection, but cannot be removed.")

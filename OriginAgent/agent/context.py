@@ -81,9 +81,11 @@ class ContextBuilder:
         confirmation_store: Any | None = None,
         background_review_service: Any | None = None,
         curator_service: Any | None = None,
+        output_language: str | None = None,
     ):
         self.workspace = workspace
         self.timezone = timezone
+        self.output_language = output_language or None
         self._memory_feature_flags = dict(memory_feature_flags or {})
         self._context_config = context_config or ContextConfig()
         self.memory = MemoryStore(workspace, feature_flags=self._memory_feature_flags)
@@ -317,6 +319,7 @@ class ContextBuilder:
             runtime=runtime,
             platform_policy=render_template("agent/platform_policy.md", system=system),
             channel=channel or "",
+            output_language=self.output_language,
         )
 
     @staticmethod
@@ -485,12 +488,23 @@ class ContextBuilder:
 
     @staticmethod
     def build_recovered_continuity_context(snapshot: Mapping[str, Any]) -> dict[str, Any]:
+        # 提取最近轮次摘要，单独渲染以便 Agent 识别恢复后的对话上下文
+        recent_turns = snapshot.get("recent_turns_summary") or []
+        recent_turns_text = ""
+        if recent_turns:
+            lines = ["\n## Recent Turns Summary (from checkpoint)"]
+            for turn in recent_turns:
+                role = turn.get("role", "")
+                content = turn.get("content", "")
+                lines.append(f"[{role}] {content}")
+            recent_turns_text = "\n".join(lines) + "\n"
         return {
             "type": "text",
             "text": (
                 "<recovered_continuity trust='internal'>\n"
                 "Recovered continuity checkpoint from the previous session state.\n"
                 f"{json.dumps(dict(snapshot), ensure_ascii=False, indent=2)}\n"
+                f"{recent_turns_text}"
                 "</recovered_continuity>"
             ),
             "_meta": {

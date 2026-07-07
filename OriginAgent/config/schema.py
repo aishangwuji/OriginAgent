@@ -1365,6 +1365,11 @@ class AgentDefaults(Base):
     )
     learning: LearningConfig = Field(default_factory=LearningConfig)
     timezone: str = "Asia/Shanghai"  # IANA timezone, e.g. "Asia/Shanghai", "America/New_York"
+    output_language: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("outputLanguage", "output_language"),
+        serialization_alias="outputLanguage",
+    )  # Agent 产出语言（BCP-47 标签，如 "zh-CN"、"en"、"ja"）；None 表示交由 LLM 自决
     bot_name: str = "OriginAgent"  # Display name shown in CLI prompts (e.g. "{name} is thinking...")
     bot_icon: str = "OA"  # Short icon (emoji or text) shown next to the bot name in CLI; "" to omit
     unified_session: bool = False  # Share one session across all channels (single-user multi-device)

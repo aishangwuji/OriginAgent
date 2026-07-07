@@ -1551,13 +1551,14 @@ async def test_multiplex_new_chat_roundtrip(bus: MagicMock) -> None:
             ready = json.loads(await client.recv())
             default_chat = ready["chat_id"]
 
+            # 单一会话模式：new_chat 返回同一个 chat_id，不再创建新会话
             await client.send(json.dumps({"type": "new_chat"}))
             attached = json.loads(await client.recv())
             assert attached["event"] == "attached"
             new_chat = attached["chat_id"]
-            assert new_chat and new_chat != default_chat
+            assert new_chat == default_chat
 
-            # Send on the new chat via typed envelope
+            # 在同一 chat_id 上发消息
             await client.send(
                 json.dumps({"type": "message", "chat_id": new_chat, "content": "hi on new"})
             )
@@ -1581,6 +1582,7 @@ async def test_multiplex_new_chat_roundtrip(bus: MagicMock) -> None:
 
 @pytest.mark.asyncio
 async def test_multiplex_two_chats_isolated(bus: MagicMock) -> None:
+    """单一会话模式：多次 new_chat 返回同一个 chat_id，不再隔离。"""
     port = 29932
     channel = _ch(bus, port=port)
     server_task = asyncio.create_task(channel.start())
@@ -1590,27 +1592,20 @@ async def test_multiplex_two_chats_isolated(bus: MagicMock) -> None:
         async with websockets.connect(f"ws://127.0.0.1:{port}/ws?client_id=two") as client:
             await client.recv()  # ready
 
+            # 两次 new_chat 都返回同一个 chat_id（单一会话）
             await client.send(json.dumps({"type": "new_chat"}))
             chat_a = json.loads(await client.recv())["chat_id"]
             await client.send(json.dumps({"type": "new_chat"}))
             chat_b = json.loads(await client.recv())["chat_id"]
-            assert chat_a != chat_b
+            assert chat_a == chat_b
 
-            # Push A → client sees A only (FIFO over the single WS).
+            # 推送到该 chat_id → 客户端能收到
             await channel.send(
                 OutboundMessage(channel="websocket", chat_id=chat_a, content="for-A")
             )
             msg_a = json.loads(await client.recv())
             assert msg_a["chat_id"] == chat_a
             assert msg_a["text"] == "for-A"
-
-            # Push B → client sees B only.
-            await channel.send(
-                OutboundMessage(channel="websocket", chat_id=chat_b, content="for-B")
-            )
-            msg_b = json.loads(await client.recv())
-            assert msg_b["chat_id"] == chat_b
-            assert msg_b["text"] == "for-B"
     finally:
         await channel.stop()
         await server_task

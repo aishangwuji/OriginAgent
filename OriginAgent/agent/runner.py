@@ -46,6 +46,7 @@ from OriginAgent.utils.runtime import (
     build_finalization_retry_message,
     build_length_recovery_message,
     ensure_nonempty_tool_result,
+    external_lookup_signature,
     is_blank_text,
     repeated_external_lookup_error,
     repeated_workspace_violation_error,
@@ -304,6 +305,8 @@ class AgentRunner:
         length_recovery_count = 0
         had_injections = False
         injection_cycles = 0
+        # Turn-scoped 幂等键：防止 LLM 在同一 turn 内重复调用同一工具同一参数
+        _successful_idempotency_keys: set[str] = set()
 
         for iteration in range(spec.max_iterations):
             try:
@@ -386,6 +389,7 @@ class AgentRunner:
                     tool_calls,
                     external_lookup_counts,
                     workspace_violation_counts,
+                    _successful_idempotency_keys,
                 )
                 tool_events.extend(new_events)
                 context.tool_results = list(results)
@@ -807,13 +811,25 @@ class AgentRunner:
             merged[key] = merged.get(key, 0) + value
         return merged
 
+    @staticmethod
+    def _compute_tool_idempotency_key(tool_name: str, args: dict) -> str:
+        """计算工具调用的幂等键：tool_name + 参数哈希，相同参数生成相同 key。"""
+        import hashlib
+        import json
+        # 对 args 排序后 hash，确保相同参数生成相同 key
+        args_str = json.dumps(args, sort_keys=True, ensure_ascii=False, default=str)
+        return f"{tool_name}:{hashlib.sha256(args_str.encode()).hexdigest()[:16]}"
+
     async def _execute_tools(
         self,
         spec: AgentRunSpec,
         tool_calls: list[ToolCallRequest],
         external_lookup_counts: dict[str, int],
         workspace_violation_counts: dict[str, int],
+        idempotency_keys: set[str] | None = None,
     ) -> tuple[list[Any], list[dict[str, str]], BaseException | None]:
+        if idempotency_keys is None:
+            idempotency_keys = set()
         log_event("tools.execute", tool_count=len(tool_calls), session_key=spec.session_key)
         batches = self._partition_tool_batches(spec, tool_calls)
         tool_results: list[tuple[Any, dict[str, str], BaseException | None]] = []
@@ -821,6 +837,7 @@ class AgentRunner:
             if spec.concurrent_tools and len(batch) > 1:
                 batch_results = await self._execute_parallel_batch(
                     spec, batch, external_lookup_counts, workspace_violation_counts,
+                    idempotency_keys,
                 )
                 tool_results.extend(batch_results)
             else:
@@ -828,6 +845,7 @@ class AgentRunner:
                 for tool_call in batch:
                     result = await self._run_tool(
                         spec, tool_call, external_lookup_counts, workspace_violation_counts,
+                        idempotency_keys,
                     )
                     tool_results.append(result)
                     batch_results.append(result)
@@ -852,6 +870,7 @@ class AgentRunner:
         batch: list[ToolCallRequest],
         external_lookup_counts: dict[str, int],
         workspace_violation_counts: dict[str, int],
+        idempotency_keys: set[str],
     ) -> list[tuple[Any, dict[str, str], BaseException | None]]:
         """Execute a batch of concurrent-safe tools with interrupt propagation.
 
@@ -866,9 +885,11 @@ class AgentRunner:
                 async with semaphore:
                     return await self._run_tool(
                         spec, tc, external_lookup_counts, workspace_violation_counts,
+                        idempotency_keys,
                     )
             return await self._run_tool(
                 spec, tc, external_lookup_counts, workspace_violation_counts,
+                idempotency_keys,
             )
 
         tasks = {asyncio.create_task(_run_one(tc)): tc for tc in batch}
@@ -921,8 +942,22 @@ class AgentRunner:
         tool_call: ToolCallRequest,
         external_lookup_counts: dict[str, int],
         workspace_violation_counts: dict[str, int],
+        idempotency_keys: set[str],
     ) -> tuple[Any, dict[str, str], BaseException | None]:
         hint = "\n\n[Analyze the error above and try a different approach.]"
+        # Turn-scoped 幂等检查：同一 turn 内已成功执行过的工具+参数组合不再重复执行
+        # 外部查找工具（web_fetch/web_search）已有独立的重试节流，不纳入幂等检查
+        idempotency_key: str | None = None
+        if external_lookup_signature(tool_call.name, tool_call.arguments) is None:
+            idempotency_key = self._compute_tool_idempotency_key(
+                tool_call.name, tool_call.arguments,
+            )
+            if idempotency_key in idempotency_keys:
+                return (
+                    "已执行，勿重复。This tool was already called with the same arguments in this turn.",
+                    {"name": tool_call.name, "status": "skipped", "detail": "duplicate tool call blocked"},
+                    None,
+                )
         lookup_error = repeated_external_lookup_error(
             tool_call.name,
             tool_call.arguments,
@@ -1084,6 +1119,9 @@ class AgentRunner:
             detail = "(empty)"
         elif len(detail) > 120:
             detail = detail[:120] + "..."
+        # 仅对成功执行的非外部查找工具记录幂等键，失败的不记录
+        if idempotency_key is not None:
+            idempotency_keys.add(idempotency_key)
         return result, {"name": tool_call.name, "status": "ok", "detail": detail}, None
 
     async def _audit_tool_from_runner(

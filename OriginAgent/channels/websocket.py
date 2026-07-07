@@ -1082,7 +1082,9 @@ class WebSocketChannel(BaseChannel):
             self.logger.warning("client_id too long ({} chars), truncating", len(client_id))
             client_id = client_id[:128]
 
-        default_chat_id = str(uuid.uuid4())
+        # 固定使用单一 chat_id，实现"从始至终只有一个对话历史框"
+        # 所有 WebUI 连接共享同一个会话，避免会话分裂
+        default_chat_id = "default"
 
         try:
             await connection.send(
@@ -1219,10 +1221,11 @@ class WebSocketChannel(BaseChannel):
         """Route one typed inbound envelope (``new_chat`` / ``attach`` / ``message``)."""
         t = envelope.get("type")
         if t == "new_chat":
-            new_id = str(uuid.uuid4())
-            self._attach(connection, new_id)
-            await self._send_event(connection, "attached", chat_id=new_id)
-            await self._maybe_push_active_goal_state(new_id)
+            # 单一会话模式：new_chat 不再创建新会话，返回当前固定的 chat_id
+            # 前端调用 newChat() 时会得到同一个 "default"，保持单一历史框
+            current_id = self._conn_default.get(connection, "default")
+            await self._send_event(connection, "attached", chat_id=current_id)
+            await self._maybe_push_active_goal_state(current_id)
             return
         if t == "attach":
             cid = envelope.get("chat_id")

@@ -609,10 +609,41 @@ class AgentRuntime:
             "active_constraints": list(working.active_constraints or []),
             "pending_confirmation_refs": self._collect_pending_confirmation_refs(session),
             "profile_ref": profile_ref,
+            "recent_turns_summary": self._extract_recent_turns_summary(session),
             "updated_at": _utcnow_iso(),
         }
         session.metadata.setdefault("continuity_checkpoint_v1", checkpoint)
         return checkpoint
+
+    @staticmethod
+    def _extract_recent_turns_summary(session: Any) -> list[dict[str, str]]:
+        """从 session 历史中提取最近 2 轮对话摘要（2 user + 2 assistant）"""
+        # Session 类使用 messages 属性；兼容可能使用 history 的 mock
+        history = getattr(session, "messages", None)
+        if history is None:
+            history = getattr(session, "history", None) or []
+        # 取最后 4 条消息（2 轮 = 2 user + 2 assistant）
+        recent = history[-4:] if len(history) >= 4 else history
+        summary: list[dict[str, str]] = []
+        for msg in recent:
+            if not isinstance(msg, dict):
+                continue
+            role = msg.get("role", "")
+            content = msg.get("content", "")
+            # content 可能是 list（多模态）或 str
+            if isinstance(content, list):
+                text_parts: list[str] = []
+                for part in content:
+                    if isinstance(part, dict) and part.get("type") == "text":
+                        text_parts.append(part.get("text", ""))
+                    elif isinstance(part, str):
+                        text_parts.append(part)
+                content = " ".join(text_parts)
+            # 截断到 500 字符
+            content = str(content)[:500]
+            if role in ("user", "assistant") and content.strip():
+                summary.append({"role": role, "content": content})
+        return summary[-4:]  # 最多 4 条（2 轮）
 
     @staticmethod
     def _load_continuity_checkpoint(session: Any) -> dict | None:
@@ -626,6 +657,7 @@ class AgentRuntime:
             "open_loops": [str(item).strip() for item in raw.get("open_loops", []) if str(item).strip()][:8],
             "active_constraints": [str(item).strip() for item in raw.get("active_constraints", []) if str(item).strip()][:8],
             "pending_confirmation_refs": [dict(item) for item in raw.get("pending_confirmation_refs", []) if isinstance(item, dict)][:8],
+            "recent_turns_summary": [dict(item) for item in raw.get("recent_turns_summary", []) if isinstance(item, dict)][:4],
             "updated_at": str(raw.get("updated_at") or "").strip(),
         }
 
@@ -848,19 +880,37 @@ class AgentRuntime:
                     self._runtime_chat_id(pending_msg),
                     d.context.timezone,
                 )
-                if (pending_msg.sender_id == "subagent"
-                        or pending_msg.metadata.get("injected_event") == "subagent_result"):
-                    merged = [runtime_block, d.context.build_internal_event_block("subagent_result", content)]
-                elif pending_msg.metadata.get("injected_event") == "active_intent":
-                    merged = [runtime_block, d.context.build_internal_event_block("active_intent", content)]
-                else:
-                    merged = [runtime_block, *d.context._build_user_content(content, media)]
+                merged = [runtime_block, *d.context._build_user_content(content, media)]
                 return {"role": "user", "content": merged}
+
+            def _to_system_event(pending_msg: InboundMessage) -> dict:
+                """将内部事件包装为 system role，避免 LLM 误解为用户指令"""
+                content = pending_msg.content
+                runtime_block = d.context.build_runtime_context_block(
+                    pending_msg.channel,
+                    self._runtime_chat_id(pending_msg),
+                    d.context.timezone,
+                )
+                event_type = pending_msg.metadata.get("injected_event") or "subagent_result"
+                merged = [runtime_block, d.context.build_internal_event_block(event_type, content)]
+                return {"role": "system", "content": merged}
+
+            def _is_internal_event(pending_msg: InboundMessage) -> bool:
+                """判断是否为内部事件（不应伪装为 user role）"""
+                return (
+                    pending_msg.metadata.get("injected_event") in ("active_intent", "subagent_result")
+                    or pending_msg.sender_id == "subagent"
+                )
 
             items: list[dict] = []
             while len(items) < limit:
                 try:
-                    items.append(_to_user_message(pending_queue.get_nowait()))
+                    pending_msg = pending_queue.get_nowait()
+                    # 内部事件使用 system role，避免 LLM 误解为用户指令
+                    if _is_internal_event(pending_msg):
+                        items.append(_to_system_event(pending_msg))
+                    else:
+                        items.append(_to_user_message(pending_msg))
                 except _asyncio.QueueEmpty:
                     break
             if (not items and session is not None and d.subagents is not None
@@ -870,10 +920,17 @@ class AgentRuntime:
                 except _asyncio.TimeoutError:
                     logger.warning("Timeout waiting for sub-agent completion in session {}", session.key)
                     return items
-                items.append(_to_user_message(msg))
+                if _is_internal_event(msg):
+                    items.append(_to_system_event(msg))
+                else:
+                    items.append(_to_user_message(msg))
                 while len(items) < limit:
                     try:
-                        items.append(_to_user_message(pending_queue.get_nowait()))
+                        pending_msg = pending_queue.get_nowait()
+                        if _is_internal_event(pending_msg):
+                            items.append(_to_system_event(pending_msg))
+                        else:
+                            items.append(_to_user_message(pending_msg))
                     except _asyncio.QueueEmpty:
                         break
             return items

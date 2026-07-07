@@ -51,6 +51,39 @@
       "mcp": "MCP",
       "skills": "Skills"
     },
+    "tieredRouter": {
+      "overview": "Routing LLM berlapis",
+      "enable": "Aktifkan routing berlapis",
+      "enableHelp": "Rutekan tugas latar belakang ke model yang lebih murah sambil mempertahankan model unggulan untuk penalaran dan keputusan.",
+      "tiers": "Tingkat yang tersedia",
+      "mapping": "Pemetaan Tugas → Tingkat",
+      "default": "Default",
+      "setAsDefault": "Jadikan default",
+      "providerLabel": "Provider",
+      "providerPlaceholder": "Pilih provider yang dikonfigurasi",
+      "modelLabel": "Model",
+      "modelPlaceholder": "Masukkan atau pilih nama model",
+      "refreshModels": "Segarkan daftar model",
+      "catalogFetchFailed": "Gagal mengambil daftar model",
+      "tier": {
+        "economy": "🟢 Ekonomis",
+        "standard": "🔵 Seimbang",
+        "premium": "🟣 Unggulan"
+      },
+      "task": {
+        "web_search": "Pencarian web",
+        "consolidation": "Konsolidasi memori",
+        "webui_title": "Judul percakapan",
+        "snapshot_inspection": "Inspeksi snapshot",
+        "dream_phase1": "Fase mimpi 1",
+        "background_review": "Tinjauan latar belakang",
+        "meta_cognition": "Refleksi meta-kognisi",
+        "dream_phase2": "Fase mimpi 2",
+        "bdi_deliberation": "Deliberasi BDI",
+        "heartbeat": "Heartbeat",
+        "evaluator": "Evaluator"
+      }
+    },
     "sections": {
       "interface": "Antarmuka",
       "ai": "AI",
@@ -62,19 +95,22 @@
       "provider": "Penyedia",
       "model": "Model",
       "restart": "Mulai ulang OriginAgent",
-      "configPath": "Path konfigurasi"
+      "configPath": "Path konfigurasi",
+      "outputLanguage": "Bahasa output Agent"
     },
     "help": {
       "theme": "Beralih antara tampilan terang dan gelap.",
       "language": "Pilih bahasa yang digunakan WebUI.",
       "provider": "Pilih penyedia untuk permintaan model baru.",
       "model": "Atur nama model default yang digunakan OriginAgent.",
-      "configPath": "File konfigurasi gateway yang sedang digunakan."
+      "configPath": "File konfigurasi gateway yang sedang digunakan.",
+      "outputLanguage": "Pilih bahasa untuk konten yang dihasilkan Agent (balasan, metakognisi, mimpi, dll.). Kosongkan agar LLM memutuskan."
     },
     "values": {
       "light": "Terang",
       "dark": "Gelap",
-      "notAvailable": "Tidak tersedia"
+      "notAvailable": "Tidak tersedia",
+      "outputLanguageAuto": "Otomatis (LLM memutuskan)"
     },
     "status": {
       "loading": "Memuat pengaturan...",
@@ -82,9 +118,11 @@
       "unsaved": "Ada perubahan yang belum disimpan.",
       "savedRestart": "Tersimpan. Mulai ulang OriginAgent untuk menerapkan."
     },
+    "unsavedConfirm": "Ada perubahan yang belum disimpan. Tinggalkan bagian ini tanpa menyimpan?",
     "actions": {
       "save": "Simpan",
       "saving": "Menyimpan",
+      "saveAll": "Simpan Semua",
       "edit": "Edit",
       "cancel": "Batal"
     },

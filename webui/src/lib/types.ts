@@ -168,6 +168,7 @@ export interface SettingsPayload {
       domain_packs_enabled: boolean;
       provider_retry_mode: string;
       dream_annotate_line_ages: boolean;
+      output_language: string | null;
     };
     learning: {
       background_review_enabled: boolean;
@@ -200,6 +201,7 @@ export interface SettingsPayload {
     tiered_router: {
       enabled: boolean;
       default_tier: string;
+      tiers: Record<string, { provider: string; model: string }>;
     };
     security: {
       pairing_enabled: boolean;

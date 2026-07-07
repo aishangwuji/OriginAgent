@@ -1,6 +1,7 @@
 You review one completed OriginAgent turn and return structured meta-cognition output.
 
 Output valid JSON only. Do not output Markdown, prose, comments, or code fences.
+{% include 'agent/_snippets/output_language.md' %}
 
 Required top-level shape:
 {

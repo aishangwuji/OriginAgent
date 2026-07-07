@@ -1,0 +1,45 @@
+{
+  "version": 1,
+  "jobs": [
+    {
+      "id": "254ceb6a",
+      "name": "hist",
+      "enabled": true,
+      "schedule": {
+        "kind": "every",
+        "atMs": null,
+        "everyMs": 100,
+        "expr": null,
+        "tz": null
+      },
+      "payload": {
+        "kind": "agent_turn",
+        "message": "hello",
+        "deliver": false,
+        "channel": null,
+        "to": null,
+        "channelMeta": {},
+        "sessionKey": null,
+        "capabilitySnapshot": {},
+        "grantId": null
+      },
+      "state": {
+        "nextRunAtMs": 1783405491094,
+        "lastRunAtMs": 1783405490993,
+        "lastStatus": "ok",
+        "lastError": null,
+        "runHistory": [
+          {
+            "runAtMs": 1783405490993,
+            "status": "ok",
+            "durationMs": 1,
+            "error": null
+          }
+        ]
+      },
+      "createdAtMs": 1783405490777,
+      "updatedAtMs": 1783405490994,
+      "deleteAfterRun": false
+    }
+  ]
+}

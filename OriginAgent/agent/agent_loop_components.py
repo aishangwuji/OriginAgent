@@ -515,6 +515,7 @@ def build_loop_components(
         confirmation_store=values["_confirmation_store"],
         background_review_service=values["background_review"],
         curator_service=values["curator"],
+        output_language=defaults.output_language,
     )
     values["context"].working_memory = values["working_memory"]
     values["context"].world_state = values["world_state"]
@@ -638,6 +639,7 @@ def build_loop_components(
         working_memory=values["working_memory"],
         context_config=defaults.context,
         substrate=_thought_substrate,
+        output_language=defaults.output_language,
     )
     # ── PerceptionEventFusion (CS-003) ─────────────────────────────
     _fusion_config = SimpleNamespace(
