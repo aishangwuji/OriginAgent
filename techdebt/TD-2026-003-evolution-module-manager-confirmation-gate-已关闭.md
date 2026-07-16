@@ -8,7 +8,7 @@
 | 关联Spec | .trae/specs/restore-and-wire-design-modules/spec.md |
 | 关联规则 | 规则18(安全边界最低要求) |
 | 优先级 | P1 |
-| 状态 | 已确认 |
+| 状态 | 已关闭 |
 
 ## 详细描述
 EvolutionControlPlane 的 `execute_action` 方法中,`force_cleanup` 和 `rollback_artifact` 的模块级委派路径(当 `target_id` 非空 / `artifact_type == "module"` 时)直接调用 `EvolutionModuleManager.force_clean_module()` / `rollback_module()`,**未经 ConfirmationManager 审批**。
@@ -37,3 +37,4 @@ spec 要求"模块包级回滚经治理层审批 — WHEN 用户请求回滚模�
 | 日期 | 评审人 | 结论 |
 |------|--------|------|
 | 2026-07-15 | 观雪 | 确认为 P1 技术债(安全边界),需优先修复 |
+| 2026-07-16 | Agent 核查 | 关闭:代码核查发现 force_cleanup/rollback_artifact 均在 WRITE_ACTIONS 中,L418 全局审批检查在分支前执行,模块级路径不可能跳过审批。补测试锁定行为。 |

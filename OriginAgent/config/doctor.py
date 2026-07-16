@@ -227,6 +227,16 @@ def _ignored_field_warnings(config: Config) -> list[dict[str, Any]]:
             "reason": "agent_messages_disabled_but_active_intent_tuning_present",
             "message": "Agent-initiated messages are disabled, so active-intent timing overrides are currently ignored.",
         })
+
+    # RobotG1 是 P5B+ 占位字段,当前无实现读取(config/schema.py:341-365)。
+    # 用户配置 enabled=true 时必须 warning,避免误以为功能已生效(规则14)。
+    robot_g1 = defaults.robot_g1
+    if robot_g1.enabled or robot_g1.perception_enabled:
+        warnings.append({
+            "path": "agents.defaults.robotG1",
+            "reason": "robot_g1_placeholder_not_implemented",
+            "message": "RobotG1 integration is a P5B+ placeholder; configured fields are not yet read by any implementation.",
+        })
     return warnings
 
 

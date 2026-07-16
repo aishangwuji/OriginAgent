@@ -12,7 +12,7 @@ schema_version: 1
 | 关联Spec | 无(排查发现) |
 | 关联规则 | 规则38(业务全景先行与系统认知持久化) |
 | 优先级 | P2 |
-| 状态 | 待评估 |
+| 状态 | 已修复 |
 
 ## 详细描述
 `RobotG1Config`(`config/schema.py:341-365`)定义了 5 个字段(`enabled`/`mcp_endpoint`/`tool_timeout_seconds`/`perception_enabled`/`perception_mode`),但全代码库搜索 `robot_g1.enabled`、`defaults.robot_g1`、`robot_g1.perception` 等**零匹配**——没有任何代码读取这些字段。
@@ -38,3 +38,4 @@ schema_version: 1
 | 日期 | 评审人 | 结论 |
 |------|--------|------|
 | 2026-07-16 | Agent 排查 | 待人工裁决:保留占位 / 移除 / 加 warning |
+| 2026-07-16 | Agent 修复 | 修复:在 config/doctor.py 添加 robot_g1_placeholder_not_implemented warning,用户配置 enabled=true 时会收到告警。保留 schema 字段供未来 P5B+ 实现。 |

@@ -12,7 +12,7 @@ schema_version: 1
 | 关联Spec | 无(排查发现) |
 | 关联规则 | 规则6(单一数据源)、规则17(禁止硬编码) |
 | 优先级 | P3 |
-| 状态 | 待评估 |
+| 状态 | 已关闭 |
 
 ## 详细描述
 `config/schema.py:1935` 定义了 `VoicePipelineConfig.enabled` 字段(默认 `False`),但 `channels/manager.py:123-136` 中 `VoicePipeline` 的初始化条件**未直接读取 `tools.voice.enabled`**,而是基于 audio 配置触发。
@@ -38,3 +38,4 @@ schema_version: 1
 | 日期 | 评审人 | 结论 |
 |------|--------|------|
 | 2026-07-16 | Agent 排查 | 待人工复核:实际启动逻辑与 schema 字段的关系 |
+| 2026-07-16 | Agent 核查 | 关闭:误报。manager.py:126 通过 `getattr(voice_cfg, "enabled", False)` 读取了 tools.voice.enabled,字面 grep 未匹配 getattr 字符串形式访问导致漏判。 |

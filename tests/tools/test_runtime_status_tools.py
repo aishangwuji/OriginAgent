@@ -1179,6 +1179,28 @@ def test_config_doctor_reports_disabled_voice_settings_as_ignored(tmp_path) -> N
     assert "voice_output_disabled_but_configured" in reasons
 
 
+def test_config_doctor_reports_robot_g1_placeholder_as_ignored(tmp_path) -> None:
+    """RobotG1Config fields are P5B+ placeholders — doctor must warn when configured as enabled."""
+    config = Config.model_validate({
+        "agents": {
+            "defaults": {
+                "workspace": str(tmp_path),
+                "robotG1": {
+                    "enabled": True,
+                    "mcpEndpoint": "http://192.168.123.164:18791/sse",
+                    "perceptionEnabled": True,
+                    "perceptionMode": "on_demand",
+                },
+            }
+        }
+    })
+
+    report = build_config_doctor_report(config=config).to_dict()
+    reasons = {item["reason"] for item in report["ignored_fields"]}
+
+    assert "robot_g1_placeholder_not_implemented" in reasons
+
+
 @pytest.mark.asyncio
 async def test_runtime_status_uses_provided_nearline_runtime_config(tmp_path) -> None:
     class Registry:

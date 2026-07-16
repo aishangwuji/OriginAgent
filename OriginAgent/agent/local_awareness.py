@@ -341,6 +341,14 @@ def _fingerprint_kind(device: dict[str, Any]) -> tuple[str, float]:
 
 @dataclass(frozen=True)
 class LocalAwarenessSummary:
+    """Flat projection of `ToolsConfig.LocalAwarenessConfig` for observability.
+
+    Field values are derived from `LocalAwarenessConfig` in
+    `normalize_local_awareness_summary` (all fields are explicitly passed at
+    construction). The dataclass defaults below are only type-annotation
+    placeholders and never take effect at runtime — there is no second
+    independent copy of the config (rule 6 single source of truth).
+    """
     enabled: bool = False
     device_discovery_enabled: bool = False
     lan_discovery_enabled: bool = False

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from unittest.mock import MagicMock
 
 import yaml
 from datetime import datetime, timedelta, timezone
@@ -439,3 +440,32 @@ def test_control_plane_counts_review_only_evolution_proposals(tmp_path: Path) ->
     assert status["review_only_proposal_count"] == 1
     assert status["read_model"]["proposals"]["by_type"]["prompt_policy"] == 1
     assert status["read_model"]["proposals"]["review_only"] == 1
+
+
+def test_module_level_force_cleanup_requires_approval(tmp_path: Path) -> None:
+    module_manager = MagicMock()
+    plane = EvolutionControlPlane(tmp_path, EvolutionConfig(), module_manager=module_manager)
+
+    result = plane.execute_action("force_cleanup", target_id="some_module_digest", reason="test")
+
+    assert result["ok"] is False
+    assert result["error"] == "approval_confirmation_required"
+    assert result["will_write"] is False
+    module_manager.force_clean_module.assert_not_called()
+
+
+def test_module_level_rollback_artifact_requires_approval(tmp_path: Path) -> None:
+    module_manager = MagicMock()
+    plane = EvolutionControlPlane(tmp_path, EvolutionConfig(), module_manager=module_manager)
+
+    result = plane.execute_action(
+        "rollback_artifact",
+        artifact_type="module",
+        artifact_name="some_module_digest",
+        reason="test",
+    )
+
+    assert result["ok"] is False
+    assert result["error"] == "approval_confirmation_required"
+    assert result["will_write"] is False
+    module_manager.rollback_module.assert_not_called()

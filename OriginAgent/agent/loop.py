@@ -1850,7 +1850,7 @@ class AgentLoop:
     ) -> OutboundMessage | None:
         """Process a single inbound message and return the response."""
         self._refresh_provider_snapshot()
-        return await self._get_turn_orchestrator().process_message(
+        result = await self._get_turn_orchestrator().process_message(
             msg,
             session_key=session_key,
             on_progress=on_progress,
@@ -1859,6 +1859,20 @@ class AgentLoop:
             pending_queue=pending_queue,
             capability_snapshot=capability_snapshot,
         )
+        # Mirror the per-session audit snapshot onto the loop-level attribute
+        # so legacy getattr(loop, "_last_context_assembly") consumers see the
+        # latest assembly. State is written during the turn (e.g. in
+        # _build_initial_messages) to state.last_context_assembly; this sync
+        # keeps the backward-compat flat attribute from going stale (TD-2026-004).
+        # Note: SAVE phase calls _clear_pending_user_turn which drops state;
+        # the sync in _clear_pending_user_turn (before drop) is the primary
+        # path. This secondary sync only fires when state still holds data
+        # (e.g. turn ended without clearing pending user turn).
+        effective_key = session_key or msg.session_key
+        state = self._state_holder.get(effective_key)
+        if state.last_context_assembly:
+            self._last_context_assembly = dict(state.last_context_assembly)
+        return result
 
     def _install_meta_cognition_observer(self) -> None:
         runtime = getattr(self, "_meta_cognition_runtime", None)
@@ -2331,8 +2345,17 @@ class AgentLoop:
 
     def _save_turn(self, session: Session, messages: list[dict], skip: int) -> None:
         if hasattr(self, "_runtime") and self._runtime is not None:
-            return self._runtime._save_turn(session, messages, skip)
-        AgentLoop._turn_persist_manager(self).save_turn(session, messages, skip)
+            self._runtime._save_turn(session, messages, skip)
+        else:
+            AgentLoop._turn_persist_manager(self).save_turn(session, messages, skip)
+        # Sync active episode msg_end to include newly saved messages.
+        # TurnPersistManager.save_turn appends directly to session.messages
+        # without going through Session.add_message, so episode.msg_end goes
+        # stale — this keeps it in sync so get_episode_history returns the
+        # complete turn (including assistant tool_call messages saved by runner).
+        active_ep = session.active_episode
+        if active_ep is not None and active_ep.status == "active":
+            active_ep.msg_end = len(session.messages)
 
     def _persist_subagent_followup(self, session: Session, msg: InboundMessage) -> bool:
         if hasattr(self, "_runtime") and self._runtime is not None:
@@ -2348,11 +2371,20 @@ class AgentLoop:
 
     def _clear_pending_user_turn(self, session: Session) -> None:
         AgentLoop._turn_persist_manager(self).clear_pending_user_turn(session)
+        # Sync state.last_context_assembly to the loop-level flat attribute
+        # before dropping state, so legacy consumers (tests, getattr(loop,
+        # "_last_context_assembly")) can still read the latest assembly after
+        # the turn ends (TD-2026-004). Without this sync the flat attribute
+        # would be reset to {} and consumers would see KeyError on "enabled".
+        state = self._state_holder.get(session.key)
+        if state is not None and state.last_context_assembly:
+            self._last_context_assembly = dict(state.last_context_assembly)
         self._state_holder.drop(session.key)
-        # Reset flat attributes to prevent stale reads (backward compat)
+        # Reset other flat attributes to prevent stale reads (backward compat).
+        # _last_context_assembly is intentionally retained from the sync above;
+        # it will be overwritten on the next turn's BUILD phase.
         self._last_runtime_context = None
         self._last_continuity_session_key = None
-        self._last_context_assembly = {}
         self._last_governance_audit = {}
         self._last_action_continuity_audit = {}
         self._last_cognitive_scan = {}

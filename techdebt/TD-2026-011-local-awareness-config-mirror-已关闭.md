@@ -12,7 +12,7 @@ schema_version: 1
 | 关联Spec | 无(排查发现) |
 | 关联规则 | 规则6(单一数据源,禁止部分遵守) |
 | 优先级 | P3 |
-| 状态 | 待评估 |
+| 状态 | 已关闭 |
 
 ## 详细描述
 `agent/local_awareness.py:344-354` 的 `LocalAwarenessSummary` 中存在一组与 `ToolsConfig.LocalAwarenessConfig`(`config/schema.py:1898-2020`)字段同名的 bool 字段:
@@ -42,3 +42,4 @@ schema_version: 1
 | 日期 | 评审人 | 结论 |
 |------|--------|------|
 | 2026-07-16 | Agent 排查 | 待人工复核:是否为独立硬编码?若是则违反规则 6 |
+| 2026-07-16 | Agent 核查 | 关闭:部分属实但不违规。字段同名属实,但构造点(local_awareness.py:1338-1365)全部从 LocalAwarenessConfig 派生,dataclass 默认值运行时不生效。已在 LocalAwarenessSummary 类添加 docstring 澄清派生关系(方案 B)。 |
