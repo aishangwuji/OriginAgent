@@ -123,6 +123,28 @@ async def run_phase1(
             len(proposal_json),
             proposal_json[:500],
         )
+        # 空内容/显式 error 响应必须提前拦截，避免空字符串喂给 JSON 解析器
+        # 以 JSONDecodeError 形式爆出（掩盖真实失败原因）。呼应规则 14：把
+        # "LLM 一定返回非空 JSON" 这一隐含假设落地为显式断言。
+        if phase1_response.finish_reason == "error" or not proposal_json.strip():
+            logger.warning(
+                "Dream Phase 1 returned empty/error response (finish_reason={}, "
+                "error_kind={}, content_len={})",
+                phase1_response.finish_reason,
+                phase1_response.error_kind,
+                len(proposal_json),
+            )
+            dream._remember_report(build_task_report(
+                task_name="dream",
+                status="error",
+                phase="phase1",
+                fault_class="external",
+                retryable=True,
+                reason="phase1_empty_response",
+                started_at=started_at,
+                finished_at=now_iso(),
+            ))
+            return Phase1Result(success=False, error_reason="phase1_empty_response")
     except Exception:
         logger.exception("Dream Phase 1 failed")
         dream._remember_report(build_task_report(

@@ -531,6 +531,18 @@ class AuxiliaryLLMRouter:
                 reason,
             )
 
+        # 所有 candidate 都失败/空内容时的兜底。
+        # 若 last_response 是空内容（content 与 reasoning_content 均空），必须以
+        # finish_reason="error" + error_kind="empty_content" 暴露失败语义——空字符串
+        # 喂给下游 JSON 解析器会以 JSONDecodeError 形式爆出，掩盖真实失败原因
+        # （见 Dream Phase 1 崩溃事故，呼应规则 11 错误分类与规则 14 关键假设断言化）。
+        if last_response is not None and self._is_empty_response(last_response):
+            return LLMResponse(
+                content="",
+                finish_reason="error",
+                error_kind="empty_content",
+                error_should_retry=True,
+            )
         return last_response or LLMResponse(
             content=f"No LLM provider configured for auxiliary task '{task}'",
             finish_reason="error",

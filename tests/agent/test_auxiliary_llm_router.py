@@ -91,6 +91,11 @@ def _auth_error() -> LLMResponse:
     )
 
 
+def _empty() -> LLMResponse:
+    """空内容响应：finish_reason=stop 但 content 与 reasoning_content 均为空。"""
+    return LLMResponse(content="", finish_reason="stop")
+
+
 def _router(
     primary: FakeProvider,
     fallback: FakeProvider,
@@ -386,3 +391,41 @@ async def test_dream_phase1_invalid_fallback_json_keeps_cursor(tmp_path) -> None
     assert result is False
     assert store.get_last_dream_cursor() == 0
     dream._runner.run.assert_not_called()
+
+
+async def test_dream_phase1_empty_response_keeps_cursor(tmp_path) -> None:
+    """所有 candidate 返回空内容时，Phase 1 应提前返回失败，不进入 JSON 解析。
+
+    锁定 memory_phases.run_phase1 的空内容分支（呼应规则 14：把"LLM 一定返回
+    非空 JSON"落地为显式断言）。期望：
+    - Dream.run() 返回 False
+    - dream cursor 不前进（不消费 history）
+    - Phase 2 runner 不被调用
+    - 不触发 JSONDecodeError（修复前会以 JSONDecodeError 形式爆出）
+    """
+    store = MemoryStore(tmp_path)
+    store.append_history("User prefers concise answers")
+    # primary 与 fallback 均返回空内容 → 触发 auxiliary_llm 兜底 error_kind=empty_content
+    primary = FakeProvider("primary", [_empty()])
+    fallback = FakeProvider("fallback", [_empty()])
+    router = _router(
+        primary,
+        fallback,
+        task="dream_phase1",
+        task_config=AuxiliaryTaskConfig(
+            fallback_models=[
+                InlineFallbackConfig(model="fallback-model", provider="openrouter")
+            ],
+        ),
+    )
+    dream = Dream(store=store, provider=primary, model="primary-model", auxiliary_router=router)
+    dream._runner.run = AsyncMock()
+
+    result = await dream.run()
+
+    assert result is False
+    assert store.get_last_dream_cursor() == 0
+    dream._runner.run.assert_not_called()
+    # 两个 candidate 都被尝试过（空内容触发 fallback）
+    assert len(primary.calls) == 1
+    assert len(fallback.calls) == 1

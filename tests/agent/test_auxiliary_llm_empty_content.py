@@ -87,8 +87,13 @@ async def test_primary_empty_content_triggers_fallback() -> None:
     assert "primary" in router._unhealthy_until
 
 
-async def test_all_candidates_empty_content_returns_last() -> None:
-    """所有 candidate 都返回空内容时，应返回最后一个响应（保持现有行为）。"""
+async def test_all_candidates_empty_content_returns_error() -> None:
+    """所有 candidate 都返回空内容时，应返回显式 error 响应而非空内容响应。
+
+    空内容对调用方而言是实质失败（如 Dream Phase 1 拿到空 JSON 直接崩溃），
+    必须以 finish_reason="error" + error_kind="empty_content" 暴露失败语义，
+    让调用方走错误处理分支而非把空字符串喂给下游解析器。
+    """
     primary = FakeProvider("primary", [_empty()])
     fallback = FakeProvider("fallback", [_empty()])
     router = _router(primary, fallback)
@@ -98,8 +103,8 @@ async def test_all_candidates_empty_content_returns_last() -> None:
         messages=[{"role": "user", "content": "summarize"}],
     )
 
-    # 两个 candidate 都被调用且都返回空，最终返回最后一个响应
+    # 两个 candidate 都被调用且都返回空，最终返回显式 error 响应
     assert len(primary.calls) == 1
     assert len(fallback.calls) == 1
-    assert result.content == ""
-    assert result.finish_reason == "stop"
+    assert result.finish_reason == "error"
+    assert result.error_kind == "empty_content"
