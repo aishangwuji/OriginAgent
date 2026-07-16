@@ -116,6 +116,7 @@ async def run_phase1(
             ],
             tools=None,
             tool_choice=None,
+            max_tokens=81920,
         )
         proposal_json = phase1_response.content or ""
         logger.debug(
@@ -123,12 +124,15 @@ async def run_phase1(
             len(proposal_json),
             proposal_json[:500],
         )
-        # 空内容/显式 error 响应必须提前拦截，避免空字符串喂给 JSON 解析器
+        # 空内容/显式 error/截断响应必须提前拦截，避免喂给 JSON 解析器
         # 以 JSONDecodeError 形式爆出（掩盖真实失败原因）。呼应规则 14：把
-        # "LLM 一定返回非空 JSON" 这一隐含假设落地为显式断言。
-        if phase1_response.finish_reason == "error" or not proposal_json.strip():
+        # "LLM 一定返回非空且完整的 JSON" 这一隐含假设落地为显式断言。
+        # finish_reason=length 表示 LLM 输出被 token 上限截断，JSON 不完整。
+        is_truncated = phase1_response.finish_reason == "length"
+        if phase1_response.finish_reason == "error" or not proposal_json.strip() or is_truncated:
+            reason = "phase1_truncated_response" if is_truncated else "phase1_empty_response"
             logger.warning(
-                "Dream Phase 1 returned empty/error response (finish_reason={}, "
+                "Dream Phase 1 returned empty/error/truncated response (finish_reason={}, "
                 "error_kind={}, content_len={})",
                 phase1_response.finish_reason,
                 phase1_response.error_kind,
@@ -140,11 +144,11 @@ async def run_phase1(
                 phase="phase1",
                 fault_class="external",
                 retryable=True,
-                reason="phase1_empty_response",
+                reason=reason,
                 started_at=started_at,
                 finished_at=now_iso(),
             ))
-            return Phase1Result(success=False, error_reason="phase1_empty_response")
+            return Phase1Result(success=False, error_reason=reason)
     except Exception:
         logger.exception("Dream Phase 1 failed")
         dream._remember_report(build_task_report(

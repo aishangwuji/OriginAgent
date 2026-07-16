@@ -429,3 +429,35 @@ async def test_dream_phase1_empty_response_keeps_cursor(tmp_path) -> None:
     # 两个 candidate 都被尝试过（空内容触发 fallback）
     assert len(primary.calls) == 1
     assert len(fallback.calls) == 1
+
+
+async def test_dream_phase1_truncated_response_keeps_cursor(tmp_path) -> None:
+    """LLM 返回被截断的 JSON（finish_reason=length）时，Phase 1 应提前返回失败。
+
+    不以 JSONDecodeError 形式爆出，而是给出清晰的 phase1_truncated_response
+    错误原因。期望：
+    - Dream.run() 返回 False
+    - dream cursor 不前进
+    - Phase 2 runner 不被调用
+    """
+    store = MemoryStore(tmp_path)
+    store.append_history("User prefers concise answers")
+    # 模拟 finish_reason=length 的截断响应：内容是未闭合的 JSON 片段
+    truncated_json = '{"facts_to_upsert": [{"content": "test fact", "category": "note"'
+    primary = FakeProvider("primary", [LLMResponse(
+        content=truncated_json,
+        finish_reason="length",
+    )])
+    router = _router(
+        primary,
+        FakeProvider("fallback", [_ok()]),
+        task="dream_phase1",
+    )
+    dream = Dream(store=store, provider=primary, model="primary-model", auxiliary_router=router)
+    dream._runner.run = AsyncMock()
+
+    result = await dream.run()
+
+    assert result is False
+    assert store.get_last_dream_cursor() == 0
+    dream._runner.run.assert_not_called()
