@@ -585,3 +585,35 @@ class TestLegacyHistoryMigration:
         assert entries[0]["timestamp"] == "2026-04-01 10:00"
         assert "Broken" in entries[0]["content"]
         assert "migration." in entries[0]["content"]
+
+
+def test_read_sqlite_failure_logs_warning_and_falls_back(tmp_path):
+    """SQLite read failure should log a warning and fall back to JSONL (empty when JSONL missing).
+
+    Locks the expected behavior for the TD-2026-010 fix at memory/store.py L115-121:
+    a swallowed exception must still produce a warning-level log line so that
+    SQLite corruption / schema mismatch is observable (rule 1 — full-chain tracing),
+    while preserving the graceful-degradation contract (return None → caller falls back to JSONL).
+    """
+    from unittest.mock import MagicMock
+
+    from loguru import logger as loguru_logger
+
+    from OriginAgent.memory.store import NearlineMemoryStore
+
+    sqlite_store = MagicMock()
+    sqlite_store.read_all = MagicMock(side_effect=RuntimeError("sqlite corrupted"))
+
+    store = NearlineMemoryStore(tmp_path, sqlite_store=sqlite_store)
+
+    records: list[str] = []
+    handler_id = loguru_logger.add(lambda m: records.append(str(m)), level="WARNING")
+    try:
+        result = store.read_memcells()
+    finally:
+        loguru_logger.remove(handler_id)
+
+    # 降级到 JSONL,JSONL 不存在则空列表
+    assert result == []
+    # 应有 warning 日志包含 "SQLite read failed"
+    assert any("SQLite read failed" in r for r in records)

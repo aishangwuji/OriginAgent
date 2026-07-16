@@ -116,8 +116,8 @@ class NearlineMemoryStore:
         if self._sqlite is not None:
             try:
                 return self._sqlite.read_all(kind, limit=limit)
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.warning(f"SQLite read failed for kind={kind}, falling back to JSONL: {exc}")
         return None
 
     def read_memcells(self, *, limit: int | None = None) -> list[MemCell]:

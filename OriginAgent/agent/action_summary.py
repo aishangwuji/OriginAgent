@@ -5,6 +5,8 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any
 
+from loguru import logger
+
 ACTION_SUMMARY_SOURCE = "AgentLoop._cached_action_summary"
 
 
@@ -59,6 +61,6 @@ def action_summary_from_loop(loop: Any | None) -> dict[str, Any]:
     summary = normalize_action_summary(audit)
     try:
         setattr(loop, "_cached_action_summary", dict(summary))
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.debug(f"Failed to cache action summary on loop: {exc}")
     return summary

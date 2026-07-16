@@ -670,6 +670,22 @@ def gateway(
     _run_gateway(cfg, port=port)
 
 
+@app.command()
+def voice(
+    ws_url: str = typer.Option(
+        "ws://127.0.0.1:18790", "--ws-url", help="WebSocket URL of the gateway"
+    ),
+    chat_id: str = typer.Option(
+        None, "--chat-id", help="Chat ID (default: auto-generated)"
+    ),
+) -> None:
+    """Start the desktop voice assistant client (push-to-talk)."""
+    from OriginAgent.voice.desktop_assistant import DesktopVoiceAssistant
+
+    assistant = DesktopVoiceAssistant(ws_url=ws_url, chat_id=chat_id)
+    asyncio.run(assistant.run())
+
+
 def _run_gateway(
     config: Config,
     *,
@@ -886,8 +902,8 @@ def _run_gateway(
                     await cron_bridge.on_job_completed(
                         job, success=not bool(error), error=error, duration_ms=elapsed_ms,
                     )
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logger.warning(f"Cron-BDI bridge on_job_completed callback failed for job={job.id}: {exc}")
 
     cron.on_job = _on_cron_bridge
 

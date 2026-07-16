@@ -64,11 +64,7 @@ dependencies = [
     "boto3>=1.43.0",
     "jieba>=0.42.1,<1.0.0",
     "rapidfuzz>=3.14.0,<4.0.0",
-    "sounddevice>=0.5.5",
-    "webrtcvad>=2.0.10",
-    "pynput>=1.8.2",
     "setuptools>=82.0.1",
-    "numpy>=2.4.6",
 ]
 
 [project.optional-dependencies]
@@ -103,6 +99,12 @@ pdf = [
 ]
 olostep = [
     "olostep>=0.1.0",
+]
+voice = [
+    "sounddevice>=0.5.5",
+    "numpy>=2.4.6",
+    "webrtcvad>=2.0.10",
+    "pynput>=1.8.2",
 ]
 dev = [
     "pytest>=9.0.0,<10.0.0",
