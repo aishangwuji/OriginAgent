@@ -1,3 +1,0 @@
-{"accepted": true, "decision": "accepted", "session_key": "cli:direct", "source_reference": "grep:1", "suppression_reason": null, "trigger_id": "a", "trigger_type": "tool_failure", "turn_id": "turn-1"}
-{"accepted": false, "decision": "suppressed_duplicate", "session_key": "cli:direct", "source_reference": "grep:1", "suppression_reason": "duplicate_source_reference", "trigger_id": "a", "trigger_type": "tool_failure", "turn_id": "turn-1"}
-{"accepted": false, "decision": "suppressed_turn_limit", "session_key": "cli:direct", "source_reference": "user_correction:2", "suppression_reason": "turn_limit_reached", "trigger_id": "b", "trigger_type": "user_correction", "turn_id": "turn-1"}

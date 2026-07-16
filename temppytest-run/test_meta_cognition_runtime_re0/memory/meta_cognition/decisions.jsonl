@@ -1,1 +1,0 @@
-{"accepted": false, "decision": "dropped_runtime_disabled", "session_key": "cli:direct", "source_reference": "grep:1", "suppression_reason": "runtime_disabled", "trigger_id": "a", "trigger_type": "tool_failure", "turn_id": "turn-1"}

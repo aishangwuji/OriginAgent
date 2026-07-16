@@ -34,6 +34,11 @@ venv/
 .pytest_tmp/
 .pytest_tmp*/
 .pytest_tmp2/
+# pytest 临时产物泄漏到工作目录的其他变体
+.tmp_pytest/
+temppytest-run/
+# 运行时用户上传目录
+uploads/
 .mypy_cache/
 .ruff_cache/
 .pytype/
