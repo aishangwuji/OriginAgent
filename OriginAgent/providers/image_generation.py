@@ -10,6 +10,7 @@ from typing import Any
 import httpx
 
 from OriginAgent.providers.registry import find_by_name
+from OriginAgent.utils.constants import RoleConstants
 from OriginAgent.utils.helpers import detect_image_mime
 
 _OPENROUTER_ATTRIBUTION_HEADERS = {
@@ -158,7 +159,7 @@ class OpenRouterImageGenerationClient:
 
         body: dict[str, Any] = {
             "model": model,
-            "messages": [{"role": "user", "content": content}],
+            "messages": [{"role": RoleConstants.USER, "content": content}],
             "modalities": ["image", "text"],
             "stream": False,
         }

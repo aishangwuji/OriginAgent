@@ -709,7 +709,7 @@ async def test_settings_api_returns_safe_subset_and_updates_whitelist(
         )
         assert provider_updated.status_code == 200
         provider_body = provider_updated.json()
-        assert provider_body["requires_restart"] is False
+        assert provider_body["requires_restart"] is True
         provider_rows = {provider["name"]: provider for provider in provider_body["providers"]}
         assert provider_rows["openrouter"]["configured"] is True
         assert provider_rows["openrouter"]["model_catalog_kind"] == "catalog"

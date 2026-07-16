@@ -306,7 +306,7 @@ class MochatChannel(BaseChannel):
             return
 
         self._running = True
-        self._http = httpx.AsyncClient(timeout=30.0)
+        self._http = httpx.AsyncClient(timeout=self.http_download_timeout)
         self._state_dir.mkdir(parents=True, exist_ok=True)
         await self._load_session_cursors()
         self._seed_targets_from_config()
@@ -521,7 +521,7 @@ class MochatChannel(BaseChannel):
         if not self._socket:
             return {"result": False, "message": "socket not connected"}
         try:
-            raw = await self._socket.call(event_name, payload, timeout=10)
+            raw = await self._socket.call(event_name, payload, timeout=10)  # Socket.IO call timeout, not HTTP download
         except Exception as e:
             return {"result": False, "message": str(e)}
         return raw if isinstance(raw, dict) else {"result": True, "data": raw}

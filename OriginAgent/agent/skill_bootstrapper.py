@@ -197,125 +197,99 @@ def compile_to_proposal_bundle(
     )
 
 
-class SkillBootstrapper:
-    """有状态在线技能引导器 — 维护滚动窗口，支持即时 ingest_chunk。
+from collections import deque
+from datetime import datetime, timezone
 
-    区别于无状态的 SkillBootstrapperScanner.scan()，本类维护按 fingerprint
-    分组的滚动窗口，当同一工具序列累计达到 min_repeats 且含 correction_flag 时
-    自动触发 SkillCandidateCompiler.compile()，实现在线技能形成（Soar chunking）。
+
+class SkillBootstrapper:
+    """Online skill bootstrapper — ingests ActionTraceDigest chunks and compiles skills.
+
+    Soar-style online chunking: maintains a rolling window of digests keyed by
+    fingerprint. When a fingerprint reaches ``min_repeats`` AND the latest digest
+    has ``correction_flag=True``, triggers compilation via ``SkillCandidateCompiler``.
+    After compilation (or compile attempt), the fingerprint is removed from the window.
+
+    Args:
+        min_repeats: minimum digest count per fingerprint to trigger compile
+        max_window_size: total digest capacity (FIFO eviction when exceeded)
+        scanner: optional injected scanner (defaults to SkillBootstrapperScanner)
+        compiler: optional injected compiler (defaults to SkillCandidateCompiler)
+        workspace: optional workspace path for persistence (unused in Phase 1)
     """
 
     def __init__(
         self,
-        scanner: SkillBootstrapperScanner | None = None,
-        compiler: SkillCandidateCompiler | None = None,
         *,
         min_repeats: int = 3,
-        max_window_size: int = 200,
+        max_window_size: int = 50,
+        scanner: SkillBootstrapperScanner | None = None,
+        compiler: SkillCandidateCompiler | None = None,
+        workspace: Any = None,
     ) -> None:
-        self._scanner = scanner or SkillBootstrapperScanner()
-        self._compiler = compiler or SkillCandidateCompiler()
         self._min_repeats = min_repeats
         self._max_window_size = max_window_size
-        # fingerprint → 有序 digest 列表（按 ingest 顺序）
-        self._window: dict[str, list[ActionTraceDigest]] = {}
-        # 全局 FIFO 队列：记录所有 digest 的 (fingerprint, digest_id) 用于淘汰
-        self._fifo: list[tuple[str, str]] = []
+        self._scanner = scanner or SkillBootstrapperScanner()
+        self._compiler = compiler or SkillCandidateCompiler()
+        self._workspace = workspace
+        # fingerprint → deque of digests (FIFO for eviction)
+        self._window: dict[str, deque[ActionTraceDigest]] = defaultdict(deque)
 
     @property
     def window_size(self) -> int:
-        """当前窗口中的 digest 总数。"""
-        return sum(len(v) for v in self._window.values())
+        """Total digest count across all fingerprints."""
+        return sum(len(q) for q in self._window.values())
 
     def ingest_chunk(self, digest: ActionTraceDigest) -> SkillCandidate | None:
-        """在线 ingest 单个 digest，可能触发 compile。
-
-        当同一 fingerprint 的 digest 累计达到 min_repeats 且至少一个含
-        correction_flag=True 时，自动调用 compiler.compile() 产出 SkillCandidate，
-        并从窗口移除该 fingerprint 的所有 digest。
+        """Ingest a digest chunk; compile when threshold + correction_flag met.
 
         Returns:
-            SkillCandidate 若触发 compile 且 compile 成功，否则 None。
+            SkillCandidate if compilation triggered, None otherwise.
+            After compile (or compile attempt), the fingerprint is removed from window.
         """
-        fp = digest.fingerprint
-        self._window.setdefault(fp, []).append(digest)
-        self._fifo.append((fp, digest.digest_id))
-
-        # FIFO 淘汰
-        self._evict_if_needed()
-
-        # 检查是否达到 compile 阈值
-        bucket = self._window.get(fp, [])
-        if len(bucket) < self._min_repeats:
+        fp = build_fingerprint(digest)
+        if not fp:
             return None
 
-        # 至少一个含 correction_flag
-        has_correction = any(d.correction_flag for d in bucket)
-        if not has_correction:
+        queue = self._window[fp]
+        queue.append(digest)
+
+        # FIFO eviction when exceeding max_window_size
+        if self.window_size > self._max_window_size:
+            self._evict_oldest()
+
+        # Check compile trigger: reached min_repeats AND latest digest has correction_flag
+        if len(queue) >= self._min_repeats and digest.correction_flag:
+            # Build RepeatedPattern from window
+            digests = list(queue)
+            patterns = self._scanner.scan(
+                digests,
+                min_repeats=self._min_repeats,
+                min_confidence=0.0,  # bypass confidence filter, we already know threshold met
+            )
+            # Remove fingerprint from window after compile attempt
+            del self._window[fp]
+            # Compile the matching pattern (if any)
+            for pattern in patterns:
+                if pattern.fingerprint_hash == fp:
+                    candidate = self._compiler.compile(pattern, min_confidence=0.0)
+                    return candidate
             return None
 
-        # 构造 RepeatedPattern（复用 scanner 的分组逻辑）
-        pattern = self._build_pattern(fp, bucket)
-        if pattern is None:
-            return None
+        return None
 
-        # 调用 compiler
-        candidate = self._compiler.compile(pattern, min_confidence=0.5)
-
-        # 从窗口移除该 fingerprint（避免重复 compile）
-        removed = self._window.pop(fp, [])
-        for d in removed:
-            # 从 FIFO 队列移除对应条目
-            try:
-                self._fifo.remove((fp, d.digest_id))
-            except ValueError:
-                pass
-
-        return candidate
-
-    def _evict_if_needed(self) -> None:
-        """当窗口总数超过 max_window_size 时，按 FIFO 移除最旧 digest。"""
-        while self.window_size > self._max_window_size and self._fifo:
-            fp, did = self._fifo.pop(0)
-            bucket = self._window.get(fp)
-            if not bucket:
+    def _evict_oldest(self) -> None:
+        """Evict the oldest digest across all fingerprints (FIFO)."""
+        oldest_fp: str | None = None
+        oldest_time: datetime | None = None
+        for fp, queue in self._window.items():
+            if not queue:
                 continue
-            # 移除该 fingerprint 下第一个匹配的 digest
-            for i, d in enumerate(bucket):
-                if d.digest_id == did:
-                    bucket.pop(i)
-                    break
-            if not bucket:
-                self._window.pop(fp, None)
-
-    @staticmethod
-    def _build_pattern(
-        fingerprint: str,
-        digests: list[ActionTraceDigest],
-    ) -> RepeatedPattern | None:
-        """从同 fingerprint 的 digest 列表构造 RepeatedPattern。"""
-        if not digests:
-            return None
-
-        tool_signature = " -> ".join(digests[0].tool_sequence)
-        session_keys = sorted({d.session_key for d in digests if d.session_key})
-        sample_digest_ids = [d.digest_id for d in digests[:5]]  # 最多 5 个样本
-        timestamps = [d.created_at for d in digests if d.created_at]
-        first_seen = min(timestamps) if timestamps else ""
-        last_seen = max(timestamps) if timestamps else ""
-        has_correction = any(d.correction_flag for d in digests)
-        # confidence 复用 scanner 的公式
-        confidence = min(0.95, 0.5 + (len(digests) - 1) * 0.1)
-
-        return RepeatedPattern(
-            pattern_id=f"soar_chunk_{fingerprint[:16]}",
-            fingerprint_hash=fingerprint,
-            tool_signature=tool_signature,
-            repeat_count=len(digests),
-            session_keys=session_keys,
-            sample_digest_ids=sample_digest_ids,
-            first_seen_at=first_seen,
-            last_seen_at=last_seen,
-            confidence=confidence,
-            has_correction=has_correction,
-        )
+            first = queue[0]
+            if oldest_time is None or first.created_at < oldest_time:
+                oldest_time = first.created_at
+                oldest_fp = fp
+        if oldest_fp is not None and self._window[oldest_fp]:
+            self._window[oldest_fp].popleft()
+            # Clean up empty queues
+            if not self._window[oldest_fp]:
+                del self._window[oldest_fp]

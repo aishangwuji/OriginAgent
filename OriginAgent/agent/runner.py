@@ -23,6 +23,7 @@ from OriginAgent.agent.tools.registry import (
 )
 from OriginAgent.security.policy import PolicyDeniedError
 from OriginAgent.providers.base import LLMProvider, LLMResponse, ToolCallRequest
+from OriginAgent.utils.constants import RoleConstants
 from OriginAgent.utils.helpers import (
     build_assistant_message,
     estimate_message_tokens,
@@ -138,6 +139,11 @@ class AgentRunResult:
     error: str | None = None
     tool_events: list[dict[str, str]] = field(default_factory=list)
     had_injections: bool = False
+    # Snapshot of the messages actually sent to the LLM on the last iteration
+    # (after context governance: _drop_orphan_tool_results, _snip_history, …).
+    # ``messages`` above is the *persisted* conversation (untrimmed); callers
+    # that need to audit what the model really saw must read this field.
+    last_sent_messages: list[dict[str, Any]] = field(default_factory=list)
 
 
 class AgentRunner:
@@ -187,8 +193,8 @@ class AgentRunner:
         for injection in injections:
             if (
                 messages
-                and injection.get("role") == "user"
-                and messages[-1].get("role") == "user"
+                and injection.get("role") == RoleConstants.USER
+                and messages[-1].get("role") == RoleConstants.USER
             ):
                 merged = dict(messages[-1])
                 merged["content"] = cls._merge_message_content(
@@ -273,12 +279,12 @@ class AgentRunner:
             return []
         injected_messages: list[dict[str, Any]] = []
         for item in items:
-            if isinstance(item, dict) and item.get("role") == "user" and "content" in item:
+            if isinstance(item, dict) and item.get("role") == RoleConstants.USER and "content" in item:
                 injected_messages.append(item)
                 continue
             text = getattr(item, "content", str(item))
             if text.strip():
-                injected_messages.append({"role": "user", "content": text})
+                injected_messages.append({"role": RoleConstants.USER, "content": text})
         if len(injected_messages) > _MAX_INJECTIONS_PER_TURN:
             dropped = len(injected_messages) - _MAX_INJECTIONS_PER_TURN
             logger.warning(
@@ -307,6 +313,11 @@ class AgentRunner:
         injection_cycles = 0
         # Turn-scoped 幂等键：防止 LLM 在同一 turn 内重复调用同一工具同一参数
         _successful_idempotency_keys: set[str] = set()
+        # Snapshot of the last messages_for_model actually sent to the LLM
+        # (after context governance). Used by callers to refresh audit trails
+        # (state.last_context_assembly) so they reflect the real sent state
+        # rather than the pre-governance snapshot written by ContextBudgetManager.
+        last_sent_messages: list[dict[str, Any]] = []
 
         for iteration in range(spec.max_iterations):
             try:
@@ -333,6 +344,13 @@ class AgentRunner:
                     messages_for_model = self._backfill_missing_tool_results(messages_for_model)
                 except Exception:
                     messages_for_model = messages
+            # Snapshot the governed messages that will be sent to the LLM.
+            # A shallow list copy is sufficient: governance produces new dicts
+            # when it mutates, and the persisted ``messages`` list (which keeps
+            # growing) is never the same object after _drop_orphan_tool_results
+            # unless governance is a no-op — in which case the snapshot is still
+            # accurate at capture time.
+            last_sent_messages = list(messages_for_model)
             context = AgentHookContext(iteration=iteration, messages=messages)
             await hook.before_iteration(context)
             response = await self._request_model(provider, spec, messages_for_model, hook, context)
@@ -649,6 +667,7 @@ class AgentRunner:
             error=error,
             tool_events=tool_events,
             had_injections=had_injections,
+            last_sent_messages=last_sent_messages,
         )
 
     def _build_request_kwargs(
@@ -1280,7 +1299,7 @@ class AgentRunner:
             return
         if (
             messages
-            and messages[-1].get("role") == "assistant"
+            and messages[-1].get("role") == RoleConstants.ASSISTANT
             and not messages[-1].get("tool_calls")
         ):
             if messages[-1].get("content") == content:
@@ -1291,7 +1310,7 @@ class AgentRunner:
 
     @staticmethod
     def _append_model_error_placeholder(messages: list[dict[str, Any]]) -> None:
-        if messages and messages[-1].get("role") == "assistant" and not messages[-1].get("tool_calls"):
+        if messages and messages[-1].get("role") == RoleConstants.ASSISTANT and not messages[-1].get("tool_calls"):
             return
         messages.append(build_assistant_message(_PERSISTED_MODEL_ERROR_PLACEHOLDER))
 
@@ -1331,7 +1350,7 @@ class AgentRunner:
         updated: list[dict[str, Any]] | None = None
         for idx, msg in enumerate(messages):
             role = msg.get("role")
-            if role == "assistant":
+            if role == RoleConstants.ASSISTANT:
                 for tc in msg.get("tool_calls") or []:
                     if isinstance(tc, dict) and tc.get("id"):
                         declared.add(str(tc["id"]))
@@ -1357,7 +1376,7 @@ class AgentRunner:
         fulfilled: set[str] = set()
         for idx, msg in enumerate(messages):
             role = msg.get("role")
-            if role == "assistant":
+            if role == RoleConstants.ASSISTANT:
                 for tc in msg.get("tool_calls") or []:
                     if isinstance(tc, dict) and tc.get("id"):
                         name = ""
@@ -1464,8 +1483,8 @@ class AgentRunner:
         if estimate <= budget:
             return messages
 
-        system_messages = [dict(msg) for msg in messages if msg.get("role") == "system"]
-        non_system = [dict(msg) for msg in messages if msg.get("role") != "system"]
+        system_messages = [dict(msg) for msg in messages if msg.get("role") == RoleConstants.SYSTEM]
+        non_system = [dict(msg) for msg in messages if msg.get("role") != RoleConstants.SYSTEM]
         if not non_system:
             return messages
 
@@ -1483,7 +1502,7 @@ class AgentRunner:
 
         if kept:
             for i, message in enumerate(kept):
-                if message.get("role") == "user":
+                if message.get("role") == RoleConstants.USER:
                     kept = kept[i:]
                     break
             else:
@@ -1491,7 +1510,7 @@ class AgentRunner:
                 # GLM rejects system→assistant (error 1214).  Budget is
                 # intentionally exceeded — oversized beats invalid.
                 for idx in range(len(non_system) - 1, -1, -1):
-                    if non_system[idx].get("role") == "user":
+                    if non_system[idx].get("role") == RoleConstants.USER:
                         kept = non_system[idx:]
                         break
                 # If no user exists at all, _enforce_role_alternation

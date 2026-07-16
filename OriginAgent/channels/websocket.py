@@ -267,7 +267,6 @@ _SESSION_SEARCH_BACKEND_OPTIONS = {"auto", "literal", "sqlite_fts"}
 _EXEC_PROFILE_OPTIONS = {"secure", "local_dev", "disabled"}
 _EXEC_SHELL_SYNTAX_POLICY_OPTIONS = {"restricted", "shell"}
 _DEVICE_MODE_OPTIONS = {"dry_run", "real"}
-_DEVICE_BACKEND_OPTIONS = {"none", "fake", "lighting_client"}
 _AUDIT_MODE_OPTIONS = {"off", "minimal", "security"}
 _TRANSCRIPTION_PROVIDER_OPTIONS = {"groq", "openai", "volcengine"}
 

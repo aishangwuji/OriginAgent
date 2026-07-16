@@ -14,6 +14,8 @@ from rich.live import Live
 from rich.markdown import Markdown
 from rich.text import Text
 
+from OriginAgent.i18n import t
+
 
 def _make_console() -> Console:
     """Create a Console that emits plain text when stdout is not a TTY.
@@ -34,7 +36,9 @@ class ThinkingSpinner:
 
     def __init__(self, console: Console | None = None, bot_name: str = "OriginAgent"):
         c = console or _make_console()
-        self._spinner = c.status(f"[dim]{bot_name} is thinking...[/dim]", spinner="dots")
+        self._spinner = c.status(
+            f"[dim]{bot_name} {t('cli.thinking')}[/dim]", spinner="dots"
+        )
         self._active = False
 
     def __enter__(self):

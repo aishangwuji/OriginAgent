@@ -10,7 +10,6 @@ from typing import Any, Mapping
 
 from loguru import logger
 
-from OriginAgent.agent.context_assembler import ContextAssemblerV2, ContextAssemblyResult
 from OriginAgent.agent.context_budget import ContextBudgetManager
 from OriginAgent.agent.action_continuity import ActionContinuityInputs, ActionWorldView
 from OriginAgent.agent.domain_packs import DomainPackManager
@@ -30,6 +29,7 @@ from OriginAgent.utils.attachments import (
     describe_attachment,
     image_url_block,
 )
+from OriginAgent.utils.constants import RoleConstants
 from OriginAgent.utils.helpers import (
     build_assistant_message,
     current_time_str,
@@ -37,10 +37,28 @@ from OriginAgent.utils.helpers import (
     truncate_text,
 )
 from OriginAgent.utils.prompt_templates import render_template
+from OriginAgent.agent.context_assembler import ContextAssemblerV2, ContextAssemblyResult
 
 
 class ContextBuilder:
-    """Builds the context (system prompt + messages) for the agent."""
+    """Builds the context (system prompt + messages) for the agent.
+
+    Responsibility boundary (spec 1.10 / tech-debt Batch C1):
+        Owns **context content assembly** — gathering and ordering the blocks
+        that form the agent's prompt: messages, retrieval results, working
+        memory, world state, continuity checkpoints, runtime metadata, and
+        reference/bootstrap files.  Produces a ``ContextAssemblyResult`` whose
+        ``blocks`` are prompt-ready.
+
+        Explicitly out of scope:
+        * **Token budget trimming** — delegated to
+          :class:`~OriginAgent.agent.context_budget.ContextBudgetManager`,
+          which is invoked after assembly to fit the blocks within the model's
+          context window.  ContextBuilder does not decide what to drop for
+          budget reasons.
+        * **Runtime plumbing** (chat-id resolution, capability snapshots, tool
+          routing) — lives in ``agent_runtime_context.py``.
+    """
 
     BOOTSTRAP_FILES = ["AGENTS.md", "SOUL.md", "USER.md", "TOOLS.md"]
     TRUSTED_BOOTSTRAP_FILES = ["AGENTS.md", "SOUL.md", "TOOLS.md"]
@@ -60,6 +78,17 @@ class ContextBuilder:
     WORLD_STATE_CONTEXT_KIND = "world_state_context"
     RECOVERED_CONTINUITY_CONTEXT_KIND = "recovered_continuity_context"
     CLOSED_EPISODE_SUMMARIES_KIND = "closed_episode_summaries"
+
+    CONTRACT_VERSION = "continuity.v1.freeze"
+    ASSEMBLY_ORDER = [
+        "system_prompt",
+        "runtime_state",
+        "recovered_continuity_checkpoint",
+        "continuity_blocks",
+        "reference_blocks",
+        "internal_event",
+        "current_user_message",
+    ]
 
     def __init__(
         self,
@@ -129,6 +158,7 @@ class ContextBuilder:
         self._last_governance_audit: dict[str, Any] = {}
         self._last_context_assembly_audit: dict[str, Any] = {}
         self._last_media_block_audit: dict[str, Any] = {}
+        self.assembler_v2 = ContextAssemblerV2(self)
         self.retrieval_fusion = RetrievalFusion(
             workspace,
             memory=self.memory,
@@ -137,8 +167,42 @@ class ContextBuilder:
             context_config=self._context_config,
             nearline_memory_config=nearline_memory_config,
         )
-        self.assembler_v2 = ContextAssemblerV2(self)
         self.budget_manager = ContextBudgetManager()
+
+    # ── 公共接口(供 ContextAssemblerV2 使用,修复封装边界) ──────────────
+    # 以下方法和属性让 ContextAssemblerV2 通过公共接口访问 ContextBuilder,
+    # 不再直接访问 _build_user_content / _last_* / _context_config / _sessions 等私有成员。
+
+    @property
+    def session_store(self) -> Any:
+        """会话存储的公共只读访问器(供 ContextAssemblerV2 使用)。"""
+        return self._sessions
+
+    def build_user_content(
+        self, text: str | None, media: list[str] | None
+    ) -> list[dict[str, Any]]:
+        """公共入口:构建用户内容块,委托给 _build_user_content。"""
+        return self._build_user_content(text, media)
+
+    def collect_assembly_audit(self) -> dict[str, Any]:
+        """收集本次组装过程中产生的所有审计数据(公共接口)。
+
+        在 assemble 流程中,_build_user_content / prepare_prewarm_bundle /
+        build_reference_context_blocks 会分别写入对应的审计字典。
+        本方法将它们合并返回,供 ContextAssemblerV2 构建 audit。
+        """
+        return {
+            "media": dict(self._last_media_block_audit or {}),
+            "retrieval_fusion": dict(self._last_retrieval_fusion or {}),
+            "governance": dict(self._last_governance_audit or {}),
+            "prewarm": dict(self._last_prewarm_audit or {}),
+            "governance_enabled": bool(
+                getattr(self._context_config, "governance_enabled", False)
+            ),
+            "prewarm_enabled": bool(
+                getattr(self._context_config, "prewarm_enabled", False)
+            ),
+        }
 
     def build_system_prompt(
         self,
@@ -498,6 +562,24 @@ class ContextBuilder:
                 content = turn.get("content", "")
                 lines.append(f"[{role}] {content}")
             recent_turns_text = "\n".join(lines) + "\n"
+        # 冷区索引：渐进式暴露 warm 区归档总结的索引视图。
+        # 仅渲染 turn_range/summary/key_entities 摘要行，Agent 据此判断是否需要
+        # 通过 locator 回查 warm_archive 获取完整 commitments/decisions 等细节，
+        # 避免一次性把全部历史总结灌入上下文造成 token 浪费。
+        cold_indices = snapshot.get("cold_indices") or []
+        cold_indices_text = ""
+        if cold_indices:
+            lines = ["\n## Cold Indices (warm archive summaries)"]
+            for item in cold_indices:
+                turn_range = item.get("turn_range", "")
+                summary = item.get("summary", "")
+                entities = item.get("key_entities") or []
+                entities_str = ", ".join(str(e) for e in entities) if entities else ""
+                if entities_str:
+                    lines.append(f"[{turn_range}] {summary} ({entities_str})")
+                else:
+                    lines.append(f"[{turn_range}] {summary}")
+            cold_indices_text = "\n".join(lines) + "\n"
         return {
             "type": "text",
             "text": (
@@ -505,6 +587,7 @@ class ContextBuilder:
                 "Recovered continuity checkpoint from the previous session state.\n"
                 f"{json.dumps(dict(snapshot), ensure_ascii=False, indent=2)}\n"
                 f"{recent_turns_text}"
+                f"{cold_indices_text}"
                 "</recovered_continuity>"
             ),
             "_meta": {
@@ -738,11 +821,14 @@ class ContextBuilder:
     ) -> ContextAssemblyResult:
         """Assemble user-turn content blocks for an LLM call.
 
-        Public entry point that wraps ``ContextAssemblerV2``, making it
-        accessible to callers (e.g. ``loop.py``) without reaching through
-        the internal ``assembler_v2`` attribute.
+        Public entry point that delegates to ``ContextAssemblerV2.assemble``,
+        preserving the encapsulation boundary between content assembly
+        (ContextBuilder) and audit collection (ContextAssemblerV2).
+
+        ContextAssemblerV2 通过公共接口访问 ContextBuilder 的审计数据,
+        不再直接访问私有属性;审计字典由本方法从返回值回写。
         """
-        return self.assembler_v2.assemble(
+        result = self.assembler_v2.assemble(
             current_message=current_message,
             media=media,
             channel=channel,
@@ -756,6 +842,9 @@ class ContextBuilder:
             recovered_continuity_block=recovered_continuity_block,
             include_current_message=include_current_message,
         )
+        # 从返回值回写审计字典(替代 ContextAssemblerV2.assemble 中的私有写回)
+        self._last_context_assembly_audit = dict(result.audit)
+        return result
 
     def build_messages(
         self,
@@ -765,7 +854,7 @@ class ContextBuilder:
         media: list[str] | None = None,
         channel: str | None = None,
         chat_id: str | None = None,
-        current_role: str = "user",
+        current_role: str = RoleConstants.USER,
         sender_id: str | None = None,
         session_summary: str | None = None,
         session_metadata: Mapping[str, Any] | None = None,
@@ -780,7 +869,7 @@ class ContextBuilder:
         """Build the complete message list for an LLM call."""
         messages = [
             {
-                "role": "system",
+                "role": RoleConstants.SYSTEM,
                 "content": self.build_system_prompt(
                     skill_names,
                     channel=channel,
@@ -791,7 +880,7 @@ class ContextBuilder:
         ]
 
         user_content = self._build_user_content(current_message, media)
-        if current_role == "user":
+        if current_role == RoleConstants.USER:
             if self._context_config.enable_phase1_continuity:
                 assembled = self.assemble_user_content(
                     current_message=current_message,
@@ -831,7 +920,7 @@ class ContextBuilder:
                         merged.append(self.build_internal_event_block(source, content))
                 merged.extend(user_content)
             if merged:
-                messages.append({"role": "user", "content": merged})
+                messages.append({"role": RoleConstants.USER, "content": merged})
             return self._apply_prompt_budget(
                 messages,
                 context_window_tokens=context_window_tokens,

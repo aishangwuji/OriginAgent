@@ -360,19 +360,31 @@ def onboard(
         if wizard:
             config = _apply_workspace_override(load_config(config_path))
         else:
+            existing = _apply_workspace_override(load_config(config_path))
             console.print(f"[yellow]Config already exists at {config_path}[/yellow]")
-            console.print(
-                "  [bold]y[/bold] = overwrite with defaults (existing values will be lost)"
-            )
-            console.print(
-                "  [bold]N[/bold] = refresh config, keeping existing values and adding new fields"
-            )
-            if typer.confirm("Overwrite?"):
-                config = _apply_workspace_override(Config())
-                save_config(config, config_path)
-                console.print(f"[green]✓[/green] Config reset to defaults at {config_path}")
+            if _has_custom_config(existing):
+                # Destructive: overwriting would lose user's API key / provider settings.
+                # Rule 23: require explicit confirmation, default to N (preserve).
+                model = existing.agents.defaults.model
+                provider = existing.agents.defaults.provider
+                console.print(
+                    f"[yellow]Existing configuration detected "
+                    f"(provider={provider}, model={model})[/yellow]"
+                )
+                if typer.confirm("Overwrite existing configuration?", default=False):
+                    config = _apply_workspace_override(Config())
+                    save_config(config, config_path)
+                    console.print(f"[green]✓[/green] Config reset to defaults at {config_path}")
+                else:
+                    console.print(
+                        "[yellow]Onboard cancelled. Existing configuration preserved.[/yellow]"
+                    )
+                    console.print(
+                        "[dim]Use 'originagent onboard --wizard' to edit configuration.[/dim]"
+                    )
+                    raise typer.Exit(0)
             else:
-                config = _apply_workspace_override(load_config(config_path))
+                config = existing
                 save_config(config, config_path)
                 console.print(
                     f"[green]✓[/green] Config refreshed at {config_path} (existing values preserved)"
@@ -443,6 +455,29 @@ def _merge_missing_defaults(existing: Any, defaults: Any) -> Any:
         else:
             merged[key] = _merge_missing_defaults(merged[key], value)
     return merged
+
+
+def _has_custom_config(config: Any) -> bool:
+    """Check if config has non-default values worth protecting from overwrite.
+
+    Returns True if any provider has an API key set, or if the model/provider
+    differ from defaults. Used to guard against destructive overwrites in
+    non-wizard onboard mode (rule 23: destructive operations need explicit consent).
+    """
+    from OriginAgent.config.schema import AgentDefaults
+
+    # Any provider with an API key set indicates user customization
+    for name in type(config.providers).model_fields:
+        provider_config = getattr(config.providers, name, None)
+        if provider_config and provider_config.api_key:
+            return True
+    # Model or provider different from defaults
+    defaults = AgentDefaults()
+    if config.agents.defaults.model != defaults.model:
+        return True
+    if config.agents.defaults.provider != defaults.provider:
+        return True
+    return False
 
 
 def _onboard_plugins(config_path: Path) -> None:
@@ -649,6 +684,7 @@ def _run_gateway(
     from OriginAgent.cron.service import CronService
     from OriginAgent.cron.types import CronJob
     from OriginAgent.heartbeat.service import HeartbeatService
+    from OriginAgent.bdi.heartbeat_bridge import BDIHeartbeatBridge
     from OriginAgent.providers.factory import build_provider_snapshot, load_provider_snapshot
     from OriginAgent.session.manager import SessionManager
 
@@ -945,6 +981,10 @@ def _run_gateway(
         )
 
     hb_cfg = config.gateway.heartbeat
+    _bdi_engine = getattr(agent, "_bdi_engine", None)
+    _bdi_bridge: BDIHeartbeatBridge | None = None
+    if _bdi_engine is not None:
+        _bdi_bridge = BDIHeartbeatBridge(engine=_bdi_engine)
     heartbeat = HeartbeatService(
         workspace=config.workspace_path,
         provider=agent.provider,
@@ -954,6 +994,7 @@ def _run_gateway(
         interval_s=hb_cfg.interval_s,
         enabled=hb_cfg.enabled,
         timezone=config.agents.defaults.timezone,
+        bdi_bridge=_bdi_bridge,
     )
 
     if channels.enabled_channels:
@@ -2151,6 +2192,86 @@ def domain_info(
     table.add_row("Skills", str(len(record.get("skills", []))))
     table.add_row("Tools", str(len(record.get("tools", []))))
     table.add_row("Workflows", str(len(record.get("workflows", []))))
+    console.print(table)
+
+
+# ============================================================================
+# Audit Commands
+# ============================================================================
+
+audit_app = typer.Typer(help="Query append-only audit logs for post-hoc investigation")
+app.add_typer(audit_app, name="audit")
+
+
+@audit_app.command("query")
+def audit_query(
+    action_id: str = typer.Option(..., "--action-id", help="Action ID to look up"),
+    workspace: Path = typer.Option(..., "--workspace", "-w", help="Workspace directory"),
+) -> None:
+    """Query audit events by action ID for post-hoc investigation."""
+    from OriginAgent.agent.audit import AuditLogger
+
+    audit = AuditLogger(workspace)
+    events = audit.find_by_action_id(action_id)
+    if not events:
+        console.print(
+            f"[yellow]No audit events found for action_id={action_id}[/yellow]"
+        )
+        return
+
+    console.print(f"[cyan]Audit events for action_id={action_id}[/cyan]\n")
+    table = Table(title=f"Audit Trail: {action_id}")
+    table.add_column("Time", style="dim")
+    table.add_column("Type", style="cyan")
+    table.add_column("Action", style="magenta")
+    table.add_column("Decision", style="green")
+    table.add_column("Reason")
+    for event in events:
+        table.add_row(
+            event.created_at,
+            event.event_type,
+            event.action or "-",
+            event.decision,
+            event.reason or "-",
+        )
+    console.print(table)
+
+
+@audit_app.command("list")
+def audit_list(
+    workspace: Path = typer.Option(..., "--workspace", "-w", help="Workspace directory"),
+    limit: int = typer.Option(
+        20, "--limit", "-n", help="Maximum number of recent events to show"
+    ),
+) -> None:
+    """List recent audit events across all audit files."""
+    from OriginAgent.agent.audit import AuditLogger
+
+    audit = AuditLogger(workspace)
+    events = sorted(
+        audit._read_all_events(), key=lambda e: e.created_at, reverse=True
+    )[:limit]
+    if not events:
+        console.print("[yellow]No audit events found in workspace.[/yellow]")
+        return
+
+    console.print(f"[cyan]Recent audit events (limit={limit})[/cyan]\n")
+    table = Table(title="Recent Audit Events")
+    table.add_column("Time", style="dim")
+    table.add_column("Event ID", style="dim")
+    table.add_column("Type", style="cyan")
+    table.add_column("Action ID", style="magenta")
+    table.add_column("Action", style="magenta")
+    table.add_column("Decision", style="green")
+    for event in events:
+        table.add_row(
+            event.created_at,
+            event.event_id,
+            event.event_type,
+            event.action_id or "-",
+            event.action or "-",
+            event.decision,
+        )
     console.print(table)
 
 

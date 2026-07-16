@@ -10,6 +10,7 @@ from OriginAgent.utils.attachments import (
     attachment_placeholder_text,
     parse_attachment,
 )
+from OriginAgent.utils.constants import RoleConstants
 
 
 def convert_messages(
@@ -30,11 +31,11 @@ def convert_messages(
         role = msg.get("role")
         content = msg.get("content")
 
-        if role == "system":
+        if role == RoleConstants.SYSTEM:
             system_prompt = content if isinstance(content, str) else ""
             continue
 
-        if role == "user":
+        if role == RoleConstants.USER:
             input_items.append(
                 convert_user_message(
                     content,
@@ -43,10 +44,10 @@ def convert_messages(
             )
             continue
 
-        if role == "assistant":
+        if role == RoleConstants.ASSISTANT:
             if isinstance(content, str) and content:
                 input_items.append({
-                    "type": "message", "role": "assistant",
+                    "type": "message", "role": RoleConstants.ASSISTANT,
                     "content": [{"type": "output_text", "text": content}],
                     "status": "completed", "id": f"msg_{idx}",
                 })
@@ -103,7 +104,7 @@ def convert_user_message(
     ``image_url`` blocks -> ``input_image``.
     """
     if isinstance(content, str):
-        return {"role": "user", "content": [{"type": "input_text", "text": content}]}
+        return {"role": RoleConstants.USER, "content": [{"type": "input_text", "text": content}]}
     if isinstance(content, list):
         converted: list[dict[str, Any]] = []
         for item in content:
@@ -131,8 +132,8 @@ def convert_user_message(
                         "text": attachment_placeholder_text(descriptor),
                     })
         if converted:
-            return {"role": "user", "content": converted}
-    return {"role": "user", "content": [{"type": "input_text", "text": ""}]}
+            return {"role": RoleConstants.USER, "content": converted}
+    return {"role": RoleConstants.USER, "content": [{"type": "input_text", "text": ""}]}
 
 
 def convert_tools(tools: list[dict[str, Any]]) -> list[dict[str, Any]]:

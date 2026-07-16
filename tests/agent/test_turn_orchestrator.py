@@ -19,6 +19,7 @@ def _make_orchestrator(
     system_turn_handler: SystemTurnHandler | object | None = None,
     scan_meta_triggers_for_turn: MagicMock | None = None,
     schedule_meta_cognition_reflection: MagicMock | None = None,
+    meta_cognition_runtime: object | None = None,
 ) -> tuple[TurnOrchestrator, MagicMock, MagicMock]:
     scan = scan_meta_triggers_for_turn or MagicMock()
     schedule = schedule_meta_cognition_reflection or MagicMock()
@@ -30,6 +31,7 @@ def _make_orchestrator(
             system_turn_handler=handler,  # type: ignore[arg-type]
             scan_meta_triggers_for_turn=scan,
             schedule_meta_cognition_reflection=schedule,
+            meta_cognition_runtime=meta_cognition_runtime,
         )
     )
     return orchestrator, scan, schedule
@@ -267,3 +269,78 @@ def test_get_turn_orchestrator_returns_prebound_instance() -> None:
     loop._turn_orchestrator = orchestrator
 
     assert loop._get_turn_orchestrator() is orchestrator
+
+
+def test_turn_orchestrator_deps_meta_cognition_runtime_defaults_to_none() -> None:
+    """TurnOrchestratorDeps exposes meta_cognition_runtime defaulting to None."""
+    import dataclasses
+
+    field_names = {f.name for f in dataclasses.fields(TurnOrchestratorDeps)}
+    assert "meta_cognition_runtime" in field_names
+
+    deps = TurnOrchestratorDeps(
+        turn_pipeline=SimpleNamespace(),
+        transitions={},
+        system_turn_handler=SimpleNamespace(process_message=AsyncMock()),  # type: ignore[arg-type]
+        scan_meta_triggers_for_turn=MagicMock(),
+        schedule_meta_cognition_reflection=MagicMock(),
+    )
+    assert deps.meta_cognition_runtime is None
+
+
+@pytest.mark.asyncio
+async def test_turn_orchestrator_invokes_meta_runtime_start_and_end_turn() -> None:
+    """When meta_cognition_runtime is provided, start_turn/end_turn bracket the turn."""
+
+    class MinimalPipeline:
+        async def state_restore(self, ctx: TurnContext) -> str:
+            ctx.outbound = OutboundMessage(channel="cli", chat_id="chat", content="ok")
+            return "ok"
+
+    meta_runtime = MagicMock()
+    orchestrator, _scan, _schedule = _make_orchestrator(
+        turn_pipeline=MinimalPipeline(),
+        transitions={(TurnState.RESTORE, "ok"): TurnState.DONE},
+        meta_cognition_runtime=meta_runtime,
+    )
+
+    outbound = await orchestrator.process_message(
+        InboundMessage(channel="cli", sender_id="alice", chat_id="chat", content="hello"),
+        session_key="cli:chat",
+    )
+
+    assert outbound is not None
+    meta_runtime.start_turn.assert_called_once()
+    meta_runtime.end_turn.assert_called_once()
+    # Both invoked with the same turn_id (turn-scoped dedup isolation)
+    start_turn_id = meta_runtime.start_turn.call_args[0][0]
+    end_turn_id = meta_runtime.end_turn.call_args[0][0]
+    assert start_turn_id == end_turn_id
+    assert start_turn_id.startswith("cli:chat:")
+
+
+@pytest.mark.asyncio
+async def test_turn_orchestrator_without_meta_runtime_completes_turn() -> None:
+    """Without meta_cognition_runtime the turn still completes (backward compat).
+
+    meta_cognition_runtime is None, so start_turn/end_turn cannot be invoked;
+    successful completion proves the orchestrator skips them rather than crashing.
+    """
+
+    class MinimalPipeline:
+        async def state_restore(self, ctx: TurnContext) -> str:
+            ctx.outbound = OutboundMessage(channel="cli", chat_id="chat", content="ok")
+            return "ok"
+
+    orchestrator, _scan, _schedule = _make_orchestrator(
+        turn_pipeline=MinimalPipeline(),
+        transitions={(TurnState.RESTORE, "ok"): TurnState.DONE},
+    )
+
+    outbound = await orchestrator.process_message(
+        InboundMessage(channel="cli", sender_id="alice", chat_id="chat", content="hello"),
+        session_key="cli:chat",
+    )
+
+    assert outbound is not None
+    assert outbound.content == "ok"

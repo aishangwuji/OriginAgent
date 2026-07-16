@@ -13,7 +13,8 @@ from OriginAgent.channels.feishu import FeishuChannel
 
 
 def test_parse_md_table_strips_markdown_formatting_in_headers_and_cells() -> None:
-    table = FeishuChannel._parse_md_table(
+    channel = FeishuChannel.__new__(FeishuChannel)
+    table = channel._parse_md_table(
         """
 | **Name** | __Status__ | *Notes* | ~~State~~ |
 | --- | --- | --- | --- |

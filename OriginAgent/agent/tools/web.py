@@ -162,6 +162,7 @@ class WebSearchTool(Tool):
         user_agent: str | None = None,
         config_loader: Callable[[], WebSearchConfig] | None = None,
         auxiliary_router: Any = None,
+        http_api_timeout: float = 30.0,
     ):
         from OriginAgent.config.schema import WebSearchConfig
 
@@ -170,6 +171,7 @@ class WebSearchTool(Tool):
         self.user_agent = user_agent if user_agent is not None else _DEFAULT_USER_AGENT
         self._config_loader = config_loader
         self.auxiliary_router = auxiliary_router
+        self._http_api_timeout = http_api_timeout
 
     # ── config helpers ──────────────────────────────────────────────────
 
@@ -531,7 +533,7 @@ class WebSearchTool(Tool):
                     "X-Subscription-Token": api_key,
                     "User-Agent": self.user_agent,
                 },
-                timeout=10.0,
+                timeout=self._http_api_timeout,
             )
             r.raise_for_status()
         return [
@@ -548,7 +550,7 @@ class WebSearchTool(Tool):
                 "https://api.tavily.com/search",
                 headers={"Authorization": f"Bearer {api_key}", "User-Agent": self.user_agent},
                 json={"query": query, "max_results": n},
-                timeout=15.0,
+                timeout=self._http_api_timeout,
             )
             r.raise_for_status()
         return [
@@ -569,7 +571,7 @@ class WebSearchTool(Tool):
                 endpoint,
                 params={"q": query, "format": "json"},
                 headers={"User-Agent": self.user_agent},
-                timeout=10.0,
+                timeout=self._http_api_timeout,
             )
             r.raise_for_status()
         return [
@@ -591,7 +593,7 @@ class WebSearchTool(Tool):
             r = await client.get(
                 f"https://s.jina.ai/{encoded_query}",
                 headers=headers,
-                timeout=15.0,
+                timeout=self._http_api_timeout,
             )
             r.raise_for_status()
         data = r.json().get("data", [])[:n]
@@ -609,7 +611,7 @@ class WebSearchTool(Tool):
                 "https://kagi.com/api/v0/search",
                 params={"q": query, "limit": n},
                 headers={"Authorization": f"Bot {api_key}", "User-Agent": self.user_agent},
-                timeout=10.0,
+                timeout=self._http_api_timeout,
             )
             r.raise_for_status()
         return [
@@ -628,7 +630,7 @@ class WebSearchTool(Tool):
         from ddgs import DDGS
 
         async def _search() -> list[dict[str, Any]]:
-            ddgs = DDGS(timeout=10)
+            ddgs = DDGS(timeout=int(self._http_api_timeout))
             raw = await asyncio.wait_for(
                 asyncio.to_thread(ddgs.text, query, max_results=n),
                 timeout=self.config.timeout,
@@ -791,6 +793,7 @@ class WebFetchTool(Tool):
         max_chars: int | None = None,
         limits: ToolLimits | None = None,
         content_read_config: Any | None = None,
+        http_api_timeout: float = 30.0,
     ):
         from OriginAgent.config.schema import WebFetchConfig
 
@@ -800,6 +803,7 @@ class WebFetchTool(Tool):
         self.user_agent = user_agent or _DEFAULT_USER_AGENT
         self.max_chars = max_chars if max_chars is not None else self._limits.web_fetch_max_chars
         self.content_read_config = content_read_config
+        self._http_api_timeout = http_api_timeout
 
     @property
     def parameters(self) -> dict[str, Any]:
@@ -913,7 +917,7 @@ class WebFetchTool(Tool):
     async def _fetch_image_if_applicable(self, url: str, *, force: bool = False) -> Any | None:
         """Detect and fetch images directly to avoid textual image captioning."""
         try:
-            async with httpx.AsyncClient(proxy=self.proxy, follow_redirects=True, max_redirects=MAX_REDIRECTS, timeout=15.0) as client:
+            async with httpx.AsyncClient(proxy=self.proxy, follow_redirects=True, max_redirects=MAX_REDIRECTS, timeout=self._http_api_timeout) as client:
                 async with client.stream("GET", url, headers=_browser_headers(self.user_agent)) as r:
                     from OriginAgent.security.network import validate_resolved_url
 
@@ -1050,7 +1054,7 @@ class WebFetchTool(Tool):
             jina_key = os.environ.get("JINA_API_KEY", "")
             if jina_key:
                 headers["Authorization"] = f"Bearer {jina_key}"
-            async with httpx.AsyncClient(proxy=self.proxy, timeout=20.0) as client:
+            async with httpx.AsyncClient(proxy=self.proxy, timeout=self._http_api_timeout) as client:
                 r = await client.get(f"https://r.jina.ai/{url}", headers=headers)
                 if r.status_code == 429:
                     logger.debug("Jina Reader rate limited, falling back to readability")
@@ -1092,7 +1096,7 @@ class WebFetchTool(Tool):
             async with httpx.AsyncClient(
                 follow_redirects=True,
                 max_redirects=MAX_REDIRECTS,
-                timeout=30.0,
+                timeout=self._http_api_timeout,
                 proxy=self.proxy,
             ) as client:
                 async with client.stream("GET", url, headers=_browser_headers(self.user_agent)) as r:

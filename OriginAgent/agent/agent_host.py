@@ -11,7 +11,7 @@ from __future__ import annotations
 import asyncio
 from contextlib import AsyncExitStack, suppress
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, TYPE_CHECKING
 
 from loguru import logger
 
@@ -19,6 +19,12 @@ from OriginAgent.agent.local_awareness import (
     LocalAwarenessBackend,
     normalize_local_awareness_summary,
 )
+
+if TYPE_CHECKING:
+    # Imported lazily at runtime inside _init_bdi_engine* to avoid a circular
+    # import; declared here only so the field/property annotations below resolve
+    # under static type checkers.
+    from OriginAgent.bdi import DeliberationEngine
 
 
 @dataclass(frozen=True)
@@ -56,6 +62,8 @@ class AgentHostDependencies:
     workspace: Any = None  # Path
     bdi_config: Any = None  # BDIConfig | None
     meta_cognition_config: Any = None
+    meta_cognition_audit: Any = None  # JsonlMetaCognitionAuditLedger | None
+    event_bus: Any = None  # TypedEventBus | None — shared between WorldStateManager and BDI
 
     # Phase 2b — Transcription
     transcription_provider_config: dict | None = None
@@ -100,7 +108,33 @@ class AgentHost:
         # ── BDI state ───────────────────────────────────────────
         self._desire_store: Any = None
         self._bdi_engines: dict[str, Any] = {}  # tenant_id -> DeliberationEngine
-        self._legacy_bdi_engine: Any = None  # Single-tenant fallback
+        self._legacy_bdi_engine: DeliberationEngine | None = None
+        # Single-tenant BDI fallback (spec 3.18 / tech-debt Batch C13).
+        #
+        # Retention rationale: the multi-tenant path
+        # (_init_bdi_engine_for_tenant) has NOT reached feature parity with
+        # this legacy path, so the legacy path cannot yet be removed:
+        #   1. No InnerMonologueEngine wiring — the legacy path registers
+        #      set_on_cycle_complete -> InnerMonologueEngine.on_bdi_cycle; the
+        #      per-tenant path does not.
+        #   2. Missing config passthrough — max_desires_per_cycle and
+        #      auto_create_from_foresight are not forwarded to the per-tenant
+        #      DeliberationEngine.
+        #   3. Per-tenant CronDesireBridge is a local variable, not stored on
+        #      self._cron_bridge, so the "disable_cron" system action in
+        #      _on_bdi_intention_for cannot reach it (hasattr check fails).
+        #
+        # Migration condition: once _init_bdi_engine_for_tenant closes the
+        # three gaps above and a multi-tenant integration test covers the
+        # inner-monologue + cron-bridge disable path, this field and
+        # _init_bdi_engine() can be removed; bdi_engine will then read solely
+        # from _bdi_engines.
+        #
+        # @DeferDecision — no fixed migration date: the gap is in optional
+        #   cognitive features (inner monologue) that only single-tenant
+        #   deployments currently exercise.  Re-evaluate when a multi-tenant
+        #   deployment requests inner-monologue support.  Tracked in the
+        #   tech-debt backlog under spec 3.18.
         self._inner_monologue_engine: Any = None
 
         # ── Transcription ───────────────────────────────────────
@@ -350,7 +384,7 @@ class AgentHost:
             for engine in self._bdi_engines.values():
                 return engine
             return None
-        return self._legacy_bdi_engine  # Single-tenant fallback
+        return self._legacy_bdi_engine  # Single-tenant fallback — see retention rationale at declaration (spec 3.18)
 
     @property
     def desire_store(self) -> Any | None:
@@ -389,6 +423,7 @@ class AgentHost:
         from OriginAgent.bdi import DeliberationEngine, DesireStore
         from OriginAgent.bdi.cron_desire_bridge import CronDesireBridge
         from OriginAgent.bdi.cron_observation_store import CronObservationStore
+        from OriginAgent.bdi.utility_reward_bridge import UtilityRewardBridge
 
         workspace = tenant.workspace_dir
         _sqlite = getattr(self._deps, "sqlite_stores", None)
@@ -400,6 +435,10 @@ class AgentHost:
             observation_store=_cron_obs,
             enabled=True,
         )
+        _reward_bridge = UtilityRewardBridge(
+            audit_ledger=self._deps.meta_cognition_audit,
+            desire_store=desire_store,
+        )
         engine = DeliberationEngine(
             workspace=workspace,
             store=desire_store,
@@ -410,6 +449,9 @@ class AgentHost:
             interval_s=getattr(self._deps.bdi_config, "interval_s", 120),
             on_intention=self._on_bdi_intention_for(tenant),
             cron_bridge=_cron_bridge,
+            event_bus=self._deps.event_bus,
+            use_actr_utility=True,
+            reward_bridge=_reward_bridge,
         )
         self._bdi_engines[tenant.tenant_id] = engine
 
@@ -490,6 +532,7 @@ class AgentHost:
         from OriginAgent.bdi import DeliberationEngine, DesireStore
         from OriginAgent.bdi.cron_desire_bridge import CronDesireBridge
         from OriginAgent.bdi.cron_observation_store import CronObservationStore
+        from OriginAgent.bdi.utility_reward_bridge import UtilityRewardBridge
 
         _sqlite = getattr(self._deps, "sqlite_stores", None)
         self._desire_store = DesireStore(
@@ -507,6 +550,12 @@ class AgentHost:
             enabled=bool(bdi_config.enabled),
         )
 
+        # ── Utility-Reward bridge (ACT-R utility learning) ───────
+        _reward_bridge = UtilityRewardBridge(
+            audit_ledger=self._deps.meta_cognition_audit,
+            desire_store=self._desire_store,
+        )
+
         self._legacy_bdi_engine = DeliberationEngine(
             workspace=self._deps.workspace,
             store=self._desire_store,
@@ -518,6 +567,9 @@ class AgentHost:
             auto_create_from_foresight=bdi_config.auto_create_from_foresight,
             on_intention=self._on_bdi_intention,
             cron_bridge=self._cron_bridge,
+            event_bus=self._deps.event_bus,
+            use_actr_utility=True,
+            reward_bridge=_reward_bridge,
         )
 
         # InnerMonologueEngine

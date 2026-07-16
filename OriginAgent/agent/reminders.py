@@ -116,7 +116,7 @@ class ReminderRecord:
 class ReminderStore:
     """Durable JSONL-backed store for one-shot reminders."""
 
-    def __init__(self, workspace: Path, *, sqlite_store: Any = None, jsonl_fallback_enabled: bool = True):
+    def __init__(self, workspace: Path, *, sqlite_store: Any = None, jsonl_fallback_enabled: bool = False):
         self.workspace = Path(workspace)
         self.root = ensure_dir(self.workspace / "memory" / "active_intents")
         self.path = self.root / "reminders.jsonl"

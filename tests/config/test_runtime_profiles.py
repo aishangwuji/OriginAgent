@@ -81,11 +81,15 @@ def test_automation_profile_does_not_default_to_high_power_grants() -> None:
 
 
 def test_profile_application_does_not_override_explicit_values() -> None:
-    cfg = Config()
-    cfg.runtime.profile = "local_dev"
-    cfg.tools.exec = ExecToolConfig(profile="disabled")
-    cfg.tools.audit = ToolAuditConfig(mode="off")
-    cfg.tools.device = DeviceToolsConfig(enabled=True, lighting_enabled=True, backend="fake")
+    raw = {
+        "runtime": {"profile": "local_dev"},
+        "tools": {
+            "exec": {"profile": "disabled"},
+            "audit": {"mode": "off"},
+            "device": {"enabled": True, "lighting_enabled": True, "backend": "fake"},
+        },
+    }
+    cfg = Config.model_validate(raw)
 
     applied = apply_runtime_profile(cfg)
 
@@ -93,6 +97,19 @@ def test_profile_application_does_not_override_explicit_values() -> None:
     assert applied.tools.audit.mode == "off"
     assert applied.tools.device.enabled is True
     assert applied.tools.device.backend == "fake"
+
+
+def test_profile_does_not_override_explicit_default_values() -> None:
+    """User-explicit values equal to schema defaults must not be overridden (spec 3.16)."""
+    raw = {
+        "runtime": {"profile": "safe"},
+        "tools": {"exec": {"profile": "local_dev"}},
+    }
+    cfg = Config.model_validate(raw)
+
+    applied = apply_runtime_profile(cfg)
+
+    assert applied.tools.exec.profile == "local_dev"
 
 
 def test_loader_applies_profile_defaults_with_unsafe_exec(tmp_path) -> None:

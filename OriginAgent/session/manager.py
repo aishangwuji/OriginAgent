@@ -715,6 +715,181 @@ class Session:
             out = kept
         return out
 
+    def _find_hot_start_idx(self, max_turns: int = 50) -> int:
+        """定位热区起点在 ``self.messages`` 中的索引（按 user turn 边界对齐）。
+
+        与 ``get_hot_history`` 的边界对齐逻辑一致，但只返回起点 index，
+        不实际切片 / 处理消息内容。供需要"截取超出热区部分"的调用方复用，
+        避免边界对齐逻辑重复实现导致行为漂移。
+
+        - 总轮数 <= ``max_turns`` 时返回 0（全部消息都属于热区）；
+        - 否则返回倒数第 ``max_turns`` 个 user 消息的位置，并按 tool_call
+          完整性向前扩展；
+        - 最后丢弃前端仍无法配对的孤儿 tool_result。
+        """
+        if not self.messages:
+            return 0
+
+        max_turns = max_turns if max_turns > 0 else 50
+
+        # 一轮 = 一条 user 消息开始，到下一条 user 消息之前的全部内容。
+        # 从尾部向前数 user 消息，定位第 max_turns 轮的起点。
+        user_indices = [i for i, m in enumerate(self.messages) if m.get("role") == "user"]
+
+        if not user_indices or len(user_indices) <= max_turns:
+            # 不足 max_turns 轮：全部消息都属于热区。
+            return 0
+
+        start = user_indices[-max_turns]
+        # 主动下发的 assistant 消息（_channel_delivery）与其后的 user 回复
+        # 属于同一轮，需一并保留，与 get_history 行为一致。
+        if start > 0 and self.messages[start - 1].get("_channel_delivery"):
+            start -= 1
+
+        sliced = self.messages[start:]
+
+        # 边界对齐：若截断点落在 tool_call 序列中间（前方存在孤儿 tool_result，
+        # 即声明它的 assistant 被截断），向前扩展到上一个 user 轮，使每个
+        # tool_call 与其 tool_result 保持完整配对。
+        while start > 0:
+            legal = find_legal_message_start(sliced)
+            if legal == 0:
+                break
+            prev_user = None
+            for i in range(start - 1, -1, -1):
+                if self.messages[i].get("role") == "user":
+                    prev_user = i
+                    break
+            if prev_user is None:
+                break
+            start = prev_user
+            sliced = self.messages[start:]
+
+        # 仍无法配对的孤儿 tool_result（父 assistant 不存在）直接丢弃，
+        # 让 start 前移越过它们。
+        legal = find_legal_message_start(sliced)
+        if legal:
+            start += legal
+
+        return start
+
+    def get_hot_history(
+        self,
+        max_turns: int = 50,
+        *,
+        max_tokens: int = 0,
+        include_timestamps: bool = False,
+    ) -> list[dict[str, Any]]:
+        """Return the most recent turns for LLM input, bounded by turn count.
+
+        A "turn" = one user message + its corresponding assistant response(s)
+        (including tool_calls and tool_results). Boundary aligns to user
+        message, never truncating mid-tool_call sequence.
+
+        Unlike ``get_history`` (which slices by raw message count over the
+        unconsolidated tail), this method counts *user turns* across the full
+        ``self.messages`` log, so recently consolidated turns are still
+        eligible as long as they fall inside the turn window.
+        """
+        if not self.messages:
+            return []
+
+        max_turns = max_turns if max_turns > 0 else 50
+
+        # 一轮 = 一条 user 消息开始，到下一条 user 消息之前的全部内容。
+        # 从尾部向前数 user 消息，定位第 max_turns 轮的起点。
+        user_indices = [i for i, m in enumerate(self.messages) if m.get("role") == "user"]
+
+        if not user_indices:
+            start = 0
+        elif len(user_indices) <= max_turns:
+            # 不足 max_turns 轮：从首条消息起全部返回（保留首个 user 之前的
+            # 主动下发消息）。
+            start = 0
+        else:
+            start = user_indices[-max_turns]
+            # 主动下发的 assistant 消息（_channel_delivery）与其后的 user 回复
+            # 属于同一轮，需一并保留，与 get_history 行为一致。
+            if start > 0 and self.messages[start - 1].get("_channel_delivery"):
+                start -= 1
+
+        sliced = self.messages[start:]
+
+        # 边界对齐：若截断点落在 tool_call 序列中间（前方存在孤儿 tool_result，
+        # 即声明它的 assistant 被截断），向前扩展到上一个 user 轮，使每个
+        # tool_call 与其 tool_result 保持完整配对。
+        while start > 0:
+            legal = find_legal_message_start(sliced)
+            if legal == 0:
+                break
+            prev_user = None
+            for i in range(start - 1, -1, -1):
+                if self.messages[i].get("role") == "user":
+                    prev_user = i
+                    break
+            if prev_user is None:
+                break
+            start = prev_user
+            sliced = self.messages[start:]
+
+        # 仍无法配对的孤儿 tool_result（父 assistant 不存在）直接丢弃。
+        legal = find_legal_message_start(sliced)
+        if legal:
+            sliced = sliced[legal:]
+
+        out: list[dict[str, Any]] = []
+        for message in sliced:
+            if message.get("_command"):
+                continue
+            content = message.get("content", "")
+            role = message.get("role")
+            if role == "assistant" and isinstance(content, str):
+                content = _sanitize_assistant_replay_text(content)
+            media = message.get("media")
+            if role == "user" and isinstance(media, list) and media and isinstance(content, str):
+                breadcrumbs = "\n".join(
+                    image_placeholder_text(p) for p in media if isinstance(p, str) and p
+                )
+                content = f"{content}\n{breadcrumbs}" if content else breadcrumbs
+            if include_timestamps:
+                content = self._annotate_message_time(message, content)
+            if role == "assistant" and isinstance(content, str) and not content.strip():
+                if not any(key in message for key in ("tool_calls", "reasoning_content", "thinking_blocks")):
+                    continue
+            entry: dict[str, Any] = {"role": message["role"], "content": content}
+            for key in ("tool_calls", "tool_call_id", "name", "reasoning_content", "thinking_blocks"):
+                if key in message:
+                    entry[key] = message[key]
+            out.append(entry)
+
+        if max_tokens > 0 and out:
+            kept: list[dict[str, Any]] = []
+            used = 0
+            for message in reversed(out):
+                tokens = estimate_message_tokens(message)
+                if kept and used + tokens > max_tokens:
+                    break
+                kept.append(message)
+                used += tokens
+            kept.reverse()
+
+            first_user = next((i for i, m in enumerate(kept) if m.get("role") == "user"), None)
+            if first_user is not None:
+                kept = kept[first_user:]
+            else:
+                recovered_user = next(
+                    (i for i in range(len(out) - 1, -1, -1) if out[i].get("role") == "user"),
+                    None,
+                )
+                if recovered_user is not None:
+                    kept = out[recovered_user:]
+
+            legal = find_legal_message_start(kept)
+            if legal:
+                kept = kept[legal:]
+            out = kept
+        return out
+
     def clear(self) -> None:
         """Clear all messages, episodes, and reset session to initial state."""
         self.messages = []

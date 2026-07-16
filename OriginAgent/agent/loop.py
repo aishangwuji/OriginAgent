@@ -18,12 +18,12 @@ from OriginAgent.agent.agent_host import AgentHost, AgentHostDependencies
 from OriginAgent.agent.agent_loop_components import build_loop_components
 from OriginAgent.agent.agent_runtime import (
     AgentRuntime,
-    BackgroundServices,
-    CoreServices,
-    MemoryServices,
-    MetaCognitionServices,
     RuntimeConfig,
     RuntimeDependencies,
+    CoreServices,
+    MetaCognitionServices,
+    MemoryServices,
+    BackgroundServices,
     StoreServices,
 )
 from OriginAgent.agent.agent_runtime_context import (
@@ -96,6 +96,7 @@ from OriginAgent.security.capabilities import CapabilitySnapshot
 from OriginAgent.security.grants import issue_tool_approval_grant
 from OriginAgent.session.goal_state import goal_state_raw, goal_state_ws_blob, parse_goal_state
 from OriginAgent.session.manager import Session, SessionManager
+from OriginAgent.utils.constants import RoleConstants
 from OriginAgent.utils.image_generation_intent import image_generation_prompt
 from OriginAgent.utils.webui_titles import mark_webui_session
 from OriginAgent.utils.webui_transcript import append_transcript_object, delete_webui_transcript
@@ -380,6 +381,7 @@ class AgentLoop:
                 system_turn_handler=self._system_turn_handler,
                 scan_meta_triggers_for_turn=self._scan_meta_triggers_for_turn,
                 schedule_meta_cognition_reflection=self._schedule_meta_cognition_reflection,
+                meta_cognition_runtime=getattr(self, "_meta_cognition_runtime", None),
             )
         )
         self._message_dispatcher = MessageDispatcher(MessageDispatcherDeps(loop=self))
@@ -425,6 +427,8 @@ class AgentLoop:
             workspace=self.workspace,
             bdi_config=_bdi_cfg if _bdi_cfg and _bdi_cfg.enabled else None,
             meta_cognition_config=getattr(self, "_meta_cognition_config", None),
+            meta_cognition_audit=getattr(self, "_meta_cognition_audit", None),
+            event_bus=getattr(self, "_typed_event_bus", None),
             # Phase 2b — Transcription
             transcription_provider_config=transcription_provider_config,
             tools_config=self.tools_config,
@@ -445,51 +449,6 @@ class AgentLoop:
 
         # ── AgentRuntime: stateless message router ────────────────────────
         self._runtime = AgentRuntime(RuntimeDependencies(
-            # ── New: grouped sub-containers ────────────────────────────
-            core=CoreServices(
-                tools=self.tools,
-                provider=self.provider,
-                runner=self.runner,
-                context=self.context,
-                sessions=self.sessions,
-                bus=self.bus,
-                workspace=self.workspace,
-                subagents=self.subagents,
-            ),
-            meta=MetaCognitionServices(
-                runtime=getattr(self, "_meta_cognition_runtime", None),
-                reflector=getattr(self, "_meta_cognition_reflector", None),
-                regulator=getattr(self, "_meta_cognition_regulator", None),
-                config=getattr(self, "_meta_cognition_config", None),
-                coordinator=self._meta_coordinator,
-                perception_fusion=getattr(self, "_perception_fusion", None),
-            ),
-            memory=MemoryServices(
-                state_holder=self._state_holder,
-                working_memory=self.working_memory,
-                nearline_memory=self.nearline_memory,
-                session_search_index=self.session_search_index,
-                consolidator=self.consolidator,
-                dream=self.dream,
-                session_cold_archive=self.session_cold_archive,
-                rolling_episode_compaction=self.rolling_episode_compaction,
-                memory_governance=self.memory_governance,
-                auto_compact=self.auto_compact,
-            ),
-            background=BackgroundServices(
-                background_review=self.background_review,
-                curator=self.curator,
-                cognitive_loop=self.cognitive_loop,
-                cognitive_scheduler=self.cognitive_scheduler,
-                cognitive_audit=self._cognitive_audit,
-                cron_service=self.cron_service,
-            ),
-            stores=StoreServices(
-                file_state_store=self._file_state_store,
-                confirmation_store=self._confirmation_store,
-                confirmation_manager=self._confirmation_manager,
-                grant_store=self._grant_store,
-            ),
             config=RuntimeConfig(
                 model=self.model,
                 max_iterations=self.max_iterations,
@@ -573,6 +532,56 @@ class AgentLoop:
             domain_runtime_contributions=self._domain_runtime_contributions,
             bdi_engine=self._bdi_engine,
             sqlite_stores=getattr(self, "_sqlite_stores", None),
+
+            # ── Strangler Fig typed subcontainers (Phase 0: dual-path coexistence) ─
+            core=CoreServices(
+                tools=self.tools,
+                provider=self.provider,
+                runner=self.runner,
+                context=self.context,
+                sessions=self.sessions,
+                bus=self.bus,
+                workspace=self.workspace,
+                subagents=self.subagents,
+                working_memory=self.working_memory,
+                commands=self.commands,
+                action_planner=self.action_planner,
+                active_intents=self.active_intents,
+                reminder_store=self._reminder_store,
+                world_state=self.world_state,
+            ),
+            meta_cognition_svc=MetaCognitionServices(
+                meta_cognition_runtime=getattr(self, "_meta_cognition_runtime", None),
+                meta_cognition_reflector=getattr(self, "_meta_cognition_reflector", None),
+                meta_cognition_regulator=getattr(self, "_meta_cognition_regulator", None),
+                meta_cognition_config=getattr(self, "_meta_cognition_config", None),
+                meta_coordinator=self._meta_coordinator,
+                perception_fusion=getattr(self, "_perception_fusion", None),
+            ),
+            memory_svc=MemoryServices(
+                nearline_memory=self.nearline_memory,
+                session_search_index=self.session_search_index,
+                consolidator=self.consolidator,
+                dream=self.dream,
+                memory_governance=self.memory_governance,
+            ),
+            background_svc=BackgroundServices(
+                background_review=self.background_review,
+                curator=self.curator,
+                cognitive_loop=self.cognitive_loop,
+                cognitive_scheduler=self.cognitive_scheduler,
+                cognitive_audit=self._cognitive_audit,
+                session_cold_archive=self.session_cold_archive,
+                rolling_episode_compaction=self.rolling_episode_compaction,
+                auto_compact=self.auto_compact,
+            ),
+            stores=StoreServices(
+                file_state_store=self._file_state_store,
+                confirmation_store=self._confirmation_store,
+                confirmation_manager=self._confirmation_manager,
+                grant_store=self._grant_store,
+                cron_service=self.cron_service,
+            ),
         ))
 
     @classmethod
@@ -871,6 +880,7 @@ class AgentLoop:
             record_action_continuity_audit=self._record_action_continuity_audit,
             assemble_outbound=self._assemble_outbound,
             get_max_messages=self._get_max_messages,
+            get_warm_summarizer=self._get_warm_summarizer,
         )
 
     # ── Lazy getters for TurnPipelineDeps ────────────────────────────────
@@ -896,6 +906,20 @@ class AgentLoop:
 
     def _get_max_messages(self):
         return self._max_messages
+
+    def _get_warm_summarizer(self):
+        """Lazily construct WarmSummarizer on first use.
+
+        WarmSummarizer requires auxiliary_router + workspace；采用惰性构造
+        避免在 loop 初始化阶段产生开销，同时让不涉及温区总结的测试可跳过。
+        """
+        if getattr(self, "_warm_summarizer", None) is None:
+            from OriginAgent.agent.warm_summarizer import WarmSummarizer
+            self._warm_summarizer = WarmSummarizer(
+                auxiliary_router=self.auxiliary_router,
+                workspace=self.workspace,
+            )
+        return self._warm_summarizer
 
     def _resolve_state_key(self, session_key: str | None = None) -> str:
         """Resolve the effective session key for state-holder lookups.
@@ -1335,9 +1359,9 @@ class AgentLoop:
             if self.context._context_config.enable_phase1_continuity:
                 assembled = self.context.assemble_user_content(current_message=None, media=None, channel=msg.channel, chat_id=self._runtime_chat_id(msg), sender_id=msg.sender_id, session_summary=pending_summary, session_metadata=session.metadata, internal_event=None, runtime_context=self._state_holder.get(session.key).last_runtime_context, session_key=session.key, recovered_continuity_block=recovered_continuity_block, include_current_message=False)
                 self._state_holder.get(session.key).last_context_assembly = dict(assembled.audit)
-                messages.append({"role": "user", "content": assembled.blocks})
+                messages.append({"role": RoleConstants.USER, "content": assembled.blocks})
                 return self.context._apply_prompt_budget(messages, context_window_tokens=self.context_window_tokens, max_completion_tokens=getattr(self.provider.generation, "max_tokens", 4096))
-            messages.append({"role": "user", "content": [self.context.build_runtime_context_block(msg.channel, self._runtime_chat_id(msg), self.context.timezone, sender_id=msg.sender_id, session_metadata=session.metadata)] + ([recovered_continuity_block] if recovered_continuity_block else []) + list(self.context.build_reference_context_blocks(session_summary=pending_summary, session_key=session.key, runtime_context=self._state_holder.get(session.key).last_runtime_context, current_message=msg.content))})
+            messages.append({"role": RoleConstants.USER, "content": [self.context.build_runtime_context_block(msg.channel, self._runtime_chat_id(msg), self.context.timezone, sender_id=msg.sender_id, session_metadata=session.metadata)] + ([recovered_continuity_block] if recovered_continuity_block else []) + list(self.context.build_reference_context_blocks(session_summary=pending_summary, session_key=session.key, runtime_context=self._state_holder.get(session.key).last_runtime_context, current_message=msg.content))})
             self._state_holder.get(session.key).last_context_assembly = {"enabled": False, "session_key": session.key, "reason": "phase1_continuity_disabled", "block_kinds": [self.context.RUNTIME_CONTEXT_KIND] + [block.get("_meta", {}).get("kind") for block in self.context.build_reference_context_blocks(session_summary=pending_summary, session_key=session.key, runtime_context=self._state_holder.get(session.key).last_runtime_context, current_message=msg.content)]}
             return self.context._apply_prompt_budget(messages, context_window_tokens=self.context_window_tokens, max_completion_tokens=getattr(self.provider.generation, "max_tokens", 4096))
         state = self._state_holder.get(session.key)
@@ -1427,7 +1451,7 @@ class AgentLoop:
         mark_webui_session(session, msg.metadata)
         self._persist_user_message_early(msg, session, pending_ask_id=None, _command=True)
         if result.content.strip():
-            session.add_message("assistant", result.content, _command=True)
+            session.add_message(RoleConstants.ASSISTANT, result.content, _command=True)
         self._clear_pending_user_turn(session)
         self.sessions.save(session)
         self._append_webui_command_transcript(msg, result.content)
@@ -1799,9 +1823,14 @@ class AgentLoop:
             return self._runtime._save_continuity_checkpoint(session, runtime_context=runtime_context)
         return {"session_key": session.key, "current_goal": None}
 
-    @staticmethod
-    def _load_continuity_checkpoint(session: Session) -> dict[str, Any] | None:
-        return AgentRuntime._load_continuity_checkpoint(session)
+    def _load_continuity_checkpoint(self, session: Session) -> dict[str, Any] | None:
+        # 三级重建：传入 workspace 以便从 warm_summaries.jsonl 读取最新冷区索引
+        if hasattr(self, "_runtime") and self._runtime is not None:
+            workspace = getattr(self._runtime._deps, "workspace", None)
+            return AgentRuntime._load_continuity_checkpoint(session, workspace=workspace)
+        return AgentRuntime._load_continuity_checkpoint(
+            session, workspace=getattr(self, "workspace", None)
+        )
 
     def _snapshot_context_assembly_from_messages(self, messages: list[dict], *,
                                                    session_key: str | None, runtime_context: RuntimeContext | None) -> dict:

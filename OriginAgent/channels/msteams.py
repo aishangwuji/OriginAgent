@@ -38,7 +38,8 @@ from OriginAgent.bus.events import OutboundMessage
 from OriginAgent.bus.queue import MessageBus
 from OriginAgent.channels.base import BaseChannel
 from OriginAgent.config.paths import get_workspace_path
-from OriginAgent.config.schema import Base
+from OriginAgent.config.schema import Base, RuntimeProfile
+from OriginAgent.i18n import t
 
 MSTEAMS_AVAILABLE = (
     importlib.util.find_spec("jwt") is not None
@@ -71,8 +72,11 @@ class MSTeamsConfig(Base):
     path: str = "/api/messages"
     allow_from: list[str] = Field(default_factory=list)
     reply_in_thread: bool = True
-    mention_only_response: str = "Hi — what can I help with?"
+    mention_only_response: str = t("channel.msteams.mention_only_response")
     validate_inbound_auth: bool = True
+    # Runtime profile controls whether auth can be disabled. Only "local_dev"
+    # permits validate_inbound_auth=False; all other profiles enforce it.
+    runtime_profile: RuntimeProfile = "default"
     ref_ttl_days: int = Field(default=MSTEAMS_REF_TTL_DAYS, ge=1)
     prune_web_chat_refs: bool = True
     prune_non_personal_refs: bool = True
@@ -141,14 +145,17 @@ class MSTeamsChannel(BaseChannel):
             return
 
         if not self.config.validate_inbound_auth:
-            self.logger.warning(
-                "Inbound auth validation was explicitly DISABLED in config. "
-                "Anyone who knows the webhook URL can send messages as any user. "
-                "Only disable this for local development or controlled testing."
-            )
+            if self.config.runtime_profile != "local_dev":
+                raise RuntimeError(
+                    self._t(
+                        "channel.msteams.auth_required_error",
+                        profile=self.config.runtime_profile,
+                    )
+                )
+            self.logger.warning(self._t("channel.msteams.auth_disabled_warning"))
 
         self._loop = asyncio.get_running_loop()
-        self._http = httpx.AsyncClient(timeout=30.0)
+        self._http = httpx.AsyncClient(timeout=self.http_download_timeout)
         self._running = True
 
         channel = self

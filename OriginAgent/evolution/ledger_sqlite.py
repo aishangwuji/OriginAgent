@@ -39,6 +39,7 @@ class SqliteEvolutionLedger:
         db_path: Path | None = None,
         identity_store: EvolutionIdentityStore | None = None,
         sign_events: bool = False,
+        db_busy_timeout: int = 5000,
     ) -> None:
         self.workspace = Path(workspace)
         memory_dir = self.workspace / "memory"
@@ -48,6 +49,7 @@ class SqliteEvolutionLedger:
         )
         self._sign_events = sign_events
         self._identity_store = identity_store
+        self._db_busy_timeout = db_busy_timeout  # SQLite busy timeout in ms (spec 3.4, rule 17)
         self._conn: sqlite3.Connection | None = None
 
     # -- Connection management -----------------------------------------------------
@@ -56,7 +58,7 @@ class SqliteEvolutionLedger:
         if self._conn is not None:
             return self._conn
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
-        conn = sqlite3.connect(str(self.db_path))
+        conn = sqlite3.connect(str(self.db_path), timeout=self._db_busy_timeout / 1000)
         conn.execute("PRAGMA journal_mode=WAL")
         conn.execute("PRAGMA synchronous=NORMAL")
         conn.execute("PRAGMA foreign_keys=ON")
@@ -66,7 +68,7 @@ class SqliteEvolutionLedger:
         return self._conn
 
     def _ensure_schema(self, conn: sqlite3.Connection) -> None:
-        conn.execute("PRAGMA busy_timeout=10000")  # 10s retry under concurrent writes
+        conn.execute(f"PRAGMA busy_timeout={self._db_busy_timeout}")  # spec 3.4, rule 17
         conn.executescript("""
             CREATE TABLE IF NOT EXISTS evolution_events (
                 event_id TEXT PRIMARY KEY,

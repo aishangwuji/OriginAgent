@@ -566,7 +566,7 @@ $out | ConvertTo-Json -Depth 5 -Compress
 """
         result = self._command_runner(
             ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", script],
-            timeout=8,
+            timeout=8,  # Local subprocess timeout (spec 3.4) — not HTTP/DB, not in TimeoutConfig
         )
         data = json.loads(result or "{}")
         out: dict[str, list[dict[str, Any]]] = {}
@@ -579,7 +579,7 @@ $out | ConvertTo-Json -Depth 5 -Compress
 
     def _discover_from_arp(self, *, generated_at: str, skipped: list[str]) -> list[DiscoveredDevice]:
         try:
-            output = self._command_runner(["arp", "-a"], timeout=5)
+            output = self._command_runner(["arp", "-a"], timeout=5)  # Local subprocess timeout (spec 3.4) — not HTTP/DB
         except Exception as exc:
             skipped.append(f"arp_failed:{type(exc).__name__}")
             return []
@@ -840,7 +840,7 @@ $out | ConvertTo-Json -Depth 5 -Compress
                     "-Command",
                     f"Get-NetIPAddress -IPAddress '{ip}' -ErrorAction SilentlyContinue | Select-Object -ExpandProperty InterfaceAlias",
                 ],
-                timeout=4,
+                timeout=4,  # Local subprocess timeout (spec 3.4) — not HTTP/DB
             )
         except Exception:
             return ""
@@ -861,7 +861,7 @@ $out | ConvertTo-Json -Depth 5 -Compress
         }
 
     @staticmethod
-    def _run_command(command: list[str], *, timeout: int = 8) -> str:
+    def _run_command(command: list[str], *, timeout: int = 8) -> str:  # Local subprocess default (spec 3.4) — not HTTP/DB
         completed = subprocess.run(
             command,
             capture_output=True,
@@ -1031,6 +1031,7 @@ $recorder.SaveToFile($path)
             "X-Api-Resource-Id": resource_id,
             "X-Api-Request-Id": request_id,
         }
+        # TTS speech generation is slow — needs longer than http_api_timeout default (spec 3.4)
         response = httpx.post(api_url, headers=headers, json=payload, timeout=120.0)
         response.raise_for_status()
         body = response.json()

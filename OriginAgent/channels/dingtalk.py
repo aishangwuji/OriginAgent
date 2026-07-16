@@ -9,7 +9,7 @@ import zipfile
 from io import BytesIO
 from pathlib import Path
 from typing import Any
-from urllib.parse import unquote, urljoin, urlparse
+from urllib.parse import urljoin, urlparse
 
 import httpx
 from pydantic import Field
@@ -479,17 +479,12 @@ class DingTalkChannel(BaseChannel):
             return data, filename, content_type or None
 
         try:
-            if media_ref.startswith("file://"):
-                parsed = urlparse(media_ref)
-                local_path = Path(unquote(parsed.path))
-            else:
-                local_path = Path(os.path.expanduser(media_ref))
-            if not local_path.is_file():
-                self.logger.warning("media file not found: {}", local_path)
+            result = await self.read_local_media(media_ref)
+            if result is None:
                 return None, None, None
-            data = await asyncio.to_thread(local_path.read_bytes)
-            content_type = mimetypes.guess_type(local_path.name)[0]
-            return data, local_path.name, content_type
+            data, filename = result
+            content_type = mimetypes.guess_type(filename)[0]
+            return data, filename, content_type
         except Exception:
             self.logger.exception("media read error ref={}", media_ref)
             return None, None, None

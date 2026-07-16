@@ -431,7 +431,7 @@ class CaptureCameraFrameTool(_LocalAwarenessTool):
 
     @property
     def description(self) -> str:
-        return "Capture one camera frame into the workspace when local awareness camera capture is enabled."
+        return "Capture one camera frame into the workspace when local awareness camera capture is enabled. NOTE: Current implementation only writes a 1x1 transparent PNG placeholder file; real camera perception is not implemented."
 
     @property
     def parameters(self) -> dict[str, Any]:
@@ -492,7 +492,7 @@ class CaptureScreenTool(CaptureCameraFrameTool):
 
     @property
     def description(self) -> str:
-        return "Capture one screen image into the workspace when local awareness screen capture is enabled."
+        return "Capture one screen image into the workspace when local awareness screen capture is enabled. NOTE: Current implementation only writes a 1x1 transparent PNG placeholder file; real screen perception is not implemented."
 
     @property
     def parameters(self) -> dict[str, Any]:
@@ -541,7 +541,7 @@ class RecordAudioSampleTool(_LocalAwarenessTool):
 
     @property
     def description(self) -> str:
-        return "Record a bounded audio sample into the workspace when audio input is enabled."
+        return "Record a bounded audio sample into the workspace when audio input is enabled. NOTE: Real audio perception is not fully implemented; the backend may write a placeholder WAV file when recording is unavailable."
 
     @property
     def parameters(self) -> dict[str, Any]:

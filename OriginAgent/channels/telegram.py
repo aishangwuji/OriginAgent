@@ -318,15 +318,15 @@ class TelegramChannel(BaseChannel):
         api_request = HTTPXRequest(
             connection_pool_size=self.config.connection_pool_size,
             pool_timeout=self.config.pool_timeout,
-            connect_timeout=30.0,
-            read_timeout=30.0,
+            connect_timeout=self.http_download_timeout,
+            read_timeout=self.http_download_timeout,
             proxy=proxy,
         )
         poll_request = HTTPXRequest(
             connection_pool_size=4,
             pool_timeout=self.config.pool_timeout,
-            connect_timeout=30.0,
-            read_timeout=30.0,
+            connect_timeout=self.http_download_timeout,
+            read_timeout=self.http_download_timeout,
             proxy=proxy,
         )
         builder = (

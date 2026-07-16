@@ -14,6 +14,8 @@ from typing import Any
 import tiktoken
 from loguru import logger
 
+from OriginAgent.utils.constants import RoleConstants
+
 
 def strip_think(text: str) -> str:
     """Remove thinking blocks, unclosed trailing tags, and tokenizer-level
@@ -211,7 +213,7 @@ def find_legal_message_start(messages: list[dict[str, Any]]) -> int:
     start = 0
     for i, msg in enumerate(messages):
         role = msg.get("role")
-        if role == "assistant":
+        if role == RoleConstants.ASSISTANT:
             for tc in msg.get("tool_calls") or []:
                 if isinstance(tc, dict) and tc.get("id"):
                     declared.add(str(tc["id"]))
@@ -375,7 +377,7 @@ def build_assistant_message(
     thinking_blocks: list[dict] | None = None,
 ) -> dict[str, Any]:
     """Build a provider-safe assistant message with optional reasoning fields."""
-    msg: dict[str, Any] = {"role": "assistant", "content": content or ""}
+    msg: dict[str, Any] = {"role": RoleConstants.ASSISTANT, "content": content or ""}
     if tool_calls:
         msg["tool_calls"] = tool_calls
     if reasoning_content is not None or thinking_blocks:

@@ -37,6 +37,7 @@ from OriginAgent.providers.base import LLMProvider
 from OriginAgent.security.capabilities import CapabilitySnapshot, intersect_capability_snapshots
 from OriginAgent.security.grants import CapabilityGrantStore
 from OriginAgent.security.policy import PolicyDeniedError
+from OriginAgent.utils.constants import RoleConstants
 from OriginAgent.utils.prompt_templates import render_template
 from OriginAgent.utils.tracing import log_event
 
@@ -498,8 +499,8 @@ class SubagentManager:
             )
             system_prompt = self._build_subagent_prompt()
             messages: list[dict[str, Any]] = [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": task},
+                {"role": RoleConstants.SYSTEM, "content": system_prompt},
+                {"role": RoleConstants.USER, "content": task},
             ]
 
             result = await self.runner.run(AgentRunSpec(

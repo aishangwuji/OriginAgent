@@ -9,6 +9,7 @@ from loguru import logger
 
 from OriginAgent.providers.base import LLMProvider
 from OriginAgent.session.manager import Session, SessionManager
+from OriginAgent.utils.constants import RoleConstants
 from OriginAgent.utils.helpers import truncate_text
 
 WEBUI_SESSION_METADATA_KEY = "webui"
@@ -46,9 +47,9 @@ def _title_inputs(session: Session) -> tuple[str, str]:
         content = message.get("content")
         if not isinstance(content, str) or not content.strip():
             continue
-        if role == "user" and not user_text:
+        if role == RoleConstants.USER and not user_text:
             user_text = content.strip()
-        elif role == "assistant" and not assistant_text:
+        elif role == RoleConstants.ASSISTANT and not assistant_text:
             assistant_text = content.strip()
         if user_text and assistant_text:
             break
@@ -93,13 +94,13 @@ async def maybe_generate_webui_title(
         response = await provider.chat_with_retry(
             [
                 {
-                    "role": "system",
+                    "role": RoleConstants.SYSTEM,
                     "content": (
                         "You write short, neutral chat titles. "
                         "Return only the title text."
                     ),
                 },
-                {"role": "user", "content": prompt},
+                {"role": RoleConstants.USER, "content": prompt},
             ],
             tools=None,
             model=model,

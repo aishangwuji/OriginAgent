@@ -634,7 +634,7 @@ class MatrixChannel(BaseChannel):
         backoff = 2.0
         while self._running:
             try:
-                await self.client.sync_forever(timeout=30000, full_state=True)
+                await self.client.sync_forever(timeout=30000, full_state=True)  # Matrix sync long-poll duration (ms), not HTTP download
                 backoff = 2.0
             except asyncio.CancelledError:
                 break

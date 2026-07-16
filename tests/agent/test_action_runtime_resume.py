@@ -246,19 +246,6 @@ def test_missing_confirmation_does_not_execute(tmp_path):
     assert backend.calls == 0
 
 
-def test_notify_only_confirmation_cannot_resume(tmp_path):
-    gate = SequenceGate(decision("notify_only"))
-    backend = CountingBackend()
-    safe_executor = executor(tmp_path, gate, backend)
-    result = safe_executor.submit(intent(action="notify_user", risk="low"), now=NOW)
-
-    resumed = safe_executor.resume_confirmed(result.confirmation_id, reply="yes", now=NOW)
-
-    assert resumed.status == "denied"
-    assert "not executable" in resumed.reason
-    assert backend.calls == 0
-
-
 def test_same_confirmation_cannot_execute_twice(tmp_path):
     gate = SequenceGate(
         decision("ask_confirmation"),

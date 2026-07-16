@@ -19,6 +19,7 @@ class TurnOrchestratorDeps:
     system_turn_handler: SystemTurnHandler
     scan_meta_triggers_for_turn: Callable[[TurnContext], None]
     schedule_meta_cognition_reflection: Callable[[TurnContext], None]
+    meta_cognition_runtime: Any = None
 
 
 class TurnOrchestrator:
@@ -62,7 +63,7 @@ class TurnOrchestrator:
             capability_snapshot=capability_snapshot,
         )
         # Start turn-scoped dedup isolation on the meta runtime
-        meta_runtime = getattr(self._deps, "meta_cognition_runtime", None)
+        meta_runtime = self._deps.meta_cognition_runtime
         if meta_runtime and hasattr(meta_runtime, "start_turn"):
             meta_runtime.start_turn(ctx.turn_id)
         try:

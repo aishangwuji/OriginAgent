@@ -25,6 +25,7 @@ from OriginAgent.agent.cognitive_scheduler import CognitiveScheduler, CognitiveS
 from OriginAgent.agent.confirmation import ConfirmationManager, PendingConfirmationStore
 from OriginAgent.agent.curator import CuratorService
 from OriginAgent.agent.domain_packs import DomainPackManager
+from OriginAgent.agent.epic_motor import EpicActionQueue, EpicMotorProcessor
 from OriginAgent.agent.introspection.service import RuntimeIntrospectionService
 from OriginAgent.agent.memory import Consolidator, Dream, dream_feature_flags
 from OriginAgent.agent.memory_governance import MemoryGovernance
@@ -37,15 +38,18 @@ from OriginAgent.agent.reminders import ReminderStore
 from OriginAgent.agent.roaming_prewarm import RoamingPrewarmService
 from OriginAgent.agent.runner import AgentRunner
 from OriginAgent.agent.skill_bootstrapper import (
+    SkillBootstrapper,
     SkillBootstrapperScanner,
     SkillCandidateCompiler,
 )
+from OriginAgent.agent.soar_chunker import SoarChunker
 from OriginAgent.agent.thought_substrate_store import ThoughtSubstrate
 from OriginAgent.agent.tools.audit import JsonlToolAuditSink, ToolAuditConfig
 from OriginAgent.agent.tools.file_state import FileStateStore
 from OriginAgent.agent.tools.registry import ToolRegistry
 from OriginAgent.agent.working_memory import WorkingMemoryManager
 from OriginAgent.agent.world_state import WorldStateManager
+from OriginAgent.bus.typed_events import TypedEventBus
 from OriginAgent.memory.pipeline import NearlineMemoryPipeline
 from OriginAgent.memory.rolling import RollingEpisodeCompaction
 from OriginAgent.security.grants import CapabilityGrantStore
@@ -123,6 +127,7 @@ class AgentLoopAttributes:
     # Step 3 — registry, subagents, runtime contributions
     working_memory: Any = None  # type: ignore[assignment]
     world_state: Any = None  # type: ignore[assignment]
+    _typed_event_bus: Any = None  # type: ignore[assignment]
     action_planner: Any = None  # type: ignore[assignment]
     tools: Any = None  # type: ignore[assignment]
     _domain_runtime_overrides: Any = None  # type: ignore[assignment]
@@ -399,9 +404,15 @@ def build_loop_components(
     # Must be created early — downstream services wire in SQLite fallback.
     values["_sqlite_stores"] = SqliteStoreFactory.create_all(workspace)
 
+    # Single source of truth for JSONL fallback (config.schema.StorageConfig).
+    _jsonl_fallback = bool(
+        effective_config
+        and getattr(getattr(effective_config, "storage", None), "jsonl_fallback_enabled", False)
+    )
     values["_audit_logger"] = AuditLogger(
         workspace,
         sqlite_store=values["_sqlite_stores"].audit_events,
+        jsonl_fallback_enabled=_jsonl_fallback,
     )
     values["_confirmation_store"] = PendingConfirmationStore(workspace)
     values["_confirmation_manager"] = ConfirmationManager(
@@ -413,7 +424,7 @@ def build_loop_components(
     values["_reminder_store"] = ReminderStore(
         workspace,
         sqlite_store=values["_sqlite_stores"].reminders,
-        jsonl_fallback_enabled=False,
+        jsonl_fallback_enabled=_jsonl_fallback,
     )
 
     # Step 3: registry, subagents, runtime contributions.
@@ -421,10 +432,12 @@ def build_loop_components(
         values["sessions"],
         reminder_store=values["_reminder_store"],
     )
+    values["_typed_event_bus"] = TypedEventBus()
     values["world_state"] = WorldStateManager(
         workspace,
         values["sessions"],
         context_config=defaults.context,
+        event_bus=values["_typed_event_bus"],
     )
     values["action_planner"] = UnifiedActionPlanner()
     values["tools"] = ToolRegistry(
@@ -522,9 +535,10 @@ def build_loop_components(
     # Inject SQLite fact store + relation store into the context's memory
     if hasattr(values["context"].memory, "fact_store"):
         values["context"].memory.fact_store._sqlite_facts = values["_sqlite_stores"].fact_store
-        values["context"].memory.fact_store._jsonl_fallback_enabled = False
+        values["context"].memory.fact_store._jsonl_fallback_enabled = _jsonl_fallback
         values["context"].memory.fact_store.relation_store._sqlite = values["_sqlite_stores"].fact_relations
-        values["context"].memory.fact_store.relation_store._jsonl_fallback_enabled = False
+        values["context"].memory.fact_store.relation_store._jsonl_fallback_enabled = _jsonl_fallback
+        values["context"].memory.fact_store.event_store._jsonl_fallback_enabled = _jsonl_fallback
     values["memory_governance"] = MemoryGovernance(
         workspace=workspace,
         memory=values["context"].memory,
@@ -609,6 +623,27 @@ def build_loop_components(
         _compiler = SkillCandidateCompiler()
     values["_skill_bootstrapper_scanner"] = _scanner
     values["_skill_bootstrapper_compiler"] = _compiler
+    # ── SkillBootstrapper + SoarChunker (在线技能形成 / Soar chunking) ──
+    # 构造 SkillBootstrapper 并通过 SoarChunker 注入 SubagentManager 的
+    # 成功解决钩子(subagent.py L624),激活 Soar 在线块化。
+    # 后置注入原因:scanner/compiler 依赖 _meta_cognition_config(L335),
+    # 晚于 SubagentManager 构造(L473),但此时 SubagentManager 尚未启动,
+    # 注入 _soar_chunker 字段是安全的。
+    _skill_bootstrapper: SkillBootstrapper | None = None
+    _soar_chunker: SoarChunker | None = None
+    if _bs_enabled and _scanner is not None and _compiler is not None:
+        _skill_bootstrapper = SkillBootstrapper(
+            scanner=_scanner,
+            compiler=_compiler,
+            workspace=workspace,
+        )
+        _soar_chunker = SoarChunker(
+            bootstrapper=_skill_bootstrapper,
+            tool_record_store=None,  # 优雅降级:无 store 时 _extract_tool_sequence 返回空列表
+        )
+        values["subagents"]._soar_chunker = _soar_chunker
+    values["_skill_bootstrapper"] = _skill_bootstrapper
+    values["_soar_chunker"] = _soar_chunker
     values["_meta_cognition_runtime"] = MetaCognitionRuntime(
         config=values["_meta_cognition_config"],
         audit=values["_meta_cognition_audit"],
@@ -659,15 +694,40 @@ def build_loop_components(
         running_subagents_provider=values["subagents"].get_running_count_by_session,
         session_processor=loop._run_cognitive_pass_for_session,
     )
+
+    # 先构造 CognitiveLoopConfig,供 EPIC motor 与 CognitiveLoop 共享同一份配置
+    # (规则6 单一数据源:motor_tick_interval_ms 只在 CognitiveLoopConfig 上定义)。
+    cognitive_loop_config = CognitiveLoopConfig(
+        enabled=bool(cognition_enabled),
+        interval_seconds=values["_active_intent_config"].interval_seconds,
+    )
+
+    # ── EPIC motor wiring (感知-认知-运动三层架构) ────────────────────────
+    # 构造 EpicActionQueue + EpicMotorProcessor,注入 CognitiveLoop 的双循环架构。
+    # 跨层依赖处理:device_action_executor(领域包层) → safe_executor → motor_queue;
+    # EpicMotorProcessor(核心层) 反向引用 safe_executor 用于 tick 派发。
+    motor_processor = None
+    if cognition_enabled and device_action_executor is not None:
+        motor_queue = EpicActionQueue()
+        # 从 DeviceActionExecutor 提取内部 SafeActionExecutor 并注入 motor_queue
+        safe_executor = getattr(device_action_executor, "safe_executor", None)
+        if safe_executor is not None and hasattr(safe_executor, "_motor_queue"):
+            safe_executor._motor_queue = motor_queue
+            motor_processor = EpicMotorProcessor(
+                executor=safe_executor,
+                queue=motor_queue,
+                tick_interval_ms=cognitive_loop_config.motor_tick_interval_ms,
+            )
+            values["_epic_motor_queue"] = motor_queue
+            values["_epic_motor_processor"] = motor_processor
+
     values["cognitive_loop"] = CognitiveLoop(
-        config=CognitiveLoopConfig(
-            enabled=bool(cognition_enabled),
-            interval_seconds=values["_active_intent_config"].interval_seconds,
-        ),
+        config=cognitive_loop_config,
         session_keys_provider=values["active_intents"].session_keys,
         active_task_count_provider=loop._active_task_count,
         running_subagents_provider=values["subagents"].get_running_count_by_session,
         session_processor=loop._run_cognitive_pass_for_session,
+        motor_processor=motor_processor,
     )
     values["nearline_memory"] = NearlineMemoryPipeline(
         workspace=workspace,

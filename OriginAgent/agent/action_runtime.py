@@ -1,7 +1,7 @@
 """Safety-gated action execution boundary.
 
 Phase 3f intentionally provides only a dry-run skeleton. Real device drivers
-must plug in behind SafeActionExecutor so they cannot bypass ActionSafetyGate.
+must plug in behind SafeActionExecutor so they cannot bypass the safety gate.
 """
 
 from __future__ import annotations
@@ -16,7 +16,7 @@ from typing import TYPE_CHECKING, Any, Callable, Protocol
 from filelock import FileLock
 from loguru import logger
 
-from OriginAgent.agent.action_safety import ActionDecision, ActionRequest, ActionSafetyGate
+from OriginAgent.agent.action_safety import ActionDecision, ActionRequest, CompositeSafetyGate
 from OriginAgent.agent.audit import AuditLogger
 from OriginAgent.agent.confirmation import (
     REASON_MAX_CHARS,
@@ -34,9 +34,8 @@ from OriginAgent.agent.world_simulator import SimulationTrace
 from OriginAgent.utils.helpers import ensure_dir
 
 if TYPE_CHECKING:
-    # 仅类型检查时导入，避免与 epic_motor 的循环导入
-    # （epic_motor 顶部 import ActionIntent，故 action_runtime 不能在运行时反向 import EpicActionQueue）
-    from OriginAgent.agent.epic_motor import EpicActionQueue
+    # 运行时不导入以避免与 epic_motor 形成循环依赖
+    from OriginAgent.agent.epic_motor import EpicActionQueue, EpicMotorCommand
 
 ACTION_FORBIDDEN_PAYLOAD_KEYS = {
     *FORBIDDEN_METADATA_KEYS,
@@ -69,7 +68,6 @@ class ActionIntent:
     continuity_origin: str | None = None
     continuity_proposal_digest: str | None = None
     simulation_trace_id: str | None = None
-    # Epic 字段：执行时长与并行调度提示，默认值保持向后兼容
     duration_ms: int = 0
     requires_parallel: bool = False
 
@@ -209,7 +207,7 @@ class SafeActionExecutor:
     def __init__(
         self,
         *,
-        gate: ActionSafetyGate,
+        gate: CompositeSafetyGate,
         confirmation_manager: ConfirmationManager,
         backend: ActionBackend,
         permission_resolver: PermissionResolver | None = None,
@@ -310,26 +308,28 @@ class SafeActionExecutor:
                     result = self._permission_result(action_id, decision, permission)
                     self._record(action_id, sanitized_intent, decision, result, current_time)
                     return result
-                # ── EPIC 运动队列模式：motor_queue 启用时入队而非直接执行 ──
                 if self._motor_queue is not None:
                     result = self._enqueue_motor_command(
-                        action_id, sanitized_intent, decision, current_time
-                    )
-                else:
-                    result = self._execute_allowed(
                         action_id,
                         sanitized_intent,
                         decision,
                         current_time,
                     )
+                    result.permission_status = permission.decision
+                    self._attach_simulation_metadata(result, simulation_precheck)
+                    self._record(action_id, sanitized_intent, decision, result, current_time)
+                    self._record_simulation_feedback(sanitized_intent, result, now=current_time)
+                    return result
+                result = self._execute_allowed(
+                    action_id,
+                    sanitized_intent,
+                    decision,
+                    current_time,
+                )
                 result.permission_status = permission.decision
                 self._attach_simulation_metadata(result, simulation_precheck)
                 self._record(action_id, sanitized_intent, decision, result, current_time)
-                # 仅在同步执行成功时记忆幂等键；queued 状态尚未真正执行，不记忆
-                # （真正的执行在 motor processor tick 中，那时由 _execute_allowed 返回 executed 后再记忆；
-                #  该记忆逻辑属于 motor processor 侧，本 spec 不实现，留作 Out of Scope）
-                if result.status != "queued":
-                    self._remember_successful_idempotency(sanitized_intent, result)
+                self._remember_successful_idempotency(sanitized_intent, result)
                 self._record_simulation_feedback(sanitized_intent, result, now=current_time)
                 return result
 
@@ -379,44 +379,6 @@ class SafeActionExecutor:
                     confirmation_id=confirmation.confirmation_id,
                     decision=decision,
                     permission_status=permission.decision,
-                )
-            self._attach_simulation_metadata(result, simulation_precheck)
-            self._record(action_id, sanitized_intent, decision, result, current_time)
-            self._record_simulation_feedback(sanitized_intent, result, now=current_time)
-            return result
-
-        # The production safety gate does not emit notify_only today; this path
-        # only preserves compatibility for explicitly injected notification decisions.
-        if decision.decision == "notify_only":
-            try:
-                notification = self.confirmation_manager.create_from_action_decision(
-                    request,
-                    decision,
-                    now=current_time,
-                )
-            except Exception as exc:
-                result = ActionExecutionResult(
-                    status="failed",
-                    action_id=action_id,
-                    reason=_sanitize_text(str(exc), REASON_MAX_CHARS),
-                    decision=decision,
-                )
-                self._record(action_id, sanitized_intent, decision, result, current_time)
-                return result
-            if notification is None:
-                result = ActionExecutionResult(
-                    status="failed",
-                    action_id=action_id,
-                    reason="notification creation failed",
-                    decision=decision,
-                )
-            else:
-                result = ActionExecutionResult(
-                    status="notified",
-                    action_id=action_id,
-                    reason=decision.reason,
-                    confirmation_id=notification.confirmation_id,
-                    decision=decision,
                 )
             self._attach_simulation_metadata(result, simulation_precheck)
             self._record(action_id, sanitized_intent, decision, result, current_time)
@@ -600,17 +562,6 @@ class SafeActionExecutor:
             )
             self._record(action_id, intent, decision, result, current_time)
             return result
-        # Notify-only confirmations are informational and must remain non-executable.
-        if decision.decision == "notify_only":
-            result = ActionExecutionResult(
-                status="notified",
-                action_id=action_id,
-                reason=decision.reason,
-                confirmation_id=confirmation_id,
-                decision=decision,
-            )
-            self._record(action_id, intent, decision, result, current_time)
-            return result
         if decision.decision != "allow":
             result = ActionExecutionResult(
                 status="failed",
@@ -726,14 +677,14 @@ class SafeActionExecutor:
         decision: ActionDecision,
         now: datetime,
     ) -> ActionExecutionResult:
-        """将已通过门禁的可执行意图入队，返回 queued 状态。
+        """将已通过门禁/权限的动作入队到 motor processor,返回 queued 状态。
 
-        由 EpicMotorProcessor 在 tick 中调用 _execute_allowed 完成实际派发。
-        ready_at 设为 now（立即就绪）；duration_ms / requires_parallel 从 intent 取。
+        motor processor 将在 50ms 节拍内调用 _execute_allowed 派发。
+        幂等键记忆由 motor processor 在派发成功后负责(见 EpicMotorProcessor.tick)。
         """
         from OriginAgent.agent.epic_motor import EpicMotorCommand
 
-        cmd = EpicMotorCommand(
+        command = EpicMotorCommand(
             action_id=action_id,
             intent=intent,
             decision=decision,
@@ -742,7 +693,7 @@ class SafeActionExecutor:
             duration_ms=intent.duration_ms,
             requires_parallel=intent.requires_parallel,
         )
-        self._motor_queue.enqueue(cmd)  # 同步入队
+        self._motor_queue.enqueue(command)
         return ActionExecutionResult(
             status="queued",
             action_id=action_id,

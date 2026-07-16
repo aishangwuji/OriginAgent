@@ -77,3 +77,25 @@ async def test_pairing_enabled_dm_sends_code_and_approves(isolated_config) -> No
     code = channel.sent[0].metadata["_pairing_code"]
     assert approve_code(code) == ("dummy", "alice")
     assert channel.is_allowed("alice") is True
+
+
+async def test_read_local_media_returns_bytes_and_filename(tmp_path) -> None:
+    f = tmp_path / "note.txt"
+    f.write_bytes(b"media-bytes")
+    channel = _DummyChannel({"allow_from": []}, MessageBus())
+
+    result = await channel.read_local_media(str(f))
+
+    assert result == (b"media-bytes", "note.txt")
+
+
+async def test_read_local_media_missing_returns_none(tmp_path) -> None:
+    channel = _DummyChannel({"allow_from": []}, MessageBus())
+
+    assert await channel.read_local_media(str(tmp_path / "nope.txt")) is None
+
+
+def test_strip_markdown_delegates_to_shared_inline_stripper() -> None:
+    channel = _DummyChannel({"allow_from": []}, MessageBus())
+
+    assert channel._strip_markdown("**bold** `code`") == "bold code"

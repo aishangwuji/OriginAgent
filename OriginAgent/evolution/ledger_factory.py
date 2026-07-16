@@ -33,10 +33,17 @@ def create_ledger(
             sign_events=sign_events,
         )
 
+    db_busy_timeout = 5000  # default matches TimeoutConfig (spec 3.4)
+    if config is not None:
+        timeouts = getattr(config, "timeouts", None)
+        if timeouts is not None:
+            db_busy_timeout = getattr(timeouts, "db_busy_timeout", db_busy_timeout)
+
     return SqliteEvolutionLedger(
         workspace=workspace,
         identity_store=identity_store,
         sign_events=sign_events,
+        db_busy_timeout=db_busy_timeout,
     )
 
 

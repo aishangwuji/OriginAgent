@@ -75,5 +75,30 @@
     "stop_count": "已停止 {count} 个任务。",
     "restart": "正在重启..."
   },
-  "help_header": "OriginAgent 命令："
+  "help_header": "OriginAgent 命令：",
+  "channel": {
+    "msteams": {
+      "mention_only_response": "你好——需要什么帮助？",
+      "auth_disabled_warning": "入站鉴权校验已在配置中显式关闭。任何知道 webhook URL 的人都可以冒充任意用户发送消息。仅在本地开发或受控测试环境下关闭。",
+      "auth_required_error": "生产环境(runtime_profile={profile})必须开启 msteams 鉴权(validate_inbound_auth=True)。如需关闭鉴权,请在开发/测试环境中运行(设置 runtime_profile=local_dev)。"
+    }
+  },
+  "cli": {
+    "thinking": "正在思考...",
+    "bot_name": "OriginAgent",
+    "onboard": {
+      "static_models_notice": "模型库为静态版本,部分型号可能缺失,可手动输入完整模型名。",
+      "overwrite_prompt": "是否覆盖现有配置?",
+      "overwrite_cancelled": "Onboard 已取消,已保留现有配置。"
+    }
+  },
+  "api": {
+    "analyze_uploaded_file": "请分析上传的文件"
+  },
+  "error": {
+    "allow_from_empty": "错误:\"{name}\" 的 allowFrom 为空(拒绝所有访问)。设置 [\"*\"] 允许所有人,或添加具体用户 ID。",
+    "channel": {
+      "startup_failed": "通道 {name} 启动失败: {error}"
+    }
+  }
 }

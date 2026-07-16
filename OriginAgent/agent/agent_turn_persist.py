@@ -8,6 +8,7 @@ from typing import Any
 from OriginAgent.agent.context import ContextBuilder
 from OriginAgent.bus.events import InboundMessage
 from OriginAgent.session.manager import Session
+from OriginAgent.utils.constants import RoleConstants
 from OriginAgent.utils.helpers import image_placeholder_text
 from OriginAgent.utils.helpers import truncate_text as truncate_text_fn
 
@@ -36,7 +37,7 @@ class TurnPersistManager:
             extra: dict[str, Any] = {"media": list(media_paths)} if media_paths else {}
             extra.update(kwargs)
             text = msg.content if isinstance(msg.content, str) else ""
-            session.add_message("user", text, **extra)
+            session.add_message(RoleConstants.USER, text, **extra)
             self.mark_pending_user_turn(session)
             self.sessions.save(session)
             return True
@@ -90,7 +91,7 @@ class TurnPersistManager:
         for m in messages[skip:]:
             entry = dict(m)
             role, content = entry.get("role"), entry.get("content")
-            if role == "assistant" and not content and not entry.get("tool_calls"):
+            if role == RoleConstants.ASSISTANT and not content and not entry.get("tool_calls"):
                 continue
             if role == "tool":
                 if isinstance(content, str) and len(content) > self.max_tool_result_chars:
@@ -100,7 +101,7 @@ class TurnPersistManager:
                     if not filtered:
                         continue
                     entry["content"] = filtered
-            elif role == "user":
+            elif role == RoleConstants.USER:
                 if isinstance(content, str) and content.startswith(ContextBuilder._RUNTIME_CONTEXT_TAG):
                     end_marker = ContextBuilder._RUNTIME_CONTEXT_END
                     end_pos = content.find(end_marker)
@@ -136,7 +137,7 @@ class TurnPersistManager:
         ):
             return False
         session.add_message(
-            "assistant",
+            RoleConstants.ASSISTANT,
             msg.content,
             sender_id=msg.sender_id,
             injected_event="subagent_result",
@@ -228,10 +229,10 @@ class TurnPersistManager:
         if not session.metadata.get(self.PENDING_USER_TURN_KEY):
             return False
 
-        if session.messages and session.messages[-1].get("role") == "user":
+        if session.messages and session.messages[-1].get("role") == RoleConstants.USER:
             session.messages.append(
                 {
-                    "role": "assistant",
+                    "role": RoleConstants.ASSISTANT,
                     "content": "Error: Task interrupted before a response was generated.",
                     "timestamp": datetime.now().isoformat(),
                 }

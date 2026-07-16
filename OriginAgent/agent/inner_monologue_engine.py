@@ -83,11 +83,8 @@ def bridge_deliberation_to_monologue(
     ``active_goal``                    parameter or first desire content
     ``candidate_hypotheses``           ``[intent.reasoning for ...]``
     ``intended_strategy``              ``result.reasoning``
-    ``verification_needs``             ``[]`` (Phase 1 placeholder)
-    ``simulation_requests``            ``[]`` (Phase 1 placeholder)
     ``confidence``                     ``derive_confidence_and_uncertainty()``
     ``uncertainty_flags``              ``derive_confidence_and_uncertainty()``
-    ``self_critique``                  ``""`` (Phase 1 placeholder)
     ``created_at``                     now
     =================================  ============================
     """
@@ -120,11 +117,8 @@ def bridge_deliberation_to_monologue(
         active_goal=goal,
         candidate_hypotheses=hypotheses,
         intended_strategy=strategy,
-        verification_needs=[],
-        simulation_requests=[],
         confidence=confidence,
         uncertainty_flags=flags,
-        self_critique="",
         created_at=_utcnow_iso(),
     )
 
@@ -204,8 +198,6 @@ class InnerMonologueEngine:
                     active_goal=frame.active_goal,
                     candidate_hypotheses=frame.candidate_hypotheses,
                     intended_strategy=frame.intended_strategy,
-                    verification_needs=frame.verification_needs,
-                    simulation_requests=frame.simulation_requests,
                     confidence=frame.confidence,
                     uncertainty_flags=frame.uncertainty_flags,
                 )
@@ -220,12 +212,10 @@ class InnerMonologueEngine:
         session_key: str = "bdi:deliberation",
         *,
         observation_summary: str = "",
-        trigger_refs: list[str] | None = None,
     ) -> MonologueFrame | None:
         """Run a full inner-monologue cycle: BDI → bridge → substrate."""
         if not self._enabled or self._engine is None:
             return None
-        _ = trigger_refs  # unused in Phase 1
         result = await self._engine.run_cycle()
         return await self.on_bdi_cycle(result)
 

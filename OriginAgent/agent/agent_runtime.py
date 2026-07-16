@@ -7,14 +7,57 @@ scratchpad and on AgentHost for infrastructure lifecycle.
 
 from __future__ import annotations
 
+import asyncio
+import json
 import time as _time
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
 
 from loguru import logger
 
-from OriginAgent.utils.tracing import set_session, span
+from OriginAgent.agent.agent_runtime_context import (
+    runtime_chat_id,
+    set_tool_context as set_tools_runtime_context,
+    snapshot_for_trigger,
+)
+from OriginAgent.agent.agent_turn_persist import TurnPersistManager
+from OriginAgent.agent.cognitive_events import CognitiveEvent
+from OriginAgent.agent.confirmation import classify_confirmation_reply
+from OriginAgent.agent.error_classifier import (
+    ClassifiedError,
+    ErrorKind,
+    user_facing_message,
+)
+from OriginAgent.agent.hook import AgentHook, CompositeHook
+from OriginAgent.agent.message_metadata import build_origin_metadata
+from OriginAgent.agent.meta_cognition_triggers import (
+    bridge_runtime_event_to_trigger,
+    build_user_correction_trigger,
+    latest_assistant_message,
+)
+from OriginAgent.agent.progress_hook import AgentProgressHook
+from OriginAgent.agent.runner import _MAX_INJECTIONS_PER_TURN, AgentRunSpec
+from OriginAgent.agent.self_model import SelfModelService
+from OriginAgent.agent.tools.ask import (
+    ask_user_options_from_messages,
+    ask_user_outbound,
+    ask_user_tool_result_messages,
+)
+from OriginAgent.agent.tools.file_state import bind_file_states, reset_file_states
+from OriginAgent.agent.tools.message import MessageTool
+from OriginAgent.agent.warm_store import WarmStore
+from OriginAgent.bus.events import InboundMessage, OutboundMessage
+from OriginAgent.security.grants import issue_tool_approval_grant
+from OriginAgent.session.goal_state import goal_state_ws_blob, runner_wall_llm_timeout_s
+from OriginAgent.utils.constants import RoleConstants
+from OriginAgent.utils.document import extract_documents
+from OriginAgent.utils.helpers import strip_think
+from OriginAgent.utils.image_generation_intent import image_generation_prompt
+from OriginAgent.utils.tool_hints import format_tool_hints
+from OriginAgent.utils.tracing import new_trace as _new_trace, set_session, span
+from OriginAgent.utils.webui_transcript import append_transcript_object
 
 
 def _utcnow_iso() -> str:
@@ -28,70 +71,6 @@ def _trim_text(value: Any, *, max_chars: int = 240) -> str:
     if len(text) > max_chars:
         return text[:max_chars].rstrip() + "..."
     return text
-
-
-# ── Sub-container dataclasses (Strangler Fig — incremental migration) ──
-# Each group bundles related services with real type annotations.
-# As call sites are migrated, Any → concrete type.
-
-
-@dataclass(frozen=True)
-class CoreServices:
-    """Primary runtime services."""
-    tools: Any = None  # TODO(migrate): ToolRegistry
-    provider: Any = None  # TODO(migrate): LLMProvider
-    runner: Any = None  # TODO(migrate): AgentRunner
-    context: Any = None  # TODO(migrate): ContextBuilder
-    sessions: Any = None  # TODO(migrate): SessionManager
-    bus: Any = None  # TODO(migrate): MessageBus
-    workspace: Any = None  # TODO(migrate): Path
-    subagents: Any = None
-
-
-@dataclass(frozen=True)
-class MetaCognitionServices:
-    """Meta-cognition runtime components."""
-    runtime: Any = None  # TODO(migrate): MetaCognitionRuntime
-    reflector: Any = None  # TODO(migrate): MetaCognitionReflector
-    regulator: Any = None  # TODO(migrate): MetaCognitionRegulator
-    config: Any = None
-    coordinator: Any = None  # TODO(migrate): MetaCognitionCoordinator
-    perception_fusion: Any = None
-
-
-@dataclass(frozen=True)
-class MemoryServices:
-    """Session memory and persistence."""
-    working_memory: Any = None
-    nearline_memory: Any = None
-    session_search_index: Any = None
-    consolidator: Any = None
-    dream: Any = None
-    session_cold_archive: Any = None
-    rolling_episode_compaction: Any = None
-    memory_governance: Any = None
-    auto_compact: Any = None
-    state_holder: Any = None  # TODO(migrate): SessionStateHolder
-
-
-@dataclass(frozen=True)
-class BackgroundServices:
-    """Background processing services."""
-    background_review: Any = None
-    curator: Any = None
-    cognitive_loop: Any = None
-    cognitive_scheduler: Any = None
-    cognitive_audit: Any = None
-    cron_service: Any = None
-
-
-@dataclass(frozen=True)
-class StoreServices:
-    """Persistent stores."""
-    file_state_store: Any = None
-    confirmation_store: Any = None
-    confirmation_manager: Any = None
-    grant_store: Any = None
 
 
 @dataclass(frozen=True)
@@ -112,27 +91,81 @@ class RuntimeConfig:
 
 
 @dataclass(frozen=True)
+class CoreServices:
+    """Typed subcontainer for core agent services (Strangler Fig migration target)."""
+    tools: Any = None
+    provider: Any = None
+    runner: Any = None
+    context: Any = None
+    sessions: Any = None
+    bus: Any = None
+    workspace: Any = None
+    subagents: Any = None
+    working_memory: Any = None
+    commands: Any = None
+    action_planner: Any = None
+    active_intents: Any = None
+    reminder_store: Any = None
+    world_state: Any = None
+
+
+@dataclass(frozen=True)
+class MetaCognitionServices:
+    """Typed subcontainer for meta-cognition services."""
+    meta_cognition_runtime: Any = None
+    meta_cognition_reflector: Any = None
+    meta_cognition_regulator: Any = None
+    meta_cognition_config: Any = None
+    meta_coordinator: Any = None
+    perception_fusion: Any = None
+
+
+@dataclass(frozen=True)
+class MemoryServices:
+    """Typed subcontainer for memory pipeline services."""
+    nearline_memory: Any = None
+    session_search_index: Any = None
+    consolidator: Any = None
+    dream: Any = None
+    memory_governance: Any = None
+
+
+@dataclass(frozen=True)
+class BackgroundServices:
+    """Typed subcontainer for background/async services."""
+    background_review: Any = None
+    curator: Any = None
+    cognitive_loop: Any = None
+    cognitive_scheduler: Any = None
+    cognitive_audit: Any = None
+    session_cold_archive: Any = None
+    rolling_episode_compaction: Any = None
+    auto_compact: Any = None
+
+
+@dataclass(frozen=True)
+class StoreServices:
+    """Typed subcontainer for persistent stores."""
+    file_state_store: Any = None
+    confirmation_store: Any = None
+    confirmation_manager: Any = None
+    grant_store: Any = None
+    cron_service: Any = None
+
+
+@dataclass(frozen=True)
 class RuntimeDependencies:
     """Immutable dependency bundle for AgentRuntime.
+
+    Strangler Fig migration: flat fields coexist with typed subcontainers.
+    During migration, both ``deps.tools`` and ``deps.core.tools`` return
+    the same object. Phase 6 will remove the flat fields.
 
     All dependencies are injected at construction time.  AgentRuntime
     never reaches back to AgentLoop — every method receives context
     explicitly.
-
-    Fields are being migrated from flat Any-typed entries into typed
-    sub-containers via Strangler Fig pattern.  During migration:
-    - New code accesses ``deps.core.tools`` instead of ``deps.tools``
-    - Old flat fields remain as compat aliases
-    - Sub-containers are populated in AgentLoop.__init__ alongside
-      flat fields (same values, two access paths)
     """
 
-    # ── New: grouped sub-containers (migration target) ──────────────────────
-    core: CoreServices = CoreServices()
-    meta: MetaCognitionServices = MetaCognitionServices()
-    memory: MemoryServices = MemoryServices()
-    background: BackgroundServices = BackgroundServices()
-    stores: StoreServices = StoreServices()
     config: RuntimeConfig = RuntimeConfig()
 
     # ── Existing flat fields (keep for backward compat) ────────────────────
@@ -226,6 +259,15 @@ class RuntimeDependencies:
     bdi_engine: Any = None
     sqlite_stores: Any = None  # SqliteStoreRegistry
 
+    # ── Strangler Fig typed subcontainers (Phase 0: dual-path coexistence) ─
+    # During migration, both flat fields and subcontainers return the same
+    # objects. Phase 6 will remove the flat fields above.
+    core: CoreServices | None = None
+    meta_cognition_svc: MetaCognitionServices | None = None
+    memory_svc: MemoryServices | None = None
+    background_svc: BackgroundServices | None = None
+    stores: StoreServices | None = None
+
 
 class AgentRuntime:
     """Stateless message router — processes inbound messages through
@@ -271,7 +313,6 @@ class AgentRuntime:
 
     def _tool_hint(self, tool_calls: list) -> str:
         """Format tool calls as concise hints with smart abbreviation."""
-        from OriginAgent.utils.tool_hints import format_tool_hints
         return format_tool_hints(tool_calls, max_length=self._deps.tool_hint_max_length or 40)
 
     def _set_tool_context(
@@ -285,9 +326,6 @@ class AgentRuntime:
         turn_id: str | None = None,
     ) -> None:
         """Update context for all tools that need routing info."""
-        from OriginAgent.agent.agent_runtime_context import (
-            set_tool_context as set_tools_runtime_context,
-        )
         _cap_snapshot = capability_snapshot  # turn-scoped, passed in
         set_tools_runtime_context(
             self._deps.tools,
@@ -310,13 +348,11 @@ class AgentRuntime:
         """Remove <think>…</think> blocks that some models embed in content."""
         if not text:
             return None
-        from OriginAgent.utils.helpers import strip_think
         return strip_think(text) or None
 
     @staticmethod
     def _runtime_chat_id(msg: Any) -> str:
         """Return the chat id shown in runtime metadata for the model."""
-        from OriginAgent.agent.agent_runtime_context import runtime_chat_id
         return runtime_chat_id(msg)
 
     def _resolve_runtime_context(
@@ -343,7 +379,6 @@ class AgentRuntime:
     @staticmethod
     def _snapshot_for_trigger(trigger: str | None) -> Any:
         """Return a capability snapshot for the given trigger."""
-        from OriginAgent.agent.agent_runtime_context import snapshot_for_trigger
         return snapshot_for_trigger(trigger)
 
     # ── Cognitive ───────────────────────────────────────────────
@@ -354,9 +389,6 @@ class AgentRuntime:
             if ":" in session_key
             else ("cli", session_key)
         )
-        from OriginAgent.agent.message_metadata import build_origin_metadata
-        from OriginAgent.bus.events import InboundMessage
-
         msg = InboundMessage(
             channel="system",
             sender_id="agent_cognitive",
@@ -408,10 +440,6 @@ class AgentRuntime:
                 f"Reminder: {record.content}\n"
                 "If helpful, continue from this due reminder and keep the follow-up bounded."
             )
-            from OriginAgent.agent.cognitive_events import CognitiveEvent
-            from OriginAgent.agent.message_metadata import build_origin_metadata
-            from OriginAgent.bus.events import InboundMessage
-
             message = InboundMessage(
                 channel="system", sender_id="agent_cognitive",
                 chat_id=record.chat_id or session_key, content=content,
@@ -451,14 +479,12 @@ class AgentRuntime:
         return items
 
     def _candidate_to_cognitive_event(self, session_key: str, item: Any) -> Any:
-        from OriginAgent.agent.cognitive_events import CognitiveEvent
         if isinstance(item, dict) and isinstance(item.get("event"), CognitiveEvent):
             return item["event"]
         candidate = item.get("candidate") if isinstance(item, dict) and "candidate" in item else item
         priority = "medium"
         if getattr(candidate, "intent_type", "") in {"pending_confirmation_nudge", "goal_nudge"}:
             priority = "high"
-        from OriginAgent.agent.cognitive_events import CognitiveEvent
         return CognitiveEvent(
             event_id=str(getattr(candidate, "intent_id", "")),
             session_key=session_key,
@@ -503,14 +529,12 @@ class AgentRuntime:
         confirmation = d.confirmation_manager.latest_pending_tool_approval(session_key) if d.confirmation_manager else None
         if confirmation is None:
             return None, False
-        from OriginAgent.agent.confirmation import classify_confirmation_reply
         classification = classify_confirmation_reply(reply)
         if classification not in {"confirmed", "rejected"}:
             return None, False
         result = d.confirmation_manager.resolve_user_reply(confirmation.confirmation_id, reply)
         tool_name = confirmation.metadata.get("tool_name") or confirmation.action or "tool"
         if result.decision == "confirmed":
-            from OriginAgent.security.grants import issue_tool_approval_grant
             grant = issue_tool_approval_grant(confirmation, d.grant_store, approved_by=actor_id)
             return (("tool_approval",
                      f"Tool approval confirmed for {tool_name}. "
@@ -530,7 +554,6 @@ class AgentRuntime:
     def _append_webui_command_transcript(self, msg: Any, content: str) -> None:
         if not self._is_webui_message(msg):
             return
-        from OriginAgent.utils.webui_transcript import append_transcript_object
         try:
             append_transcript_object(
                 f"websocket:{msg.chat_id}",
@@ -544,19 +567,16 @@ class AgentRuntime:
     def _sanitize_persisted_blocks(
         self, content: list[dict], *, should_truncate_text: bool = False, drop_runtime: bool = False,
     ) -> list[dict]:
-        from OriginAgent.agent.agent_turn_persist import TurnPersistManager
         max_chars = self._deps.max_tool_result_chars
         return TurnPersistManager(max_chars, self._deps.sessions).sanitize_persisted_blocks(
             content, should_truncate_text=should_truncate_text, drop_runtime=drop_runtime,
         )
 
     def _save_turn(self, session: Any, messages: list[dict], skip: int) -> None:
-        from OriginAgent.agent.agent_turn_persist import TurnPersistManager
         max_chars = self._deps.max_tool_result_chars
         TurnPersistManager(max_chars, self._deps.sessions).save_turn(session, messages, skip)
 
     def _persist_subagent_followup(self, session: Any, msg: Any) -> bool:
-        from OriginAgent.agent.agent_turn_persist import TurnPersistManager
         max_chars = self._deps.max_tool_result_chars
         return TurnPersistManager(max_chars, self._deps.sessions).persist_subagent_followup(session, msg)
 
@@ -610,10 +630,53 @@ class AgentRuntime:
             "pending_confirmation_refs": self._collect_pending_confirmation_refs(session),
             "profile_ref": profile_ref,
             "recent_turns_summary": self._extract_recent_turns_summary(session),
+            # 冷区索引：渐进式暴露 warm 区归档总结的索引视图，
+            # 只保留 turn_range/summary/key_entities，完整结构化字段通过 locator 回查，
+            # 避免 checkpoint 膨胀为"缓慢的庞然大物"
+            "cold_indices": self._collect_cold_indices(session.key),
             "updated_at": _utcnow_iso(),
         }
         session.metadata.setdefault("continuity_checkpoint_v1", checkpoint)
         return checkpoint
+
+    def _collect_cold_indices(self, session_key: str) -> list[dict[str, Any]]:
+        """从 warm_summaries.jsonl 读取当前 session 的最近 5 条冷区索引。
+
+        渐进式暴露设计：checkpoint 只承载索引视图（turn_range/summary/key_entities），
+        完整的 commitments/decisions/open_questions 等结构化字段保留在 warm_summaries.jsonl
+        原始归档中，Agent 需要细节时通过 locator 回查 warm_archive，避免一次性把所有
+        历史总结塞入 checkpoint 导致上下文膨胀。
+        """
+        d = self._deps
+        if not d.workspace:
+            return []
+        summaries_path = Path(d.workspace) / "warm_summaries.jsonl"
+        if not summaries_path.exists():
+            return []
+        matched: list[dict[str, Any]] = []
+        try:
+            for line in summaries_path.read_text(encoding="utf-8").splitlines():
+                if not line.strip():
+                    continue
+                try:
+                    entry = json.loads(line)
+                except (json.JSONDecodeError, ValueError):
+                    continue
+                if entry.get("session_key") != session_key:
+                    continue
+                matched.append(entry)
+        except Exception:
+            return []
+        # 文件以追加模式写入，末尾即最新；倒序后取最近 5 条
+        matched.reverse()
+        return [
+            {
+                "turn_range": str(item.get("turn_range", "")),
+                "summary": str(item.get("summary", "")),
+                "key_entities": [str(e) for e in (item.get("key_entities") or [])],
+            }
+            for item in matched[:5]
+        ]
 
     @staticmethod
     def _extract_recent_turns_summary(session: Any) -> list[dict[str, str]]:
@@ -641,15 +704,41 @@ class AgentRuntime:
                 content = " ".join(text_parts)
             # 截断到 500 字符
             content = str(content)[:500]
-            if role in ("user", "assistant") and content.strip():
+            if role in (RoleConstants.USER, RoleConstants.ASSISTANT) and content.strip():
                 summary.append({"role": role, "content": content})
         return summary[-4:]  # 最多 4 条（2 轮）
 
     @staticmethod
-    def _load_continuity_checkpoint(session: Any) -> dict | None:
+    def _load_continuity_checkpoint(session: Any, workspace: Any = None) -> dict | None:
+        """加载 continuity checkpoint 并执行三级状态重建（Phase 6 Task 9）。
+
+        三级重建设计意图：
+        - 热区：由 ``session.get_hot_history`` 在 ``state_build`` 阶段从
+          ``session.messages`` 尾部取 50 轮，此处不重复处理；
+        - 温区：从 ``session.metadata["warm_buffer"]`` 恢复，``WarmStore``
+          无状态地读取 session.metadata，重启后天然可用；
+        - 冷区：优先从 ``workspace/warm_summaries.jsonl`` 读取最近 5 条索引
+          （按 session_key 过滤），确保后台总结任务生成的新条目能被及时感知；
+          workspace 不可用时回退到 checkpoint 中已保存的索引。
+        """
         raw = session.metadata.get("continuity_checkpoint_v1")
         if not isinstance(raw, dict):
             return None
+        # 温区状态恢复：WarmStore 从 session.metadata 读取，无需额外持久化
+        warm_buffer = WarmStore().load(session)
+        # 冷区索引恢复：优先从 warm_summaries.jsonl 读取最新条目
+        cold_indices = AgentRuntime._read_cold_indices(workspace, session.key)
+        if not cold_indices:
+            # workspace 不可用或文件不存在时，回退到 checkpoint 中已保存的索引
+            cold_indices = [
+                {
+                    "turn_range": str(item.get("turn_range", "")),
+                    "summary": str(item.get("summary", "")),
+                    "key_entities": [str(e) for e in (item.get("key_entities") or [])],
+                }
+                for item in raw.get("cold_indices", [])
+                if isinstance(item, dict)
+            ][:5]
         return {
             "session_key": str(raw.get("session_key") or session.key),
             "current_goal": _trim_text(raw.get("current_goal"), max_chars=1000),
@@ -658,8 +747,53 @@ class AgentRuntime:
             "active_constraints": [str(item).strip() for item in raw.get("active_constraints", []) if str(item).strip()][:8],
             "pending_confirmation_refs": [dict(item) for item in raw.get("pending_confirmation_refs", []) if isinstance(item, dict)][:8],
             "recent_turns_summary": [dict(item) for item in raw.get("recent_turns_summary", []) if isinstance(item, dict)][:4],
+            # 温区状态摘要（三级重建 - 温区）：只保留计数字段，避免上下文膨胀
+            "warm_buffer": {
+                "turn_count": int(warm_buffer.get("turn_count", 0)),
+                "message_count": len(warm_buffer.get("messages", [])),
+                "updated_at": str(warm_buffer.get("updated_at", "")),
+            },
+            # 冷区索引（三级重建 - 冷区）：最近 5 条温区总结的索引条目
+            "cold_indices": cold_indices,
             "updated_at": str(raw.get("updated_at") or "").strip(),
         }
+
+    @staticmethod
+    def _read_cold_indices(workspace: Any, session_key: str) -> list[dict[str, Any]]:
+        """从 ``warm_summaries.jsonl`` 读取最近 5 条冷区索引（按 session_key 过滤）。
+
+        冷区索引是温区总结归档后生成的结构化条目，用于在 session 恢复时
+        让 Agent 感知历史长程对话的存在。文件以追加模式写入，末尾即最新。
+        """
+        if workspace is None:
+            return []
+        try:
+            summaries_path = Path(workspace) / "warm_summaries.jsonl"
+            if not summaries_path.exists():
+                return []
+        except Exception:
+            return []
+        entries: list[dict[str, Any]] = []
+        try:
+            for line in summaries_path.read_text(encoding="utf-8").splitlines():
+                if not line.strip():
+                    continue
+                try:
+                    entry = json.loads(line)
+                except (json.JSONDecodeError, ValueError):
+                    continue
+                if entry.get("session_key") != session_key:
+                    continue
+                entries.append({
+                    "turn_range": str(entry.get("turn_range", "")),
+                    "summary": str(entry.get("summary", "")),
+                    "key_entities": [str(e) for e in (entry.get("key_entities") or [])],
+                })
+        except Exception:
+            logger.exception("Failed to read cold indices from warm_summaries.jsonl")
+            return []
+        # 取最近 5 条（文件追加写入，末尾即最新）
+        return entries[-5:]
 
     # ── Post-turn effects ───────────────────────────────────────
 
@@ -742,11 +876,6 @@ class AgentRuntime:
         on_stream: Any = None,
     ) -> Any | None:
         """Assemble the final outbound message from turn results."""
-        from OriginAgent.agent.tools.ask import ask_user_options_from_messages, ask_user_outbound
-        from OriginAgent.agent.tools.message import MessageTool
-        from OriginAgent.bus.events import OutboundMessage
-        from OriginAgent.session.goal_state import goal_state_ws_blob
-
         d = self._deps
         if (mt := d.tools.get("message")) and isinstance(mt, MessageTool) and mt._sent_in_turn:
             if not had_injections or stop_reason == "empty_final_response":
@@ -802,22 +931,6 @@ class AgentRuntime:
 
         Returns (final_content, tools_used, messages, stop_reason, had_injections).
         """
-        import asyncio as _asyncio
-
-        from OriginAgent.agent.agent_runtime_context import snapshot_for_trigger
-        from OriginAgent.agent.error_classifier import (
-            ClassifiedError,
-            ErrorKind,
-            user_facing_message,
-        )
-        from OriginAgent.agent.hook import AgentHook, CompositeHook
-        from OriginAgent.agent.progress_hook import AgentProgressHook
-        from OriginAgent.agent.runner import _MAX_INJECTIONS_PER_TURN, AgentRunSpec
-        from OriginAgent.agent.tools.file_state import bind_file_states, reset_file_states
-        from OriginAgent.bus.events import InboundMessage
-        from OriginAgent.session.goal_state import runner_wall_llm_timeout_s
-        from OriginAgent.utils.document import extract_documents
-
         _sensitive_names: frozenset[str] = frozenset({"exec", "message", "web_fetch"})
         _sensitive_prefixes: tuple[str, ...] = ("originagent_device_",)
 
@@ -881,7 +994,7 @@ class AgentRuntime:
                     d.context.timezone,
                 )
                 merged = [runtime_block, *d.context._build_user_content(content, media)]
-                return {"role": "user", "content": merged}
+                return {"role": RoleConstants.USER, "content": merged}
 
             def _to_system_event(pending_msg: InboundMessage) -> dict:
                 """将内部事件包装为 system role，避免 LLM 误解为用户指令"""
@@ -893,7 +1006,7 @@ class AgentRuntime:
                 )
                 event_type = pending_msg.metadata.get("injected_event") or "subagent_result"
                 merged = [runtime_block, d.context.build_internal_event_block(event_type, content)]
-                return {"role": "system", "content": merged}
+                return {"role": RoleConstants.SYSTEM, "content": merged}
 
             def _is_internal_event(pending_msg: InboundMessage) -> bool:
                 """判断是否为内部事件（不应伪装为 user role）"""
@@ -911,13 +1024,14 @@ class AgentRuntime:
                         items.append(_to_system_event(pending_msg))
                     else:
                         items.append(_to_user_message(pending_msg))
-                except _asyncio.QueueEmpty:
+                except asyncio.QueueEmpty:
                     break
             if (not items and session is not None and d.subagents is not None
                     and d.subagents.get_running_count_by_session(session.key) > 0):
                 try:
-                    msg = await _asyncio.wait_for(pending_queue.get(), timeout=300)
-                except _asyncio.TimeoutError:
+                    # Sub-agent completion wait (5 min) — not a tool/HTTP timeout, not in TimeoutConfig (spec 3.4)
+                    msg = await asyncio.wait_for(pending_queue.get(), timeout=300)
+                except asyncio.TimeoutError:
                     logger.warning("Timeout waiting for sub-agent completion in session {}", session.key)
                     return items
                 if _is_internal_event(msg):
@@ -931,7 +1045,7 @@ class AgentRuntime:
                             items.append(_to_system_event(pending_msg))
                         else:
                             items.append(_to_user_message(pending_msg))
-                    except _asyncio.QueueEmpty:
+                    except asyncio.QueueEmpty:
                         break
             return items
 
@@ -968,6 +1082,24 @@ class AgentRuntime:
         finally:
             reset_file_states(file_state_token)
 
+        # Refresh state.last_context_assembly so it reflects the messages
+        # actually sent to the LLM (after runner governance such as
+        # _snip_history), not just the pre-governance snapshot written by
+        # ContextBudgetManager in _build_initial_messages.
+        # 规则5: this cached audit must reflect the final sent state.
+        # 规则7: single write path here — the audit no longer goes stale.
+        if session is not None and result.last_sent_messages:
+            state = d.state_holder.get(session.key)
+            if state is not None:
+                existing = dict(state.last_context_assembly or {})
+                budget_audit = dict(existing.get("budget") or {})
+                budget_audit["final_sent_message_count"] = len(result.last_sent_messages)
+                budget_audit["runner_governance_applied"] = (
+                    len(result.last_sent_messages) != len(initial_messages)
+                )
+                existing["budget"] = budget_audit
+                state.last_context_assembly = existing
+
         if result.stop_reason == "max_iterations":
             logger.warning("Max iterations ({}) reached", d.max_iterations)
             if on_stream and on_stream_end:
@@ -995,11 +1127,6 @@ class AgentRuntime:
         try:
             d.meta_coordinator.reset_fast_path()
             fusion = d.perception_fusion
-            from OriginAgent.agent.meta_cognition_triggers import (
-                bridge_runtime_event_to_trigger,
-                build_user_correction_trigger,
-                latest_assistant_message,
-            )
             if fusion is not None and fusion.enabled:
                 _re = fusion.bridge_user_message(session_key=ctx.session_key, text=ctx.msg.content)
                 if _re is not None:
@@ -1045,7 +1172,6 @@ class AgentRuntime:
             logger.debug("Meta-cognition fast path failed", exc_info=True)
 
     def _schedule_meta_cognition_reflection(self, ctx: Any) -> None:
-        from OriginAgent.agent.meta_cognition_triggers import latest_assistant_message
         d = self._deps
         if d.meta_cognition_reflector is None or d.meta_cognition_runtime is None:
             return
@@ -1150,7 +1276,6 @@ class AgentRuntime:
     ) -> Any | None:
         """Process a single inbound message and return the response."""
         sk = session_key or getattr(msg, "session_key", None) or "unknown"
-        from OriginAgent.utils.tracing import new_trace as _new_trace
         _new_trace()
         set_session(sk)
         turn_id = f"{getattr(msg, 'channel', 'msg')}:{_time.time_ns()}"
@@ -1173,11 +1298,9 @@ class AgentRuntime:
         on_stream_end: Any = None,
     ) -> Any | None:
         """Process a message directly and return the outbound payload."""
-        from OriginAgent.utils.tracing import new_trace as _new_trace
         _new_trace()
         set_session(session_key)
         await self._deps.host._connect_mcp()
-        from OriginAgent.bus.events import InboundMessage
         msg = InboundMessage(channel=channel, sender_id="user", chat_id=chat_id,
                              content=content, media=media or [])
         return await self._process_message(msg, session_key=session_key,
@@ -1206,7 +1329,6 @@ class AgentRuntime:
         d = self._deps
         introspection = d.introspection
         snapshot = introspection.runtime_context_snapshot() if introspection is not None else {}
-        from OriginAgent.agent.self_model import SelfModelService
         return SelfModelService(
             d.workspace,
             audit_mode=getattr(d.tool_audit_config, "mode", "standard"),
@@ -1221,7 +1343,6 @@ class AgentRuntime:
     def _persist_user_message_early(
         self, msg: Any, session: Any, pending_ask_id: str | None, **kwargs: Any
     ) -> bool:
-        from OriginAgent.agent.agent_turn_persist import TurnPersistManager
         return TurnPersistManager(
             self._deps.max_tool_result_chars, self._deps.sessions
         ).persist_user_message_early(msg, session, pending_ask_id, **kwargs)
@@ -1231,7 +1352,7 @@ class AgentRuntime:
     ) -> dict:
         user_blocks: list[dict] = []
         for message in reversed(messages):
-            if message.get("role") != "user":
+            if message.get("role") != RoleConstants.USER:
                 continue
             content = message.get("content")
             if isinstance(content, list):
@@ -1271,9 +1392,6 @@ class AgentRuntime:
         recovered_continuity_block: dict | None = None,
     ) -> list[dict]:
         """Build the initial message list for the LLM turn."""
-        from OriginAgent.agent.tools.ask import ask_user_tool_result_messages
-        from OriginAgent.utils.image_generation_intent import image_generation_prompt
-
         d = self._deps
         self_model_payload = self._build_prompt_self_model()
         if pending_ask_id:
@@ -1297,14 +1415,14 @@ class AgentRuntime:
                     include_current_message=False,
                 )
                 d.state_holder.get(session.key).last_context_assembly = dict(assembled.audit)
-                messages.append({"role": "user", "content": assembled.blocks})
+                messages.append({"role": RoleConstants.USER, "content": assembled.blocks})
                 return d.context._apply_prompt_budget(
                     messages,
                     context_window_tokens=d.context_window_tokens,
                     max_completion_tokens=getattr(d.provider.generation, "max_tokens", 4096),
                 )
             messages.append({
-                "role": "user",
+                "role": RoleConstants.USER,
                 "content": [
                     d.context.build_runtime_context_block(
                         msg.channel, self._runtime_chat_id(msg),

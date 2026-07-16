@@ -17,6 +17,7 @@ from OriginAgent.api.server import (
     create_app,
 )
 from OriginAgent.config.paths import get_workspace_upload_dir
+from OriginAgent.i18n import t
 from OriginAgent.utils.document import extract_documents
 
 try:
@@ -327,7 +328,9 @@ async def test_multipart_defaults_text_when_missing(aiohttp_client, mock_agent, 
     resp = await client.post("/v1/chat/completions", data=data)
     assert resp.status == 200
     call_kwargs = mock_agent.process_direct.call_args.kwargs
-    assert call_kwargs["content"] == "请分析上传的文件"
+    # Default text now comes from i18n (en fallback) instead of a hardcoded
+    # Chinese literal — see Task B6.
+    assert call_kwargs["content"] == t("api.analyze_uploaded_file")
 
 
 @pytest.mark.skipif(not HAS_AIOHTTP, reason="aiohttp not installed")

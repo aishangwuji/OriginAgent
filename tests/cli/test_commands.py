@@ -96,10 +96,14 @@ def test_onboard_existing_config_refresh(mock_paths):
     assert (workspace_dir / "AGENTS.md").exists()
 
 
-def test_onboard_existing_config_overwrite(mock_paths):
-    """Config exists, user confirms overwrite — should reset to defaults."""
+def test_onboard_existing_config_overwrite(mock_paths, monkeypatch):
+    """Config exists with custom values, user confirms overwrite — should reset to defaults."""
     config_file, workspace_dir, _ = mock_paths
     config_file.write_text('{"existing": true}')
+
+    custom_config = Config()
+    custom_config.providers.deepseek.api_key = "sk-existing-key"
+    monkeypatch.setattr("OriginAgent.config.loader.load_config", lambda _=None: custom_config)
 
     result = runner.invoke(app, ["onboard"], input="y\n")
 

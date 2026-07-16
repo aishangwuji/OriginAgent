@@ -6,8 +6,26 @@ from typing import Any
 
 from OriginAgent.agent.soar_chunker import SoarChunker
 from OriginAgent.agent.soar_models import SoarObstacle, SoarSubgoal
-from OriginAgent.agent.skill_bootstrapper import SkillBootstrapper
 from OriginAgent.agent.skill_bootstrapper_models import ActionTraceDigest, SkillCandidate
+
+
+class _StubBootstrapper:
+    """Minimal stub replacing the deleted SkillBootstrapper for SoarChunker tests.
+
+    Mirrors the ingest_chunk/window_size surface that SoarChunker relies on,
+    without the full online-chunking pipeline (which was dead code).
+    """
+
+    def __init__(self) -> None:
+        self._count = 0
+
+    def ingest_chunk(self, digest: ActionTraceDigest) -> None:
+        self._count += 1
+        return None
+
+    @property
+    def window_size(self) -> int:
+        return self._count
 
 
 @dataclass
@@ -40,7 +58,7 @@ def make_subgoal(subagent_task_id: str = "task_123", solution_path: dict | None 
 class TestSoarChunker:
     @pytest.fixture
     def bootstrapper(self):
-        return SkillBootstrapper(min_repeats=100)  # high threshold to avoid actual compile
+        return _StubBootstrapper()
 
     @pytest.fixture
     def tool_records(self):

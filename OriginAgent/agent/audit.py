@@ -2,6 +2,16 @@
 
 Audit logs are diagnostic records. They do not authorize actions and should
 never contain raw payloads, prompts, source excerpts, or private evidence.
+
+Audit is write-only in the production runtime: events are appended via
+``log_action_decision`` / ``log_confirmation_event`` /
+``log_permission_decision``, but no runtime code path reads them back.
+The query helpers (``find_by_action_id``, ``find_by_confirmation_id``,
+``explain_action``) are intended for post-hoc investigation only, exposed
+through the ``originagent audit query`` and ``originagent audit list`` CLI
+commands. They must not be wired into runtime decision loops — that would
+conflate diagnostic records with authorization state and violates the
+separation of concerns stated above.
 """
 
 from __future__ import annotations
@@ -148,6 +158,7 @@ class AuditLogger:
         redactor: Callable[[str], str] | None = None,
         scope_redactor: ScopeRedactor | None = None,
         sqlite_store: Any = None,
+        jsonl_fallback_enabled: bool = False,
     ):
         self.workspace = Path(workspace)
         self.memory_dir = ensure_dir(self.workspace / "memory")
@@ -158,7 +169,7 @@ class AuditLogger:
         self._scope_redactor = scope_redactor or _default_scope_redactor
         self._last_hash_by_file: dict[str, str | None] = {}
         self._sqlite = sqlite_store
-        self._jsonl_fallback_enabled = True
+        self._jsonl_fallback_enabled = jsonl_fallback_enabled
 
     def log_action_decision(
         self,

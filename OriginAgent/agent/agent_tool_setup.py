@@ -486,6 +486,10 @@ def register_default_tools(
         )
 
     if web_config.enable:
+        # Safely resolve http_api_timeout from root Config via introspection_service (spec 3.4)
+        _effective_cfg = getattr(introspection_service, "_effective_config", None) if introspection_service is not None else None
+        _http_api_timeout = getattr(getattr(_effective_cfg, "timeouts", None), "http_api_timeout", 30.0)
+
         web_search_config_loader = None
         if provider_snapshot_loader is not None:
             def web_search_config_loader():
@@ -503,6 +507,7 @@ def register_default_tools(
                 auxiliary_router=getattr(introspection_service._loop, "auxiliary_router", None)
                 if introspection_service is not None and getattr(introspection_service, "_loop", None) is not None
                 else None,
+                http_api_timeout=_http_api_timeout,
             ),
         )
         _register_named(
@@ -512,6 +517,7 @@ def register_default_tools(
                 proxy=web_config.proxy,
                 user_agent=web_config.user_agent,
                 content_read_config=config.content_read,
+                http_api_timeout=_http_api_timeout,
             ),
         )
 

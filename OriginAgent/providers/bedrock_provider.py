@@ -18,6 +18,7 @@ from OriginAgent.utils.attachments import (
     attachment_placeholder_text,
     parse_attachment,
 )
+from OriginAgent.utils.constants import RoleConstants
 from OriginAgent.utils.dict_utils import deep_merge
 
 _IMAGE_DATA_URL = re.compile(r"^data:image/([a-zA-Z0-9.+-]+);base64,(.*)$", re.DOTALL)
@@ -300,12 +301,12 @@ class BedrockProvider(LLMProvider):
                 merged.append(msg)
 
         last_popped: dict[str, Any] | None = None
-        while merged and merged[-1].get("role") == "assistant":
+        while merged and merged[-1].get("role") == RoleConstants.ASSISTANT:
             last_popped = merged.pop()
         if not merged and last_popped is not None and not BedrockProvider._has_tool_use(last_popped):
-            merged.append({"role": "user", "content": last_popped.get("content") or [{"text": "(empty)"}]})
-        if merged and merged[0].get("role") == "assistant" and not BedrockProvider._has_tool_use(merged[0]):
-            merged.insert(0, {"role": "user", "content": [{"text": "(conversation continued)"}]})
+            merged.append({"role": RoleConstants.USER, "content": last_popped.get("content") or [{"text": "(empty)"}]})
+        if merged and merged[0].get("role") == RoleConstants.ASSISTANT and not BedrockProvider._has_tool_use(merged[0]):
+            merged.insert(0, {"role": RoleConstants.USER, "content": [{"text": "(conversation continued)"}]})
         return merged
 
     def _convert_messages(
@@ -318,21 +319,21 @@ class BedrockProvider(LLMProvider):
         for msg in messages:
             role = msg.get("role")
             content = msg.get("content")
-            if role == "system":
+            if role == RoleConstants.SYSTEM:
                 system.extend(self._system_blocks(content))
                 continue
             if role == "tool":
                 block = self._tool_result_block(msg)
-                if converted and converted[-1].get("role") == "user":
+                if converted and converted[-1].get("role") == RoleConstants.USER:
                     converted[-1].setdefault("content", []).append(block)
                 else:
-                    converted.append({"role": "user", "content": [block]})
+                    converted.append({"role": RoleConstants.USER, "content": [block]})
                 continue
-            if role == "assistant":
-                converted.append({"role": "assistant", "content": self._assistant_blocks(msg)})
+            if role == RoleConstants.ASSISTANT:
+                converted.append({"role": RoleConstants.ASSISTANT, "content": self._assistant_blocks(msg)})
                 continue
-            if role == "user":
-                converted.append({"role": "user", "content": self._content_blocks(content)})
+            if role == RoleConstants.USER:
+                converted.append({"role": RoleConstants.USER, "content": self._content_blocks(content)})
 
         return system, self._merge_consecutive(converted)
 
@@ -404,7 +405,7 @@ class BedrockProvider(LLMProvider):
         model_id = self._strip_prefix(model or self.default_model)
         system, bedrock_messages = self._convert_messages(self._sanitize_empty_content(messages))
         if not bedrock_messages:
-            bedrock_messages = [{"role": "user", "content": [{"text": "(empty)"}]}]
+            bedrock_messages = [{"role": RoleConstants.USER, "content": [{"text": "(empty)"}]}]
 
         kwargs: dict[str, Any] = {
             "modelId": model_id,

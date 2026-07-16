@@ -15,7 +15,21 @@ class ContextBudgetResult:
 
 
 class ContextBudgetManager:
-    """Trim prompt inputs without mutating persisted session state."""
+    """Trim prompt inputs without mutating persisted session state.
+
+    Responsibility boundary (spec 1.10 / tech-debt Batch C1):
+        Owns **token budget trimming and audit** — given the already-assembled
+        message list produced by :class:`~OriginAgent.agent.context.ContextBuilder`,
+        fit it within ``context_window_tokens - max_completion_tokens -
+        safety_buffer`` by dropping blocks in a defined trim order (history →
+        recent_history → retrieval → profile/archived summary), always
+        preserving the current user message, working memory and world state.
+        Emits a structured ``audit`` dict for observability.
+
+        Explicitly out of scope:
+        * **Content assembly** — never gathers or renders prompt blocks; only
+          removes/keeps what ContextBuilder already produced.
+    """
 
     CONTRACT_VERSION = "continuity.v1.freeze"
     TRIM_ORDER = [

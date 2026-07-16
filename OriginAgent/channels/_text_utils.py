@@ -1,12 +1,16 @@
-"""Shared markdown-to-plain-text utilities for channel output rendering.
+"""Shared utilities for channel output rendering.
 
-Extracted from telegram.py's _strip_md / _strip_md_block to eliminate
-copy-paste across channel implementations (A2).
+Includes markdown-to-plain-text stripping (extracted from telegram.py's
+_strip_md / _strip_md_block to eliminate copy-paste, A2) and local media
+reference parsing (extracted from dingtalk/qq to eliminate copy-paste, C4).
 """
 
 from __future__ import annotations
 
+import os
 import re
+from pathlib import Path
+from urllib.parse import unquote, urlparse
 
 # ---------------------------------------------------------------------------
 # Inline formatting
@@ -65,3 +69,32 @@ def strip_markdown_block(text: str) -> str:
     # Inline formatting
     text = strip_markdown_inline(text)
     return text.strip()
+
+
+# ---------------------------------------------------------------------------
+# Local media reference parsing
+# ---------------------------------------------------------------------------
+
+
+def parse_local_media_ref(media_ref: str) -> Path | None:
+    """Resolve a local media reference to an existing file Path.
+
+    Accepts either a ``file://`` URI or a plain filesystem path (with ``~``
+    expansion). Returns the resolved :class:`~pathlib.Path` when it points to
+    an existing file, otherwise ``None``.
+
+    Extracted from dingtalk/qq to provide a single source of truth for
+    local-media resolution (C4).
+    """
+    if not media_ref:
+        return None
+    if media_ref.startswith("file://"):
+        parsed = urlparse(media_ref)
+        # Windows drive letter may land in netloc (file://C:/...); Unix uses path.
+        raw = parsed.path or parsed.netloc
+        local_path = Path(unquote(raw))
+    else:
+        local_path = Path(os.path.expanduser(media_ref))
+    if not local_path.is_file():
+        return None
+    return local_path

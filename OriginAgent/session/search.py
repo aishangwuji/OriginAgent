@@ -17,7 +17,7 @@ from OriginAgent.agent.memory import redact_memory_text
 from OriginAgent.config.loader import get_config_path
 from OriginAgent.memory.policy import nearline_runtime_enabled
 from OriginAgent.session.cold_archive import SESSION_COLD_ARCHIVE_DIR
-from OriginAgent.utils.helpers import truncate_text
+from OriginAgent.utils.helpers import safe_filename, truncate_text
 
 DEFAULT_SOURCES: tuple[str, ...] = ("sessions", "history", "webui")
 SUPPORTED_SOURCES: tuple[str, ...] = (
@@ -31,6 +31,9 @@ SUPPORTED_SOURCES: tuple[str, ...] = (
     "foresights",
     "agent_cases",
     "profiles",
+    # 温区归档：原始消息与结构化索引（Phase 4 Task 6）
+    "warm_archive",
+    "warm_summaries",
 )
 SOURCE_PRIORITY: dict[str, int] = {
     "sessions": 0,
@@ -43,6 +46,8 @@ SOURCE_PRIORITY: dict[str, int] = {
     "foresights": 7,
     "agent_cases": 8,
     "profiles": 9,
+    "warm_archive": 10,
+    "warm_summaries": 11,
 }
 SUPPORTED_MODES: tuple[str, ...] = ("literal", "hybrid", "semantic")
 SUPPORTED_RESULT_SHAPES: tuple[str, ...] = ("records", "memory_blocks")
@@ -133,6 +138,9 @@ class SessionSearchService:
         self.sessions_dir = self.workspace / "sessions"
         self.history_file = self.workspace / "memory" / "history.jsonl"
         self.cold_archive_dir = self.workspace / SESSION_COLD_ARCHIVE_DIR
+        # 温区归档：原始消息目录与结构化总结索引文件
+        self.warm_archive_dir = self.workspace / "warm_archive"
+        self.warm_summaries_file = self.workspace / "warm_summaries.jsonl"
         self._webui_dir = webui_dir
         self._cache_ttl_s = cache_ttl_s
         self._cache_records_per_source = cache_records_per_source
@@ -208,15 +216,20 @@ class SessionSearchService:
         old_range_requested = _is_old_range(since_dt) or _is_old_range(until_dt)
         use_live_scan = old_range_requested or limit_value > self._cache_records_per_source
 
+        # 温区 source 由专用方法处理（路径与字段结构与标准 source 不同），
+        # 标准 source 走统一的加载-过滤-匹配流程。
+        warm_source_names = {"warm_archive", "warm_summaries"}
+        standard_sources = tuple(s for s in requested_sources if s not in warm_source_names)
+
         source_loads: dict[str, _SourceLoad] = {}
-        for source in requested_sources:
+        for source in standard_sources:
             source_loads[source] = self._load_source(source, live=use_live_scan)
 
         query_lc = query.casefold()
         matches: list[tuple[SearchRecord, int]] = []
         skipped_records = sum(load.skipped_records for load in source_loads.values())
         scanned_records = sum(load.scanned_records for load in source_loads.values())
-        for source in requested_sources:
+        for source in standard_sources:
             for record in source_loads[source].records:
                 if requested_roles and record.role not in requested_roles:
                     continue
@@ -232,6 +245,23 @@ class SessionSearchService:
                 if hit_count <= 0:
                     continue
                 matches.append((record, hit_count))
+
+        # 温区归档与索引检索：专用方法返回 (record, hit_count) 后并入统一排序
+        if "warm_archive" in requested_sources:
+            matches.extend(self._search_warm_archive(
+                query_lc=query_lc,
+                target_session_key=target_session_key,
+                since_dt=since_dt,
+                until_dt=until_dt,
+                requested_roles=requested_roles,
+            ))
+        if "warm_summaries" in requested_sources:
+            matches.extend(self._search_warm_summaries(
+                query_lc=query_lc,
+                target_session_key=target_session_key,
+                since_dt=since_dt,
+                until_dt=until_dt,
+            ))
 
         matches.sort(key=_sort_key)
         results = [
@@ -626,6 +656,184 @@ class SessionSearchService:
             return _profile_record_from_json(self.workspace, path, line_no, data)
         return None
 
+    # ── 温区归档检索（Phase 4 Task 6） ──────────────────────────────────
+    # warm_archive：从 workspace/warm_archive/{safe_key}.jsonl 检索原始消息，
+    #   每行一个 JSON 消息（role/content/timestamp），literal 模式按 content 子串匹配。
+    # warm_summaries：从 workspace/warm_summaries.jsonl 检索结构化索引条目，
+    #   literal 模式匹配 summary/key_entities/commitments/decisions/open_questions。
+    # 两者均返回 list[tuple[SearchRecord, int]]，与标准 source 的 matches 同构，
+    # 便于在 search 方法中统一排序与格式化。
+
+    def _search_warm_archive(
+        self,
+        *,
+        query_lc: str,
+        target_session_key: str | None,
+        since_dt: datetime | None,
+        until_dt: datetime | None,
+        requested_roles: set[str],
+    ) -> list[tuple[SearchRecord, int]]:
+        """从 warm_archive/{safe_key}.jsonl 检索原始消息（大小写不敏感子串匹配 content）。
+
+        - 指定 target_session_key 时只读对应归档文件，session_key 直接复用入参；
+        - 未指定时扫描 warm_archive 目录下全部 .jsonl，session_key 由文件名反推。
+        - 文件不存在时返回空列表，不抛异常。
+        """
+        if not self.warm_archive_dir.is_dir():
+            return []
+        if target_session_key:
+            safe_key = _warm_safe_key(target_session_key)
+            path = self.warm_archive_dir / f"{safe_key}.jsonl"
+            if not path.is_file():
+                return []
+            return self._match_warm_archive_file(
+                path, target_session_key, query_lc, since_dt, until_dt, requested_roles
+            )
+        matches: list[tuple[SearchRecord, int]] = []
+        for path in sorted(self.warm_archive_dir.glob("*.jsonl")):
+            if not path.is_file():
+                continue
+            # 文件名即 safe_key，反推 session_key（与 sessions source 同构：首下划线还原为冒号）
+            session_key = _session_key_from_stem(path.stem, source="warm_archive")
+            matches.extend(self._match_warm_archive_file(
+                path, session_key, query_lc, since_dt, until_dt, requested_roles
+            ))
+        return matches
+
+    def _match_warm_archive_file(
+        self,
+        path: Path,
+        session_key: str,
+        query_lc: str,
+        since_dt: datetime | None,
+        until_dt: datetime | None,
+        requested_roles: set[str],
+    ) -> list[tuple[SearchRecord, int]]:
+        """扫描单个 warm_archive 文件，返回命中的 (record, hit_count) 列表。"""
+        matches: list[tuple[SearchRecord, int]] = []
+        try:
+            with path.open("r", encoding="utf-8") as handle:
+                for line_no, raw in enumerate(handle, start=1):
+                    line = raw.strip()
+                    if not line:
+                        continue
+                    try:
+                        data = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    if not isinstance(data, dict):
+                        continue
+                    role = str(data.get("role") or "").lower()
+                    if role not in {"user", "assistant", "tool", "system"}:
+                        continue
+                    if requested_roles and role not in requested_roles:
+                        continue
+                    text = _text_from_content(data.get("content"))
+                    if not text.strip():
+                        continue
+                    timestamp = _parse_record_timestamp(data.get("timestamp"))
+                    if not _in_time_range(timestamp, since_dt, until_dt):
+                        continue
+                    hit_count = _count_literal_matches(text, query_lc)
+                    if hit_count <= 0:
+                        continue
+                    matches.append((
+                        SearchRecord(
+                            source="warm_archive",
+                            session_key=session_key,
+                            role=role,
+                            timestamp=timestamp,
+                            text=text,
+                            locator={
+                                "path": _relative_path(self.workspace, path),
+                                "line": line_no,
+                                "message_index": max(0, line_no - 1),
+                                "has_full_content": True,
+                            },
+                        ),
+                        hit_count,
+                    ))
+        except OSError as exc:
+            logger.warning("session_search warm_archive failed to read {}: {}", path, exc)
+        return matches
+
+    def _search_warm_summaries(
+        self,
+        *,
+        query_lc: str,
+        target_session_key: str | None,
+        since_dt: datetime | None,
+        until_dt: datetime | None,
+    ) -> list[tuple[SearchRecord, int]]:
+        """从 warm_summaries.jsonl 检索结构化索引条目。
+
+        literal 模式匹配 summary / key_entities / commitments / decisions /
+        open_questions 等字段；命中时返回完整结构化字段（置于 locator）。
+        文件不存在时返回空列表，不抛异常。
+        """
+        if not self.warm_summaries_file.is_file():
+            return []
+        matches: list[tuple[SearchRecord, int]] = []
+        try:
+            with self.warm_summaries_file.open("r", encoding="utf-8") as handle:
+                for line_no, raw in enumerate(handle, start=1):
+                    line = raw.strip()
+                    if not line:
+                        continue
+                    try:
+                        data = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    if not isinstance(data, dict):
+                        continue
+                    session_key = str(data.get("session_key") or "")
+                    if target_session_key and session_key != target_session_key:
+                        continue
+                    timestamp = _parse_record_timestamp(data.get("created_at"))
+                    if not _in_time_range(timestamp, since_dt, until_dt):
+                        continue
+                    summary = _text_from_content(data.get("summary"))
+                    commitments = _join_list_field(data.get("commitments"))
+                    decisions = _join_list_field(data.get("decisions"))
+                    open_questions = _join_list_field(data.get("open_questions"))
+                    key_entities = _join_list_field(data.get("key_entities"))
+                    # 合并所有可搜索字段，统一做子串匹配
+                    text = "\n".join(
+                        part for part in (summary, key_entities, commitments, decisions, open_questions)
+                        if part.strip()
+                    )
+                    if not text.strip():
+                        continue
+                    hit_count = _count_literal_matches(text, query_lc)
+                    if hit_count <= 0:
+                        continue
+                    matches.append((
+                        SearchRecord(
+                            source="warm_summaries",
+                            session_key=session_key,
+                            role="archive",
+                            timestamp=timestamp,
+                            text=text,
+                            locator={
+                                "path": _relative_path(self.workspace, self.warm_summaries_file),
+                                "line": line_no,
+                                "turn_range": str(data.get("turn_range") or ""),
+                                "summary": summary,
+                                "commitments": list(data.get("commitments") or []),
+                                "decisions": list(data.get("decisions") or []),
+                                "open_questions": list(data.get("open_questions") or []),
+                                "key_entities": list(data.get("key_entities") or []),
+                                "timestamp_range": data.get("timestamp_range") or {},
+                                "archive_locator": str(data.get("locator") or ""),
+                                "has_full_content": True,
+                            },
+                        ),
+                        hit_count,
+                    ))
+        except OSError as exc:
+            logger.warning("session_search warm_summaries failed to read {}: {}", self.warm_summaries_file, exc)
+        return matches
+
 
 def _normalize_sources(sources: Iterable[str] | None) -> tuple[str, ...]:
     if sources is None:
@@ -677,6 +885,23 @@ def _session_key_from_stem(stem: str, *, source: str) -> str:
     if "_" in stem:
         return stem.replace("_", ":", 1)
     return stem
+
+
+def _warm_safe_key(session_key: str) -> str:
+    """将 session_key 转换为 warm_archive 文件名（与 SessionManager.safe_key 一致）。
+
+    例如 ``cli:default`` → ``cli_default``，确保文件路径安全。
+    """
+    return safe_filename(session_key.replace(":", "_"))
+
+
+def _join_list_field(value: Any) -> str:
+    """将结构化索引中的列表字段拼接为可搜索文本（元素以换行分隔）。"""
+    if isinstance(value, list):
+        return "\n".join(str(item) for item in value if item is not None)
+    if isinstance(value, str):
+        return value
+    return ""
 
 
 def _channel_from_session_key(session_key: str) -> str | None:

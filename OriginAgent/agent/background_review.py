@@ -59,6 +59,7 @@ from OriginAgent.agent.workflow_artifacts import write_workflow_artifact
 from OriginAgent.config.loader import load_config
 from OriginAgent.config.schema import BackgroundReviewConfig, TaskRuntimeConfig
 from OriginAgent.providers.base import LLMProvider
+from OriginAgent.utils.constants import RoleConstants
 from OriginAgent.utils.helpers import truncate_text
 from OriginAgent.utils.prompt_templates import render_template
 
@@ -1522,7 +1523,7 @@ class BackgroundReviewService:
                     model=self.model,
                     messages=[
                         {
-                            "role": "system",
+                            "role": RoleConstants.SYSTEM,
                             "content": render_template(
                                 "agent/background_review.md",
                                 strip=True,
@@ -1530,7 +1531,7 @@ class BackgroundReviewService:
                                 max_proposals=int(getattr(cfg, "max_proposals_per_turn", 8) or 8),
                             ),
                         },
-                        {"role": "user", "content": prompt},
+                        {"role": RoleConstants.USER, "content": prompt},
                     ],
                     tools=None,
                     tool_choice=None,

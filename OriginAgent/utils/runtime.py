@@ -8,6 +8,7 @@ from typing import Any
 
 from loguru import logger
 
+from OriginAgent.utils.constants import RoleConstants
 from OriginAgent.utils.helpers import stringify_text_blocks
 
 _MAX_REPEAT_EXTERNAL_LOOKUPS = 2
@@ -57,12 +58,12 @@ def is_blank_text(content: str | None) -> bool:
 
 def build_finalization_retry_message() -> dict[str, str]:
     """A short no-tools-allowed prompt for final answer recovery."""
-    return {"role": "user", "content": FINALIZATION_RETRY_PROMPT}
+    return {"role": RoleConstants.USER, "content": FINALIZATION_RETRY_PROMPT}
 
 
 def build_length_recovery_message() -> dict[str, str]:
     """Prompt the model to continue after hitting output token limit."""
-    return {"role": "user", "content": LENGTH_RECOVERY_PROMPT}
+    return {"role": RoleConstants.USER, "content": LENGTH_RECOVERY_PROMPT}
 
 
 def external_lookup_signature(tool_name: str, arguments: dict[str, Any]) -> str | None:

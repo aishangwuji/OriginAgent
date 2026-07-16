@@ -4,7 +4,7 @@ import json
 import os
 import re
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 import pydantic
 from loguru import logger
@@ -162,11 +162,21 @@ def _env_replace(match: re.Match[str]) -> str:
     return value
 
 
-def _migrate_config(data: dict) -> dict:
-    """Migrate old config formats to current."""
-    # Move tools.exec.restrictToWorkspace → tools.restrictToWorkspace
+# Current config schema version. Bump when a new migration is appended to
+# MIGRATIONS below (spec 3.15, rule 2 — explicit contract versioning).
+CURRENT_CONFIG_VERSION = 1
+
+
+def _migrate_v0_to_v1(data: dict) -> None:
+    """Migrate a v0 (unversioned) config dict up to v1, in place.
+
+    Wraps the two legacy ad-hoc migrations that previously ran unconditionally:
+    - tools.exec.restrictToWorkspace → tools.restrictToWorkspace
+    - tools.myEnabled / tools.mySet → tools.my.{enable, allowSet}
+    """
     tools = data.get("tools", {})
     exec_cfg = tools.get("exec", {})
+    # Move tools.exec.restrictToWorkspace → tools.restrictToWorkspace
     if "restrictToWorkspace" in exec_cfg and "restrictToWorkspace" not in tools:
         tools["restrictToWorkspace"] = exec_cfg.pop("restrictToWorkspace")
 
@@ -184,4 +194,27 @@ def _migrate_config(data: dict) -> dict:
         else:
             tools.pop("mySet", None)
 
+
+# Forward migration registry: (target_version, migration_fn). Each entry
+# transforms a config dict from version (target-1) to target, in place. To add
+# a migration, append (N+1, fn) and bump CURRENT_CONFIG_VERSION (spec 3.15).
+MIGRATIONS: list[tuple[int, Callable[[dict], None]]] = [
+    (1, _migrate_v0_to_v1),
+]
+
+
+def _migrate_config(data: dict) -> dict:
+    """Migrate a raw config dict forward to CURRENT_CONFIG_VERSION (rule 2).
+
+    Reads ``config_version`` from the dict (default 0 = legacy unversioned
+    config) and runs each migration whose target version is higher, in order.
+    Finally stamps the dict with the current version so re-saving an
+    already-migrated config is a no-op.
+    """
+    current_version = data.get("config_version", 0)
+    for target_version, migration_fn in MIGRATIONS:
+        if target_version > current_version:
+            migration_fn(data)
+            current_version = target_version
+    data["config_version"] = CURRENT_CONFIG_VERSION
     return data

@@ -4,7 +4,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from OriginAgent.config.loader import get_config_path
+from loguru import logger
+
+from OriginAgent.config.loader import APP_DATA_DIR_NAME, get_config_path
 from OriginAgent.utils.helpers import ensure_dir
 
 
@@ -81,5 +83,39 @@ def get_bridge_install_dir() -> Path:
 
 
 def get_legacy_sessions_dir() -> Path:
-    """Return the legacy global session directory used for migration fallback."""
-    return Path.home() / ".OriginAgent" / "sessions"
+    """Return the legacy global session directory used for migration fallback.
+
+    Prefers the lowercase ``~/.originagent/sessions`` (current convention). On
+    case-sensitive filesystems (Linux/macOS), falls back to the legacy uppercase
+    ``~/.OriginAgent/sessions`` when the lowercase directory is absent, so users
+    upgrading from older releases keep finding their historical sessions. When
+    neither exists, the lowercase default is returned for new installs.
+    """
+    lowercase_path = Path.home() / APP_DATA_DIR_NAME / "sessions"
+    uppercase_path = Path.home() / ".OriginAgent" / "sessions"
+    if lowercase_path.exists():
+        return lowercase_path
+    if uppercase_path.exists():
+        return uppercase_path
+    return lowercase_path
+
+
+def check_and_warn_legacy_case_mismatch() -> bool:
+    """Warn if a legacy uppercase ``~/.OriginAgent`` dir exists without a lowercase counterpart.
+
+    On case-sensitive filesystems an old install may have created ``~/.OriginAgent``
+    while the current convention is ``~/.originagent``. This emits a migration hint
+    without performing any destructive move (automatic migration is a destructive
+    operation and is deferred to the user per project rule 23). Returns True when a
+    mismatch was detected and a warning was emitted.
+    """
+    lowercase_dir = Path.home() / APP_DATA_DIR_NAME
+    uppercase_dir = Path.home() / ".OriginAgent"
+    if uppercase_dir.exists() and not lowercase_dir.exists():
+        logger.warning(
+            "Found legacy data directory ~/.OriginAgent (uppercase). "
+            "Please rename it to ~/.originagent (lowercase) to match the current "
+            "convention. Automatic migration is not performed to avoid data loss."
+        )
+        return True
+    return False

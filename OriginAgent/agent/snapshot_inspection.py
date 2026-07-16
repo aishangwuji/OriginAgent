@@ -11,6 +11,7 @@ from typing import Any
 from OriginAgent.agent.world_state import WorldStateManager
 from OriginAgent.providers.base import LLMProvider
 from OriginAgent.session.manager import Session
+from OriginAgent.utils.constants import RoleConstants
 
 
 class SnapshotInspectionService:
@@ -148,7 +149,7 @@ class SnapshotInspectionService:
             meta["inspection_mode"] = "vision"
             return [
                 {
-                    "role": "user",
+                    "role": RoleConstants.USER,
                     "content": [
                         {"type": "text", "text": text},
                         image_block,
@@ -159,7 +160,7 @@ class SnapshotInspectionService:
             meta["inspection_mode"] = "text_fallback"
         return [
             {
-                "role": "user",
+                "role": RoleConstants.USER,
                 "content": text,
             }
         ], meta

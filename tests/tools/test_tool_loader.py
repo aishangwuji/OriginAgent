@@ -43,7 +43,7 @@ def test_tool_loader_skips_plugin_that_conflicts_with_core_tool() -> None:
     core.tool_name = "core_tool"
     registry.register(core)
 
-    loader = ToolLoader(test_classes=[])
+    loader = ToolLoader()
     loader._plugins = {"conflict": _CoreConflictPlugin}
 
     assert loader.load(SimpleNamespace(), registry) == []
@@ -52,7 +52,7 @@ def test_tool_loader_skips_plugin_that_conflicts_with_core_tool() -> None:
 
 def test_tool_loader_honors_scope_and_registers_plugin() -> None:
     registry = ToolRegistry()
-    loader = ToolLoader(test_classes=[])
+    loader = ToolLoader()
     loader._plugins = {"scoped": _ScopedPlugin, "core": _CorePlugin}
 
     assert loader.load(SimpleNamespace(), registry, scope="core") == ["plugin_tool"]

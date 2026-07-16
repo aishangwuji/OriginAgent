@@ -75,5 +75,30 @@
     "stop_count": "Stopped {count} task(s).",
     "restart": "Restarting..."
   },
-  "help_header": "OriginAgent commands:"
+  "help_header": "OriginAgent commands:",
+  "channel": {
+    "msteams": {
+      "mention_only_response": "Hi — what can I help with?",
+      "auth_disabled_warning": "Inbound auth validation was explicitly DISABLED in config. Anyone who knows the webhook URL can send messages as any user. Only disable this for local development or controlled testing.",
+      "auth_required_error": "Production environment (runtime_profile={profile}) must enable msteams auth (validate_inbound_auth=True). To disable auth, run in dev/test environment (set runtime_profile=local_dev)."
+    }
+  },
+  "cli": {
+    "thinking": "is thinking...",
+    "bot_name": "OriginAgent",
+    "onboard": {
+      "static_models_notice": "The model registry is a static build; some models may be missing. You can type the full model name manually.",
+      "overwrite_prompt": "Overwrite existing configuration?",
+      "overwrite_cancelled": "Onboard cancelled. Existing configuration preserved."
+    }
+  },
+  "api": {
+    "analyze_uploaded_file": "Please analyze the uploaded file."
+  },
+  "error": {
+    "allow_from_empty": "Error: \"{name}\" has empty allowFrom (denies all). Set [\"*\"] to allow everyone, or add specific user IDs.",
+    "channel": {
+      "startup_failed": "Failed to start channel {name}: {error}"
+    }
+  }
 }

@@ -23,6 +23,7 @@ from OriginAgent.agent.evolution_sandbox import sandbox_status_counts, trial_pol
 from OriginAgent.agent.evolution_schema import validate_evolution_stores
 from OriginAgent.agent.evolution_snapshots import EvolutionRollbackService, EvolutionSnapshotStore
 from OriginAgent.agent.evolution_trial_logs import EvolutionTrialLogStore, trial_log_policy_status
+from OriginAgent.evolution.manager import EvolutionModuleManager
 from OriginAgent.agent.meta_programming import MetaProgrammingCompilationStore
 from OriginAgent.agent.confirmation import ConfirmationManager, ConfirmationRequest
 from OriginAgent.security.grants import CapabilityGrantStore, issue_evolution_override_grant
@@ -153,7 +154,13 @@ class EvolutionPolicy:
 class EvolutionControlPlane:
     """Read, preview, and guarded write API for governed evolution."""
 
-    def __init__(self, workspace: Path, config: Any | None = None) -> None:
+    def __init__(
+        self,
+        workspace: Path,
+        config: Any | None = None,
+        *,
+        module_manager: EvolutionModuleManager | None = None,
+    ) -> None:
         self.workspace = Path(workspace)
         self.raw_config = config
         self.config = apply_config_overlay(self.workspace, config)
@@ -161,6 +168,10 @@ class EvolutionControlPlane:
         self.operator = EvolutionOperator(self.workspace, self.config)
         self.confirmations = ConfirmationManager(self.workspace)
         self.grants = CapabilityGrantStore(self.workspace)
+        # 桥接 EvolutionModuleManager:模块包级 force_cleanup / rollback_artifact
+        # 通过治理层(ConfirmationManager + CapabilityGrantStore)执行。
+        # 未显式传入时懒构造,保持与现有 lazy 构造模式一致。
+        self.module_manager = module_manager or EvolutionModuleManager(self.workspace)
 
     def status(self) -> dict[str, Any]:
         """Return the unified dashboard-ready evolution read model."""
@@ -474,17 +485,35 @@ class EvolutionControlPlane:
                 message="Signal resumed." if signal is not None else "Opportunity signal was not found or is not suppressed.",
             )
         elif action in {"run_maintenance", "force_cleanup"}:
-            result = self._action_result(
-                action_kind=action,
-                target_type="maintenance",
-                target_id="",
-                will_write=True,
-                result=run_evolution_maintenance(
-                    self.workspace,
-                    self.config,
-                    force_cleanup=force_cleanup or action == "force_cleanup",
-                ),
-            )
+            if action == "force_cleanup" and target_id and self.module_manager is not None:
+                # 模块包级强制清理:经治理层审批后委派给 EvolutionModuleManager
+                recovery = self.module_manager.force_clean_module(
+                    target_id,
+                    reason=reason or "force_cleanup",
+                    actor=actor or "control_plane",
+                )
+                result = self._action_result(
+                    ok=recovery.ok,
+                    action_kind=action,
+                    target_type="module",
+                    target_id=target_id,
+                    will_write=True,
+                    result=asdict(recovery),
+                    error=recovery.error,
+                    message=f"Module {target_id} force-cleaned (status={recovery.status}).",
+                )
+            else:
+                result = self._action_result(
+                    action_kind=action,
+                    target_type="maintenance",
+                    target_id="",
+                    will_write=True,
+                    result=run_evolution_maintenance(
+                        self.workspace,
+                        self.config,
+                        force_cleanup=force_cleanup or action == "force_cleanup",
+                    ),
+                )
         elif action == "run_feedback_calibration":
             result = self._action_result(
                 action_kind=action,
@@ -506,24 +535,42 @@ class EvolutionControlPlane:
                 message=retry.message,
             )
         elif action == "rollback_artifact":
-            rollback = EvolutionRollbackService(self.workspace).rollback(
-                artifact_type=artifact_type,
-                artifact_name=artifact_name or target_id,
-                snapshot_id=snapshot_id or None,
-                reason=reason,
-                actor=actor or "control_plane",
-                force=force_cleanup,
-            )
-            result = self._action_result(
-                ok=rollback.ok,
-                action_kind=action,
-                target_type="artifact",
-                target_id=artifact_name or target_id,
-                will_write=True,
-                result=rollback.to_json(),
-                error=rollback.error,
-                message=rollback.message,
-            )
+            if artifact_type == "module" and self.module_manager is not None:
+                # 模块包级回滚:经治理层审批后委派给 EvolutionModuleManager
+                digest = artifact_name or target_id
+                activation = self.module_manager.rollback_module(
+                    digest,
+                    actor=actor or "control_plane",
+                )
+                result = self._action_result(
+                    ok=activation.ok,
+                    action_kind=action,
+                    target_type="module",
+                    target_id=digest,
+                    will_write=True,
+                    result=asdict(activation),
+                    error=activation.error,
+                    message=f"Module {digest} rolled back (status={activation.status}).",
+                )
+            else:
+                rollback = EvolutionRollbackService(self.workspace).rollback(
+                    artifact_type=artifact_type,
+                    artifact_name=artifact_name or target_id,
+                    snapshot_id=snapshot_id or None,
+                    reason=reason,
+                    actor=actor or "control_plane",
+                    force=force_cleanup,
+                )
+                result = self._action_result(
+                    ok=rollback.ok,
+                    action_kind=action,
+                    target_type="artifact",
+                    target_id=artifact_name or target_id,
+                    will_write=True,
+                    result=rollback.to_json(),
+                    error=rollback.error,
+                    message=rollback.message,
+                )
         elif action == "clear_config_overlay":
             overlay = EvolutionConfigOverlayStore(self.workspace).clear(actor=actor or "control_plane", source=source)
             result = self._action_result(

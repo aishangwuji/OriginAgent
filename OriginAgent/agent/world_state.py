@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import hashlib
 import mimetypes
@@ -13,6 +14,11 @@ from typing import Any
 
 from OriginAgent.agent.identity import RuntimeContext
 from OriginAgent.agent.local_awareness import summarize_device_map
+from OriginAgent.bdi.world_state_watcher import (
+    BELIEF_CHANGED_EVENT,
+    BeliefChangeEvent,
+    BeliefChangeSeverity,
+)
 from OriginAgent.session.manager import Session, SessionManager
 from OriginAgent.utils.attachments import AttachmentDescriptor, describe_attachment
 
@@ -596,10 +602,48 @@ class WorldStateManager:
         workspace: Path,
         sessions: SessionManager,
         context_config: Any | None = None,
+        *,
+        event_bus: Any | None = None,
     ) -> None:
         self._workspace = Path(workspace)
         self._sessions = sessions
         self._context_config = context_config
+        self._event_bus = event_bus
+        self._pending_publishes: set[asyncio.Task] = set()
+
+    def _publish_belief_changed(
+        self,
+        *,
+        source: str,
+        key: str,
+        old_value: str | None = None,
+        new_value: str | None = None,
+        severity: BeliefChangeSeverity = BeliefChangeSeverity.MEDIUM,
+        reason: str = "",
+    ) -> None:
+        """Fire-and-forget publish of BELIEF_CHANGED_EVENT to the event bus.
+
+        If no event bus is configured or no running loop exists, this is a no-op.
+        Tasks are tracked in _pending_publishes to prevent GC and allow tests
+        to await completion.
+        """
+        if self._event_bus is None:
+            return
+        event = BeliefChangeEvent(
+            source=source,
+            key=key,
+            old_value=old_value,
+            new_value=new_value,
+            severity=severity,
+            reason=reason,
+        )
+        try:
+            loop = asyncio.get_running_loop()
+            task = loop.create_task(self._event_bus.publish(BELIEF_CHANGED_EVENT, event))
+            self._pending_publishes.add(task)
+            task.add_done_callback(self._pending_publishes.discard)
+        except RuntimeError:
+            pass
 
     def load(self, session: Session, *, identity: RuntimeContext | None = None) -> WorldStateSnapshot:
         snapshot = WorldStateSnapshot.from_json(session.metadata.get(WORLD_STATE_METADATA_KEY))
@@ -763,7 +807,15 @@ class WorldStateManager:
             existing=snapshot.device_events,
             new_events=lifecycle_events,
         )
-        return self.save(session, snapshot)
+        saved = self.save(session, snapshot)
+        self._publish_belief_changed(
+            source="device_discovery",
+            key="device_map",
+            new_value=f"{len(stabilized_map)} devices",
+            severity=BeliefChangeSeverity.HIGH,
+            reason="Device map updated",
+        )
+        return saved
 
     def bind_device(
         self,
@@ -901,12 +953,18 @@ class WorldStateManager:
     ) -> WorldStateSnapshot:
         snapshot = self.load(session, identity=runtime_context)
         descriptors = [self._describe_workspace_attachment(media_path, source="media") for media_path in (media_paths or []) if isinstance(media_path, str) and media_path]
-        return self._ingest_descriptors(
+        result = self._ingest_descriptors(
             session,
             runtime_context=runtime_context,
             snapshot=snapshot,
             descriptors=descriptors,
         )
+        self._publish_belief_changed(
+            source="media_ingest",
+            key="media_snapshots",
+            reason="Media ingested",
+        )
+        return result
 
     def ingest_media_scan(
         self,
@@ -1100,6 +1158,12 @@ class WorldStateManager:
             ),
         )
         self.save(session, refreshed)
+        self._publish_belief_changed(
+            source="inspection",
+            key="inspection_result",
+            new_value=target.media_status,
+            reason="Inspection applied",
+        )
         return {
             "snapshot": target.to_json(),
             "inspection": inspection.to_json(),

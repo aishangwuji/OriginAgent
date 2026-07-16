@@ -1,4 +1,21 @@
-"""Runtime context helpers for AgentLoop."""
+"""Runtime context helpers for AgentLoop.
+
+Responsibility boundary (spec 1.10 / tech-debt Batch C1):
+    Pure, stateless utility functions providing runtime-context plumbing for
+    the AgentLoop: ``runtime_chat_id`` (chat-id resolution for runtime
+    metadata), ``snapshot_for_trigger`` (capability snapshot selection by
+    trigger kind), ``set_tool_context`` (propagate routing info / capability
+    snapshot to the tool registry and individual tools), and bus
+    progress/retry-wait callbacks.
+
+    Kept as a dedicated module rather than merged into ``context.py``: its
+    concern is *per-turn runtime routing & tool wiring*, which is distinct
+    from *prompt content assembly* (ContextBuilder) and *token budget
+    trimming* (ContextBudgetManager).  The functions are small, cohesive and
+    stateless, so an independent module preserves a clean
+    single-responsibility boundary — context.py owns the prompt, this module
+    owns the per-turn runtime plumbing.
+"""
 
 from __future__ import annotations
 

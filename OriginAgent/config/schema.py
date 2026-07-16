@@ -9,6 +9,19 @@ from pydantic_settings import BaseSettings
 
 from OriginAgent.cron.types import CronSchedule
 
+# Single source of truth for supported transcription providers (spec 3.6, rule 6).
+# Consumed by config.doctor (validation) and gateway.rest_api (UI options) to keep
+# them in sync — previously these were defined independently and drifted (2 vs 3).
+TRANSCRIPTION_PROVIDERS = {"groq", "openai", "volcengine"}
+
+# Single source of truth for supported device backends (spec 3.5, rule 6).
+# Consumed by gateway.rest_api (settings_update validation). The Literal type on
+# DeviceToolsConfig.backend is a *static* type-check constraint and cannot be
+# derived from this runtime tuple — both must be kept in sync by hand when a
+# backend is added. Previously channels/websocket.py and gateway/rest_api.py each
+# maintained an independent copy, risking drift on schema changes.
+DEVICE_BACKEND_OPTIONS = ("none", "fake", "lighting_client")
+
 
 class Base(BaseModel):
     """Base model that accepts both camelCase and snake_case keys."""
@@ -2032,14 +2045,65 @@ class ToolsConfig(Base):
 
 
 class StorageConfig(Base):
-    """Storage backend configuration."""
+    """Storage backend configuration.
 
-    jsonl_fallback_enabled: bool = True
+    ``jsonl_fallback_enabled`` controls the JSONL cold-backup dual-write path.
+    SQLite is the primary source of truth (WAL mode, busy_timeout=10000,
+    synchronous=NORMAL — see ``storage/sqlite_helpers.py``). When this flag is
+    ``False`` (production default), stores write ONLY to SQLite. When ``True``,
+    stores additionally append a buffered-I/O JSONL copy as an emergency
+    rollback artifact.
+
+    收口时间表 (rule 25): JSONL fallback is retained solely as a safety net
+    during the SQLite cutover window. Planned full removal: after two full
+    release cycles of stable production operation without any SQLite write
+    failures that required JSONL recovery. Track in the tech-debt board.
+    """
+
+    jsonl_fallback_enabled: bool = False
+
+
+class TimeoutConfig(Base):
+    """Centralized timeout configuration (spec 3.4, rule 17).
+
+    Replaces scattered inline magic values (10.0/15.0/20.0/30.0/300 etc.)
+    with a single source of truth so the same operation class uses the
+    same timeout across files.
+    """
+
+    http_download_timeout: float = Field(
+        default=30.0,
+        ge=1.0,
+        validation_alias=AliasChoices("httpDownloadTimeout", "http_download_timeout"),
+        serialization_alias="httpDownloadTimeout",
+    )  # HTTP download/stream timeout (channels: telegram, email, msteams, mochat)
+    http_api_timeout: float = Field(
+        default=30.0,
+        ge=1.0,
+        validation_alias=AliasChoices("httpApiTimeout", "http_api_timeout"),
+        serialization_alias="httpApiTimeout",
+    )  # HTTP API call timeout (agent/tools/web.py search & fetch calls)
+    db_busy_timeout: int = Field(
+        default=5000,
+        ge=0,
+        validation_alias=AliasChoices("dbBusyTimeout", "db_busy_timeout"),
+        serialization_alias="dbBusyTimeout",
+    )  # SQLite PRAGMA busy_timeout in milliseconds
+    tool_default_timeout: float = Field(
+        default=30.0,
+        ge=1.0,
+        validation_alias=AliasChoices("toolDefaultTimeout", "tool_default_timeout"),
+        serialization_alias="toolDefaultTimeout",
+    )  # Default tool execution timeout (gateway tool dispatch, pending queue wait)
 
 
 class Config(BaseSettings):
     """Root configuration for OriginAgent."""
 
+    # Schema version for migration tracking (spec 3.15, rule 2). v0 = legacy
+    # unversioned configs; bumped on each breaking schema change so loader.py
+    # can run the forward migration chain. See MIGRATIONS in config/loader.py.
+    config_version: int = 1
     agents: AgentsConfig = Field(default_factory=AgentsConfig)
     channels: ChannelsConfig = Field(default_factory=ChannelsConfig)
     providers: ProvidersConfig = Field(default_factory=ProvidersConfig)
@@ -2049,6 +2113,11 @@ class Config(BaseSettings):
     security: SecurityConfig = Field(default_factory=SecurityConfig)
     tools: ToolsConfig = Field(default_factory=ToolsConfig)
     storage: StorageConfig = Field(default_factory=StorageConfig)
+    timeouts: TimeoutConfig = Field(
+        default_factory=TimeoutConfig,
+        validation_alias=AliasChoices("timeouts"),
+        serialization_alias="timeouts",
+    )
     model_presets: dict[str, ModelPresetConfig] = Field(
         default_factory=dict,
         validation_alias=AliasChoices("modelPresets", "model_presets"),

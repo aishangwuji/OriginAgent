@@ -28,6 +28,7 @@ from OriginAgent.bdi.models import (
 )
 from OriginAgent.bdi.plan_library import PlanLibrary
 from OriginAgent.bdi.world_state_watcher import WorldStateWatcher
+from OriginAgent.utils.constants import RoleConstants
 from OriginAgent.utils.helpers import ensure_dir
 
 _DELIBERATION_SYSTEM_PROMPT = """You are the BDI Deliberation Engine of OriginAgent.
@@ -373,8 +374,8 @@ class DeliberationEngine:
             try:
                 response = await self._provider.chat_with_retry(
                     messages=[
-                        {"role": "system", "content": _DELIBERATION_SYSTEM_PROMPT},
-                        {"role": "user", "content": user_prompt},
+                        {"role": RoleConstants.SYSTEM, "content": _DELIBERATION_SYSTEM_PROMPT},
+                        {"role": RoleConstants.USER, "content": user_prompt},
                     ],
                     tools=_DELIBERATION_TOOL,
                     model=self._model,

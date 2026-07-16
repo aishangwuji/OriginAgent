@@ -33,11 +33,8 @@ class MonologueFrame:
     active_goal: str = ""
     candidate_hypotheses: list[str] = field(default_factory=list)
     intended_strategy: str = ""
-    verification_needs: list[str] = field(default_factory=list)
-    simulation_requests: list[str] = field(default_factory=list)
     confidence: float = 0.0
     uncertainty_flags: list[str] = field(default_factory=list)
-    self_critique: str = ""
     created_at: str = field(default_factory=_utcnow_iso)
 
     def __post_init__(self) -> None:
@@ -47,11 +44,8 @@ class MonologueFrame:
         object.__setattr__(self, "active_goal", _normalize_text(self.active_goal, max_chars=240))
         object.__setattr__(self, "candidate_hypotheses", _normalize_str_list(self.candidate_hypotheses, limit=8, max_chars=320))
         object.__setattr__(self, "intended_strategy", _normalize_text(self.intended_strategy, max_chars=480))
-        object.__setattr__(self, "verification_needs", _normalize_str_list(self.verification_needs, limit=8, max_chars=240))
-        object.__setattr__(self, "simulation_requests", _normalize_str_list(self.simulation_requests, limit=8, max_chars=160))
         object.__setattr__(self, "confidence", _normalize_float(self.confidence))
         object.__setattr__(self, "uncertainty_flags", _normalize_str_list(self.uncertainty_flags, limit=8, max_chars=120))
-        object.__setattr__(self, "self_critique", _normalize_text(self.self_critique, max_chars=480))
         object.__setattr__(self, "created_at", _normalize_text(self.created_at, max_chars=80) or _utcnow_iso())
 
     def to_json(self) -> dict[str, Any]:

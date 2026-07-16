@@ -56,7 +56,9 @@ def test_shared_paths_follow_originagent_default(monkeypatch, tmp_path: Path) ->
 
     assert get_cli_history_path() == tmp_path / ".originagent" / "history" / "cli_history"
     assert get_bridge_install_dir() == tmp_path / ".originagent" / "bridge"
-    assert get_legacy_sessions_dir() == Path.home() / ".OriginAgent" / "sessions"
+    # Neither ~/.originagent/sessions nor ~/.OriginAgent/sessions exists under the
+    # monkeypatched home, so the lowercase default is returned (Task B8).
+    assert get_legacy_sessions_dir() == tmp_path / ".originagent" / "sessions"
 
 
 def test_workspace_path_is_explicitly_resolved(monkeypatch, tmp_path: Path) -> None:

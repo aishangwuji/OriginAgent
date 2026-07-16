@@ -44,8 +44,10 @@ from OriginAgent.agent.runner import AgentRunner
 from OriginAgent.agent.runtime_models import TaskRunReport, now_iso
 from OriginAgent.agent.task_runtime import build_task_report, remember_report, report_to_status_payload
 from OriginAgent.agent.tools.registry import ToolRegistry
+from OriginAgent.agent.warm_store import WarmStore
 from OriginAgent.memory.candidates import GovernedMemoryWriter
 from OriginAgent.session.manager import Session
+from OriginAgent.utils.constants import RoleConstants
 from OriginAgent.utils.gitstore import GitStore
 from OriginAgent.utils.helpers import (
     ensure_dir,
@@ -1154,7 +1156,7 @@ class Consolidator:
         last_boundary: tuple[int, int] | None = None
         for idx in range(start, len(session.messages)):
             message = session.messages[idx]
-            if idx > start and message.get("role") == "user":
+            if idx > start and message.get("role") == RoleConstants.USER:
                 last_boundary = (idx, removed_tokens)
                 if removed_tokens >= tokens_to_remove:
                     return last_boundary
@@ -1190,7 +1192,7 @@ class Consolidator:
 
         sliced = tail[-replay_max_messages:]
         for i, (_idx, message) in enumerate(sliced):
-            if message.get("role") == "user":
+            if message.get("role") == RoleConstants.USER:
                 start = i
                 if i > 0 and sliced[i - 1][1].get("_channel_delivery"):
                     start = i - 1
@@ -1297,13 +1299,13 @@ class Consolidator:
                 model=self.model,
                 messages=[
                     {
-                        "role": "system",
+                        "role": RoleConstants.SYSTEM,
                         "content": render_template(
                             "agent/consolidator_archive.md",
                             strip=True,
                         ),
                     },
-                    {"role": "user", "content": formatted},
+                    {"role": RoleConstants.USER, "content": formatted},
                 ],
                 tools=None,
                 tool_choice=None,
@@ -1324,100 +1326,51 @@ class Consolidator:
         *,
         replay_max_messages: int | None = None,
     ) -> None:
-        """Loop: archive old messages until prompt fits within safe budget.
+        """检查温区轮次，必要时触发温区总结。
 
-        The budget reserves space for completion tokens and a safety buffer
-        so the LLM request never exceeds the context window.
+        Phase 5 Task 7 废弃了旧的 token 估算循环压缩逻辑：
+        - 旧逻辑：循环 ``archive`` 直到 prompt token 低于 target，
+          问题在于 token 估算不可预测、一次性压缩大量消息导致摘要质量差、
+          压缩后原始消息不可见。
+        - 新逻辑：改为检查温区（warm store）轮次，温区满 50 轮时由上层
+          ``AgentTurnPipeline.state_save`` 中的 ``_schedule_warm_summary``
+          触发结构化温区总结（drain → summarize → 归档），原始消息移到
+          ``warm_archive`` 可检索，避免破坏性删除。
+
+        本方法仍保留：
+        - ``_consolidate_replay_overflow``：处理 replay 窗口溢出（旧消息
+          超出 ``replay_max_messages`` 窗口时归档为 breadcrumb）；
+        - ``_persist_recent_summary``：把最近一次总结写入 session metadata，
+          供下一轮 ``prepare_session`` 注入运行时上下文。
+
+        ``Consolidator.archive`` 底层方法保留，供温区总结的底层调用与
+        replay 溢出归档使用，但本方法不再循环调用它。
         """
         if not session.messages or self.context_window_tokens <= 0:
             return
 
         lock = self.get_lock(session.key)
         async with lock:
-            budget = self._input_token_budget
-            target = int(budget * self.consolidation_ratio)
+            # 1. 处理 replay 窗口溢出：超出 replay_max_messages 的旧消息
+            #    必须先物化为归档 breadcrumb，否则下一轮 LLM 调用会丢失上下文。
             last_result = await self._consolidate_replay_overflow(
                 session,
                 replay_max_messages,
             )
-            try:
-                estimated, source = self.estimate_session_prompt_tokens(
-                    session,
-                )
-            except Exception:
-                logger.exception("Token estimation failed for {}", session.key)
-                estimated, source = 0, "error"
-            if estimated <= 0:
-                self._persist_recent_summary(session, last_result)
-                return
-            if estimated < budget:
-                unconsolidated_count = len(session.messages) - session.last_consolidated
-                logger.debug(
-                    "Token consolidation idle {}: {}/{} via {}, msgs={}",
-                    session.key,
-                    estimated,
-                    self.context_window_tokens,
-                    source,
-                    unconsolidated_count,
-                )
-                self._persist_recent_summary(session, last_result)
-                return
 
-            for round_num in range(self._MAX_CONSOLIDATION_ROUNDS):
-                if estimated <= target:
-                    break
-
-                boundary = self.pick_consolidation_boundary(session, max(1, estimated - target))
-                if boundary is None:
-                    logger.debug(
-                        "Token consolidation: no safe boundary for {} (round {})",
-                        session.key,
-                        round_num,
-                    )
-                    break
-
-                end_idx = boundary[0]
-
-                chunk = session.messages[session.last_consolidated:end_idx]
-                if not chunk:
-                    break
-
+            # 2. 检查温区轮次：温区满 50 轮时，温区总结由上层
+            #    ``state_save._schedule_warm_summary`` 异步触发（耗时的 LLM
+            #    总结不在此处同步执行，避免阻塞 turn 主流程）。
+            #    此处仅记录日志，不再执行 token 估算循环压缩。
+            if WarmStore().is_full(session):
                 logger.info(
-                    "Token consolidation round {} for {}: {}/{} via {}, chunk={} msgs",
-                    round_num,
+                    "Warm buffer full for {}: warm summary scheduled by upper layer "
+                    "(token-loop consolidation deprecated in Phase 5 Task 7)",
                     session.key,
-                    estimated,
-                    self.context_window_tokens,
-                    source,
-                    len(chunk),
                 )
-                result = await self.archive(chunk)
-                # Advance the cursor either way: on success the chunk was
-                # summarized; on failure archive() already raw-archived it as
-                # a breadcrumb. Re-archiving the same chunk on the next call
-                # would just emit duplicate [RAW] entries.
-                if result:
-                    last_result = result
-                session.last_consolidated = end_idx
-                self.sessions.save(session)
-                if not result:
-                    # LLM is degraded — stop hammering it this call;
-                    # the next invocation can retry a fresh chunk.
-                    break
 
-                try:
-                    estimated, source = self.estimate_session_prompt_tokens(
-                        session,
-                    )
-                except Exception:
-                    logger.exception("Token estimation failed for {}", session.key)
-                    estimated, source = 0, "error"
-                if estimated <= 0:
-                    break
-
-            # Persist the latest summary to session metadata so it can be injected
-            # into the runtime context on the next prepare_session() call, aligning
-            # the summary injection strategy with AutoCompact._archive().
+            # 3. 持久化最近一次总结到 session metadata，供下一轮 prepare_session
+            #    注入运行时上下文，与 AutoCompact._archive() 的注入策略对齐。
             self._persist_recent_summary(session, last_result)
 
 

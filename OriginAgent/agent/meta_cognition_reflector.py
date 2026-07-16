@@ -39,6 +39,7 @@ from OriginAgent.agent.task_runtime import (
 )
 from OriginAgent.memory.candidates import GovernedMemoryWriter, MemoryCandidate
 from OriginAgent.session.goal_state import goal_state_raw, parse_goal_state
+from OriginAgent.utils.constants import RoleConstants
 from OriginAgent.utils.prompt_templates import render_template
 
 _ARTIFACT_RUNTIME_STATUS = {
@@ -77,14 +78,6 @@ def _build_observation_summary(turn_snapshot: dict[str, Any]) -> str:
     if tool_count:
         parts.append(f"tools: {tool_count}")
     return " | ".join(parts) if parts else "(empty)"
-
-
-def _extract_active_goal(session_key: str) -> str:
-    """Extract an active goal string from the session metadata for the frame."""
-    # Minimal Phase 1:  return empty — enriched by InnerMonologueEngine in Phase 2.
-    _ = session_key  # placeholder for future session.metadata lookup
-    return ""
-
 
 
 @dataclass(frozen=True)
@@ -209,6 +202,22 @@ class MetaCognitionReflector:
             **last_payload,
         }
 
+    def _extract_active_goal(self, session_key: str) -> str:
+        """Extract the active goal from working memory for the reflection frame.
+
+        Reads ``current_goal`` from the working memory snapshot. The
+        ``WorkingMemoryManager`` already skips goal hydration when the
+        underlying goal_state is older than 30 minutes, so an expired goal
+        surfaces here as an empty string.
+        """
+        session = self.sessions.get_or_create(session_key)
+        snapshot = self.working_memory.load(session)
+        goal = snapshot.current_goal.strip()
+        if not goal:
+            logger.debug("No active goal available for session {}", session_key)
+            return ""
+        return goal
+
     async def reflect_turn(
         self,
         *,
@@ -262,7 +271,7 @@ class MetaCognitionReflector:
                 session_key,
                 trigger_refs=[t.trigger_id for t in triggers],
                 observation_summary=_build_observation_summary(turn_snapshot),
-                active_goal=_extract_active_goal(session_key),
+                active_goal=self._extract_active_goal(session_key),
                 confidence=0.0,
             )
 
@@ -345,14 +354,14 @@ class MetaCognitionReflector:
                     model=self.model,
                     messages=[
                         {
-                            "role": "system",
+                            "role": RoleConstants.SYSTEM,
                             "content": render_template(
                                 "agent/meta_cognition_reflection.md",
                                 strip=True,
                                 output_language=self.output_language,
                             ),
                         },
-                        {"role": "user", "content": prompt},
+                        {"role": RoleConstants.USER, "content": prompt},
                     ],
                     tools=None,
                     tool_choice=None,

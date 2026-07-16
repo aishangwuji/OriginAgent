@@ -499,6 +499,9 @@ def _input_model_with_autocomplete(
                     display=model,
                 )
 
+    console.print(
+        "[dim](i) 模型库为静态版本,部分型号可能缺失,可手动输入完整模型名[/dim]"
+    )
     value = _get_questionary().autocomplete(
         f"{display_name}:",
         choices=[""],  # Placeholder, actual completions from completer

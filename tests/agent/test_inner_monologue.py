@@ -59,11 +59,8 @@ class TestMonologueFrame:
             active_goal="fix the issue",
             candidate_hypotheses=["h1", "h2"],
             intended_strategy="strategy A",
-            verification_needs=["check log"],
-            simulation_requests=["sim-1"],
             confidence=0.8,
             uncertainty_flags=["low_data"],
-            self_critique="need more evidence",
             created_at="2026-07-01T00:00:00+00:00",
         )
         assert f.cycle_id == "c1"
@@ -75,7 +72,6 @@ class TestMonologueFrame:
         assert f.observation_summary == ""
         assert f.confidence == 0.0
         assert f.uncertainty_flags == []
-        assert f.self_critique == ""
         assert f.created_at != ""
 
     def test_normalization_clamps(self) -> None:
@@ -175,9 +171,6 @@ class TestBridgeDeliberation:
         assert frame.active_goal == "test goal"
         assert len(frame.candidate_hypotheses) == 2
         assert frame.confidence == 0.9
-        assert frame.verification_needs == []
-        assert frame.simulation_requests == []
-        assert frame.self_critique == ""
 
     def test_empty_intentions(self) -> None:
         result = _make_result(intentions=0, reasoning="")
@@ -210,12 +203,6 @@ class TestBridgeDeliberation:
         frame = bridge_deliberation_to_monologue(result, session_key="sess")
         # fallback uses reasoning text when observation_summary is empty
         assert frame.observation_summary == "my strategy"
-
-    def test_verification_and_simulation_placeholders(self) -> None:
-        result = _make_result(intentions=2)
-        frame = bridge_deliberation_to_monologue(result, session_key="sess")
-        assert frame.verification_needs == []
-        assert frame.simulation_requests == []
 
 
 # ── InnerMonologueEngine tests ───────────────────────────────────────────────

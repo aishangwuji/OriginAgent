@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Any
@@ -10,6 +11,7 @@ from loguru import logger
 
 from OriginAgent.bus.events import InboundMessage, OutboundMessage
 from OriginAgent.bus.queue import MessageBus
+from OriginAgent.channels._text_utils import parse_local_media_ref, strip_markdown_inline
 from OriginAgent.config.schema import PairingConfig
 from OriginAgent.pairing import PAIRING_CODE_META_KEY, format_pairing_reply, generate_code, is_approved
 
@@ -42,6 +44,7 @@ class BaseChannel(ABC):
     send_progress: bool = True
     send_tool_hints: bool = False
     show_reasoning: bool = True
+    http_download_timeout: float = 30.0  # HTTP download/stream timeout (spec 3.4, rule 17)
 
     def __init__(self, config: Any, bus: MessageBus):
         """
@@ -56,6 +59,16 @@ class BaseChannel(ABC):
         self.bus = bus
         self._running = False
         self.pairing_config = PairingConfig()
+
+    def _t(self, key: str, **kwargs: Any) -> str:
+        """Translate a key using the i18n system.
+
+        Thin wrapper around :func:`OriginAgent.i18n.t` so channels can resolve
+        user-visible strings via ``self._t("...")`` instead of hardcoding text.
+        """
+        from OriginAgent.i18n import t
+
+        return t(key, **kwargs)
 
     async def transcribe_audio(self, file_path: str | Path) -> str:
         """Transcribe an audio file via Whisper (OpenAI or Groq). Returns empty string on failure."""
@@ -83,6 +96,33 @@ class BaseChannel(ABC):
         except Exception:
             self.logger.exception("Audio transcription failed")
             return ""
+
+    async def read_local_media(self, media_ref: str) -> tuple[bytes, str] | None:
+        """Read bytes from a local media reference (``file://`` URI or path).
+
+        Returns ``(data, filename)`` on success, or ``None`` when the file
+        cannot be resolved or read. Delegates path resolution to the shared
+        :func:`parse_local_media_ref` so all channels share one parsing path.
+        """
+        local_path = parse_local_media_ref(media_ref)
+        if local_path is None:
+            self.logger.warning("local media file not found ref={}", media_ref)
+            return None
+        try:
+            data = await asyncio.to_thread(local_path.read_bytes)
+            return data, local_path.name
+        except Exception:
+            self.logger.exception("local media read error ref={}", media_ref)
+            return None
+
+    def _strip_markdown(self, text: str) -> str:
+        """Strip inline markdown formatting (bold/italic/strike/code) from text.
+
+        Thin wrapper over the shared :func:`strip_markdown_inline` so channels
+        can call ``self._strip_markdown(...)`` instead of importing the helper
+        directly. Promotes a single source of truth for inline stripping (C10).
+        """
+        return strip_markdown_inline(text)
 
     async def login(self, force: bool = False) -> bool:
         """

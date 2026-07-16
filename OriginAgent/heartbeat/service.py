@@ -8,6 +8,8 @@ from typing import TYPE_CHECKING, Any, Callable, Coroutine
 
 from loguru import logger
 
+from OriginAgent.utils.constants import RoleConstants
+
 if TYPE_CHECKING:
     from OriginAgent.bdi.heartbeat_bridge import BDIHeartbeatBridge
     from OriginAgent.providers.base import LLMProvider
@@ -96,8 +98,8 @@ class HeartbeatService:
 
         response = await self.provider.chat_with_retry(
             messages=[
-                {"role": "system", "content": "You are a heartbeat agent. Call the heartbeat tool to report your decision."},
-                {"role": "user", "content": (
+                {"role": RoleConstants.SYSTEM, "content": "You are a heartbeat agent. Call the heartbeat tool to report your decision."},
+                {"role": RoleConstants.USER, "content": (
                     f"Current Time: {current_time_str(self.timezone)}\n\n"
                     "Review the following HEARTBEAT.md and decide whether there are active tasks.\n\n"
                     f"{content}"

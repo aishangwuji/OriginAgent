@@ -26,7 +26,7 @@ class DesireStore:
     temp-file + fsync + rename + dir-fsync.
     """
 
-    def __init__(self, workspace: Path, *, sqlite_store: Any = None, jsonl_fallback_enabled: bool = True) -> None:
+    def __init__(self, workspace: Path, *, sqlite_store: Any = None, jsonl_fallback_enabled: bool = False) -> None:
         self.workspace = Path(workspace)
         self._dir = self.workspace / "memory" / "bdi"
         self._path = self._dir / "desires.jsonl"

@@ -10,6 +10,8 @@ from typing import TYPE_CHECKING, Any
 
 from loguru import logger
 
+from OriginAgent.utils.constants import RoleConstants
+
 if TYPE_CHECKING:
 
     from OriginAgent.agent.memory import Dream
@@ -103,14 +105,14 @@ async def run_phase1(
             model=dream.model,
             messages=[
                 {
-                    "role": "system",
+                    "role": RoleConstants.SYSTEM,
                     "content": render_template(
                         "agent/dream_phase1.md",
                         strip=True,
                         stale_threshold_days=_STALE_THRESHOLD_DAYS,
                     ),
                 },
-                {"role": "user", "content": phase1_prompt},
+                {"role": RoleConstants.USER, "content": phase1_prompt},
             ],
             tools=None,
             tool_choice=None,
@@ -251,14 +253,14 @@ async def run_phase2(
     skill_creator_path = BUILTIN_SKILLS_DIR / "skill-creator" / "SKILL.md"
     messages: list[dict[str, Any]] = [
         {
-            "role": "system",
+            "role": RoleConstants.SYSTEM,
             "content": render_template(
                 "agent/dream_phase2.md",
                 strip=True,
                 skill_creator_path=str(skill_creator_path),
             ),
         },
-        {"role": "user", "content": phase2_prompt},
+        {"role": RoleConstants.USER, "content": phase2_prompt},
     ]
 
     try:

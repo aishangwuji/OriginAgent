@@ -51,7 +51,6 @@ class TypedDeviceAction:
     requested_by: str | None = None
     trigger: str = "user_initiated"
     idempotency_key: str | None = None
-    # Epic 字段：执行时长与并行调度提示，默认值保持向后兼容
     duration_ms: int = 0
     requires_parallel: bool = False
 

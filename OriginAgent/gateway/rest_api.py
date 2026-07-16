@@ -18,6 +18,8 @@ from loguru import logger
 from websockets.http11 import Request as WsRequest
 from websockets.http11 import Response
 
+from OriginAgent.config.schema import DEVICE_BACKEND_OPTIONS as _DEVICE_BACKEND_OPTIONS
+from OriginAgent.config.schema import TRANSCRIPTION_PROVIDERS as _TRANSCRIPTION_PROVIDER_OPTIONS
 from OriginAgent.gateway._helpers import http_error, http_json_response
 from OriginAgent.gateway.auth import GatewayAuth
 
@@ -69,6 +71,24 @@ def _mask_secret_hint(secret: str | None) -> str | None:
     return f"{secret[:4]}••••{secret[-4:]}"
 
 
+def _check_env_refs(value: str | None) -> str | None:
+    """Return an error message if *value* contains ``${VAR}`` refs that cannot be resolved.
+
+    Returns ``None`` when all references resolve (or when *value* is None/plain).
+    Used by settings_update to validate user-entered env-var references at request
+    time without storing the resolved secret on disk (rule 18: never persist secrets).
+    """
+    if not value:
+        return None
+    import os
+    from OriginAgent.config.loader import _ENV_REF_PATTERN
+
+    for name in _ENV_REF_PATTERN.findall(value):
+        if os.environ.get(name) is None:
+            return f"Environment variable '{name}' is not set"
+    return None
+
+
 _WEB_SEARCH_PROVIDER_OPTIONS: tuple[dict[str, str], ...] = (
     {"name": "duckduckgo", "label": "DuckDuckGo", "credential": "none"},
     {"name": "brave", "label": "Brave Search", "credential": "api_key"},
@@ -89,9 +109,7 @@ _SESSION_SEARCH_BACKEND_OPTIONS = {"auto", "literal", "sqlite_fts"}
 _EXEC_PROFILE_OPTIONS = {"secure", "local_dev", "disabled"}
 _EXEC_SHELL_SYNTAX_POLICY_OPTIONS = {"restricted", "shell"}
 _DEVICE_MODE_OPTIONS = {"dry_run", "real"}
-_DEVICE_BACKEND_OPTIONS = {"none", "fake", "lighting_client"}
 _AUDIT_MODE_OPTIONS = {"off", "minimal", "security"}
-_TRANSCRIPTION_PROVIDER_OPTIONS = {"groq", "openai", "volcengine"}
 
 _MCP_SERVER_NAME_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 _MCP_SECRET_HINT = "••••"
@@ -1200,6 +1218,9 @@ class RestApi:
                 api_key = _query_first(query, "apiKey")
             api_key = (api_key or "").strip() or None
             if provider_config.api_key != api_key:
+                unresolved = _check_env_refs(api_key)
+                if unresolved is not None:
+                    return http_error(400, unresolved)
                 provider_config.api_key = api_key
                 changed = True
 
@@ -1209,12 +1230,18 @@ class RestApi:
                 api_base = _query_first(query, "apiBase")
             api_base = (api_base or "").strip() or None
             if provider_config.api_base != api_base:
+                unresolved = _check_env_refs(api_base)
+                if unresolved is not None:
+                    return http_error(400, unresolved)
                 provider_config.api_base = api_base
                 changed = True
 
         if changed:
             save_config(config)
-        return http_json_response(self._settings_payload(requires_restart=False))
+        # Provider config (api_key/api_base) is consumed at startup when the
+        # provider snapshot is built (providers/factory.py); runtime edits
+        # require a restart to take effect.
+        return http_json_response(self._settings_payload(requires_restart=True))
 
     async def _handle_settings_provider_models(self, request: WsRequest) -> Response:
         if not self._check_api_token(request):
@@ -1786,7 +1813,7 @@ class RestApi:
             type="streamableHttp",
             url=url,
             headers={"Authorization": authorization},
-            tool_timeout=30,
+            tool_timeout=int(config.timeouts.tool_default_timeout),  # spec 3.4, rule 17
             enabled_tools=["*"],
         )
 

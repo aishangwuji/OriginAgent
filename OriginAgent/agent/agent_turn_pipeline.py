@@ -4,9 +4,12 @@ from __future__ import annotations
 
 import asyncio
 import dataclasses
+import json
 import os
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from enum import Enum, auto
+from pathlib import Path
 from typing import Any, Awaitable, Callable
 
 from loguru import logger
@@ -20,7 +23,9 @@ from OriginAgent.agent.identity import RuntimeContext
 from OriginAgent.session.manager import Session
 from OriginAgent.utils.artifacts import generated_image_paths_from_messages
 from OriginAgent.utils.document import extract_documents
+from OriginAgent.utils.helpers import safe_filename
 from OriginAgent.agent.topic_detection import detect_topic_shift
+from OriginAgent.agent.warm_store import WarmStore
 from OriginAgent.utils.runtime import EMPTY_FINAL_RESPONSE_MESSAGE
 from OriginAgent.utils.session_attachments import merge_turn_media_into_last_assistant
 from OriginAgent.utils.webui_turn_helpers import publish_turn_run_status, websocket_turn_latency_ms
@@ -85,6 +90,10 @@ class TurnContext:
     runtime_context: RuntimeContext | None = None
     capability_snapshot: CapabilitySnapshot | None = None
     recovered_continuity_checkpoint: dict[str, Any] | None = None
+
+    # Populated by state_run when it catches an exception (Task A2.1); read by
+    # the HANDLE_ERROR / HANDLE_TIMEOUT handlers to record an audit log.
+    error: str | None = None
 
     trace: list[StateTraceEntry] = field(default_factory=list)
 
@@ -192,6 +201,8 @@ class TurnPipelineDeps:
         OutboundMessage | None,
     ]
     get_max_messages: Callable[[], int]
+    # Phase 3 Task 6: 温区总结器 getter；None 表示未配置，不触发温区总结
+    get_warm_summarizer: Callable[[], Any] | None = None
 
 
 _CONTEXT_INSUFFICIENCY_MIN_MESSAGES = 20
@@ -249,6 +260,84 @@ def _maybe_auto_detect_topic_shift(
 
     if detect_topic_shift(current_message, window):
         session.start_new_episode(working_memory=working_memory)
+
+
+def _split_messages_by_turn(
+    messages: list[dict[str, Any]],
+) -> list[tuple[dict[str, Any], list[dict[str, Any]]]]:
+    """将消息列表按 user turn 拆分为 ``(user_msg, assistant_msgs)`` 元组列表。
+
+    一轮 = 一条 user 消息开始，到下一条 user 消息之前的全部内容
+    （含 assistant / tool / tool_result 等任意条数）。
+
+    若开头出现孤儿 assistant/tool 消息（理论上不应发生，因热区边界
+    对齐到 user turn），直接忽略，避免污染温区的首轮结构。
+    """
+    turns: list[tuple[dict[str, Any], list[dict[str, Any]]]] = []
+    current_user: dict[str, Any] | None = None
+    current_assistants: list[dict[str, Any]] = []
+
+    for msg in messages:
+        if msg.get("role") == "user":
+            if current_user is not None:
+                turns.append((current_user, current_assistants))
+            current_user = msg
+            current_assistants = []
+        else:
+            # user 还未出现时，开头的非 user 消息视为孤儿，跳过。
+            if current_user is None:
+                continue
+            current_assistants.append(msg)
+
+    if current_user is not None:
+        turns.append((current_user, current_assistants))
+    return turns
+
+
+def _spill_overflow_into_warm_store(session: Session, max_turns: int = 50) -> None:
+    """温区填补：把热区超出 ``max_turns`` 轮的前缀按 turn 追加到温区。
+
+    设计意图（Phase 2 Task 4）：
+    - 热区（``session.messages``）只保留最近 ``max_turns`` 轮对话，
+      控制 LLM 上下文长度，避免 token 膨胀；
+    - 超出部分按"轮"为单位追加到温区（``session.metadata['warm_buffer']``），
+      比逐条归档更高效，且保留跨轮次的局部连续性；
+    - 边界对齐复用 ``Session._find_hot_start_idx``，确保不截断 tool_call
+      序列，与 ``get_hot_history`` 行为一致。
+
+    本函数只负责 append；温区达到上限后的 drain（归档到冷区）由后续
+    阶段处理。任何异常都吞掉并记录日志，避免影响 turn 主流程。
+    """
+    try:
+        hot_start_idx = session._find_hot_start_idx(max_turns=max_turns)
+        if hot_start_idx <= 0:
+            return
+
+        overflow_messages = session.messages[:hot_start_idx]
+        if not overflow_messages:
+            return
+
+        warm_store = WarmStore()
+        turns = _split_messages_by_turn(overflow_messages)
+        for user_msg, assistant_msgs in turns:
+            # 即使 assistant 序列为空也 append，保持温区轮次计数与
+            # 实际溢出轮次一致；空 assistant 序列在 drain 时自然无影响。
+            warm_store.append(session, user_msg, assistant_msgs)
+
+        # 热区只保留最后 max_turns 轮（已按 user turn 边界对齐）。
+        session.messages = session.messages[hot_start_idx:]
+    except Exception:
+        logger.exception("Warm buffer fill failed during turn save")
+
+
+def _utcnow_iso() -> str:
+    """返回 UTC 时间的 ISO8601 字符串，用于温区归档时间戳。"""
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _warm_archive_filename(session_key: str) -> str:
+    """将 session_key 转换为安全的归档文件名（与 SessionManager.safe_key 一致）。"""
+    return safe_filename(session_key.replace(":", "_"))
 
 
 class AgentTurnPipeline:
@@ -446,7 +535,13 @@ class AgentTurnPipeline:
                 include_timestamps=hist_kwargs["include_timestamps"],
             )
         else:
-            ctx.history = session.get_history(**hist_kwargs)
+            # Phase 1 热区注入：改用 get_hot_history 按“用户轮次”边界截取最近热区，
+            # 避免按原始消息数切片时把同一轮的 tool_call / tool_result 拦腰截断，
+            # 同时让刚被合并的旧轮次仍可进入热区窗口，保证短期上下文连续性。
+            ctx.history = session.get_hot_history(
+                max_turns=50,
+                max_tokens=hist_kwargs.get("max_tokens", 0),
+            )
 
         pending_ask_id = self._deps.pending_ask_user_id(ctx.history)
         tool_approval_event = None
@@ -520,6 +615,15 @@ class AgentTurnPipeline:
                 trigger=runtime_context.trigger,
                 capability_snapshot=snapshot,
             )
+        except TimeoutError as exc:
+            # Route to HANDLE_TIMEOUT via (RUN, TIMEOUT) instead of crashing the turn.
+            ctx.error = f"{type(exc).__name__}: {exc}"
+            return TurnEvent.TIMEOUT
+        except Exception as exc:
+            # Route to HANDLE_ERROR via (RUN, ERROR) instead of crashing the turn.
+            # CancelledError derives from BaseException, so it is NOT swallowed here.
+            ctx.error = f"{type(exc).__name__}: {exc}"
+            return TurnEvent.ERROR
         finally:
             if ctx.msg.channel == "websocket":
                 latency = websocket_turn_latency_ms(str(ctx.msg.chat_id))
@@ -563,6 +667,16 @@ class AgentTurnPipeline:
         session = ctx.session
         self._deps.save_turn(session, ctx.all_messages, ctx.save_skip)
         session.enforce_file_cap(on_archive=self._deps.archive_session_file_cap)
+        # Phase 2 Task 4: turn 结束后将热区超出 50 轮的部分追加到温区，
+        # 把热区上下文长度控制在最近 50 轮内，溢出部分按 turn 批量进入
+        # 温区缓冲（session.metadata['warm_buffer']）等待后续 drain。
+        _spill_overflow_into_warm_store(session, max_turns=50)
+        # Phase 3 Task 6: 温区满 50 轮触发异步总结。
+        # 异步执行的设计意图：温区总结需调用辅助 LLM（耗时秒级），若在
+        # turn 主流程同步等待会阻塞用户响应。通过 schedule_background 调度
+        # 到后台执行，用户立即得到 turn 响应，总结在后台完成后写入归档。
+        if WarmStore().is_full(session):
+            self._schedule_warm_summary(session, ctx.session_key)
         self._deps.clear_pending_user_turn(session)
         self._deps.clear_runtime_checkpoint(session)
         governance_audit: dict[str, Any] = {
@@ -609,6 +723,181 @@ class AgentTurnPipeline:
         self._deps.schedule_background_review(ctx)
         self._deps.schedule_curator_review(ctx)
         return TurnEvent.OK
+
+    # ── Phase 3 Task 6: 温区总结触发与执行 ────────────────────────────
+
+    def _schedule_warm_summary(self, session: Session, session_key: str) -> None:
+        """调度温区总结后台任务（不阻塞 turn 主流程）。
+
+        若未配置 warm_summarizer（``get_warm_summarizer`` 为 None），直接跳过，
+        温区消息保留在缓冲区等待后续配置后再触发。
+        """
+        getter = self._deps.get_warm_summarizer
+        if getter is None:
+            return
+        summarizer = getter()
+        if summarizer is None:
+            return
+        self._deps.schedule_background(
+            self._run_warm_summary(session, session_key, summarizer)
+        )
+
+    async def _run_warm_summary(
+        self,
+        session: Session,
+        session_key: str,
+        summarizer: Any,
+    ) -> None:
+        """温区总结后台任务：drain → summarize → 归档 → 同步 working_memory。
+
+        执行顺序的设计：先 drain 清空温区（同步，不 yield），再调用 LLM 总结
+        （异步，耗时）。这保证在 LLM 等待期间下一轮 turn 可以安全向空温区
+        追加，不会因温区满而重复触发总结。若进程在 LLM 调用期间崩溃，已
+        持久化的 state_save 快照仍保留满温区，重启后会重新触发总结。
+        """
+        try:
+            warm_store = WarmStore()
+            # 1. 先 drain 清空温区（同步），避免 LLM 等待期间重复触发
+            warm_messages = warm_store.drain(session)
+            if not warm_messages:
+                return
+
+            # 2. 计算本批次的 turn_range（基于已有总结条数）
+            turn_range = self._compute_warm_turn_range(session_key)
+
+            # 3. 获取热区上下文（最近 50 轮），确保总结结合热区连贯性
+            hot_messages = session.get_hot_history(max_turns=50)
+
+            # 4. 调用辅助 LLM 生成结构化总结（异步，耗时秒级）
+            summary = await summarizer.summarize(
+                warm_messages,
+                hot_messages,
+                turn_range=turn_range,
+                session_key=session_key,
+            )
+
+            # 5. 归档：原始消息写入 warm_archive，总结写入 warm_summaries
+            self._archive_warm_messages(
+                session_key, warm_messages, summary, turn_range
+            )
+
+            # 6. 同步结构化字段到 working_memory
+            if summary is not None:
+                self._sync_summary_to_working_memory(session, summary)
+
+            # 7. 持久化 drain 后的温区状态 + working_memory 更新
+            self._deps.sessions.save(session)
+        except Exception:
+            logger.exception("Warm summary background task failed")
+
+    def _compute_warm_turn_range(self, session_key: str) -> str:
+        """根据已有总结数量计算本批次的 turn_range。
+
+        每批 50 轮：第 1 批为 1-50，第 2 批为 51-100，以此类推。
+        通过读取 warm_summaries.jsonl 中该 session 的已有条数确定批次序号。
+        """
+        summaries_path = Path(self._deps.workspace) / "warm_summaries.jsonl"
+        count = 0
+        if summaries_path.exists():
+            for line in summaries_path.read_text(encoding="utf-8").splitlines():
+                if not line.strip():
+                    continue
+                try:
+                    entry = json.loads(line)
+                    if entry.get("session_key") == session_key:
+                        count += 1
+                except json.JSONDecodeError:
+                    continue
+        start = count * 50 + 1
+        end = (count + 1) * 50
+        return f"{start}-{end}"
+
+    def _archive_warm_messages(
+        self,
+        session_key: str,
+        warm_messages: list[dict[str, Any]],
+        summary: dict[str, Any] | None,
+        turn_range: str,
+    ) -> None:
+        """将原始消息与总结结果写入归档文件。
+
+        - ``warm_archive/{session_key}.jsonl``：原始消息（每行一条 JSON）
+        - ``warm_summaries.jsonl``：结构化总结索引（每行一条 JSON）
+
+        两个文件均以追加模式写入，支持同一 session 多批总结累积归档。
+        """
+        workspace = Path(self._deps.workspace)
+        safe_key = _warm_archive_filename(session_key)
+
+        # 原始消息归档
+        archive_dir = workspace / "warm_archive"
+        archive_dir.mkdir(parents=True, exist_ok=True)
+        archive_path = archive_dir / f"{safe_key}.jsonl"
+        msg_count = 0
+        with archive_path.open("a", encoding="utf-8") as f:
+            for msg in warm_messages:
+                f.write(json.dumps(msg, ensure_ascii=False) + "\n")
+                msg_count += 1
+
+        # 总结索引归档（仅在总结成功时写入）
+        if summary is not None:
+            timestamp_range = summary.get("timestamp_range") or {}
+            if not isinstance(timestamp_range, dict):
+                timestamp_range = {}
+            entry = {
+                "session_key": session_key,
+                "turn_range": turn_range,
+                "summary": summary.get("summary", ""),
+                "commitments": summary.get("commitments", []),
+                "decisions": summary.get("decisions", []),
+                "open_questions": summary.get("open_questions", []),
+                "key_entities": summary.get("key_entities", []),
+                "timestamp_range": {
+                    "start": timestamp_range.get("start", ""),
+                    "end": timestamp_range.get("end", ""),
+                },
+                "locator": f"warm_archive/{safe_key}.jsonl:0:{msg_count}",
+                "created_at": _utcnow_iso(),
+            }
+            summaries_path = workspace / "warm_summaries.jsonl"
+            with summaries_path.open("a", encoding="utf-8") as f:
+                f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+
+    def _sync_summary_to_working_memory(
+        self,
+        session: Session,
+        summary: dict[str, Any],
+    ) -> None:
+        """将总结的结构化字段同步到 working_memory。
+
+        - ``commitments`` → ``open_loops``（Agent 答应过的事 = 待办事项）
+        - ``open_questions`` → ``priority_facts``（悬而未决的问题 = 需关注的事实）
+
+        采用追加去重策略：只加入尚未记录的条目，避免丢失此前累积的待办与
+        关注事项，也避免同一承诺被重复记录。
+        """
+        working_memory = self._deps.get_working_memory()
+        snapshot = working_memory.load(session)
+
+        commitments = summary.get("commitments") or []
+        open_questions = summary.get("open_questions") or []
+
+        # 追加去重：只加入尚未记录的条目
+        new_open_loops = [
+            str(c) for c in commitments
+            if str(c) not in snapshot.open_loops
+        ]
+        new_priority_facts = [
+            str(q) for q in open_questions
+            if str(q) not in snapshot.priority_facts
+        ]
+
+        if new_open_loops or new_priority_facts:
+            working_memory.upsert(
+                session,
+                open_loops=[*snapshot.open_loops, *new_open_loops],
+                priority_facts=[*snapshot.priority_facts, *new_priority_facts],
+            )
 
     async def state_automation(self, ctx: TurnContext) -> TurnEvent:
         if ctx.session is None or ctx.runtime_context is None:
@@ -764,6 +1053,34 @@ class AgentTurnPipeline:
             ctx.had_injections,
             ctx.generated_media,
             ctx.on_stream,
+        )
+        return TurnEvent.OK
+
+    async def state_handle_error(self, ctx: TurnContext) -> TurnEvent:
+        """Recovery handler reached via ``(RUN, ERROR)`` (and other ERROR transitions).
+
+        Records an audit log of the failure captured in ``ctx.error`` by ``state_run``,
+        then returns ``OK`` so the ``(HANDLE_ERROR, OK) -> RESPOND`` transition still
+        lets the user receive a response instead of crashing the turn.
+        """
+        logger.error(
+            "[turn {}] Turn entered HANDLE_ERROR: {}",
+            ctx.turn_id,
+            ctx.error or "unknown error",
+        )
+        return TurnEvent.OK
+
+    async def state_handle_timeout(self, ctx: TurnContext) -> TurnEvent:
+        """Recovery handler reached via ``(RUN, TIMEOUT)``.
+
+        Records an audit log of the timeout captured in ``ctx.error`` by ``state_run``,
+        then returns ``OK`` so the ``(HANDLE_TIMEOUT, OK) -> RESPOND`` transition still
+        lets the user receive a response instead of crashing the turn.
+        """
+        logger.warning(
+            "[turn {}] Turn entered HANDLE_TIMEOUT: {}",
+            ctx.turn_id,
+            ctx.error or "unknown timeout",
         )
         return TurnEvent.OK
 

@@ -640,31 +640,24 @@ class FeishuChannel(BaseChannel):
 
     _CODE_BLOCK_RE = re.compile(r"(```[\s\S]*?```)", re.MULTILINE)
 
-    # Markdown formatting patterns that should be stripped from plain-text
-    # surfaces like table cells and heading text.
-    _MD_BOLD_RE = re.compile(r"\*\*(.+?)\*\*")
-    _MD_BOLD_UNDERSCORE_RE = re.compile(r"__(.+?)__")
+    # Asterisk italic (*text*) is not handled by the shared inline stripper
+    # (which targets _underscore_ italic); Feishu strips it locally for
+    # plain-display fidelity on table cells and heading text.
     _MD_ITALIC_RE = re.compile(r"(?<!\*)\*(?!\*)(.+?)(?<!\*)\*(?!\*)")
-    _MD_STRIKE_RE = re.compile(r"~~(.+?)~~")
 
-    @classmethod
-    def _strip_md_formatting(cls, text: str) -> str:
+    def _strip_md_formatting(self, text: str) -> str:
         """Strip markdown formatting markers from text for plain display.
 
         Feishu table cells do not support markdown rendering, so we remove
-        the formatting markers to keep the text readable.
+        the formatting markers to keep the text readable. Bold/underscore-bold,
+        strikethrough, inline code and underscore-italic are handled by the
+        shared ``BaseChannel._strip_markdown``; asterisk italic is stripped
+        here because the shared tool does not cover it.
         """
-        # Remove bold markers
-        text = cls._MD_BOLD_RE.sub(r"\1", text)
-        text = cls._MD_BOLD_UNDERSCORE_RE.sub(r"\1", text)
-        # Remove italic markers
-        text = cls._MD_ITALIC_RE.sub(r"\1", text)
-        # Remove strikethrough markers
-        text = cls._MD_STRIKE_RE.sub(r"\1", text)
-        return text
+        text = self._strip_markdown(text)
+        return self._MD_ITALIC_RE.sub(r"\1", text)
 
-    @classmethod
-    def _parse_md_table(cls, table_text: str) -> dict | None:
+    def _parse_md_table(self, table_text: str) -> dict | None:
         """Parse a markdown table into a Feishu table element."""
         lines = [_line.strip() for _line in table_text.strip().split("\n") if _line.strip()]
         if len(lines) < 3:
@@ -673,8 +666,8 @@ class FeishuChannel(BaseChannel):
         def split(_line: str) -> list[str]:
             return [c.strip() for c in _line.strip("|").split("|")]
 
-        headers = [cls._strip_md_formatting(h) for h in split(lines[0])]
-        rows = [[cls._strip_md_formatting(c) for c in split(_line)] for _line in lines[2:]]
+        headers = [self._strip_md_formatting(h) for h in split(lines[0])]
+        rows = [[self._strip_md_formatting(c) for c in split(_line)] for _line in lines[2:]]
         columns = [
             {"tag": "column", "name": f"c{i}", "display_name": h, "width": "auto"}
             for i, h in enumerate(headers)

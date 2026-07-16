@@ -150,7 +150,7 @@ def test_allow_calls_backend_exactly_once(tmp_path):
 def test_gate_not_allow_never_calls_backend(tmp_path):
     cases = [
         (decision("ask_confirmation"), "pending_confirmation"),
-        (decision("notify_only"), "notified"),
+        (decision("notify_only"), "failed"),
         (decision("deny"), "denied"),
         (decision("surprise"), "failed"),
     ]
@@ -320,35 +320,6 @@ def test_ask_confirmation_creation_failure_returns_failed_without_backend_call(t
     )
 
     result = executor.submit(intent(action="unlock", risk="high"), now=NOW)
-
-    assert result.status == "failed"
-    assert "supersecretvalue" not in result.reason
-    assert backend.calls == 0
-    assert executor.records[0].result_status == "failed"
-
-
-def test_notify_only_creates_non_executable_notification_without_backend_call(tmp_path):
-    backend = CountingBackend()
-    executor, _ = fake_executor(tmp_path, decision("notify_only"), backend)
-
-    result = executor.submit(intent(action="notify_user"), now=NOW)
-
-    assert backend.calls == 0
-    assert result.status == "notified"
-    assert result.confirmation_id is not None
-    notifications = executor.confirmation_manager.store.read_all()
-    assert notifications[0].confirmation_id == result.confirmation_id
-
-
-def test_notify_only_creation_failure_returns_failed_without_backend_call(tmp_path):
-    backend = CountingBackend()
-    executor = SafeActionExecutor(
-        gate=FakeGate(decision("notify_only")),
-        confirmation_manager=FailingConfirmationManager(),
-        backend=backend,
-    )
-
-    result = executor.submit(intent(action="notify_user"), now=NOW)
 
     assert result.status == "failed"
     assert "supersecretvalue" not in result.reason

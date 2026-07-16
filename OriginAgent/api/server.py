@@ -18,6 +18,8 @@ from aiohttp import web
 from loguru import logger
 
 from OriginAgent.config.paths import get_workspace_upload_dir
+from OriginAgent.i18n import t
+from OriginAgent.utils.constants import RoleConstants
 from OriginAgent.utils.helpers import safe_filename
 from OriginAgent.utils.media_decode import (
     MAX_FILE_SIZE,
@@ -64,7 +66,7 @@ def _chat_completion_response(content: str, model: str) -> dict[str, Any]:
         "choices": [
             {
                 "index": 0,
-                "message": {"role": "assistant", "content": content},
+                "message": {"role": RoleConstants.ASSISTANT, "content": content},
                 "finish_reason": "stop",
             }
         ],
@@ -136,7 +138,7 @@ def _parse_json_content(
     if not isinstance(messages, list) or len(messages) != 1:
         raise ValueError("Only a single user message is supported")
     message = messages[0]
-    if not isinstance(message, dict) or message.get("role") != "user":
+    if not isinstance(message, dict) or message.get("role") != RoleConstants.USER:
         raise ValueError("Only a single user message is supported")
 
     user_content = message.get("content", "")
@@ -281,7 +283,7 @@ async def _parse_multipart(
             media_paths.append(str(dest))
 
     if not text:
-        text = "请分析上传的文件"
+        text = t("api.analyze_uploaded_file")
 
     return text, media_paths, session_id, model
 

@@ -172,7 +172,7 @@ class OpportunitySignalCandidate:
 class OpportunitySignalStore:
     """JSONL store for non-actionable self-evolution signals."""
 
-    def __init__(self, workspace: Path, *, sqlite_store: Any = None, jsonl_fallback_enabled: bool = True):
+    def __init__(self, workspace: Path, *, sqlite_store: Any = None, jsonl_fallback_enabled: bool = False):
         self.workspace = Path(workspace)
         self.memory_dir = ensure_dir(self.workspace / "memory")
         self.path = self.memory_dir / "opportunity_signals.jsonl"

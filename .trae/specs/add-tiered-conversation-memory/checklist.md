@@ -1,0 +1,21 @@
+- [ ] 热区 50 轮永远可见：`Session.get_hot_history(max_turns=50)` 按 user turn 计数截断，边界对齐到 user message，不从 tool_call 中间截断
+- [ ] 热区作为独立 message 注入：`state_build` 使用 `get_hot_history` 替代 `get_history`，热区消息作为独立 message 对象注入 LLM messages
+- [ ] 温区缓冲区 `WarmStore` 实现：`append`/`is_full`/`drain`/`load`/`save` 方法，持久化到 `session.metadata["warm_buffer"]`
+- [ ] 温区逐条填补：turn 结束时热区超出 50 轮的部分追加到温区，温区有 1-49 轮时不触发总结
+- [ ] 温区满 50 轮触发总结：温区达到 50 轮时触发结构化总结，总结完成后温区清空
+- [ ] 温区总结结构化模板：生成 JSON 含 `turn_range`/`summary`/`commitments`/`decisions`/`open_questions`/`key_entities`/`timestamp_range`
+- [ ] 温区总结结合热区上下文：总结 prompt 包含热区 50 轮完整内容，避免孤立总结
+- [ ] 温区总结异步执行：满 50 轮时后台调度总结，不阻塞用户等待
+- [ ] 结构化字段写入 working_memory：`commitments`/`open_questions` 同步写入 `working_memory.open_loops` / `priority_facts`
+- [ ] 冷区归档文件 `warm_archive/{session_key}.jsonl`：温区总结后原始消息移到此文件，`session.messages` 只保留热区
+- [ ] 冷区索引文件 `warm_summaries.jsonl`：每行一个结构化索引条目，含 session_key/turn_range/summary/key_entities/locator
+- [ ] 冷区索引渐进式暴露：最近 5 条索引通过 `recovered_continuity` 块被动注入，格式为 `[turn_range] summary (key_entities)`
+- [ ] `session_search` 支持 `warm_archive` source：从 `warm_archive/{session_key}.jsonl` 检索原始消息
+- [ ] `session_search` 支持 `warm_summaries` source：从 `warm_summaries.jsonl` 检索结构化索引条目
+- [ ] `maybe_consolidate_by_tokens` 废弃 token 估算触发：改为检查温区轮次，满 50 轮触发温区总结
+- [ ] `AutoCompact._archive` 废弃删除行为：不再执行 `session.messages = kept_msgs`，改为移到 `warm_archive` 文件
+- [ ] 跨会话三级重建：session 恢复时从 `session.metadata["warm_buffer"]` 恢复温区，从 `warm_summaries.jsonl` 恢复冷区索引，从 `session.messages` 尾部恢复热区
+- [ ] `recent_turns_summary`（已有）保留作为热区未加载时的保底视图
+- [ ] tool_call 完整性：热区边界向前扩展到包含所有 tool_call 和 tool_result，确保"调用 + 结果"完整配对
+- [ ] 现有测试回归：`test_continuity_phase1.py`、`test_memory.py`（如存在）、`tests/session/` 不出现阻断性失败
+- [ ] 新增测试覆盖：热区边界对齐、温区填补、温区总结结构化字段、冷区索引注入、`warm_archive`/`warm_summaries` 检索

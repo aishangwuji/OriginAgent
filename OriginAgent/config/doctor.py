@@ -9,7 +9,7 @@ from typing import Any, get_args, get_origin
 
 from pydantic import AliasChoices, BaseModel
 
-from OriginAgent.config.schema import ChannelsConfig, Config
+from OriginAgent.config.schema import ChannelsConfig, Config, TRANSCRIPTION_PROVIDERS as _TRANSCRIPTION_PROVIDERS
 
 _SECRET_FIELD_NAMES = {
     "api_key",
@@ -22,7 +22,6 @@ _SECRET_FIELD_NAMES = {
     "headers",
     "env",
 }
-_TRANSCRIPTION_PROVIDERS = {"groq", "openai"}
 
 
 @dataclass(frozen=True)

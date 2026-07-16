@@ -28,7 +28,7 @@ from collections import deque
 from contextlib import suppress
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
-from urllib.parse import unquote, urlparse
+from urllib.parse import urlparse
 
 import aiohttp
 from loguru import logger
@@ -380,24 +380,10 @@ class QQChannel(BaseChannel):
 
         # Local file: plain path or file:// URI
         if not media_ref.startswith("http://") and not media_ref.startswith("https://"):
-            try:
-                if media_ref.startswith("file://"):
-                    parsed = urlparse(media_ref)
-                    # Windows: path in netloc; Unix: path in path
-                    raw = parsed.path or parsed.netloc
-                    local_path = Path(unquote(raw))
-                else:
-                    local_path = Path(os.path.expanduser(media_ref))
-
-                if not local_path.is_file():
-                    self.logger.warning("outbound media file not found: {}", str(local_path))
-                    return None, None
-
-                data = await asyncio.to_thread(local_path.read_bytes)
-                return data, local_path.name
-            except Exception as e:
-                self.logger.warning("outbound media read error ref={} err={}", media_ref, e)
+            result = await self.read_local_media(media_ref)
+            if result is None:
                 return None, None
+            return result
 
         # Remote URL
         ok, err = validate_url_target(media_ref)

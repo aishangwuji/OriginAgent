@@ -150,6 +150,7 @@ class SessionSearchIndexService:
         semantic_enabled: bool = True,
         rebuild_on_start: bool = False,
         nearline_memory_config: Any | None = None,
+        db_busy_timeout: int = 5000,
     ) -> None:
         self.workspace = Path(workspace)
         self.db_path = self.workspace / INDEX_DB_RELATIVE_PATH
@@ -158,6 +159,7 @@ class SessionSearchIndexService:
         self.semantic_enabled = semantic_enabled
         self.rebuild_on_start = rebuild_on_start
         self._nearline_memory_config = nearline_memory_config
+        self._db_busy_timeout = db_busy_timeout  # SQLite busy timeout in ms (spec 3.4, rule 17)
         self.normalizer = SearchTextNormalizer()
         self._lock = threading.RLock()
         self._refresh_running = False
@@ -383,9 +385,9 @@ class SessionSearchIndexService:
         return stats
 
     def _connect(self) -> sqlite3.Connection:
-        conn = sqlite3.connect(self.db_path, timeout=5.0)
+        conn = sqlite3.connect(self.db_path, timeout=self._db_busy_timeout / 1000)
         conn.row_factory = sqlite3.Row
-        conn.execute("PRAGMA busy_timeout=5000")
+        conn.execute(f"PRAGMA busy_timeout={self._db_busy_timeout}")  # spec 3.4, rule 17
         return conn
 
     @contextmanager

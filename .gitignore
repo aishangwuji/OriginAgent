@@ -32,6 +32,8 @@ venv/
 .pytest_cache/
 .pytest-tmp/
 .pytest_tmp/
+.pytest_tmp*/
+.pytest_tmp2/
 .mypy_cache/
 .ruff_cache/
 .pytype/
@@ -99,6 +101,9 @@ logs/
 tmp/
 temp/
 *.tmp
+_autocompact_out.txt
+_continuity_out.txt
+_test_out.txt
 
 # External SDKs / third-party repos
 unitree-sdk2-mcp/

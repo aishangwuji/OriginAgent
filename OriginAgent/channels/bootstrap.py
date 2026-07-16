@@ -42,6 +42,7 @@ class ChannelRuntimeSettings:
     send_progress: bool
     send_tool_hints: bool
     show_reasoning: bool
+    http_download_timeout: float = 30.0
     init_kwargs: dict[str, Any] = field(default_factory=dict)
 
 
@@ -133,6 +134,7 @@ class DefaultChannelBootstrapAdapter(ChannelBootstrapAdapter):
             send_progress=_section_bool(section, "send_progress", core_config.channels.send_progress),
             send_tool_hints=_section_bool(section, "send_tool_hints", core_config.channels.send_tool_hints),
             show_reasoning=_section_bool(section, "show_reasoning", core_config.channels.show_reasoning),
+            http_download_timeout=core_config.timeouts.http_download_timeout,
             init_kwargs=init_kwargs,
         )
 
@@ -153,6 +155,7 @@ class DefaultChannelBootstrapAdapter(ChannelBootstrapAdapter):
         channel.send_progress = settings.send_progress
         channel.send_tool_hints = settings.send_tool_hints
         channel.show_reasoning = settings.show_reasoning
+        channel.http_download_timeout = settings.http_download_timeout
         return channel
 
 

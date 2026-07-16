@@ -173,6 +173,17 @@ class ChannelManager:
                         name,
                     )
                     continue
+                logger.error(
+                    'Startup aborted: "{}" has empty allowFrom (denies all inbound messages).\n'
+                    '  Risk: the Agent cannot receive any messages on this channel.\n'
+                    '  Fix options:\n'
+                    '    1. Configure allow_from, e.g. allow_from = ["*"] to allow everyone,\n'
+                    '       or allow_from = ["<user_id>"] to allow specific users.\n'
+                    '    2. Or enable pairing mode so unapproved senders can request access:\n'
+                    '       [security.pairing]\n'
+                    '       enabled = true',
+                    name,
+                )
                 raise SystemExit(
                     f'Error: "{name}" has empty allowFrom (denies all). '
                     f'Set ["*"] to allow everyone, or add specific user IDs.'

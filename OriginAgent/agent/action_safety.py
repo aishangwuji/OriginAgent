@@ -56,23 +56,3 @@ class DefaultSafetyGate:
         if request.risk not in VALID_RISKS:
             return ActionDecision(decision="deny", reason="invalid risk")
         return ActionDecision(decision="allow", reason="safety checks passed")
-
-
-class ActionSafetyGate:
-    """Compatibility gate that composes the core default gate with optional domain gates."""
-
-    def __init__(
-        self,
-        presence_store: object | None = None,
-        fact_store: object | None = None,
-        *,
-        extra_gates: list[SafetyGate] | None = None,
-    ):
-        gates: list[SafetyGate] = [DefaultSafetyGate()]
-        gates.extend(extra_gates or [])
-        if presence_store is not None or fact_store is not None:
-            raise ValueError("domain-specific safety gates must be passed through extra_gates")
-        self._composite = CompositeSafetyGate(gates)
-
-    def evaluate(self, request: ActionRequest) -> ActionDecision:
-        return self._composite.evaluate(request)

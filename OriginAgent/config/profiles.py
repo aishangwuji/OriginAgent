@@ -38,23 +38,23 @@ def build_runtime_profile_defaults(profile: RuntimeProfile) -> Config:
 
 
 def apply_runtime_profile(config: Config) -> Config:
-    """Apply conservative profile defaults without overriding explicit differences.
+    """Apply conservative profile defaults without overriding explicit user values.
 
-    This v1 helper intentionally treats the schema defaults as the only values
-    eligible for replacement. It keeps user-specified values intact without
-    requiring raw config field-presence tracking in the loader.
+    Uses field-presence detection (Pydantic's ``__pydantic_fields_set__``) rather
+    than value comparison, so user-explicit values equal to schema defaults are
+    preserved (spec 3.16).
     """
 
     profile = config.runtime.profile
     if profile == "default":
         return config
-    defaults = Config()
     profile_defaults = build_runtime_profile_defaults(profile)
     updated = config.model_copy(deep=True)
-    if config.tools.audit == defaults.tools.audit:
+    tools_fields_set = config.tools.__pydantic_fields_set__
+    if "audit" not in tools_fields_set:
         updated.tools.audit = profile_defaults.tools.audit
-    if config.tools.exec == defaults.tools.exec:
+    if "exec" not in tools_fields_set:
         updated.tools.exec = profile_defaults.tools.exec
-    if config.tools.device == defaults.tools.device:
+    if "device" not in tools_fields_set:
         updated.tools.device = profile_defaults.tools.device
     return updated

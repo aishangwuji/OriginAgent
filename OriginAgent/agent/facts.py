@@ -484,7 +484,7 @@ class FactResolution:
 
 
 class FactRelationStore:
-    def __init__(self, workspace: Path, *, path: Path | None = None, sqlite_store: Any = None, jsonl_fallback_enabled: bool = True) -> None:
+    def __init__(self, workspace: Path, *, path: Path | None = None, sqlite_store: Any = None, jsonl_fallback_enabled: bool = False) -> None:
         self.workspace = Path(workspace)
         self.path = path or (self.workspace / "memory" / "fact_relations.jsonl")
         self._lock_path = self.path.parent / ".fact_relations.lock"
@@ -606,11 +606,12 @@ class FactRelationStore:
 
 
 class FactEventStore:
-    def __init__(self, workspace: Path, *, path: Path | None = None, sqlite_store: Any = None) -> None:
+    def __init__(self, workspace: Path, *, path: Path | None = None, sqlite_store: Any = None, jsonl_fallback_enabled: bool = False) -> None:
         self.workspace = Path(workspace)
         self.path = path or (self.workspace / "memory" / "audit" / "fact_events.jsonl")
         self._lock_path = self.path.parent / ".fact_events.lock"
         self._sqlite = sqlite_store
+        self._jsonl_fallback_enabled = jsonl_fallback_enabled
 
     def _locked(self) -> Any:
         self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -626,7 +627,7 @@ class FactEventStore:
                 logger.opt(exception=True).warning("fact_events: sqlite append failed, falling back to JSONL")
                 self._jsonl_append(payload)
                 return event
-            if getattr(self, "_jsonl_fallback_enabled", True):
+            if self._jsonl_fallback_enabled:
                 try:
                     self._jsonl_append(payload)
                 except Exception:
@@ -1257,7 +1258,7 @@ class FactStore:
         config: FactStoreConfig | None = None,
         feature_flags: dict[str, bool] | None = None,
         sqlite_facts: Any = None,
-        jsonl_fallback_enabled: bool = True,
+        jsonl_fallback_enabled: bool = False,
     ):
         self.workspace = workspace
         self.memory_dir = ensure_dir(workspace / "memory")
@@ -1273,8 +1274,8 @@ class FactStore:
         self._redactor = redactor or _default_redactor
         self.config = config or DEFAULT_FACT_STORE_CONFIG
         self.feature_flags = self._normalize_feature_flags(feature_flags)
-        self.relation_store = FactRelationStore(workspace, path=self.relations_file)
-        self.event_store = FactEventStore(workspace, path=self.fact_events_file)
+        self.relation_store = FactRelationStore(workspace, path=self.relations_file, jsonl_fallback_enabled=jsonl_fallback_enabled)
+        self.event_store = FactEventStore(workspace, path=self.fact_events_file, jsonl_fallback_enabled=jsonl_fallback_enabled)
         self.semantic_resolver = FactSemanticResolver(workspace, path=self.semantic_index_file)
         self._cached_signature: tuple[int, int] | None = None
         self._cached_raw_records: list[dict[str, Any]] = []

@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from OriginAgent.agent.action_runtime import ActionIntent, SafeActionExecutor
-from OriginAgent.agent.action_safety import ActionSafetyGate
+from OriginAgent.agent.action_safety import CompositeSafetyGate, DefaultSafetyGate
 from OriginAgent.agent.audit import AuditLogger
 from OriginAgent.agent.confirmation import ConfirmationManager
 from OriginAgent.agent.device_actions import (
@@ -15,9 +15,7 @@ from OriginAgent.agent.device_actions import (
 )
 from OriginAgent.agent.device_backends import DeviceActionExecutor
 from OriginAgent.agent.device_integrations import RealLightingBackend
-from OriginAgent.agent.facts import FactStore
 from OriginAgent.agent.permissions import HouseholdActor, PermissionResolver
-from OriginAgent.agent.presence import PresenceStore
 
 
 class FakeLightingClient:
@@ -51,7 +49,7 @@ def build_harness(workspace: Path, *, real_mode: bool) -> Harness:
     client = FakeLightingClient()
     backend = RealLightingBackend(client, real_mode=real_mode)
     safe_executor = SafeActionExecutor(
-        gate=ActionSafetyGate(PresenceStore(workspace), FactStore(workspace)),
+        gate=CompositeSafetyGate([DefaultSafetyGate()]),
         confirmation_manager=ConfirmationManager(workspace, audit_logger=audit),
         backend=backend,
         permission_resolver=PermissionResolver(

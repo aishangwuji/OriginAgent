@@ -399,3 +399,66 @@ def test_domain_packs_config_accepts_camel_case(tmp_path) -> None:
     assert config.agents.defaults.domain_packs.max_capability_chars == 1234
     dumped = config.model_dump(mode="json", by_alias=True)
     assert dumped["agents"]["defaults"]["domainPacks"]["maxCapabilityChars"] == 1234
+
+
+# ── config_version mechanism (spec 3.15, rule 2) ──────────────────────────────
+
+
+def test_migrate_config_adds_config_version_to_unversioned_dict() -> None:
+    """An unversioned (v0) config dict must gain config_version=1 after migration."""
+    from OriginAgent.config.loader import _migrate_config
+
+    result = _migrate_config({"tools": {}})
+    assert result["config_version"] == 1
+
+
+def test_migrate_config_v0_migrates_legacy_my_tool_keys() -> None:
+    """v0 configs must still run the myEnabled/mySet → my.{enable,allowSet} migration."""
+    from OriginAgent.config.loader import _migrate_config
+
+    result = _migrate_config({"tools": {"myEnabled": False, "mySet": True}})
+    assert result["config_version"] == 1
+    assert result["tools"]["my"] == {"enable": False, "allowSet": True}
+    assert "myEnabled" not in result["tools"]
+    assert "mySet" not in result["tools"]
+
+
+def test_migrate_config_v1_does_not_re_run_migrations() -> None:
+    """A config already at config_version=1 must not be re-migrated (rule 2).
+
+    The migration chain only runs forward from the declared version. If a user
+    explicitly writes a v1 config that still contains legacy keys, those keys
+    are left untouched — v1 means 'already shaped by v0→v1'. This preserves
+    version semantics so re-saving an already-migrated config is a no-op.
+    """
+    from OriginAgent.config.loader import _migrate_config
+
+    result = _migrate_config(
+        {"config_version": 1, "tools": {"myEnabled": False, "mySet": True}}
+    )
+    assert result["config_version"] == 1
+    assert "myEnabled" in result["tools"]
+    assert "mySet" in result["tools"]
+    assert "my" not in result["tools"]
+
+
+def test_default_config_has_config_version_1() -> None:
+    """A freshly constructed Config must declare config_version=1 (rule 2)."""
+    from OriginAgent.config.schema import Config
+
+    assert Config().config_version == 1
+
+
+def test_load_config_backfills_config_version_for_legacy_file(tmp_path) -> None:
+    """Loading a legacy (unversioned) config file must yield config_version=1."""
+    config_path = tmp_path / "config.json"
+    config_path.write_text(
+        json.dumps({"tools": {"myEnabled": False}}),
+        encoding="utf-8",
+    )
+
+    config = load_config(config_path)
+
+    assert config.config_version == 1
+    assert config.tools.my.enable is False
+

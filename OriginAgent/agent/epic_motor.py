@@ -180,13 +180,17 @@ class EpicMotorProcessor:
             # 用 asyncio.to_thread 包装避免阻塞事件循环
             # 单个命令异常隔离：捕获后返回 failed result，不抛出，不影响其他命令
             try:
-                return await asyncio.to_thread(
+                result = await asyncio.to_thread(
                     self._executor._execute_allowed,
                     command.action_id,
                     command.intent,
                     command.decision,
                     now,
                 )
+                # 规则12 红线：派发成功后必须记忆幂等键，防止重试导致重复执行
+                # _remember_successful_idempotency 内部已检查 status in {"executed", "dry_run"}
+                self._executor._remember_successful_idempotency(command.intent, result)
+                return result
             except Exception as exc:
                 return ActionExecutionResult(
                     status="failed",

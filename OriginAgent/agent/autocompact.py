@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import json
 from collections.abc import Collection
 from datetime import datetime
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Coroutine
 
 from loguru import logger
@@ -12,6 +14,7 @@ from OriginAgent.agent.memory import record_recent_summary, session_summary_text
 from OriginAgent.agent.runtime_models import TaskRunReport, now_iso
 from OriginAgent.agent.task_runtime import build_task_report, remember_report, report_to_status_payload
 from OriginAgent.session.manager import Session, SessionManager
+from OriginAgent.utils.helpers import ensure_dir
 
 if TYPE_CHECKING:
     from OriginAgent.agent.memory import Consolidator
@@ -83,6 +86,31 @@ class AutoCompact:
         archive = tail[:kept_start]
         return archive, kept
 
+    def _write_warm_archive(
+        self,
+        session_key: str,
+        messages: list[dict[str, Any]],
+        *,
+        start_index: int = 0,
+    ) -> Path:
+        """将归档消息追加写入 workspace/warm_archive/{session_key}.jsonl。
+
+        Phase 5：warm_archive 是主要归档目标，供热区快速回放；
+        cold_archive 仍作为持久化兜底。每行一个 JSON 消息，追加写入。
+        """
+        workspace = self.sessions.workspace
+        archive_dir = ensure_dir(workspace / "warm_archive")
+        safe_key = SessionManager.safe_key(session_key)
+        path = archive_dir / f"{safe_key}.jsonl"
+        with open(path, "a", encoding="utf-8") as f:
+            for offset, msg in enumerate(messages):
+                # 浅拷贝，避免污染内存中的 session.messages 与后续 consolidator/cold_archive
+                record = dict(msg)
+                record.setdefault("session_key", session_key)
+                record.setdefault("turn_index", start_index + offset)
+                f.write(json.dumps(record, ensure_ascii=False) + "\n")
+        return path
+
     def check_expired(self, schedule_background: Callable[[Coroutine], None],
                       active_session_keys: Collection[str] = ()) -> None:
         """Schedule archival for idle sessions, skipping those with in-flight agent tasks."""
@@ -121,6 +149,11 @@ class AutoCompact:
             last_active = session.updated_at
             summary = None
             if archive_msgs:
+                # Phase 5：warm_archive 作为主要归档目标先行写入；
+                # 若写入失败则异常上抛，外层 except 会跳过裁剪，保证数据安全。
+                self._write_warm_archive(
+                    key, archive_msgs, start_index=session.last_consolidated
+                )
                 if self.cold_archive is not None:
                     self.cold_archive.archive(
                         key,

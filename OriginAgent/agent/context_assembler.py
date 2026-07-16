@@ -48,7 +48,7 @@ class ContextAssemblerV2:
         include_current_message: bool = True,
     ) -> ContextAssemblyResult:
         user_content = (
-            self._builder._build_user_content(current_message, media)
+            self._builder.build_user_content(current_message, media)
             if include_current_message
             else []
         )
@@ -100,7 +100,13 @@ class ContextAssemblerV2:
             if content:
                 merged.append(self._builder.build_internal_event_block(source, content))
         merged.extend(user_content)
-        media_audit = dict(getattr(self._builder, "_last_media_block_audit", {}) or {})
+
+        # 通过公共接口收集审计数据,不再直接访问 builder 的私有属性(封装边界修复)
+        audit_artifacts = self._builder.collect_assembly_audit()
+        retrieval = audit_artifacts["retrieval_fusion"]
+        governance = audit_artifacts["governance"]
+        prewarm = audit_artifacts["prewarm"]
+
         audit = {
             "enabled": True,
             "contract_version": self.CONTRACT_VERSION,
@@ -127,23 +133,23 @@ class ContextAssemblerV2:
             "recovered_continuity_included": recovered_continuity_block is not None,
             "internal_event_included": internal_event is not None and bool(internal_event[1]),
             "retrieval_fusion_enabled": True,
-            "retrieval_sources_used": list(self._builder._last_retrieval_fusion.get("sources_used", [])),
-            "retrieval_source_counts": dict(self._builder._last_retrieval_fusion.get("source_counts", {})),
-            "retrieval_deduped_count": int(self._builder._last_retrieval_fusion.get("deduped_count", 0) or 0),
-            "retrieval_trimmed_count": int(self._builder._last_retrieval_fusion.get("trimmed_count", 0) or 0),
-            "retrieval_hits": dict(self._builder._last_retrieval_fusion.get("hits", {})),
+            "retrieval_sources_used": list(retrieval.get("sources_used", [])),
+            "retrieval_source_counts": dict(retrieval.get("source_counts", {})),
+            "retrieval_deduped_count": int(retrieval.get("deduped_count", 0) or 0),
+            "retrieval_trimmed_count": int(retrieval.get("trimmed_count", 0) or 0),
+            "retrieval_hits": dict(retrieval.get("hits", {})),
             "internal_event_source": internal_event[0] if internal_event is not None else None,
-            "governance_enabled": bool(getattr(self._builder._context_config, "governance_enabled", False)),
-            "promotion_candidates": list(self._builder._last_governance_audit.get("promotion_candidates", [])),
-            "promotion_applied_count": int(self._builder._last_governance_audit.get("promotion_applied_count", 0) or 0),
-            "promotion_conflict_count": int(self._builder._last_governance_audit.get("promotion_conflict_count", 0) or 0),
-            "forgetting_actions": list(self._builder._last_governance_audit.get("forgetting_actions", [])),
-            "prewarm_enabled": bool(getattr(self._builder._context_config, "prewarm_enabled", False)),
-            "prewarm_empty": bool(self._builder._last_prewarm_audit.get("prewarm_empty", True)),
-            "prewarm_reason": self._builder._last_prewarm_audit.get("prewarm_reason"),
-            "prewarm_sources": list(self._builder._last_prewarm_audit.get("prewarm_sources", [])),
-            "prewarm_seeded_items": dict(self._builder._last_prewarm_audit.get("prewarm_seeded_items", {})),
-            "prewarm_seed_counts": dict(self._builder._last_prewarm_audit.get("prewarm_seed_counts", {})),
+            "governance_enabled": audit_artifacts["governance_enabled"],
+            "promotion_candidates": list(governance.get("promotion_candidates", [])),
+            "promotion_applied_count": int(governance.get("promotion_applied_count", 0) or 0),
+            "promotion_conflict_count": int(governance.get("promotion_conflict_count", 0) or 0),
+            "forgetting_actions": list(governance.get("forgetting_actions", [])),
+            "prewarm_enabled": audit_artifacts["prewarm_enabled"],
+            "prewarm_empty": bool(prewarm.get("prewarm_empty", True)),
+            "prewarm_reason": prewarm.get("prewarm_reason"),
+            "prewarm_sources": list(prewarm.get("prewarm_sources", [])),
+            "prewarm_seeded_items": dict(prewarm.get("prewarm_seeded_items", {})),
+            "prewarm_seed_counts": dict(prewarm.get("prewarm_seed_counts", {})),
             "runtime_context": (
                 {
                     "actor_id": runtime_context.actor_id,
@@ -167,7 +173,7 @@ class ContextAssemblerV2:
                 for block in continuity_blocks
                 if isinstance(block, dict)
             ),
-            "media": media_audit,
+            "media": audit_artifacts["media"],
             "blocks": [
                 self._block_trace(
                     block,
@@ -179,7 +185,8 @@ class ContextAssemblerV2:
             ],
         }
         if runtime_context is not None and self._builder.world_state is not None and session_key:
-            session = self._builder._sessions.get_or_create(session_key) if self._builder._sessions is not None else None
+            session_store = self._builder.session_store
+            session = session_store.get_or_create(session_key) if session_store is not None else None
             if session is not None:
                 filtered = self._builder.world_state.filtered_candidates(
                     session,
@@ -191,7 +198,8 @@ class ContextAssemblerV2:
                 audit["world_freshness"] = filtered.get("freshness", {})
                 audit["world_contested"] = filtered.get("contested_summary", {})
                 audit["world_selection_reasons"] = list(filtered.get("selection_reasons", []))
-        self._builder._last_context_assembly_audit = dict(audit)
+        # 不再直接写回 _last_context_assembly_audit;
+        # 由 assemble_user_content 从返回值回写(封装边界修复)
         return ContextAssemblyResult(blocks=merged, audit=audit)
 
     @staticmethod
