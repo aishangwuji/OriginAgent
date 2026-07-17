@@ -179,6 +179,16 @@ class Tool(ABC):
         """Whether this tool should run alone even if concurrency is enabled."""
         return False
 
+    @property
+    def once_per_turn(self) -> bool:
+        """Whether this tool should only be called once per turn.
+
+        Tools like ``close_episode`` are semantically once-per-turn — calling
+        them repeatedly with different params is a death-loop pattern. The
+        runner blocks subsequent calls after the first success.
+        """
+        return False
+
     # --- Plugin metadata ---
 
     config_key: str = ""

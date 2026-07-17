@@ -61,6 +61,10 @@ _MAX_EMPTY_RETRIES = 2
 _MAX_LENGTH_RECOVERIES = 3
 _MAX_INJECTIONS_PER_TURN = 3
 _MAX_INJECTION_CYCLES = 5
+# 工具循环断路器阈值（Fix A）：同一工具名在同一 turn 内成功调用超过此数
+# 则断路。5 次允许合法重复调用（如读多个文件），但捕获 close_episode
+# 这类死循环（LLM 每次换 label 绕过幂等检查）。
+_MAX_SAME_TOOL_CALLS_PER_TURN = 5
 _SNIP_SAFETY_BUFFER = 1024
 _MICROCOMPACT_KEEP_RECENT = 10
 _MICROCOMPACT_MIN_CHARS = 500
@@ -148,6 +152,9 @@ class AgentRunResult:
 
 class AgentRunner:
     """Run a tool-capable LLM loop without product-layer concerns."""
+
+    # 工具循环断路器阈值（Fix A）：同一工具名在同一 turn 内成功调用超过此数则断路。
+    _MAX_SAME_TOOL_CALLS_PER_TURN = _MAX_SAME_TOOL_CALLS_PER_TURN
 
     def __init__(self, provider: LLMProvider):
         self._provider = provider
@@ -314,6 +321,11 @@ class AgentRunner:
         injection_cycles = 0
         # Turn-scoped 幂等键：防止 LLM 在同一 turn 内重复调用同一工具同一参数
         _successful_idempotency_keys: set[str] = set()
+        # Fix A/B: per-turn tool loop state
+        # _tool_call_counts: 同一工具名在同一 turn 内成功调用次数（用于断路器）
+        # _once_per_turn_called: 已成功调用过的 once_per_turn 工具名集合
+        _tool_call_counts: dict[str, int] = {}
+        _once_per_turn_called: set[str] = set()
         # Snapshot of the last messages_for_model actually sent to the LLM
         # (after context governance). Used by callers to refresh audit trails
         # (state.last_context_assembly) so they reflect the real sent state
@@ -421,6 +433,8 @@ class AgentRunner:
                     external_lookup_counts,
                     workspace_violation_counts,
                     _successful_idempotency_keys,
+                    tool_call_counts=_tool_call_counts,
+                    once_per_turn_called=_once_per_turn_called,
                 )
                 tool_events.extend(new_events)
                 context.tool_results = list(results)
@@ -899,6 +913,21 @@ class AgentRunner:
         args_str = json.dumps(args, sort_keys=True, ensure_ascii=False, default=str)
         return f"{tool_name}:{hashlib.sha256(args_str.encode()).hexdigest()[:16]}"
 
+    @staticmethod
+    def _check_tool_circuit_breaker(
+        tool_call_counts: dict[str, int],
+        threshold: int,
+    ) -> str | None:
+        """检查工具循环断路器是否应触发（Fix A）。
+
+        返回第一个超过阈值的工具名（用于断路消息），无则返回 None。
+        按工具名排序保证确定性（多工具同时超阈值时结果可预测）。
+        """
+        for tool_name in sorted(tool_call_counts.keys()):
+            if tool_call_counts[tool_name] >= threshold:
+                return tool_name
+        return None
+
     async def _execute_tools(
         self,
         spec: AgentRunSpec,
@@ -906,6 +935,9 @@ class AgentRunner:
         external_lookup_counts: dict[str, int],
         workspace_violation_counts: dict[str, int],
         idempotency_keys: set[str] | None = None,
+        *,
+        tool_call_counts: dict[str, int] | None = None,
+        once_per_turn_called: set[str] | None = None,
     ) -> tuple[list[Any], list[dict[str, str]], BaseException | None]:
         if idempotency_keys is None:
             idempotency_keys = set()
@@ -923,6 +955,8 @@ class AgentRunner:
                 batch_results = await self._execute_parallel_batch(
                     spec, batch, external_lookup_counts, workspace_violation_counts,
                     idempotency_keys,
+                    tool_call_counts=tool_call_counts,
+                    once_per_turn_called=once_per_turn_called,
                 )
                 tool_results.extend(batch_results)
             else:
@@ -931,6 +965,8 @@ class AgentRunner:
                     result = await self._run_tool(
                         spec, tool_call, external_lookup_counts, workspace_violation_counts,
                         idempotency_keys,
+                        tool_call_counts=tool_call_counts,
+                        once_per_turn_called=once_per_turn_called,
                     )
                     tool_results.append(result)
                     batch_results.append(result)
@@ -956,6 +992,9 @@ class AgentRunner:
         external_lookup_counts: dict[str, int],
         workspace_violation_counts: dict[str, int],
         idempotency_keys: set[str],
+        *,
+        tool_call_counts: dict[str, int] | None = None,
+        once_per_turn_called: set[str] | None = None,
     ) -> list[tuple[Any, dict[str, str], BaseException | None]]:
         """Execute a batch of concurrent-safe tools with interrupt propagation.
 
@@ -971,10 +1010,14 @@ class AgentRunner:
                     return await self._run_tool(
                         spec, tc, external_lookup_counts, workspace_violation_counts,
                         idempotency_keys,
+                        tool_call_counts=tool_call_counts,
+                        once_per_turn_called=once_per_turn_called,
                     )
             return await self._run_tool(
                 spec, tc, external_lookup_counts, workspace_violation_counts,
                 idempotency_keys,
+                tool_call_counts=tool_call_counts,
+                once_per_turn_called=once_per_turn_called,
             )
 
         tasks = {asyncio.create_task(_run_one(tc)): tc for tc in batch}
@@ -1028,12 +1071,17 @@ class AgentRunner:
         external_lookup_counts: dict[str, int],
         workspace_violation_counts: dict[str, int],
         idempotency_keys: set[str],
+        *,
+        tool_call_counts: dict[str, int] | None = None,
+        once_per_turn_called: set[str] | None = None,
     ) -> tuple[Any, dict[str, str], BaseException | None]:
         # tool.complete 包装层：在 _run_tool_core 执行前后记录耗时与结果状态
         _tool_start = time.monotonic()
         result, event, exc = await self._run_tool_core(
             spec, tool_call, external_lookup_counts,
             workspace_violation_counts, idempotency_keys,
+            tool_call_counts=tool_call_counts,
+            once_per_turn_called=once_per_turn_called,
         )
         status_raw = event.get("status", "error")
         status = "success" if status_raw == "ok" else status_raw
@@ -1060,8 +1108,49 @@ class AgentRunner:
         external_lookup_counts: dict[str, int],
         workspace_violation_counts: dict[str, int],
         idempotency_keys: set[str],
+        *,
+        tool_call_counts: dict[str, int] | None = None,
+        once_per_turn_called: set[str] | None = None,
     ) -> tuple[Any, dict[str, str], BaseException | None]:
         hint = "\n\n[Analyze the error above and try a different approach.]"
+
+        # Fix B: once_per_turn enforcement — block if this tool was already
+        # called successfully in this turn. Checked before idempotency because
+        # once_per_turn is a stricter constraint (blocks regardless of params).
+        if once_per_turn_called is not None and tool_call.name in once_per_turn_called:
+            return (
+                f"Error: Tool '{tool_call.name}' is once-per-turn and was already "
+                f"called in this turn. Do not call it again — choose a different "
+                f"action or respond to the user directly.{hint}",
+                {
+                    "name": tool_call.name,
+                    "status": "skipped",
+                    "detail": "once_per_turn already called",
+                },
+                None,
+            )
+
+        # Fix A: tool-loop circuit breaker — if this tool name has already been
+        # called successfully >= threshold times in this turn, block further
+        # calls. Catches death-loops where LLM varies optional params (e.g.
+        # close_episode with different labels) to bypass idempotency.
+        if tool_call_counts is not None:
+            current_count = tool_call_counts.get(tool_call.name, 0)
+            if current_count >= self._MAX_SAME_TOOL_CALLS_PER_TURN:
+                return (
+                    f"Error: Tool '{tool_call.name}' has already been called "
+                    f"{current_count} times in this turn (circuit breaker "
+                    f"threshold: {self._MAX_SAME_TOOL_CALLS_PER_TURN}). This "
+                    f"looks like a tool loop — stop calling this tool and "
+                    f"respond to the user directly.{hint}",
+                    {
+                        "name": tool_call.name,
+                        "status": "skipped",
+                        "detail": "circuit breaker tripped",
+                    },
+                    None,
+                )
+
         # Turn-scoped 幂等检查：同一 turn 内已成功执行过的工具+参数组合不再重复执行
         # 外部查找工具（web_fetch/web_search）已有独立的重试节流，不纳入幂等检查
         idempotency_key: str | None = None
@@ -1263,6 +1352,18 @@ class AgentRunner:
         # 仅对成功执行的非外部查找工具记录幂等键，失败的不记录
         if idempotency_key is not None:
             idempotency_keys.add(idempotency_key)
+        # Fix A: increment per-turn tool call count for circuit breaker
+        if tool_call_counts is not None:
+            tool_call_counts[tool_call.name] = (
+                tool_call_counts.get(tool_call.name, 0) + 1
+            )
+        # Fix B: mark once_per_turn tool as called after first success
+        if (
+            once_per_turn_called is not None
+            and tool is not None
+            and getattr(tool, "once_per_turn", False)
+        ):
+            once_per_turn_called.add(tool_call.name)
         return result, {"name": tool_call.name, "status": "ok", "detail": detail}, None
 
     async def _audit_tool_from_runner(
