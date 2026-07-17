@@ -3510,13 +3510,11 @@ async def test_runner_binds_on_retry_wait_to_retry_callback_not_progress():
 async def test_runner_empty_response_warning_includes_reasoning_chars():
     """The empty-response warning must include ``reasoning_chars`` for diagnosis.
 
-    Regression (production logs 2026-07-17 22:27): model returned
-    ``content_chars=0`` but ``reasoning_chars=93``. The original warning
-    was just ``"Empty response on turn 0 for cron:8d88e717 (1/2);
-    retrying"`` with no indication that the model had actually produced
-    reasoning. Adding ``reasoning_chars`` to the warning lets operators
-    distinguish "model thought but didn't answer" from "model returned
-    nothing at all".
+    Covers the *truly* empty case: both ``content`` and ``reasoning_content``
+    are empty. The warning must still report ``reasoning_chars=0`` so
+    operators can distinguish "model returned nothing at all" from the
+    reasoning-fallback path (covered by
+    ``test_runner_uses_reasoning_content_fallback_when_content_empty``).
     """
     from OriginAgent.agent.runner import AgentRunSpec, AgentRunner
     import loguru
@@ -3527,10 +3525,10 @@ async def test_runner_empty_response_warning_includes_reasoning_chars():
     async def chat_with_retry(*, messages, tools=None, **kwargs):
         calls.append({"messages": messages, "tools": tools})
         if len(calls) == 1:
-            # First call: empty content but non-empty reasoning_content
+            # First call: truly empty (no content, no reasoning)
             return LLMResponse(
                 content=None,
-                reasoning_content="I should think about this but not answer yet.",
+                reasoning_content=None,
                 tool_calls=[],
                 usage={"prompt_tokens": 5, "completion_tokens": 1},
             )
@@ -3579,3 +3577,131 @@ async def test_runner_empty_response_warning_includes_reasoning_chars():
     assert "content_chars=" in empty_warnings[0], (
         f"warning must include content_chars for diagnosis: {empty_warnings[0]}"
     )
+
+
+@pytest.mark.asyncio
+async def test_runner_uses_reasoning_content_fallback_when_content_empty():
+    """When ``content`` is empty but ``reasoning_content`` is non-empty and
+    ``finish_reason != "error"``, the runner should treat ``reasoning_content``
+    as the final answer instead of retrying.
+
+    Regression (production logs 2026-07-17 22:27): deepseek-v4-flash returned
+    ``content_chars=0 reasoning_chars=93`` with ``finish_reason=stop``. The
+    old logic treated this as an empty response and retried, wasting a LLM
+    call. Reasoning models may legitimately put their answer in
+    ``reasoning_content`` when they decide no further output is needed.
+
+    The fallback must:
+    1. NOT increment empty_content_retries (no retry)
+    2. NOT emit "Empty response" warning
+    3. Use reasoning_content as final_content
+    4. Complete in a single LLM call (no retry)
+    """
+    from OriginAgent.agent.runner import AgentRunSpec, AgentRunner
+    import loguru
+
+    provider = MagicMock()
+    call_count = {"n": 0}
+
+    async def chat_with_retry(*, messages, tools=None, **kwargs):
+        call_count["n"] += 1
+        # Single call: empty content but non-empty reasoning_content
+        return LLMResponse(
+            content=None,
+            reasoning_content="This is my answer after reasoning.",
+            tool_calls=[],
+            finish_reason="stop",
+            usage={"prompt_tokens": 5, "completion_tokens": 10},
+        )
+
+    provider.chat_with_retry = chat_with_retry
+    tools = MagicMock()
+    tools.get_definitions.return_value = []
+
+    warnings: list[str] = []
+
+    def sink(message) -> None:
+        record = message.record
+        if record["level"].name == "WARNING":
+            warnings.append(record["message"])
+
+    handler_id = loguru.logger.add(sink, format="{message}", level="WARNING")
+    try:
+        runner = AgentRunner(provider)
+        result = await runner.run(AgentRunSpec(
+            initial_messages=[{"role": "user", "content": "do task"}],
+            tools=tools,
+            model="test-model",
+            max_iterations=3,
+            max_tool_result_chars=_MAX_TOOL_RESULT_CHARS,
+        ))
+    finally:
+        loguru.logger.remove(handler_id)
+
+    # Must complete in a single LLM call (no retry)
+    assert call_count["n"] == 1, (
+        f"expected 1 LLM call (no retry), got {call_count['n']}"
+    )
+    # Must NOT emit "Empty response" warning
+    empty_warnings = [w for w in warnings if "Empty response" in w]
+    assert len(empty_warnings) == 0, (
+        f"expected no empty response warning, got: {empty_warnings}"
+    )
+    # Must use reasoning_content as final_content
+    assert result.final_content == "This is my answer after reasoning.", (
+        f"expected reasoning_content as final_content, got: {result.final_content}"
+    )
+    assert result.stop_reason == "completed"
+
+
+@pytest.mark.asyncio
+async def test_runner_reasoning_fallback_skipped_when_tool_calls_present():
+    """When ``content`` is empty but ``tool_calls`` is non-empty, the runner
+    must NOT apply the reasoning_content fallback — tool calls take priority.
+
+    The fallback only applies when ``finish_reason != "error"`` AND
+    ``not has_tool_calls`` AND ``content`` is blank AND
+    ``reasoning_content`` is non-blank.
+    """
+    from OriginAgent.agent.runner import AgentRunSpec, AgentRunner
+
+    provider = MagicMock()
+    call_count = {"n": 0}
+
+    async def chat_with_retry(*, messages, tools=None, **kwargs):
+        call_count["n"] += 1
+        if call_count["n"] == 1:
+            # Empty content, non-empty reasoning, BUT has tool_calls
+            return LLMResponse(
+                content=None,
+                reasoning_content="I should call a tool first.",
+                tool_calls=[ToolCallRequest(id="call_1", name="list_dir", arguments={"path": "."})],
+                finish_reason="tool_calls",
+                usage={"prompt_tokens": 5, "completion_tokens": 10},
+            )
+        return LLMResponse(
+            content="done after tool",
+            tool_calls=[],
+            usage={"prompt_tokens": 3, "completion_tokens": 5},
+        )
+
+    provider.chat_with_retry = chat_with_retry
+    tools = MagicMock()
+    tools.get_definitions.return_value = []
+    tools.execute = AsyncMock(return_value="tool result")
+
+    runner = AgentRunner(provider)
+    result = await runner.run(AgentRunSpec(
+        initial_messages=[{"role": "user", "content": "do task"}],
+        tools=tools,
+        model="test-model",
+        max_iterations=3,
+        max_tool_result_chars=_MAX_TOOL_RESULT_CHARS,
+    ))
+
+    # Tool must be called (not skipped due to reasoning fallback)
+    assert "list_dir" in result.tools_used, (
+        f"expected list_dir to be called, got tools_used={result.tools_used}"
+    )
+    assert result.final_content == "done after tool"
+    assert call_count["n"] == 2  # tool_call + final response

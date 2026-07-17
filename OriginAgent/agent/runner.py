@@ -553,6 +553,26 @@ class AgentRunner:
                 )
 
             clean = hook.finalize_content(context, response.content)
+            # Reasoning model fallback: when content is empty but
+            # reasoning_content is non-empty and finish_reason is not "error",
+            # treat reasoning_content as the final answer instead of retrying.
+            # Reasoning models (DeepSeek-R1, Kimi, MiMo, deepseek-v4-flash)
+            # may legitimately put their answer in reasoning_content when they
+            # decide no further output is needed. See production logs
+            # 2026-07-17 22:27 where content_chars=0 but reasoning_chars=93.
+            if (
+                response.finish_reason != "error"
+                and is_blank_text(clean)
+                and not is_blank_text(getattr(response, "reasoning_content", None))
+            ):
+                logger.info(
+                    "Using reasoning_content as final answer for {} on turn {} "
+                    "(content was empty, reasoning_chars={})",
+                    spec.session_key or "default",
+                    iteration,
+                    len(response.reasoning_content or ""),
+                )
+                clean = hook.finalize_content(context, response.reasoning_content)
             if response.finish_reason != "error" and is_blank_text(clean):
                 empty_content_retries += 1
                 # Include reasoning_content length in the warning for diagnosis.
