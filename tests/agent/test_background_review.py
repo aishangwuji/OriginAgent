@@ -581,3 +581,122 @@ async def test_review_turn_prefers_content_over_reasoning_content(
     records = service.store.iter_all()
     assert len(records) == 1
     assert records[0]["title"] == "From content"
+
+
+@pytest.mark.asyncio
+async def test_review_turn_falls_back_to_reasoning_when_content_not_json(
+    tmp_path: Path,
+) -> None:
+    """When ``content`` is non-empty but NOT valid JSON, fall back to
+    ``reasoning_content``.
+
+    Regression observed in production (2026-07-17 22:26): DeepSeek-R1
+    put its reasoning process into ``content`` (9405 chars of "We are
+    given a conversation...") and the actual JSON proposals into
+    ``reasoning_content``. The original ``content or reasoning_content``
+    fallback only triggered when content was EMPTY — when content is
+    non-JSON prose, the fallback never ran and proposals were dropped.
+
+    Fix: try ``content`` first; if it doesn't parse as JSON, try
+    ``reasoning_content`` as a secondary fallback.
+    """
+    reasoning_json = json.dumps({
+        "proposals": [
+            {
+                "type": "memory",
+                "domain_id": "core",
+                "title": "From reasoning fallback",
+                "content": "User prefers concise answers.",
+                "rationale": "Stated explicitly.",
+                "confidence": 0.8,
+            }
+        ]
+    })
+    # content is non-empty prose (not JSON) — simulates reasoning model
+    # putting its thought process in content
+    prose_content = (
+        "We are given a conversation from a cron channel. "
+        "The user message is a scheduled reminder. "
+        "Let's analyze the evidence before producing proposals."
+    )
+    provider = FakeProvider(LLMResponse(
+        content=prose_content,
+        reasoning_content=reasoning_json,
+        finish_reason="stop",
+    ))
+    service = BackgroundReviewService(
+        workspace=tmp_path,
+        provider=provider,
+        model="fake-model",
+        config=BackgroundReviewConfig(enabled=True),
+    )
+
+    result = await service.review_turn(
+        session_key="websocket:chat1",
+        turn_id="turn-1",
+        channel="websocket",
+        chat_id="chat1",
+        message_id="m1",
+        messages=[{"role": "user", "content": "remember this"}],
+    )
+
+    assert result.status == "ok"
+    assert result.proposals_written == 1
+    records = service.store.iter_all()
+    assert len(records) == 1
+    assert records[0]["title"] == "From reasoning fallback"
+
+
+@pytest.mark.asyncio
+async def test_review_turn_warns_once_when_both_content_and_reasoning_invalid(
+    tmp_path: Path,
+) -> None:
+    """When BOTH ``content`` and ``reasoning_content`` fail to parse as
+    JSON, warn exactly once (not twice) and return zero proposals.
+
+    Ensures the secondary fallback doesn't double-warn when both fields
+    contain invalid data.
+    """
+    import loguru
+    provider = FakeProvider(LLMResponse(
+        content="This is prose, not JSON.",
+        reasoning_content="Also prose, also not JSON.",
+        finish_reason="stop",
+    ))
+    service = BackgroundReviewService(
+        workspace=tmp_path,
+        provider=provider,
+        model="fake-model",
+        config=BackgroundReviewConfig(enabled=True),
+    )
+
+    # Capture warnings
+    warnings: list[str] = []
+
+    def sink(message) -> None:
+        record = message.record
+        if record["level"].name == "WARNING":
+            warnings.append(record["message"])
+
+    handler_id = loguru.logger.add(sink, format="{message}", level="WARNING")
+    try:
+        result = await service.review_turn(
+            session_key="websocket:chat1",
+            turn_id="turn-1",
+            channel="websocket",
+            chat_id="chat1",
+            message_id="m1",
+            messages=[{"role": "user", "content": "remember this"}],
+        )
+    finally:
+        loguru.logger.remove(handler_id)
+
+    # Should complete without crash, zero proposals
+    assert result.status == "ok"
+    assert result.proposals_written == 0
+    # Exactly one "invalid JSON" warning (from the final fallback attempt)
+    invalid_json_warnings = [w for w in warnings if "invalid JSON" in w]
+    assert len(invalid_json_warnings) == 1, (
+        f"expected exactly 1 invalid JSON warning, got {len(invalid_json_warnings)}: "
+        f"{invalid_json_warnings}"
+    )

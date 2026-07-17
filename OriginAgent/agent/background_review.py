@@ -1572,13 +1572,16 @@ class BackgroundReviewService:
                     ),
                 )
             proposals = self._parse_response(
-                # Fallback to reasoning_content for reasoning models (DeepSeek-R1,
-                # Kimi, MiMo) that may put the JSON payload in reasoning_content
-                # and leave content empty. Mirrors meta_cognition_reflector.py:397.
-                response.content or response.reasoning_content or "",
+                # Primary: content. Secondary fallback: reasoning_content.
+                # Reasoning models (DeepSeek-R1, Kimi, MiMo) may put their
+                # reasoning process in content and the actual JSON in
+                # reasoning_content — see production logs 2026-07-17.
+                # Mirrors meta_cognition_reflector.py:397.
+                response.content or "",
                 session_key=session_key,
                 turn_id=turn_id,
                 message_id=message_id,
+                fallback_text=response.reasoning_content or "",
             )
             written = await asyncio.to_thread(self.store.append_many, proposals)
             return self._remember_result(
@@ -1707,8 +1710,9 @@ class BackgroundReviewService:
         session_key: str,
         turn_id: str,
         message_id: str | None,
+        fallback_text: str | None = None,
     ) -> list[ReviewProposal]:
-        payload = _load_json_payload(text)
+        payload = _load_json_payload(text, fallback_text=fallback_text)
         if not isinstance(payload, dict):
             return []
         raw_proposals = payload.get("proposals")
@@ -2114,11 +2118,60 @@ def _message_text(message: dict[str, Any]) -> str:
     return text
 
 
-def _load_json_payload(text: str) -> Any:
+def _load_json_payload(text: str, *, fallback_text: str | None = None) -> Any:
+    """Parse ``text`` as JSON, optionally falling back to ``fallback_text``.
+
+    If ``text`` is empty or doesn't parse as JSON, and ``fallback_text``
+    is provided, ``fallback_text`` is tried before warning. This handles
+    reasoning models (DeepSeek-R1, Kimi, MiMo) that may put their
+    reasoning process in ``content`` and the actual JSON payload in
+    ``reasoning_content`` — see production logs 2026-07-17.
+    """
+    parsed = _try_parse_json(text)
+    if parsed is not None:
+        return parsed
+    # Secondary fallback: try fallback_text if provided
+    if fallback_text:
+        parsed = _try_parse_json(fallback_text)
+        if parsed is not None:
+            return parsed
+        # Both failed — warn once with combined diagnostics
+        content_preview = text.strip()[:200] if text.strip() else "<empty>"
+        fallback_preview = fallback_text.strip()[:200] if fallback_text.strip() else "<empty>"
+        logger.warning(
+            "Background review returned invalid JSON in both content ({} chars) "
+            "and reasoning_content ({} chars). content preview: {} | "
+            "reasoning_content preview: {}",
+            len(text or ""),
+            len(fallback_text or ""),
+            content_preview,
+            fallback_preview,
+        )
+        return None
+    # No fallback provided — single-field warning path
+    text_stripped = (text or "").strip()
+    if not text_stripped:
+        # Empty content is not an error — model may legitimately return
+        # empty when there's nothing to propose.
+        return None
+    preview = text_stripped[:300]
+    logger.warning(
+        "Background review returned invalid JSON ({} chars). First 300 chars: {}",
+        len(text_stripped),
+        preview,
+    )
+    return None
+
+
+def _try_parse_json(text: str) -> Any:
+    """Best-effort JSON parse with fenced-block extraction.
+
+    Returns ``None`` if parsing fails (does NOT warn — caller decides
+    whether to warn based on whether a fallback is available).
+    """
+    if not text:
+        return None
     text = text.strip()
-    # Empty/whitespace-only content is not an error — the model may
-    # legitimately return empty when there's nothing to propose.
-    # Skip the warning to avoid flooding logs with noise.
     if not text:
         return None
     if text.startswith("```"):
@@ -2139,16 +2192,6 @@ def _load_json_payload(text: str) -> Any:
             return json.loads(match.group(0))
         except json.JSONDecodeError:
             pass
-    # Include char count + preview for diagnosis. The original message
-    # ("Background review returned invalid JSON") had no context, making
-    # it impossible to diagnose what the model actually returned.
-    # Mirrors meta_cognition_reflector.py:609.
-    preview = text[:300]
-    logger.warning(
-        "Background review returned invalid JSON ({} chars). First 300 chars: {}",
-        len(text),
-        preview,
-    )
     return None
 
 
