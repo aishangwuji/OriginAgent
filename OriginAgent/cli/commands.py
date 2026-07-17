@@ -58,6 +58,69 @@ from OriginAgent.security.grants import (
 from OriginAgent.security.policy import PolicyDeniedError
 
 
+def _scan_recent_policy_denials(
+    messages: list[dict[str, Any]],
+    *,
+    max_messages: int = 20,
+) -> list[str]:
+    """Scan recent session messages for PolicyDeniedError tool results.
+
+    Returns a list of denied tool names (deduplicated, most-recent-first)
+    from recent tool_result messages containing policy denial errors.
+    Used to reinforce the capability boundary in cron reminder_note so
+    the Agent doesn't retry denied tools.
+    """
+    if not messages:
+        return []
+    recent = messages[-max_messages:] if len(messages) > max_messages else messages
+    denied: list[str] = []
+    seen: set[str] = set()
+    for msg in reversed(recent):
+        if not isinstance(msg, dict) or msg.get("role") != "tool":
+            continue
+        content = msg.get("content")
+        if not isinstance(content, str):
+            continue
+        if "PolicyDeniedError" not in content:
+            continue
+        tool_name = str(msg.get("name") or "").strip()
+        if not tool_name or tool_name in seen:
+            continue
+        seen.add(tool_name)
+        denied.append(tool_name)
+    return denied
+
+
+def _build_cron_reminder_note(
+    message: str,
+    *,
+    denied_tools: list[str] | None = None,
+) -> str:
+    """Build the reminder note for a cron job, with optional denial warning.
+
+    When ``denied_tools`` is non-empty, appends a hard-constraint block
+    instructing the Agent not to retry those tools — they are unavailable
+    in this scheduled session (capability boundary, not transient failure).
+    """
+    note = (
+        "The scheduled time has arrived. Deliver this reminder to the user now, "
+        "as a brief and natural message in their language. Speak directly to them — "
+        "do not narrate progress, summarize, include user IDs, or add status reports "
+        "like 'Done' or 'Reminded'.\n\n"
+        f"Reminder: {message}"
+    )
+    if denied_tools:
+        tools_text = ", ".join(denied_tools)
+        note += (
+            "\n\n--- Capability Boundary Reminder ---\n"
+            f"The following tools were recently denied by policy in this session: "
+            f"{tools_text}. Do NOT attempt to call them again — they are unavailable "
+            f"in this scheduled session (hard policy boundary, not a transient failure). "
+            f"If the task requires them, skip the task and explain what you cannot do."
+        )
+    return note
+
+
 def _sanitize_surrogates(text: str) -> str:
     """Reconstruct surrogate pairs into real characters; replace lone surrogates.
 
@@ -844,13 +907,14 @@ def _run_gateway(
             )
             raise
 
-        reminder_note = (
-            "The scheduled time has arrived. Deliver this reminder to the user now, "
-            "as a brief and natural message in their language. Speak directly to them — "
-            "do not narrate progress, summarize, include user IDs, or add status reports "
-            "like 'Done' or 'Reminded'.\n\n"
-            f"Reminder: {job.payload.message}"
-        )
+        # 改进 C：扫描 session 近期 PolicyDeniedError，若存在则在 reminder_note
+        # 追加"不要重试"硬约束，防止 Agent 反复尝试被拒工具（"清醒地犯蠢"）。
+        try:
+            cron_session = agent.sessions.get_or_create(f"cron:{job.id}")
+            denied_tools = _scan_recent_policy_denials(cron_session.messages)
+        except Exception:
+            denied_tools = []
+        reminder_note = _build_cron_reminder_note(job.payload.message, denied_tools=denied_tools)
 
         cron_tool = agent.tools.get("cron")
         cron_token = None
