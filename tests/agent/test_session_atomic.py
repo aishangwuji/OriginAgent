@@ -1,8 +1,11 @@
 """Tests for atomic session save and corrupt-file repair."""
 
 import json
+import os
 from datetime import datetime
 from pathlib import Path
+
+import pytest
 
 from OriginAgent.session.manager import Session, SessionManager
 
@@ -100,6 +103,97 @@ class TestAtomicSave:
         assert len(loaded.messages) == 5
         for i in range(5):
             assert loaded.messages[i]["content"] == f"msg{i}"
+
+    # ─── Windows PermissionError retry (WinError 5) ──────────────────────
+    #
+    # On Windows, os.replace can fail with PermissionError [WinError 5]
+    # when the target file is briefly locked by another process (antivirus,
+    # search indexer, concurrent reader). This is a transient error — the
+    # save should retry with backoff instead of crashing the turn.
+
+    def test_save_retries_on_permission_error_then_succeeds(self, tmp_path: Path):
+        """os.replace fails once with PermissionError, then succeeds on retry."""
+        import unittest.mock
+        from unittest.mock import patch
+
+        mgr = SessionManager(tmp_path)
+        session = Session(key="test:retry-ok")
+        session.add_message("user", "hello")
+
+        call_count = {"n": 0}
+        original_replace = os.replace
+
+        def flaky_replace(src, dst):
+            call_count["n"] += 1
+            if call_count["n"] == 1:
+                raise PermissionError(
+                    "[WinError 5] 拒绝访问。",
+                    str(src), str(dst),
+                )
+            return original_replace(src, dst)
+
+        with patch("OriginAgent.session.manager.os.replace", side_effect=flaky_replace):
+            mgr.save(session)
+
+        # Should have retried at least once
+        assert call_count["n"] >= 2
+        # File should exist with correct content
+        path = mgr._get_session_path("test:retry-ok")
+        assert path.exists()
+        loaded = mgr.get_or_create("test:retry-ok")
+        assert len(loaded.messages) == 1
+
+    def test_save_fails_after_max_retries(self, tmp_path: Path):
+        """When os.replace persistently fails, save raises PermissionError."""
+        from unittest.mock import patch
+
+        mgr = SessionManager(tmp_path)
+        session = Session(key="test:retry-fail")
+        session.add_message("user", "data")
+
+        def always_fail(src, dst):
+            raise PermissionError(
+                "[WinError 5] 拒绝访问。",
+                str(src), str(dst),
+            )
+
+        with patch("OriginAgent.session.manager.os.replace", side_effect=always_fail):
+            with pytest.raises(PermissionError):
+                mgr.save(session)
+
+        # Tmp file should be cleaned up after persistent failure
+        path = mgr._get_session_path("test:retry-fail")
+        tmp = path.with_suffix(".jsonl.tmp")
+        assert not tmp.exists()
+
+    def test_save_retry_does_not_corrupt_data(self, tmp_path: Path):
+        """After a successful retry, the saved data is intact."""
+        import unittest.mock
+        from unittest.mock import patch
+
+        mgr = SessionManager(tmp_path)
+        session = Session(key="test:retry-integrity")
+        session.add_message("user", "first")
+        mgr.save(session)
+
+        session.add_message("assistant", "second")
+        call_count = {"n": 0}
+        original_replace = os.replace
+
+        def flaky_replace(src, dst):
+            call_count["n"] += 1
+            if call_count["n"] == 1:
+                raise PermissionError("[WinError 5]", str(src), str(dst))
+            return original_replace(src, dst)
+
+        with patch("OriginAgent.session.manager.os.replace", side_effect=flaky_replace):
+            mgr.save(session)
+
+        mgr.invalidate("test:retry-integrity")
+        loaded = mgr.get_or_create("test:retry-integrity")
+        assert len(loaded.messages) == 2
+        assert loaded.messages[0]["content"] == "first"
+        assert loaded.messages[1]["content"] == "second"
 
 
 class TestRepairCorruptFile:

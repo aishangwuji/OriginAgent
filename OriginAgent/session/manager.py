@@ -6,6 +6,7 @@ import json
 import os
 import re
 import shutil
+import time
 import uuid
 from contextlib import suppress
 from dataclasses import dataclass, field
@@ -1173,6 +1174,14 @@ class SessionManager:
             "messages": session.messages,
         }
 
+    # Maximum retries for os.replace on Windows PermissionError (WinError 5).
+    # Windows can briefly lock the target file when another process (antivirus,
+    # search indexer, concurrent reader) has it open. This is transient —
+    # retrying with backoff resolves it without crashing the turn.
+    # Rule 11: classified as retryable (transient file lock), not permanent.
+    _REPLACE_MAX_RETRIES = 3
+    _REPLACE_BACKOFF_SECONDS = (0.01, 0.05, 0.2)
+
     def save(self, session: Session, *, fsync: bool = False) -> None:
         """Save a session to disk atomically.
 
@@ -1182,6 +1191,12 @@ class SessionManager:
         should be enabled during graceful shutdown so that filesystems with
         write-back caching (e.g. rclone VFS, NFS, FUSE mounts) do not lose
         the most recent writes.
+
+        On Windows, ``os.replace`` may fail with ``PermissionError``
+        (WinError 5) when the target file is briefly locked by another
+        process (antivirus, search indexer, concurrent reader). This is
+        retried up to ``_REPLACE_MAX_RETRIES`` times with exponential
+        backoff before giving up.
         """
         path = self._get_session_path(session.key)
         tmp_path = path.with_suffix(".jsonl.tmp")
@@ -1205,7 +1220,7 @@ class SessionManager:
                     f.flush()
                     os.fsync(f.fileno())
 
-            os.replace(tmp_path, path)
+            self._atomic_replace(tmp_path, path)
 
             if fsync:
                 # fsync the directory so the rename is durable.
@@ -1223,6 +1238,32 @@ class SessionManager:
             raise
 
         self._cache[session.key] = session
+
+    def _atomic_replace(self, tmp_path: Path, target_path: Path) -> None:
+        """Atomically replace *target_path* with *tmp_path*, retrying on WinError 5.
+
+        On Windows, ``os.replace`` can fail with ``PermissionError`` when
+        the target file is briefly locked by another process. This is a
+        transient condition (rule 11: retryable error) — we retry with
+        backoff before giving up. Non-PermissionError exceptions are not
+        retried (e.g. OSError from disk full is not transient).
+        """
+        last_error: PermissionError | None = None
+        for attempt in range(self._REPLACE_MAX_RETRIES):
+            try:
+                os.replace(tmp_path, target_path)
+                return
+            except PermissionError as exc:
+                last_error = exc
+                if attempt < self._REPLACE_MAX_RETRIES - 1:
+                    time.sleep(self._REPLACE_BACKOFF_SECONDS[attempt])
+                    logger.debug(
+                        "Session save retry {}/{} for {} (WinError 5)",
+                        attempt + 1, self._REPLACE_MAX_RETRIES,
+                        target_path.name,
+                    )
+        if last_error is not None:
+            raise last_error
 
     def flush_all(self) -> int:
         """Re-save every cached session with fsync for durable shutdown.
