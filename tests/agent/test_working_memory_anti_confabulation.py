@@ -133,3 +133,155 @@ def test_save_empty_existing_allows_new(tmp_path: Path):
     result = manager.save(session, snapshot)
 
     assert result.current_goal == "背期末题"
+
+
+# ---------------------------------------------------------------------------
+# P1-b: attention_items conflict must not refresh updated_at
+# ---------------------------------------------------------------------------
+
+
+def test_attention_items_conflict_does_not_refresh_updated_at(tmp_path: Path):
+    """When attention_items conflict triggers rollback, ``updated_at`` must
+    NOT be refreshed.
+
+    Regression: cron session had 8 stale attention_items that conflicted
+    with every new turn's items. The conflict rollback preserved the
+    stale items, but ``updated_at`` was refreshed anyway — defeating the
+    30-minute field decay. The stale items persisted forever, producing
+    the "Working memory attention_items conflict: keeping existing 8
+    items" warning every turn.
+
+    Fix: skip the ``updated_at`` refresh when a rollback occurred, so
+    the decay timer keeps counting from the last *successful* write.
+    """
+    import time
+    sessions = SessionManager(tmp_path)
+    session = sessions.get_or_create("cli:test")
+    manager = WorkingMemoryManager(sessions)
+
+    # First write: establish baseline attention_items + updated_at
+    manager.upsert(session, attention_items=["item-a", "item-b"])
+    snapshot1 = manager.load(session)
+    original_updated_at = snapshot1.updated_at
+    assert original_updated_at, "baseline updated_at should be set"
+    assert snapshot1.attention_items == ["item-a", "item-b"]
+
+    # Sleep to ensure a different timestamp would be produced
+    time.sleep(0.01)
+
+    # Second write: conflicting items (no intersection)
+    snapshot2 = manager.load(session)
+    snapshot2.attention_items = ["item-x", "item-y"]  # no intersection
+    result = manager.save(session, snapshot2)
+
+    # Conflict rollback: existing items preserved
+    assert result.attention_items == ["item-a", "item-b"]
+    # KEY ASSERTION: updated_at must NOT be refreshed on conflict rollback
+    assert result.updated_at == original_updated_at, (
+        "updated_at must not refresh on conflict rollback — "
+        "otherwise the 30-minute decay never fires and stale items persist forever. "
+        f"original={original_updated_at}, result={result.updated_at}"
+    )
+
+
+def test_attention_items_no_conflict_refreshes_updated_at(tmp_path: Path):
+    """When there's no conflict (new items intersect or existing is empty),
+    ``updated_at`` IS refreshed normally.
+
+    Ensures the fix doesn't accidentally suppress updated_at on legitimate writes.
+    """
+    import time
+    sessions = SessionManager(tmp_path)
+    session = sessions.get_or_create("cli:test")
+    manager = WorkingMemoryManager(sessions)
+
+    # First write
+    manager.upsert(session, attention_items=["item-a", "item-b"])
+    original_updated_at = manager.load(session).updated_at
+
+    # Sleep to ensure a different timestamp
+    time.sleep(0.01)
+
+    # Second write: intersecting items (no conflict)
+    snapshot = manager.load(session)
+    snapshot.attention_items = ["item-a", "item-c"]  # "item-a" intersects
+    result = manager.save(session, snapshot)
+
+    # No conflict → updated_at refreshed
+    assert result.updated_at != original_updated_at, (
+        f"updated_at should be refreshed on non-conflict write. "
+        f"original={original_updated_at}, result={result.updated_at}"
+    )
+    assert result.attention_items == ["item-a", "item-c"]
+
+
+def test_attention_items_conflict_then_decay_clears_stale_items(tmp_path: Path):
+    """End-to-end: after a conflict rollback, waiting 30+ minutes causes
+    the stale items to decay on the next load.
+
+    This is the user-visible behavior: "keeping existing 8 items" should
+    stop after 30 minutes, not persist forever.
+    """
+    sessions = SessionManager(tmp_path)
+    session = sessions.get_or_create("cli:test")
+    manager = WorkingMemoryManager(sessions)
+
+    # Write baseline items
+    manager.upsert(session, attention_items=["stale-a", "stale-b"])
+    original_updated_at = manager.load(session).updated_at
+
+    # Simulate a conflict rollback (doesn't refresh updated_at)
+    snapshot = manager.load(session)
+    snapshot.attention_items = ["fresh-x"]  # no intersection
+    manager.save(session, snapshot)
+
+    # Verify updated_at was NOT refreshed
+    assert manager.load(session).updated_at == original_updated_at
+
+    # Simulate 31 minutes passing by manually setting updated_at
+    future_time = datetime.now(timezone.utc) - timedelta(minutes=31)
+    raw = session.metadata["working_memory_v1"]
+    raw["updated_at"] = future_time.isoformat()
+    session.metadata["working_memory_v1"] = raw
+    # Invalidate cache so load re-reads
+    manager._cache.pop(session.key, None)
+    # Also invalidate the signature so load emits event
+    manager._last_emitted_signature.pop(session.key, None)
+
+    # Load should trigger decay and clear the stale items
+    decayed = manager.load(session)
+    assert decayed.attention_items == [], (
+        "stale attention_items should be cleared by 30-minute decay"
+    )
+
+
+def test_repeated_conflict_does_not_keep_refreshing_updated_at(tmp_path: Path):
+    """Multiple consecutive conflicts must not refresh updated_at each time.
+
+    Regression: every turn, loop.py calls upsert with new attention_items,
+    conflict triggers, updated_at was refreshed — so even though the items
+    never changed, the decay timer kept resetting.
+    """
+    import time
+    sessions = SessionManager(tmp_path)
+    session = sessions.get_or_create("cli:test")
+    manager = WorkingMemoryManager(sessions)
+
+    # Baseline
+    manager.upsert(session, attention_items=["item-a", "item-b"])
+    original_updated_at = manager.load(session).updated_at
+
+    # Simulate 3 consecutive conflicts (3 turns)
+    for i in range(3):
+        time.sleep(0.01)  # ensure different timestamps would be produced
+        snapshot = manager.load(session)
+        snapshot.attention_items = [f"conflicting-{i}"]  # no intersection
+        manager.save(session, snapshot)
+
+    # After 3 conflicts, updated_at should still be the original
+    final = manager.load(session)
+    assert final.updated_at == original_updated_at, (
+        "updated_at must not refresh across multiple conflict rollbacks. "
+        f"original={original_updated_at}, final={final.updated_at}"
+    )
+    assert final.attention_items == ["item-a", "item-b"]

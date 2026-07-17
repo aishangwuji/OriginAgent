@@ -150,6 +150,11 @@ class WorkingMemoryManager:
         # 形成自我强化的虚假记忆。仅在明确冲突时保守地保留现有值。
         existing_raw = session.metadata.get(WORKING_MEMORY_METADATA_KEY)
         existing: WorkingMemorySnapshot | None = None
+        # Track whether any conflict rollback occurred. When it does, we
+        # must NOT refresh updated_at — otherwise the 30-minute field
+        # decay in _apply_field_decay keeps resetting, and stale items
+        # persist forever (the "keeping existing 8 items" inner monologue).
+        conflict_rolled_back = False
         if isinstance(existing_raw, dict):
             existing = WorkingMemorySnapshot.from_json(session.key, existing_raw)
             # current_goal 冲突：现有值非空且新值完全不同（非子串关系）时保留现有值
@@ -166,6 +171,7 @@ class WorkingMemoryManager:
                     snapshot.current_goal[:100],
                 )
                 snapshot.current_goal = existing.current_goal
+                conflict_rolled_back = True
             # attention_items 冲突：现有列表非空且新列表完全无交集时保留现有值
             if (
                 existing.attention_items
@@ -178,8 +184,13 @@ class WorkingMemoryManager:
                     len(existing.attention_items),
                 )
                 snapshot.attention_items = existing.attention_items
+                conflict_rolled_back = True
 
-        snapshot.updated_at = _utcnow_iso()
+        # Only refresh updated_at when no conflict rollback occurred.
+        # On conflict rollback, preserving the original updated_at allows
+        # the 30-minute field decay to eventually clear the stale items.
+        if not conflict_rolled_back:
+            snapshot.updated_at = _utcnow_iso()
         session.metadata[WORKING_MEMORY_METADATA_KEY] = snapshot.to_json()
         signature = self._compute_signature(snapshot)
         last_sig = self._last_emitted_signature.get(session.key)
