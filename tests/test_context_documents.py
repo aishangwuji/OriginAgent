@@ -24,7 +24,7 @@ def _text_blocks(result: list[dict[str, object]]) -> list[str]:
 def test_build_user_content_with_no_media_returns_string(tmp_path: Path) -> None:
     builder = _make_builder(tmp_path)
     result = builder._build_user_content("hello", None)
-    assert result == [{"type": "text", "text": "hello"}]
+    assert result == [{"type": "text", "text": "hello", "_meta": {"kind": "user_text"}}]
 
 
 def test_build_user_content_with_image_returns_list(tmp_path: Path) -> None:
@@ -46,7 +46,7 @@ def test_build_user_content_ignores_non_image_files(tmp_path: Path) -> None:
     txt.write_text("some text", encoding="utf-8")
     result = builder._build_user_content("summarize", [str(txt)])
     assert any(block.get("type") == "attachment_ref" for block in result)
-    assert result[-1] == {"type": "text", "text": "summarize"}
+    assert result[-1] == {"type": "text", "text": "summarize", "_meta": {"kind": "user_text"}}
 
 
 def test_build_user_content_mixed_image_and_non_image(tmp_path: Path) -> None:

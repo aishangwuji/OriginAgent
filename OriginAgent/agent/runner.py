@@ -295,6 +295,7 @@ class AgentRunner:
         return injected_messages
 
     async def run(self, spec: AgentRunSpec) -> AgentRunResult:
+        _run_start = time.monotonic()  # 记录起始时刻，用于计算 run.complete 的 elapsed_ms
         provider = self._provider  # Freeze: local binding for entire run
         hook = spec.hook or AgentHook()
         messages = list(spec.initial_messages)
@@ -373,6 +374,14 @@ class AgentRunner:
 
             if response.should_execute_tools:
                 tool_calls = list(response.tool_calls)
+                # 决策点：进入工具执行分支，记录继续循环的原因与规模
+                log_event(
+                    "loop.continue",
+                    reason="tool_calls",
+                    iteration=iteration,
+                    tool_count=len(tool_calls),
+                    session_key=spec.session_key,
+                )
                 ask_index = next((i for i, tc in enumerate(tool_calls) if tc.name == "ask_user"), None)
                 if ask_index is not None:
                     tool_calls = tool_calls[: ask_index + 1]
@@ -477,6 +486,16 @@ class AgentRunner:
                     had_injections = True
                 await hook.after_iteration(context)
                 continue
+
+            # 决策点：should_execute_tools=False，进入 finalize 路径
+            # （可能是 finish_reason="stop" 无 tool_calls，也可能是 "refusal"/"content_filter" 导致 tool_calls 被忽略）
+            log_event(
+                "loop.finalize",
+                reason="no_tool_calls",
+                iteration=iteration,
+                finish_reason=response.finish_reason,
+                session_key=spec.session_key,
+            )
 
             if response.has_tool_calls:
                 logger.warning(
@@ -628,6 +647,19 @@ class AgentRunner:
             break
         else:
             stop_reason = "max_iterations"
+            # 决策点：循环耗尽 max_iterations，记录 WARNING 便于运维定位失控循环
+            log_event(
+                "loop.max_iterations",
+                iteration=spec.max_iterations,
+                tools_used_count=len(tools_used),
+                session_key=spec.session_key,
+            )
+            logger.warning(
+                "Agent reached max_iterations={} for session={} with tools_used_count={}",
+                spec.max_iterations,
+                spec.session_key or "default",
+                len(tools_used),
+            )
             if spec.max_iterations_message:
                 final_content = spec.max_iterations_message.format(
                     max_iterations=spec.max_iterations,
@@ -657,6 +689,7 @@ class AgentRunner:
             tool_count=len(tools_used),
             tokens_used=usage.get("completion_tokens", 0),
             session_key=spec.session_key,
+            elapsed_ms=round((time.monotonic() - _run_start) * 1000, 2),
         )
         return AgentRunResult(
             final_content=final_content,
@@ -700,7 +733,6 @@ class AgentRunner:
         hook: AgentHook,
         context: AgentHookContext,
     ):
-        log_event("llm.request", model=spec.model, session_key=spec.session_key)
         timeout_s: float | None = spec.llm_timeout_s
         if timeout_s is None:
             # Default to a finite timeout to avoid per-session lock starvation when an LLM
@@ -726,6 +758,28 @@ class AgentRunner:
             and spec.progress_callback is not None
             and getattr(provider, "supports_progress_deltas", False) is True
         )
+        # 是否流式调用：主流式或进度增量流式均走 chat_stream_with_retry
+        log_event(
+            "llm.request",
+            model=spec.model,
+            session_key=spec.session_key,
+            stream=(wants_streaming or wants_progress_streaming),
+            message_count=len(messages),
+        )
+
+        def _log_llm_response(resp: LLMResponse) -> None:
+            # 结构化记录 LLM 响应的关键属性，便于审计 token 用量/工具调用/推理内容
+            log_event(
+                "llm.response",
+                model=spec.model,
+                session_key=spec.session_key,
+                finish_reason=resp.finish_reason,
+                has_tool_calls=bool(resp.tool_calls),
+                tool_call_count=len(resp.tool_calls or []),
+                content_chars=len(resp.content or ""),
+                reasoning_chars=len(getattr(resp, "reasoning_content", "") or ""),
+                usage_completion=(resp.usage or {}).get("completion_tokens", 0),
+            )
 
         if wants_streaming:
             async def _stream(delta: str) -> None:
@@ -782,11 +836,13 @@ class AgentRunner:
             response = await coro
             if wants_progress_streaming and progress_state.get("reasoning_open"):
                 await hook.emit_reasoning_end()
+            _log_llm_response(response)
             return response
         try:
             response = await asyncio.wait_for(coro, timeout=outer_timeout_s)
             if wants_progress_streaming and progress_state.get("reasoning_open"):
                 await hook.emit_reasoning_end()
+            _log_llm_response(response)
             return response
         except asyncio.TimeoutError:
             return LLMResponse(
@@ -849,7 +905,13 @@ class AgentRunner:
     ) -> tuple[list[Any], list[dict[str, str]], BaseException | None]:
         if idempotency_keys is None:
             idempotency_keys = set()
-        log_event("tools.execute", tool_count=len(tool_calls), session_key=spec.session_key)
+        tool_names = ",".join(tc.name for tc in tool_calls)
+        log_event(
+            "tools.execute",
+            tool_count=len(tool_calls),
+            session_key=spec.session_key,
+            tool_names=tool_names,
+        )
         batches = self._partition_tool_batches(spec, tool_calls)
         tool_results: list[tuple[Any, dict[str, str], BaseException | None]] = []
         for batch in batches:
@@ -963,6 +1025,38 @@ class AgentRunner:
         workspace_violation_counts: dict[str, int],
         idempotency_keys: set[str],
     ) -> tuple[Any, dict[str, str], BaseException | None]:
+        # tool.complete 包装层：在 _run_tool_core 执行前后记录耗时与结果状态
+        _tool_start = time.monotonic()
+        result, event, exc = await self._run_tool_core(
+            spec, tool_call, external_lookup_counts,
+            workspace_violation_counts, idempotency_keys,
+        )
+        status_raw = event.get("status", "error")
+        status = "success" if status_raw == "ok" else status_raw
+        result_size = len(str(result)) if status == "success" else 0
+        error_kind = event.get("error_kind") or (
+            type(exc).__name__ if exc is not None else None
+        )
+        elapsed = round((time.monotonic() - _tool_start) * 1000, 2)
+        log_event(
+            "tool.complete",
+            name=tool_call.name,
+            status=status,
+            duration_ms=elapsed,
+            result_size=result_size,
+            error_kind=error_kind if status != "success" else None,
+            session_key=spec.session_key,
+        )
+        return result, event, exc
+
+    async def _run_tool_core(
+        self,
+        spec: AgentRunSpec,
+        tool_call: ToolCallRequest,
+        external_lookup_counts: dict[str, int],
+        workspace_violation_counts: dict[str, int],
+        idempotency_keys: set[str],
+    ) -> tuple[Any, dict[str, str], BaseException | None]:
         hint = "\n\n[Analyze the error above and try a different approach.]"
         # Turn-scoped 幂等检查：同一 turn 内已成功执行过的工具+参数组合不再重复执行
         # 外部查找工具（web_fetch/web_search）已有独立的重试节流，不纳入幂等检查
@@ -1015,6 +1109,7 @@ class AgentRunner:
         ):
             prep_error = f"Error: Tool '{tool_call.name}' requires an explicit capability snapshot"
         if prep_error:
+            policy_rule = self._policy_rule_from_error(prep_error)
             await self._audit_tool_from_runner(
                 spec,
                 name=tool_call.name,
@@ -1023,8 +1118,15 @@ class AgentRunner:
                 status="policy_denied" if is_policy_denial_text(prep_error) else "validation_error",
                 start=start,
                 error_kind="validation_error",
-                policy_rule=self._policy_rule_from_error(prep_error),
+                policy_rule=policy_rule,
             )
+            if policy_rule:
+                logger.warning(
+                    "Tool {} denied by policy rule='{}' for session={}",
+                    tool_call.name,
+                    policy_rule,
+                    spec.session_key or "default",
+                )
             event = {
                 "name": tool_call.name,
                 "status": "error",
@@ -1054,6 +1156,7 @@ class AgentRunner:
                 "name": tool_call.name,
                 "status": "error",
                 "detail": str(exc),
+                "error_kind": type(exc).__name__,
             }
             if isinstance(exc, AskUserInterrupt):
                 await self._audit_tool_from_runner(
@@ -1079,6 +1182,13 @@ class AgentRunner:
                 error_kind=type(exc).__name__,
                 policy_rule=policy_rule,
             )
+            if policy_rule:
+                logger.warning(
+                    "Tool {} denied by policy rule='{}' for session={}",
+                    tool_call.name,
+                    policy_rule,
+                    spec.session_key or "default",
+                )
             handled = self._classify_violation(
                 raw_text=str(exc),
                 # Preserve legacy exception payloads without the retry hint.
@@ -1095,6 +1205,7 @@ class AgentRunner:
 
         if isinstance(result, str) and result.startswith("Error"):
             policy_denied = is_policy_denial_text(result)
+            policy_rule = self._policy_rule_from_error(result)
             await self._audit_tool_from_runner(
                 spec,
                 name=tool_call.name,
@@ -1103,8 +1214,15 @@ class AgentRunner:
                 status="policy_denied" if policy_denied else "error",
                 start=start,
                 error_kind="tool_error",
-                policy_rule=self._policy_rule_from_error(result),
+                policy_rule=policy_rule,
             )
+            if policy_rule:
+                logger.warning(
+                    "Tool {} denied by policy rule='{}' for session={}",
+                    tool_call.name,
+                    policy_rule,
+                    spec.session_key or "default",
+                )
             event = {
                 "name": tool_call.name,
                 "status": "error",

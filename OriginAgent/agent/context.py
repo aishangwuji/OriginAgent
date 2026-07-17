@@ -580,12 +580,51 @@ class ContextBuilder:
                 else:
                     lines.append(f"[{turn_range}] {summary}")
             cold_indices_text = "\n".join(lines) + "\n"
+        # 结构化字段渲染：仅渲染非空字段，避免历史归档 summary 与结构化字段
+        # 被无差别灌入上下文（原 json.dumps(dict(snapshot)) 的副作用，会导致
+        # Agent "突然聊起很久之前的事"），并与下方已结构化渲染的
+        # recent_turns_text/cold_indices_text 保持单一职责、不重复。
+        structured_parts: list[str] = []
+        current_goal = snapshot.get("current_goal") or ""
+        if current_goal:
+            structured_parts.append(f"\n## Current Goal\n{current_goal}")
+        current_plan = snapshot.get("current_plan") or []
+        if current_plan:
+            lines = ["\n## Current Plan"]
+            for step in current_plan:
+                lines.append(f"- {step}")
+            structured_parts.append("\n".join(lines))
+        open_loops = snapshot.get("open_loops") or []
+        if open_loops:
+            lines = ["\n## Open Loops"]
+            for loop in open_loops:
+                lines.append(f"- {loop}")
+            structured_parts.append("\n".join(lines))
+        active_constraints = snapshot.get("active_constraints") or []
+        if active_constraints:
+            lines = ["\n## Active Constraints"]
+            for constraint in active_constraints:
+                lines.append(f"- {constraint}")
+            structured_parts.append("\n".join(lines))
+        pending_confirmation_refs = snapshot.get("pending_confirmation_refs") or []
+        if pending_confirmation_refs:
+            lines = ["\n## Pending Confirmations"]
+            for ref in pending_confirmation_refs:
+                lines.append(f"- {ref}")
+            structured_parts.append("\n".join(lines))
+        # checkpoint 新鲜度感知：让 Agent 知道这份恢复上下文的时间戳
+        updated_at = snapshot.get("updated_at") or ""
+        if updated_at:
+            structured_parts.append(f"\n## Checkpoint Updated At\n{updated_at}")
+        structured_text = "\n".join(structured_parts)
+        if structured_text:
+            structured_text += "\n"
         return {
             "type": "text",
             "text": (
                 "<recovered_continuity trust='internal'>\n"
                 "Recovered continuity checkpoint from the previous session state.\n"
-                f"{json.dumps(dict(snapshot), ensure_ascii=False, indent=2)}\n"
+                f"{structured_text}"
                 f"{recent_turns_text}"
                 f"{cold_indices_text}"
                 "</recovered_continuity>"
@@ -1062,7 +1101,7 @@ class ContextBuilder:
         if text is not None:
             text = str(text)
             if text:
-                blocks.append({"type": "text", "text": text})
+                blocks.append({"type": "text", "text": text, "_meta": {"kind": "user_text"}})
                 media_audit["text_included"] = True
         media_audit["accepted_count"] = len(media_audit["accepted"])
         self._last_media_block_audit = media_audit

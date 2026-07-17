@@ -56,7 +56,7 @@ from OriginAgent.utils.document import extract_documents
 from OriginAgent.utils.helpers import strip_think
 from OriginAgent.utils.image_generation_intent import image_generation_prompt
 from OriginAgent.utils.tool_hints import format_tool_hints
-from OriginAgent.utils.tracing import new_trace as _new_trace, set_session, span
+from OriginAgent.utils.tracing import log_event, new_trace as _new_trace, set_session, span
 from OriginAgent.utils.webui_transcript import append_transcript_object
 
 
@@ -629,14 +629,28 @@ class AgentRuntime:
             "active_constraints": list(working.active_constraints or []),
             "pending_confirmation_refs": self._collect_pending_confirmation_refs(session),
             "profile_ref": profile_ref,
-            "recent_turns_summary": self._extract_recent_turns_summary(session),
+            # 截断长度由 ContextConfig.recent_turns_summary_max_chars 控制（默认 800），
+            # 配置访问路径：self._deps.context._context_config（与 enable_phase1_continuity 等同源）
+            "recent_turns_summary": self._extract_recent_turns_summary(
+                session,
+                max_chars=self._deps.context._context_config.recent_turns_summary_max_chars,
+            ),
             # 冷区索引：渐进式暴露 warm 区归档总结的索引视图，
             # 只保留 turn_range/summary/key_entities，完整结构化字段通过 locator 回查，
             # 避免 checkpoint 膨胀为"缓慢的庞然大物"
             "cold_indices": self._collect_cold_indices(session.key),
             "updated_at": _utcnow_iso(),
         }
-        session.metadata.setdefault("continuity_checkpoint_v1", checkpoint)
+        session.metadata["continuity_checkpoint_v1"] = checkpoint
+        log_event(
+            "continuity.checkpoint.saved",
+            session_key=session.key,
+            field_count=len([k for k, v in checkpoint.items() if v]),
+            recent_turns_count=len(checkpoint.get("recent_turns_summary") or []),
+            cold_indices_count=len(checkpoint.get("cold_indices") or []),
+            current_goal_present=bool(checkpoint.get("current_goal")),
+            open_loops_count=len(checkpoint.get("open_loops") or []),
+        )
         return checkpoint
 
     def _collect_cold_indices(self, session_key: str) -> list[dict[str, Any]]:
@@ -679,8 +693,13 @@ class AgentRuntime:
         ]
 
     @staticmethod
-    def _extract_recent_turns_summary(session: Any) -> list[dict[str, str]]:
-        """从 session 历史中提取最近 2 轮对话摘要（2 user + 2 assistant）"""
+    def _extract_recent_turns_summary(session: Any, max_chars: int = 800) -> list[dict[str, str]]:
+        """从 session 历史中提取最近 2 轮对话摘要（2 user + 2 assistant）
+
+        max_chars 控制每条消息的截断长度，默认 800（向后兼容）。
+        配置来源：ContextConfig.recent_turns_summary_max_chars，由
+        _save_continuity_checkpoint 调用时传入。
+        """
         # Session 类使用 messages 属性；兼容可能使用 history 的 mock
         history = getattr(session, "messages", None)
         if history is None:
@@ -702,8 +721,8 @@ class AgentRuntime:
                     elif isinstance(part, str):
                         text_parts.append(part)
                 content = " ".join(text_parts)
-            # 截断到 500 字符
-            content = str(content)[:500]
+            # 截断到 max_chars 字符（可配置，避免长对话关键信息丢失）
+            content = str(content)[:max_chars]
             if role in (RoleConstants.USER, RoleConstants.ASSISTANT) and content.strip():
                 summary.append({"role": role, "content": content})
         return summary[-4:]  # 最多 4 条（2 轮）
@@ -728,6 +747,9 @@ class AgentRuntime:
         warm_buffer = WarmStore().load(session)
         # 冷区索引恢复：优先从 warm_summaries.jsonl 读取最新条目
         cold_indices = AgentRuntime._read_cold_indices(workspace, session.key)
+        # 记录冷区索引来源：是否由 workspace 的 warm_summaries.jsonl 提供
+        # （用于日志区分 warm_summaries 与 checkpoint_embedded 两条恢复路径）
+        cold_indices_from_workspace = bool(cold_indices)
         if not cold_indices:
             # workspace 不可用或文件不存在时，回退到 checkpoint 中已保存的索引
             cold_indices = [
@@ -739,7 +761,7 @@ class AgentRuntime:
                 for item in raw.get("cold_indices", [])
                 if isinstance(item, dict)
             ][:5]
-        return {
+        checkpoint = {
             "session_key": str(raw.get("session_key") or session.key),
             "current_goal": _trim_text(raw.get("current_goal"), max_chars=1000),
             "current_plan": [str(item).strip() for item in raw.get("current_plan", []) if str(item).strip()][:8],
@@ -757,6 +779,15 @@ class AgentRuntime:
             "cold_indices": cold_indices,
             "updated_at": str(raw.get("updated_at") or "").strip(),
         }
+        log_event(
+            "continuity.checkpoint.loaded",
+            session_key=session.key,
+            source=("warm_summaries" if cold_indices_from_workspace else "checkpoint_embedded"),
+            field_count=len([k for k, v in checkpoint.items() if v]) if checkpoint else 0,
+            recent_turns_count=len(checkpoint.get("recent_turns_summary") or []) if checkpoint else 0,
+            cold_indices_count=len(checkpoint.get("cold_indices") or []) if checkpoint else 0,
+        )
+        return checkpoint
 
     @staticmethod
     def _read_cold_indices(workspace: Any, session_key: str) -> list[dict[str, Any]]:

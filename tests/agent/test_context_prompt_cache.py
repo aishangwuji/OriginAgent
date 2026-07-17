@@ -573,7 +573,7 @@ def test_user_content_limits_media_count_and_size(tmp_path) -> None:
 
     image_blocks = [block for block in blocks if block.get("type") == "image_url"]
     assert len(image_blocks) == builder._MAX_MEDIA_FILES - 1
-    assert blocks[-1] == {"type": "text", "text": "look"}
+    assert blocks[-1] == {"type": "text", "text": "look", "_meta": {"kind": "user_text"}}
     audit = builder._last_media_block_audit
     assert audit["requested_count"] == len([str(oversized), *paths])
     assert audit["accepted_count"] == builder._MAX_MEDIA_FILES - 1
