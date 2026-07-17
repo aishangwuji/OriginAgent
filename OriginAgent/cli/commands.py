@@ -925,8 +925,18 @@ def _run_gateway(
             pass
 
         message_record_token = None
+        delivery_target_token = None
         if isinstance(message_tool, MessageTool):
             message_record_token = message_tool.set_record_channel_delivery(True)
+            # Set delivery target so the Agent can proactively send mid-turn
+            # notifications to the user's real channel (e.g. Telegram) via the
+            # message tool, without requiring can_send_cross_target capability.
+            # The delivery target is scoped to job.payload.to (user-approved).
+            if job.payload.deliver and job.payload.to:
+                delivery_target_token = message_tool.set_delivery_target(
+                    job.payload.channel or "cli",
+                    job.payload.to,
+                )
 
         try:
             msg = InboundMessage(
@@ -946,6 +956,8 @@ def _run_gateway(
                 cron_tool.reset_cron_context(cron_token)
             if isinstance(message_tool, MessageTool) and message_record_token is not None:
                 message_tool.reset_record_channel_delivery(message_record_token)
+            if isinstance(message_tool, MessageTool) and delivery_target_token is not None:
+                message_tool.reset_delivery_target(delivery_target_token)
 
         # Cron-channel turns suppress outbound assembly (Path A disabled) to
         # avoid constructing an OutboundMessage to the inbound-only "cron"

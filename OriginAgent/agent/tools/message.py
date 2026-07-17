@@ -141,6 +141,19 @@ class MessageTool(Tool):
             "message_capability_snapshot",
             default=None,
         )
+        # Cron/scheduled session delivery target override. When set, message()
+        # calls without explicit channel/chat_id send to this target, and sends
+        # to this target are treated as same-target (no cross-target check).
+        # This enables proactive mid-turn notifications in cron sessions without
+        # requiring can_send_cross_target capability.
+        self._delivery_channel_var: ContextVar[str] = ContextVar(
+            "message_delivery_channel",
+            default="",
+        )
+        self._delivery_chat_id_var: ContextVar[str] = ContextVar(
+            "message_delivery_chat_id",
+            default="",
+        )
 
     def set_context(
         self,
@@ -185,6 +198,32 @@ class MessageTool(Tool):
     def has_cross_target_grant(self) -> bool:
         """Return whether the current runtime context explicitly allows cross-target sends."""
         return bool(self._allow_cross_target_var.get())
+
+    def set_delivery_target(self, channel: str, chat_id: str) -> tuple | None:
+        """Set a delivery target override for cron/scheduled sessions.
+
+        When set, ``message()`` calls without explicit channel/chat_id will
+        send to this target instead of the default (inbound) target. Sends
+        to this target are treated as same-target (no cross-target check),
+        enabling proactive mid-turn notifications in cron sessions without
+        requiring ``can_send_cross_target`` capability.
+
+        Returns a token tuple for :meth:`reset_delivery_target`, or ``None``
+        if the target was empty (no-op).
+        """
+        if not channel or not chat_id:
+            return None
+        ch_token = self._delivery_channel_var.set(channel)
+        ci_token = self._delivery_chat_id_var.set(chat_id)
+        return (ch_token, ci_token)
+
+    def reset_delivery_target(self, tokens: tuple | None) -> None:
+        """Reset delivery target override set by :meth:`set_delivery_target`."""
+        if tokens is None:
+            return
+        ch_token, ci_token = tokens
+        self._delivery_channel_var.reset(ch_token)
+        self._delivery_chat_id_var.reset(ci_token)
 
     def set_capability_snapshot(self, snapshot) -> None:
         self._capability_snapshot.set(snapshot)
@@ -299,8 +338,16 @@ class MessageTool(Tool):
             return button_error
         default_channel = self._default_channel.get()
         default_chat_id = self._default_chat_id.get()
-        channel = channel or default_channel
-        chat_id = chat_id or default_chat_id
+        delivery_channel = self._delivery_channel_var.get()
+        delivery_chat_id = self._delivery_chat_id_var.get()
+        # If no explicit target specified, fall back to delivery target
+        # (cron/scheduled sessions set this to the user's real channel).
+        if not channel and not chat_id and delivery_channel and delivery_chat_id:
+            channel = delivery_channel
+            chat_id = delivery_chat_id
+        else:
+            channel = channel or default_channel
+            chat_id = chat_id or default_chat_id
         # Only inherit default message_id when targeting the same channel+chat.
         # Cross-chat sends must not carry the original message_id, because
         # some channels (e.g. Feishu) use it to determine the target
@@ -308,8 +355,17 @@ class MessageTool(Tool):
         # to the wrong chat entirely.
         has_runtime_target = bool(default_channel and default_chat_id)
         same_target = channel == default_channel and chat_id == default_chat_id
+        # Delivery target (cron sessions) is treated as same-target — no
+        # cross-target check needed, because the target was explicitly set
+        # by the cron job's payload (user-approved delivery destination).
+        is_delivery_target = bool(
+            delivery_channel and delivery_chat_id
+            and channel == delivery_channel and chat_id == delivery_chat_id
+        )
         if same_target:
             message_id = message_id or self._default_message_id.get()
+        elif is_delivery_target:
+            message_id = None
         else:
             message_id = None
             snapshot = self._capability_snapshot.get()
@@ -357,7 +413,10 @@ class MessageTool(Tool):
 
         try:
             await self._send_callback(msg)
-            if channel == default_channel and chat_id == default_chat_id:
+            # Mark as sent-in-turn for both same-target and delivery-target
+            # sends, so Path B (final response delivery) is skipped when the
+            # Agent already proactively notified the user mid-turn.
+            if (channel == default_channel and chat_id == default_chat_id) or is_delivery_target:
                 self._sent_in_turn = True
             if media:
                 existing = self._turn_delivered_media_paths_var.get()

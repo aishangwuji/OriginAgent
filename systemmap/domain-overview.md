@@ -1,6 +1,6 @@
 # OriginAgent 业务域全景
 
-> **last_verified**: 2026-07-16
+> **last_verified**: 2026-07-17
 > **schema_version**: 1
 > **状态**: 初始版本(渐进式补全中,按规则 38.3)
 > **核验方法**: 代码静态分析 + 执行流程追踪 + 已有技术债交叉验证
@@ -204,6 +204,12 @@ proposed ──→ staged ──→ verified ──→ active
 
 **幂等性**: turn-scoped idempotency keys 防止单 turn 内重复创建 job
 
+**投递机制(2026-07-17 新增)**:
+- Cron 通道是 inbound-only(`_inbound_only_channels = frozenset({"cron"})`),OutboundMessages 到 cron 通道被静默丢弃
+- **Path B(最终响应投递)**:`on_cron_job` 从 `cron:{job.id}` session 提取最后一条 assistant 消息,包装为 `OutboundMessage(channel=job.payload.channel, chat_id=job.payload.to)` 经 bus 投递。`MessageTool._sent_in_turn=True` 时跳过 Path B(Agent 已主动发送)
+- **主动通知(delivery_target 机制)**:`on_cron_job` 调用 `MessageTool.set_delivery_target(channel, chat_id)` 设置 ContextVar 覆盖。Agent 在 turn 中途调用 `message(content="...")` 无显式 channel/chat_id 时,自动路由到 delivery_target(用户真实通道如 Telegram)。向 delivery_target 发送视为 same-target,豁免 `can_send_cross_target` 检查。仅允许向该特定目标发送,向其他通道发送仍被 `PolicyDeniedError` 拒绝
+- **安全授权链**:delivery_target 来源是 `job.payload.to`(用户创建 cron job 时显式配置的投递目标),属受信任配置数据,非 Agent 可控输入
+
 ### 11. 配置系统(Config)
 
 **职责**: 分层配置,profile 覆盖,doctor 校验
@@ -236,6 +242,7 @@ proposed ──→ staged ──→ verified ──→ active
 5. **工作记忆**必须包含 30 分钟过期检查,前缀 `[reminder]` 防止 confabulation 持久化
 6. **工具循环**必须维护 turn-scoped 幂等 key 集合,阻断重复执行同一 tool call
 7. **continuity_checkpoint_v1** 必须包含 `recent_turns_summary`,跨会话保留近期对话上下文
+8. **Cron 主动通知**通过 `MessageTool.set_delivery_target` 机制实现,delivery_target 来源必须是 `job.payload.to`(用户预设投递目标),Agent 不得自行指定任意通道。向非 delivery_target 的通道发送仍受 `can_send_cross_target` 约束
 
 ---
 
