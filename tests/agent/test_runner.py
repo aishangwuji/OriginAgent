@@ -3705,3 +3705,57 @@ async def test_runner_reasoning_fallback_skipped_when_tool_calls_present():
     )
     assert result.final_content == "done after tool"
     assert call_count["n"] == 2  # tool_call + final response
+
+
+@pytest.mark.asyncio
+async def test_runner_does_not_swallow_keyboard_interrupt_from_tool():
+    """``KeyboardInterrupt`` and ``SystemExit`` must propagate, not be caught
+    by the tool execution error handler.
+
+    Regression (D10): ``except BaseException`` in ``_run_tool_core`` (and
+    concurrent tool paths) swallowed process-level signals, converting them
+    into tool error strings. This could mask Ctrl+C / shutdown signals during
+    tool execution. The fix narrows to ``except Exception`` since
+    ``asyncio.CancelledError`` is already re-raised explicitly above.
+
+    Rule 3 (boundary validation) + Rule 14 (critical assumption assertion):
+    process signals are not tool errors and must propagate.
+    """
+    from OriginAgent.agent.runner import AgentRunSpec, AgentRunner
+    from OriginAgent.agent.tools.base import Tool
+
+    class KeyboardInterruptTool(Tool):
+        @property
+        def name(self) -> str:
+            return "kbd_interrupt"
+
+        @property
+        def description(self) -> str:
+            return "tool that raises KeyboardInterrupt"
+
+        @property
+        def parameters(self) -> dict:
+            return {"type": "object", "properties": {}}
+
+        async def execute(self, **kwargs):
+            raise KeyboardInterrupt("simulated Ctrl+C")
+
+    provider = MagicMock()
+    provider.chat_with_retry = AsyncMock(return_value=LLMResponse(
+        content="thinking",
+        tool_calls=[ToolCallRequest(id="call_1", name="kbd_interrupt", arguments={})],
+    ))
+
+    tools = ToolRegistry()
+    tools.register(KeyboardInterruptTool())
+
+    runner = AgentRunner(provider)
+    # KeyboardInterrupt must propagate, NOT be swallowed as tool error
+    with pytest.raises(KeyboardInterrupt):
+        await runner.run(AgentRunSpec(
+            initial_messages=[{"role": "user", "content": "run tool"}],
+            tools=tools,
+            model="test-model",
+            max_iterations=3,
+            max_tool_result_chars=_MAX_TOOL_RESULT_CHARS,
+        ))

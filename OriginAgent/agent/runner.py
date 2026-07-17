@@ -1102,9 +1102,9 @@ class AgentRunner:
                     interrupt_raised = True
                 except asyncio.CancelledError:
                     result = ("", {"name": tc.name, "status": "cancelled"}, None)
-                except BaseException as exc:
+                except Exception as exc:
                     result = ("", {"name": tc.name, "status": "error", "detail": str(exc)}, exc)
-                batch_results.append(result)
+                    batch_results.append(result)
 
             if interrupt_raised and pending:
                 for pt in pending:
@@ -1122,7 +1122,7 @@ class AgentRunner:
                 tc = tasks.pop(task)
                 try:
                     result = task.result()
-                except BaseException as exc:
+                except Exception as exc:
                     result = ("", {"name": tc.name, "status": "error", "detail": str(exc)}, exc)
                 batch_results.append(result)
 
@@ -1358,7 +1358,7 @@ class AgentRunner:
                 prepared = prepare_call(tool_call.name, tool_call.arguments)
                 if isinstance(prepared, tuple) and len(prepared) == 3:
                     tool, params, prep_error = prepared
-            except BaseException as exc:
+            except Exception as exc:
                 prep_error = (
                     f"Error: prepare_call for '{tool_call.name}' "
                     f"raised {type(exc).__name__}: {exc}"
@@ -1426,7 +1426,7 @@ class AgentRunner:
                 result = await spec.tools.execute(tool_call.name, params)
         except asyncio.CancelledError:
             raise
-        except BaseException as exc:
+        except Exception as exc:
             event = {
                 "name": tool_call.name,
                 "status": "error",
