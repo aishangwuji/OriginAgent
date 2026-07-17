@@ -66,6 +66,14 @@ _MAX_INJECTION_CYCLES = 5
 # 则断路。5 次允许合法重复调用（如读多个文件），但捕获 close_episode
 # 这类死循环（LLM 每次换 label 绕过幂等检查）。
 _MAX_SAME_TOOL_CALLS_PER_TURN = 5
+# 外部 IO 工具断路阈值（P1-A）：web_search/web_fetch 等外部查找工具成本高
+# （每次 15-20 秒延迟 + tokens），且"换关键词重搜"是常见的循环模式。
+# 3 次允许合理重试（如首次结果不相关），但阻止 6 次循环（生产日志
+# 2026-07-17 23:02-23:04，6 次 web_search 耗时 122 秒）。
+_MAX_EXTERNAL_IO_CALLS_PER_TURN = 3
+_EXTERNAL_IO_TOOLS = frozenset({"web_search", "web_fetch"})
+# 外部 IO 工具第 N 次成功后注入整合引导（N=2，让模型在第 3 次前先尝试整合）
+_EXTERNAL_IO_SYNTHESIS_NUDGE_AFTER = 2
 _SNIP_SAFETY_BUFFER = 1024
 _MICROCOMPACT_KEEP_RECENT = 10
 _MICROCOMPACT_MIN_CHARS = 500
@@ -1306,13 +1314,20 @@ class AgentRunner:
         # called successfully >= threshold times in this turn, block further
         # calls. Catches death-loops where LLM varies optional params (e.g.
         # close_episode with different labels) to bypass idempotency.
+        # P1-A: external IO tools (web_search/web_fetch) use a lower threshold
+        # because they are expensive (15-20s latency + tokens per call) and
+        # "retry with different keywords" is a common loop pattern.
         if tool_call_counts is not None:
             current_count = tool_call_counts.get(tool_call.name, 0)
-            if current_count >= self._MAX_SAME_TOOL_CALLS_PER_TURN:
+            if tool_call.name in _EXTERNAL_IO_TOOLS:
+                breaker_threshold = _MAX_EXTERNAL_IO_CALLS_PER_TURN
+            else:
+                breaker_threshold = self._MAX_SAME_TOOL_CALLS_PER_TURN
+            if current_count >= breaker_threshold:
                 return (
                     f"Error: Tool '{tool_call.name}' has already been called "
                     f"{current_count} times in this turn (circuit breaker "
-                    f"threshold: {self._MAX_SAME_TOOL_CALLS_PER_TURN}). This "
+                    f"threshold: {breaker_threshold}). This "
                     f"looks like a tool loop — stop calling this tool and "
                     f"respond to the user directly.{hint}",
                     {
@@ -1559,6 +1574,23 @@ class AgentRunner:
             tool_call_counts[tool_call.name] = (
                 tool_call_counts.get(tool_call.name, 0) + 1
             )
+        # P1-A: after N successful external IO calls, append a synthesis nudge
+        # to the tool result. This guides the LLM to integrate existing results
+        # before retrying with different keywords (production logs 2026-07-17
+        # showed 6 web_search calls with no intermediate analysis).
+        if (
+            tool_call.name in _EXTERNAL_IO_TOOLS
+            and tool_call_counts is not None
+            and tool_call_counts[tool_call.name] >= _EXTERNAL_IO_SYNTHESIS_NUDGE_AFTER
+        ):
+            nudge = (
+                "\n\n[You have now made multiple search calls. Before searching "
+                "again, try to answer the user using the results above. If you "
+                "still need to search, explain what specific information is "
+                "missing from the results so far.]"
+            )
+            if isinstance(result, str):
+                result = result + nudge
         # Fix B: mark once_per_turn tool as called after first success
         if (
             once_per_turn_called is not None

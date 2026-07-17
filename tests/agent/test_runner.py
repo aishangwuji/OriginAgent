@@ -3759,3 +3759,173 @@ async def test_runner_does_not_swallow_keyboard_interrupt_from_tool():
             max_iterations=3,
             max_tool_result_chars=_MAX_TOOL_RESULT_CHARS,
         ))
+
+
+@pytest.mark.asyncio
+async def test_runner_external_io_circuit_breaker_trips_at_3_not_5():
+    """External IO tools (web_search/web_fetch) must trip the circuit breaker
+    at 3 calls, not 5.
+
+    Regression (production logs 2026-07-17 23:02-23:04): Agent made 6
+    web_search calls with different keywords, taking 122 seconds. The
+    generic 5-call threshold was too high for expensive external IO.
+    """
+    from OriginAgent.agent.runner import AgentRunSpec, AgentRunner
+    from OriginAgent.agent.tools.base import Tool
+
+    class FakeWebSearchTool(Tool):
+        @property
+        def name(self) -> str:
+            return "web_search"
+
+        @property
+        def description(self) -> str:
+            return "fake web search"
+
+        @property
+        def parameters(self) -> dict:
+            return {"type": "object", "properties": {}}
+
+        async def execute(self, **kwargs):
+            return "search result"
+
+    provider = MagicMock()
+    call_count = {"n": 0}
+
+    async def chat_with_retry(*, messages, tools=None, **kwargs):
+        call_count["n"] += 1
+        # First 4 calls: model keeps calling web_search with different queries
+        if call_count["n"] <= 4:
+            return LLMResponse(
+                content="",
+                tool_calls=[ToolCallRequest(
+                    id=f"call_{call_count['n']}",
+                    name="web_search",
+                    arguments={"query": f"query {call_count['n']}"},
+                )],
+            )
+        return LLMResponse(content="final answer", tool_calls=[])
+
+    provider.chat_with_retry = chat_with_retry
+    tools = ToolRegistry()
+    tools.register(FakeWebSearchTool())
+
+    runner = AgentRunner(provider)
+    result = await runner.run(AgentRunSpec(
+        initial_messages=[{"role": "user", "content": "search for something"}],
+        tools=tools,
+        model="test-model",
+        max_iterations=10,
+        max_tool_result_chars=_MAX_TOOL_RESULT_CHARS,
+    ))
+
+    # web_search should be attempted 4 times: 3 successful + 1 blocked by
+    # circuit breaker (count=3 >= threshold=3). The 4th attempt must produce
+    # a circuit-breaker error message in the tool results.
+    assert result.tools_used.count("web_search") == 4, (
+        f"expected 4 web_search attempts (3 success + 1 blocked), got "
+        f"{result.tools_used.count('web_search')}: {result.tools_used}"
+    )
+    # Verify circuit breaker actually tripped — look for the error message
+    # in the tool results within the final messages
+    tool_messages = [
+        m for m in result.messages
+        if m.get("role") == "tool" and isinstance(m.get("content"), str)
+    ]
+    breaker_messages = [
+        m for m in tool_messages
+        if "circuit breaker" in m["content"].lower()
+    ]
+    assert len(breaker_messages) >= 1, (
+        f"expected at least 1 circuit breaker message, got none. "
+        f"tool messages: {[m['content'][:80] for m in tool_messages]}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_runner_external_io_synthesis_nudge_after_2nd_call():
+    """After the 2nd successful external IO call, a synthesis nudge must be
+    appended to the tool result to guide the LLM to integrate results.
+
+    This addresses the "search loop without analysis" pattern where the model
+    keeps calling web_search with different keywords without producing
+    intermediate analysis.
+    """
+    from OriginAgent.agent.runner import AgentRunSpec, AgentRunner
+    from OriginAgent.agent.tools.base import Tool
+
+    class FakeWebSearchTool(Tool):
+        @property
+        def name(self) -> str:
+            return "web_search"
+
+        @property
+        def description(self) -> str:
+            return "fake web search"
+
+        @property
+        def parameters(self) -> dict:
+            return {"type": "object", "properties": {}}
+
+        async def execute(self, **kwargs):
+            return "raw search result"
+
+    provider = MagicMock()
+    call_count = {"n": 0}
+    seen_tool_results: set[str] = set()
+    new_tool_results_per_call: list[list[str]] = []
+
+    async def chat_with_retry(*, messages, tools=None, **kwargs):
+        call_count["n"] += 1
+        # Capture only NEW tool results not seen in previous calls
+        new_results: list[str] = []
+        for msg in messages:
+            if msg.get("role") == "tool" and isinstance(msg.get("content"), str):
+                content = msg["content"]
+                if "raw search result" in content and content not in seen_tool_results:
+                    seen_tool_results.add(content)
+                    new_results.append(content)
+        if new_results:
+            new_tool_results_per_call.append(new_results)
+        if call_count["n"] <= 3:
+            return LLMResponse(
+                content="",
+                tool_calls=[ToolCallRequest(
+                    id=f"call_{call_count['n']}",
+                    name="web_search",
+                    arguments={"query": f"query {call_count['n']}"},
+                )],
+            )
+        return LLMResponse(content="final answer", tool_calls=[])
+
+    provider.chat_with_retry = chat_with_retry
+    tools = ToolRegistry()
+    tools.register(FakeWebSearchTool())
+
+    runner = AgentRunner(provider)
+    await runner.run(AgentRunSpec(
+        initial_messages=[{"role": "user", "content": "search for something"}],
+        tools=tools,
+        model="test-model",
+        max_iterations=10,
+        max_tool_result_chars=_MAX_TOOL_RESULT_CHARS,
+    ))
+
+    # Flatten the new results per call into a single list
+    all_results: list[str] = []
+    for batch in new_tool_results_per_call:
+        all_results.extend(batch)
+
+    # First tool result: no nudge (count=1 < 2)
+    assert len(all_results) >= 1, f"expected at least 1 tool result, got {all_results}"
+    assert "raw search result" in all_results[0]
+    assert "try to answer" not in all_results[0].lower(), (
+        f"first result should NOT have nudge, got: {all_results[0]}"
+    )
+
+    # Second tool result: should have nudge (count=2 >= 2)
+    assert len(all_results) >= 2, f"expected at least 2 tool results, got {all_results}"
+    assert "raw search result" in all_results[1]
+    assert "try to answer" in all_results[1].lower(), (
+        f"second result should have synthesis nudge, got: {all_results[1]}"
+    )
