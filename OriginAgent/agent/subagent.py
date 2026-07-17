@@ -75,19 +75,51 @@ class _SubagentHook(AgentHook):
         task_id: str,
         status: SubagentStatus | None = None,
         live_writer: Callable[[str, bool], None] | None = None,
+        sensitive_tool_log_names: set[str] | frozenset[str] | None = None,
     ) -> None:
         super().__init__()
         self._task_id = task_id
         self._status = status
         self._live_writer = live_writer
+        self._sensitive_tool_log_names = sensitive_tool_log_names or set()
+
+    def _is_sensitive(self, name: str) -> bool:
+        return name in self._sensitive_tool_log_names
+
+    def _summarize_sensitive(self, name: str, arguments: dict) -> str:
+        """生成敏感工具的安全摘要（不暴露参数细节），与主 Agent 对齐。"""
+        if name == "exec":
+            command = str(arguments.get("command", ""))
+            words = command.strip().split()
+            if not words:
+                return "<empty>"
+            operators = "".join(ch for ch in command if ch in "|&;<>")
+            return f"{words[0]}:{len(words)}:{operators[:16]}"
+        elif name == "message":
+            channel = arguments.get("channel", "?")
+            chat_id = arguments.get("chat_id", "?")
+            content = str(arguments.get("content", ""))
+            return f"channel={channel} chat_id={chat_id} content_chars={len(content)}"
+        elif name == "web_fetch":
+            from urllib.parse import urlparse
+
+            url = str(arguments.get("url", ""))
+            parsed = urlparse(url)
+            return f"{parsed.netloc}{parsed.path}"
+        else:
+            return "<redacted>"
 
     async def before_execute_tools(self, context: AgentHookContext) -> None:
         for tool_call in context.tool_calls:
-            args_str = json.dumps(tool_call.arguments, ensure_ascii=False)
-            logger.debug(
-                "Subagent [{}] executing: {} with arguments: {}",
-                self._task_id, tool_call.name, args_str,
-            )
+            if self._is_sensitive(tool_call.name):
+                summary = self._summarize_sensitive(tool_call.name, tool_call.arguments)
+                logger.debug("Tool call: {}({})", tool_call.name, summary)
+            else:
+                args_str = json.dumps(tool_call.arguments, ensure_ascii=False)
+                logger.debug(
+                    "Subagent [{}] executing: {} with arguments: {}",
+                    self._task_id, tool_call.name, args_str,
+                )
             if self._live_writer is not None:
                 self._live_writer(tool_call.name, False)
 
@@ -123,6 +155,7 @@ class SubagentManager:
         subagent_policy_mode: str = "normal",
         sqlite_stores: Any = None,
         soar_chunker: "SoarChunker | None" = None,
+        sensitive_tool_log_names: set[str] | frozenset[str] | None = None,
     ):
         defaults = AgentDefaults()
         self.provider = provider
@@ -167,6 +200,7 @@ class SubagentManager:
         self._lost_since_restart_count = 0
         self._stale_entries: list[dict[str, Any]] = []
         self._soar_chunker = soar_chunker
+        self._sensitive_tool_log_names = sensitive_tool_log_names
         self.reconcile_live_state()
 
     def set_provider(self, provider: LLMProvider, model: str) -> None:
@@ -174,6 +208,20 @@ class SubagentManager:
         self.model = model
         self.runner.provider = provider
         self._provider_selector.set_runtime(provider, model)
+
+    def _get_sensitive_tool_log_names(self) -> frozenset[str] | set[str]:
+        """Return sensitive tool log names, falling back to the shared default.
+
+        Lazy import avoids circular dependency: ``loop.py`` imports
+        ``SubagentManager`` at module load time, so importing the shared
+        constant ``_SENSITIVE_TOOL_LOG_FALLBACK_NAMES`` here keeps the
+        single source of truth (rule 6) without breaking load order.
+        """
+        if self._sensitive_tool_log_names is not None:
+            return self._sensitive_tool_log_names
+        from OriginAgent.agent.loop import _SENSITIVE_TOOL_LOG_FALLBACK_NAMES
+        self._sensitive_tool_log_names = _SENSITIVE_TOOL_LOG_FALLBACK_NAMES
+        return self._sensitive_tool_log_names
 
     async def spawn(
         self,
@@ -520,6 +568,7 @@ class SubagentManager:
                         current_tool_name=tool_name,
                         force=force,
                     ),
+                    sensitive_tool_log_names=self._get_sensitive_tool_log_names(),
                 ),
                 max_iterations_message="Task completed but no final response was generated.",
                 error_message=None,

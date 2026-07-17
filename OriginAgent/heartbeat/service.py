@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, Any, Callable, Coroutine
 from loguru import logger
 
 from OriginAgent.utils.constants import RoleConstants
+from OriginAgent.utils.tracing import log_event
 
 if TYPE_CHECKING:
     from OriginAgent.bdi.heartbeat_bridge import BDIHeartbeatBridge
@@ -115,10 +116,18 @@ class HeartbeatService:
                     "Ignoring heartbeat tool calls under finish_reason='{}'",
                     response.finish_reason,
                 )
-            return "skip", ""
+            action, tasks = "skip", ""
+        else:
+            args = response.tool_calls[0].arguments
+            action, tasks = args.get("action", "skip"), args.get("tasks", "")
 
-        args = response.tool_calls[0].arguments
-        return args.get("action", "skip"), args.get("tasks", "")
+        log_event(
+            "heartbeat.decided",
+            action=action,
+            tasks_preview=(tasks or "")[:100],
+            tasks_len=len(tasks or ""),
+        )
+        return action, tasks
 
     async def start(self) -> None:
         """Start the heartbeat service."""

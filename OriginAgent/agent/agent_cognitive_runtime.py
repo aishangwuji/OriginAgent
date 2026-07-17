@@ -65,7 +65,13 @@ class AgentCognitiveRuntime:
             running_subagents=running_subagents,
         )
         if not eligible:
-            log_event("cognitive.pass.skipped", session_key=session_key, reason=(reason or "ineligible"))
+            log_event(
+                "cognitive.pass.skipped",
+                session_key=session_key,
+                reason=(reason or "ineligible"),
+                active_task_count=active_task_count,
+                running_subagents=running_subagents,
+            )
             event = CognitiveEvent(
                 event_id=f"skip:{session_key}:{reason or 'ineligible'}",
                 session_key=session_key,

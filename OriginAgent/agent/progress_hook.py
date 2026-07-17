@@ -80,6 +80,34 @@ class AgentProgressHook(AgentHook):
             name.startswith(prefix) for prefix in self._sensitive_tool_log_prefixes
         )
 
+    def _sensitive_tool_summary(self, name: str, arguments: dict) -> str:
+        """生成敏感工具的安全摘要（不暴露参数细节）。
+
+        exec 暴露命令形状（首词+词数+管道操作符），message 暴露
+        channel/chat_id/内容长度，web_fetch 暴露 netloc+path（不含 query
+        string）；其余敏感前缀（如 ``originagent_device_``）仍返回 ``<redacted>``。
+        """
+        if name == "exec":
+            command = str(arguments.get("command", ""))
+            words = command.strip().split()
+            if not words:
+                return "<empty>"
+            operators = "".join(ch for ch in command if ch in "|&;<>")
+            return f"{words[0]}:{len(words)}:{operators[:16]}"
+        elif name == "message":
+            channel = arguments.get("channel", "?")
+            chat_id = arguments.get("chat_id", "?")
+            content = str(arguments.get("content", ""))
+            return f"channel={channel} chat_id={chat_id} content_chars={len(content)}"
+        elif name == "web_fetch":
+            from urllib.parse import urlparse
+
+            url = str(arguments.get("url", ""))
+            parsed = urlparse(url)
+            return f"{parsed.netloc}{parsed.path}"
+        else:
+            return "<redacted>"
+
     @staticmethod
     def _on_progress_accepts(cb: Callable[..., Any], name: str) -> bool:
         try:
@@ -138,7 +166,8 @@ class AgentProgressHook(AgentHook):
             )
         for tc in context.tool_calls:
             if self._is_sensitive_tool_log(tc.name):
-                logger.info("Tool call: {}(<redacted>)", tc.name)
+                summary = self._sensitive_tool_summary(tc.name, tc.arguments)
+                logger.info("Tool call: {}({})", tc.name, summary)
             else:
                 args_str = json.dumps(tc.arguments, ensure_ascii=False)
                 logger.info("Tool call: {}({})", tc.name, args_str[:200])

@@ -8,6 +8,7 @@ import math
 import os
 import random
 import tempfile
+import time
 import uuid
 from pathlib import Path
 from typing import Any
@@ -30,6 +31,7 @@ from OriginAgent.bdi.plan_library import PlanLibrary
 from OriginAgent.bdi.world_state_watcher import WorldStateWatcher
 from OriginAgent.utils.constants import RoleConstants
 from OriginAgent.utils.helpers import ensure_dir
+from OriginAgent.utils.tracing import log_event
 
 _DELIBERATION_SYSTEM_PROMPT = """You are the BDI Deliberation Engine of OriginAgent.
 Your job is to evaluate the agent's active desires and decide what to do next.
@@ -271,6 +273,7 @@ class DeliberationEngine:
         """
         cycle_id = f"bdi_{uuid.uuid4().hex[:12]}"
         started_at = now_iso()
+        cycle_start = time.monotonic()
 
         if not self._enabled:
             result = DeliberationResult(
@@ -524,6 +527,18 @@ class DeliberationEngine:
                 await self._on_cycle_complete(result)
             except Exception:
                 logger.exception("BDI: on_cycle_complete callback failed")
+
+        log_event(
+            "bdi.cycle.complete",
+            cycle_id=cycle_id,
+            desires_evaluated=len(desires),
+            cached_intentions=len(cached_intentions),
+            llm_desires=len(llm_desires),
+            intentions_emitted=len(
+                [i for i in all_intentions if i.trigger != "deliberation:cron_override"]
+            ),
+            elapsed_ms=round((time.monotonic() - cycle_start) * 1000, 2),
+        )
 
         return result
 

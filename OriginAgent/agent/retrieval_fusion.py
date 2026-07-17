@@ -15,6 +15,7 @@ from OriginAgent.memory.policy import nearline_runtime_enabled
 from OriginAgent.memory.retrieval import NearlineRetrievalResult
 from OriginAgent.session.search import SessionSearchService
 from OriginAgent.utils.helpers import truncate_text
+from OriginAgent.utils.tracing import log_event
 
 
 _NORMALIZE_RE = re.compile(r"\s+")
@@ -269,6 +270,16 @@ class RetrievalFusion:
                 "performance_note": memory_block_result.get("performance_note"),
             },
         }
+        log_event(
+            "retrieval.fused",
+            session_key=session_key,
+            sources=list(source_hits.keys()) if isinstance(source_hits, dict) else [],
+            per_source_counts={k: len(v) for k, v in source_hits.items()} if isinstance(source_hits, dict) else {},
+            deduped_count=deduped_count,
+            trimmed_count=len(trimmed_by_source["trimmed"]) + trimmed_global,
+            final_block_count=len(blocks),
+            top_score=max((h.score for hits in source_hits.values() for h in hits), default=0.0) if isinstance(source_hits, dict) else 0.0,
+        )
         return RetrievalFusionResult(
             retrieved_blocks=blocks,
             source_hits=deduped_hits,

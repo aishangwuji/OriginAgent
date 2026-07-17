@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from OriginAgent.utils.helpers import estimate_message_tokens
+from OriginAgent.utils.tracing import log_event
 
 
 @dataclass(frozen=True)
@@ -200,6 +201,30 @@ class ContextAssemblerV2:
                 audit["world_selection_reasons"] = list(filtered.get("selection_reasons", []))
         # 不再直接写回 _last_context_assembly_audit;
         # 由 assemble_user_content 从返回值回写(封装边界修复)
+        log_event(
+            "context.assembled",
+            session_key=session_key,
+            block_count=len(merged),
+            block_kinds=[
+                block.get("_meta", {}).get("kind")
+                for block in merged
+                if isinstance(block, dict)
+            ],
+            retrieval_sources=list(
+                retrieval.get("sources_used", []) if isinstance(retrieval, dict) else []
+            ),
+            retrieved_total=(
+                sum((retrieval.get("source_counts", {}) or {}).values())
+                if isinstance(retrieval, dict)
+                else 0
+            ),
+            trimmed_count=(
+                int(retrieval.get("trimmed_count", 0) or 0)
+                if isinstance(retrieval, dict)
+                else 0
+            ),
+            recovered_continuity_included=recovered_continuity_block is not None,
+        )
         return ContextAssemblyResult(blocks=merged, audit=audit)
 
     @staticmethod
