@@ -42,6 +42,18 @@ def _error_message() -> dict:
     return {"role": "assistant", "content": "Error: model error", "stop_reason": "error"}
 
 
+def _placeholder_error_message() -> dict:
+    """Simulate the placeholder written by _append_model_error_placeholder.
+
+    This message has NO ``stop_reason='error'`` — only the content text
+    identifies it as a model error. The old ``_detect_last_turn_failure``
+    checked for case-sensitive ``"Error:"`` or ``content.startswith("Error")``,
+    neither of which matches ``"[Assistant reply unavailable due to model
+    error.]"``, so the circuit breaker never triggered.
+    """
+    return {"role": "assistant", "content": "[Assistant reply unavailable due to model error.]"}
+
+
 def _normal_message() -> dict:
     return {"role": "assistant", "content": "Sure, here is the answer.", "stop_reason": "stop"}
 
@@ -215,3 +227,62 @@ async def test_success_resets_failure_counter() -> None:
         )
         state = runtime._session_failure_states.get("cli:test-session", {})
         assert state.get("consecutive_failures", 0) == 1
+
+
+def test_detect_last_turn_failure_matches_placeholder_text() -> None:
+    """_detect_last_turn_failure must match the placeholder text written by
+    _append_model_error_placeholder: '[Assistant reply unavailable due to
+    model error.]'.
+
+    Regression for the cron death loop: the old check was case-sensitive
+    ``"Error:" in content`` which didn't match the placeholder, so the
+    circuit breaker never triggered and the loop spun indefinitely.
+    """
+    session = SimpleNamespace(messages=[])
+    runtime = _build_runtime(session)
+
+    # Placeholder without stop_reason="error" — the bug scenario
+    session.messages = [_placeholder_error_message()]
+    assert runtime._detect_last_turn_failure(session) is True
+
+    # Case-insensitive "error:" match
+    session.messages = [{"role": "assistant", "content": "error: something went wrong"}]
+    assert runtime._detect_last_turn_failure(session) is True
+
+    # Normal message — not a failure
+    session.messages = [_normal_message()]
+    assert runtime._detect_last_turn_failure(session) is False
+
+
+@pytest.mark.asyncio
+async def test_placeholder_error_triggers_cooldown() -> None:
+    """The model-error placeholder (without stop_reason='error') must be
+    detected as a failure so the circuit breaker can trigger.
+
+    This is the exact production scenario: runner.py writes the placeholder
+    via _append_model_error_placeholder, but _detect_last_turn_failure
+    didn't recognize it, so consecutive_failures never reached the threshold
+    and the cron session looped forever emitting nudges every ~15s.
+    """
+    session = SimpleNamespace(key="cli:placeholder-test", messages=[])
+    runtime = _build_runtime(session)
+    clock = [1000.0]
+    fake_time = SimpleNamespace(time=lambda: clock[0])
+
+    with patch("OriginAgent.agent.agent_cognitive_runtime.time", fake_time), \
+         patch("OriginAgent.agent.agent_cognitive_runtime.log_event"):
+        # Call 1: normal -> emit nudge
+        session.messages = [_normal_message()]
+        await runtime.run_cognitive_pass_for_session(
+            "cli:placeholder-test", active_task_count=0, running_subagents=0,
+        )
+        # Call 2-4: three placeholder errors -> should enter cooldown
+        for _ in range(3):
+            session.messages = [_placeholder_error_message()]
+            await runtime.run_cognitive_pass_for_session(
+                "cli:placeholder-test", active_task_count=0, running_subagents=0,
+            )
+
+    state = runtime._session_failure_states.get("cli:placeholder-test", {})
+    assert state.get("consecutive_failures") == 3
+    assert state.get("cooldown_until") is not None

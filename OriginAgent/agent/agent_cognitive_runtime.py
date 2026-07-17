@@ -80,7 +80,13 @@ class AgentCognitiveRuntime:
         if last.get("stop_reason") == "error":
             return True
         content = last.get("content")
-        if isinstance(content, str) and ("Error:" in content or content.startswith("Error")):
+        if not isinstance(content, str):
+            return False
+        # Match the placeholder written by _append_model_error_placeholder
+        # ("[Assistant reply unavailable due to model error.]") as well as
+        # provider-returned error text ("Error: ...").
+        lowered = content.lower()
+        if "error:" in lowered or lowered.startswith("error") or "model error" in lowered:
             return True
         return False
 
