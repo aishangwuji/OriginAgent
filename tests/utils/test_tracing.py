@@ -256,3 +256,84 @@ class TestLogEvent:
             assert extra["active"] is True
         finally:
             loguru.logger.remove(handler_id)
+
+
+# ── TestLogEventMessageFormat ────────────────────────────────────────────
+
+
+class TestLogEventMessageFormat:
+    """Verify log_event() formats attrs into the message text (not just extra).
+
+    背景：sink format 只输出 {message}，导致 logger.bind 绑定的 attrs 全部丢失。
+    现要求 log_event 把 attrs 格式化为 `key=value` 对拼入消息文本，便于人工阅读。
+    """
+
+    @pytest.fixture(autouse=True)
+    def _reset_trace_context(self) -> Any:
+        """每个测试前重置 trace contextvars，保证消息格式可断言。
+
+        contextvars 不会在测试间自动重置，先前测试可能遗留 trace_id/session_key，
+        这会让 trace_context() 返回非空字段并污染消息文本。
+        """
+        from OriginAgent.utils.tracing import _span_id, _trace_id, _session_key
+        saved = (_trace_id.get(""), _span_id.get(""), _session_key.get(""))
+        _trace_id.set("")
+        _span_id.set("")
+        _session_key.set("")
+        yield
+        _trace_id.set(saved[0])
+        _span_id.set(saved[1])
+        _session_key.set(saved[2])
+
+    def test_log_event_with_attrs_includes_them_in_message(self) -> None:
+        """带 attrs 的事件，消息文本应包含 `event.{name} | k=v k=v`。"""
+        records, handler_id = _capture_loguru_sink()
+        import loguru
+        try:
+            log_event("llm.request", model="gpt-4", session_key="abc")
+            assert len(records) == 1, f"Expected 1 record, got {len(records)}"
+            msg = records[0]["message"]
+            assert "event.llm.request | model=gpt-4 session_key=abc" in msg
+        finally:
+            loguru.logger.remove(handler_id)
+
+    def test_log_event_without_attrs_no_pipe(self) -> None:
+        """无 attrs 的事件，消息文本不附加 `|` 分隔符。"""
+        records, handler_id = _capture_loguru_sink()
+        import loguru
+        try:
+            log_event("heartbeat.tick")
+            assert len(records) == 1, f"Expected 1 record, got {len(records)}"
+            msg = records[0]["message"]
+            assert msg == "event.heartbeat.tick"
+            assert "|" not in msg
+        finally:
+            loguru.logger.remove(handler_id)
+
+    def test_log_event_skips_none_and_empty_attrs(self) -> None:
+        """值为 None 或空字符串的 attrs 不出现在消息文本中（避免噪音）。"""
+        records, handler_id = _capture_loguru_sink()
+        import loguru
+        try:
+            log_event("test", model=None, name="", valid="x")
+            assert len(records) == 1, f"Expected 1 record, got {len(records)}"
+            msg = records[0]["message"]
+            assert "model=" not in msg
+            assert "name=" not in msg
+            assert "valid=x" in msg
+        finally:
+            loguru.logger.remove(handler_id)
+
+    def test_log_event_still_binds_attrs(self) -> None:
+        """logger.bind 仍被调用，attrs 绑定到 record extra（JSON sink 不受影响）。"""
+        records, handler_id = _capture_loguru_sink()
+        import loguru
+        try:
+            log_event("bind.check", model="gpt-4", session_key="abc")
+            assert len(records) == 1, f"Expected 1 record, got {len(records)}"
+            extra = records[0]["extra"]
+            assert extra.get("event") == "bind.check"
+            assert extra.get("model") == "gpt-4"
+            assert extra.get("session_key") == "abc"
+        finally:
+            loguru.logger.remove(handler_id)

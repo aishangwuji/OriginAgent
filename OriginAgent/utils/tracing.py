@@ -84,7 +84,20 @@ def log_event(event: str, **attrs: Any) -> None:
     ctx = trace_context()
     ctx["event"] = event
     ctx.update(attrs)
-    logger.bind(**ctx).info("event.{event}", event=event)
+    # 把 attrs 格式化为消息文本，便于人工阅读（sink format 只输出 {message}，
+    # logger.bind 绑定的 attrs 不会显示在日志中，需要拼入消息体）
+    visible_attrs = {
+        k: v for k, v in attrs.items()
+        if v is not None and v != "" and k != "event"
+    }
+    # 也加入 trace_context 的非空字段（trace_id/span_id/session_key），便于排查；
+    # 显式传入的 attrs 优先（可能覆盖同名的 trace_context 字段）
+    for k, v in ctx.items():
+        if k != "event" and v and k not in visible_attrs:
+            visible_attrs[k] = v
+    attrs_str = " ".join(f"{k}={v}" for k, v in visible_attrs.items())
+    msg = f"event.{event} | {attrs_str}" if attrs_str else f"event.{event}"
+    logger.bind(**ctx).info(msg)
 
 
 # ── Convenience aliases ──────────────────────────────────────────────
