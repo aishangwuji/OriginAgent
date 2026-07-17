@@ -155,6 +155,10 @@ async def test_active_intents_emit_pending_confirmation_nudge(tmp_path: Path) ->
     service, bus, sessions = _make_service(tmp_path, enabled=True)
     session = sessions.get_or_create("cli:test")
     sessions.save(session)
+    # Use a future expiry date so the expiry filter in
+    # _pending_confirmation_candidate does not drop this confirmation.
+    future_expiry = (datetime.now(timezone.utc) + timedelta(days=1)).isoformat()
+    past_created = (datetime.now(timezone.utc) - timedelta(days=1)).isoformat()
     service.confirmation_store.upsert(ConfirmationRequest(
         confirmation_id="c1",
         kind="action_confirmation",
@@ -168,8 +172,8 @@ async def test_active_intents_emit_pending_confirmation_nudge(tmp_path: Path) ->
         decision_reason="pending",
         presence_status="unknown",
         related_fact_ids=[],
-        created_at="2026-05-28T10:00:00+00:00",
-        expires_at="2026-05-29T10:00:00+00:00",
+        created_at=past_created,
+        expires_at=future_expiry,
         metadata={"session_key": "cli:test"},
     ))
 
@@ -617,3 +621,223 @@ async def test_cooldown_uses_legacy_ledger_when_cognitive_audit_is_empty(tmp_pat
 
     assert allowed is False
     assert reason in {"session_cooldown", "intent_cooldown"}
+
+
+# ---------------------------------------------------------------------------
+# P0 cron death-loop regression: expired confirmations + nudge cap
+# ---------------------------------------------------------------------------
+
+
+def _make_pending_confirmation(
+    *,
+    confirmation_id: str = "c1",
+    session_key: str = "cli:test",
+    expires_at: str = "2026-05-29T10:00:00+00:00",
+    status: str = "pending",
+) -> ConfirmationRequest:
+    return ConfirmationRequest(
+        confirmation_id=confirmation_id,
+        kind="action_confirmation",
+        status=status,
+        prompt="Approve deployment?",
+        action="deploy",
+        scope="workspace",
+        trigger="user",
+        risk="medium",
+        requested_by="agent",
+        decision_reason="pending",
+        presence_status="unknown",
+        related_fact_ids=[],
+        created_at="2026-05-28T10:00:00+00:00",
+        expires_at=expires_at,
+        metadata={"session_key": session_key},
+    )
+
+
+@pytest.mark.asyncio
+async def test_expired_confirmation_is_not_nudged(tmp_path: Path) -> None:
+    """An expired confirmation must not trigger a new nudge.
+
+    Regression: cron session kept nudging a confirmation whose expires_at
+    had already passed, because ``_pending_confirmation_candidate`` did
+    not check expiry. See user report "审批死锁反复 close_episode".
+    """
+    service, bus, sessions = _make_service(tmp_path, enabled=True)
+    sessions.get_or_create("cli:test")
+    sessions.save(sessions.get_or_create("cli:test"))
+
+    # expires_at in the past
+    past = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()
+    service.confirmation_store.upsert(
+        _make_pending_confirmation(expires_at=past)
+    )
+
+    emitted = await service.process_session(
+        "cli:test",
+        active_task_count=0,
+        running_subagents=0,
+    )
+
+    assert emitted == []
+    # No inbound message should be published for an expired confirmation
+    with pytest.raises(asyncio.TimeoutError):
+        await asyncio.wait_for(bus.consume_inbound(), timeout=0.1)
+
+
+@pytest.mark.asyncio
+async def test_unparseable_expires_at_does_not_filter(tmp_path: Path) -> None:
+    """A malformed expires_at must NOT silently drop a live confirmation.
+
+    Defensive: parse errors return False (not expired) so we never
+    silently suppress a confirmation the user is still waiting on.
+    """
+    service, bus, sessions = _make_service(tmp_path, enabled=True)
+    sessions.get_or_create("cli:test")
+    sessions.save(sessions.get_or_create("cli:test"))
+
+    service.confirmation_store.upsert(
+        _make_pending_confirmation(expires_at="not-a-date")
+    )
+
+    emitted = await service.process_session(
+        "cli:test",
+        active_task_count=0,
+        running_subagents=0,
+    )
+
+    # Live (unparseable) confirmation still emits a nudge
+    assert len(emitted) == 1
+    msg = await asyncio.wait_for(bus.consume_inbound(), timeout=0.2)
+    assert msg.metadata["active_intent_type"] == "pending_confirmation_nudge"
+
+
+@pytest.mark.asyncio
+async def test_nudge_cap_blocks_repeated_emission(tmp_path: Path) -> None:
+    """After _MAX_NUDGES_PER_CONFIRMATION emissions, further attempts are blocked.
+
+    Regression: cron session kept re-nudging the same confirmation every
+    pass, calling close_episode (which doesn't resolve the confirmation),
+    burning LLM tokens on an unresponsive user.
+
+    Tests ``_pending_confirmation_candidate`` directly to avoid
+    cooldown-side effects from ``process_session``.
+    """
+    from OriginAgent.agent.active_intents import _MAX_NUDGES_PER_CONFIRMATION
+
+    service, _bus, sessions = _make_service(tmp_path, enabled=True)
+    session = sessions.get_or_create("cli:test")
+    sessions.save(session)
+
+    future = (datetime.now(timezone.utc) + timedelta(days=1)).isoformat()
+    service.confirmation_store.upsert(
+        _make_pending_confirmation(expires_at=future)
+    )
+
+    intent_id = "pending_confirmation:cli:test:c1"
+
+    # Below the cap: candidate should be returned
+    service._nudge_counts[intent_id] = 0
+    assert service._pending_confirmation_candidate(session) is not None
+
+    service._nudge_counts[intent_id] = _MAX_NUDGES_PER_CONFIRMATION - 1
+    assert service._pending_confirmation_candidate(session) is not None
+
+    # At the cap: candidate should be None (blocked)
+    service._nudge_counts[intent_id] = _MAX_NUDGES_PER_CONFIRMATION
+    assert service._pending_confirmation_candidate(session) is None
+
+    # Above the cap: still blocked
+    service._nudge_counts[intent_id] = _MAX_NUDGES_PER_CONFIRMATION + 5
+    assert service._pending_confirmation_candidate(session) is None
+
+
+@pytest.mark.asyncio
+async def test_nudge_count_tracked_per_intent_id(tmp_path: Path) -> None:
+    """Nudge count is keyed by intent_id (session+confirmation), not global.
+
+    Ensures a different confirmation in the same session still gets
+    nudged even if a previous confirmation hit the cap.
+    """
+    from OriginAgent.agent.active_intents import _MAX_NUDGES_PER_CONFIRMATION
+
+    service, _bus, sessions = _make_service(tmp_path, enabled=True)
+    session = sessions.get_or_create("cli:test")
+    sessions.save(session)
+
+    future = (datetime.now(timezone.utc) + timedelta(days=1)).isoformat()
+
+    # c1 is at the cap
+    service.confirmation_store.upsert(
+        _make_pending_confirmation(
+            confirmation_id="c1", expires_at=future
+        )
+    )
+    service._nudge_counts[
+        "pending_confirmation:cli:test:c1"
+    ] = _MAX_NUDGES_PER_CONFIRMATION
+    # c1 is blocked
+    assert service._pending_confirmation_candidate(session) is None
+
+    # Replace with a different confirmation c2 (different intent_id)
+    service.confirmation_store.upsert(
+        _make_pending_confirmation(
+            confirmation_id="c2", expires_at=future
+        )
+    )
+    # Mark c1 as resolved so c2 becomes the pending one
+    c1 = service.confirmation_store.get("c1")
+    c1.status = "approved"
+    c1.decision_reason = "test"
+    service.confirmation_store.upsert(c1)
+
+    # c2 is a different intent_id → counter is 0 → should return candidate
+    candidate = service._pending_confirmation_candidate(session)
+    assert candidate is not None
+    assert candidate.intent_id == "pending_confirmation:cli:test:c2"
+
+
+@pytest.mark.asyncio
+async def test_nudge_count_increment_after_emit(tmp_path: Path) -> None:
+    """Each successful emit must increment the nudge counter for that intent_id."""
+    service, _bus, sessions = _make_service(tmp_path, enabled=True)
+    sessions.get_or_create("cli:test")
+    sessions.save(sessions.get_or_create("cli:test"))
+
+    future = (datetime.now(timezone.utc) + timedelta(days=1)).isoformat()
+    service.confirmation_store.upsert(
+        _make_pending_confirmation(expires_at=future)
+    )
+
+    await service.process_session(
+        "cli:test", active_task_count=0, running_subagents=0
+    )
+
+    intent_id = "pending_confirmation:cli:test:c1"
+    assert service._nudge_counts.get(intent_id) == 1
+
+
+def test_is_confirmation_expired_helper() -> None:
+    """Unit test for the _is_confirmation_expired helper."""
+    from OriginAgent.agent.active_intents import _is_confirmation_expired
+
+    # Past expiry
+    past_obj = type("C", (), {"expires_at": "2020-01-01T00:00:00+00:00"})()
+    assert _is_confirmation_expired(past_obj) is True
+
+    # Future expiry
+    future_obj = type(
+        "C", (), {"expires_at": "2099-01-01T00:00:00+00:00"}
+    )()
+    assert _is_confirmation_expired(future_obj) is False
+
+    # Missing expires_at
+    empty_obj = type("C", (), {"expires_at": None})()
+    assert _is_confirmation_expired(empty_obj) is False
+
+    # Unparseable
+    bad_obj = type("C", (), {"expires_at": "not-a-date"})()
+    assert _is_confirmation_expired(bad_obj) is False
+
+    # Z-suffix ISO format (commonly produced by .isoformat() with Z)
+    z_obj = type("C", (), {"expires_at": "2020-01-01T00:00:00Z"})()
+    assert _is_confirmation_expired(z_obj) is True

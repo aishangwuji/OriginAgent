@@ -30,6 +30,13 @@ ActiveIntentType = Literal["goal_nudge", "pending_confirmation_nudge", "foresigh
 
 _SUMMARY_MAX_CHARS = 240
 _RECENT_SCAN_LIMIT = 200
+# Maximum nudge attempts for the same confirmation before giving up.
+# Prevents infinite re-nudging when the user never responds (e.g., away
+# from keyboard). After this many attempts, the confirmation is left
+# pending for manual user interaction rather than continuously consuming
+# LLM calls. 3 attempts balances "give the agent a few tries" with
+# "don't burn tokens on an unresponsive user".
+_MAX_NUDGES_PER_CONFIRMATION = 3
 
 
 def _utcnow() -> datetime:
@@ -57,6 +64,27 @@ def _summarize_text(value: Any, max_chars: int = _SUMMARY_MAX_CHARS) -> str:
     if not text:
         return ""
     return truncate_text(text, max_chars).replace("\n... (truncated)", " ...")
+
+
+def _is_confirmation_expired(confirmation: Any, *, now: datetime | None = None) -> bool:
+    """Check if a confirmation has expired.
+
+    Returns False if ``expires_at`` is not set or unparseable — we err on
+    the side of NOT filtering (a live confirmation should not be silently
+    dropped due to a parse error). Only returns True when ``expires_at``
+    is a valid ISO timestamp in the past.
+    """
+    expires_at = getattr(confirmation, "expires_at", None)
+    if not expires_at or not isinstance(expires_at, str):
+        return False
+    try:
+        parsed = datetime.fromisoformat(expires_at.replace("Z", "+00:00"))
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        current_time = now or _utcnow()
+        return parsed <= current_time
+    except (ValueError, AttributeError):
+        return False
 
 
 @dataclass(frozen=True)
@@ -177,6 +205,12 @@ class ActiveIntentService:
         self._cognitive_audit = cognitive_audit
         self._nearline_memory_config = nearline_memory_config
         self.ledger = JsonlActiveIntentLedger(workspace, sqlite_store=sqlite_store)
+        # In-memory nudge counter per intent_id. Prevents infinite
+        # re-nudging of the same confirmation when the user is
+        # unresponsive. Reset on process restart (acceptable: restart
+        # gives a fresh chance, and long-stale confirmations should be
+        # handled by expires_at, not by a persistent counter).
+        self._nudge_counts: dict[str, int] = {}
 
     def session_keys(self) -> list[str]:
         seen: set[str] = set()
@@ -254,6 +288,10 @@ class ActiveIntentService:
                 action="emit",
                 published_internal_event=True,
             )
+            # Track nudge count per intent_id to cap re-nudging.
+            self._nudge_counts[candidate.intent_id] = (
+                self._nudge_counts.get(candidate.intent_id, 0) + 1
+            )
             emitted.append(candidate)
             if len(emitted) >= self.config.max_messages_per_session_per_pass:
                 break
@@ -298,14 +336,32 @@ class ActiveIntentService:
     def _pending_confirmation_candidate(self, session: Session) -> ActiveIntentCandidate | None:
         pending = [
             item for item in self.confirmation_store.read_all()
-            if item.status in {"pending", "notified"} and item.metadata.get("session_key") == session.key
+            if item.status in {"pending", "notified"}
+            and item.metadata.get("session_key") == session.key
+            and not _is_confirmation_expired(item)
         ]
         if pending:
             confirmation = pending[0]
+            intent_id = f"pending_confirmation:{session.key}:{confirmation.confirmation_id}"
+            # Nudge count cap: stop re-nudging after _MAX_NUDGES_PER_CONFIRMATION
+            # attempts. This prevents the "inner monologue death loop" where
+            # the agent keeps waking up, calling close_episode (which doesn't
+            # resolve the confirmation), and going back to sleep — burning
+            # LLM tokens on an unresponsive user.
+            nudge_count = self._nudge_counts.get(intent_id, 0)
+            if nudge_count >= _MAX_NUDGES_PER_CONFIRMATION:
+                logger.info(
+                    "pending_confirmation nudge cap reached for {} "
+                    "({}/{} attempts), stopping until user responds",
+                    confirmation.confirmation_id,
+                    nudge_count,
+                    _MAX_NUDGES_PER_CONFIRMATION,
+                )
+                return None
             prompt = _summarize_text(confirmation.prompt, max_chars=160)
             return ActiveIntentCandidate(
                 intent_type="pending_confirmation_nudge",
-                intent_id=f"pending_confirmation:{session.key}:{confirmation.confirmation_id}",
+                intent_id=intent_id,
                 content=(
                     "Pending confirmation follow-up: there is a safety or fact confirmation still waiting.\n"
                     f"Pending item: {prompt}\n"
