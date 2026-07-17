@@ -80,3 +80,47 @@ def test_drop_orphan_tool_results_handles_multiple_tool_results_for_same_assista
         if msg.get("role") == "tool"
     }
     assert kept_ids == {"call_1", "call_2"}
+
+
+def test_snip_then_drop_orphans_cleans_tools_left_by_removed_assistant():
+    """Simulate post-snip state: assistant was removed but its tool result remains.
+
+    After ``_snip_history`` removes an assistant message that declared
+    ``tool_calls``, the matching ``tool`` result messages may be left behind
+    (snip keeps a trailing tail of messages to preserve recent context, and
+    the boundary can fall between an assistant and its tool result). The
+    post-snip governance pipeline (drop -> backfill -> drop) must clean these
+    orphaned tool messages so the model never sees a ``tool`` message without
+    a preceding declaring assistant.
+
+    This test simulates the post-snip state directly (rather than triggering
+    snip end-to-end) and verifies the final pipeline result is clean,
+    regardless of which intermediate step performs the cleanup. The test is
+    regression protection: it locks in the contract that the three-step
+    post-snip pipeline yields a legally-ordered message list.
+    """
+    # Simulate post-snip state: the assistant(tool_calls=[call_1]) that
+    # originally began this segment was removed by snip, but its tool result
+    # message remains -- positionally orphaned (no preceding assistant).
+    messages_after_snip = [
+        _tool_result("call_1", "result"),
+        {"role": "user", "content": "next question"},
+        {"role": "assistant", "content": "answer"},
+    ]
+
+    # Execute the post-snip cleanup pipeline (three calls per spec).
+    messages = AgentRunner._drop_orphan_tool_results(messages_after_snip)
+    messages = AgentRunner._backfill_missing_tool_results(messages)
+    messages = AgentRunner._drop_orphan_tool_results(messages)
+
+    # The orphaned tool result must be gone.
+    assert all(
+        not (m.get("role") == "tool" and m.get("tool_call_id") == "call_1")
+        for m in messages
+    )
+    # First message must not be a tool (illegal start of conversation).
+    if messages:
+        first = messages[0]
+        assert first.get("role") in ("user", "assistant", "system"), (
+            f"first role: {first.get('role')}"
+        )

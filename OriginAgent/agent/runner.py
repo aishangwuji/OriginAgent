@@ -334,6 +334,10 @@ class AgentRunner:
                 # Snipping may have created new orphans; clean them up.
                 messages_for_model = self._drop_orphan_tool_results(messages_for_model)
                 messages_for_model = self._backfill_missing_tool_results(messages_for_model)
+                # Backfill may have inserted placeholder tool messages for tool_call_ids that
+                # were declared by an assistant which got snipped away. The placeholder is
+                # still positionally orphaned (no preceding assistant). Drop those too.
+                messages_for_model = self._drop_orphan_tool_results(messages_for_model)
             except Exception:
                 logger.exception(
                     "Context governance failed on turn {} for {}; applying minimal repair",
