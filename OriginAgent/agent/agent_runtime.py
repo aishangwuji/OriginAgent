@@ -912,6 +912,19 @@ class AgentRuntime:
             if not had_injections or stop_reason == "empty_final_response":
                 return None
 
+        # Cron 触发的 turn 不通过 channel 系统回流产出——cron 通道是 inbound-only
+        # 的内部触发源，没有实现类，OutboundMessage 发到这里只会被静默丢弃。
+        # 真正的用户通知由 on_cron_job 回调（cli/commands.py）通过
+        # job.payload.deliver/to 投递到真实通道（如 telegram）。
+        # 在此处短路返回 None，避免产生 "Response to cron:cron" 日志和被丢弃的
+        # OutboundMessage，消除路径 A 的浪费与身份污染。
+        if getattr(msg, "channel", None) == "cron":
+            logger.debug(
+                "cron session turn completed; outbound suppressed (deliver via on_cron_job payload): {}",
+                getattr(msg, "chat_id", "?"),
+            )
+            return None
+
         preview = final_content[:120] + "..." if len(final_content) > 120 else final_content
         logger.info("Response to {}:{}: {}", msg.channel, msg.sender_id, preview)
 

@@ -792,6 +792,27 @@ def _run_gateway(
     # Set cron callback (needs agent)
     grant_store = CapabilityGrantStore(config.workspace_path)
 
+    def _last_assistant_content_from_session(session_key: str) -> str:
+        """Recover the Agent's final text response from the session.
+
+        Used when ``_assemble_outbound`` suppresses the OutboundMessage
+        (cron-channel turns, Path A disabled). ``state_save`` persists the
+        assistant message to the session before ``state_respond`` calls
+        ``_assemble_outbound``, so the content is recoverable from
+        ``session.messages`` even when the outbound is None.
+        """
+        try:
+            session = agent.sessions.get_or_create(session_key)
+        except Exception:
+            return ""
+        for msg in reversed(session.messages):
+            if msg.get("role") != "assistant":
+                continue
+            content = msg.get("content")
+            if isinstance(content, str) and content.strip():
+                return content.strip()
+        return ""
+
     async def on_cron_job(job: CronJob) -> str | None:
         """Execute a cron job through the agent."""
         # Dream is an internal job — run directly, not through the agent loop.
@@ -862,7 +883,18 @@ def _run_gateway(
             if isinstance(message_tool, MessageTool) and message_record_token is not None:
                 message_tool.reset_record_channel_delivery(message_record_token)
 
-        response = resp.content if resp else ""
+        # Cron-channel turns suppress outbound assembly (Path A disabled) to
+        # avoid constructing an OutboundMessage to the inbound-only "cron"
+        # channel. When resp is None due to suppression, recover the Agent's
+        # final response from the session for Path B delivery. When
+        # MessageTool was used (_sent_in_turn), the response was already
+        # delivered to a real channel — no recovery needed.
+        if resp is not None:
+            response = resp.content or ""
+        elif isinstance(message_tool, MessageTool) and message_tool._sent_in_turn:
+            response = ""
+        else:
+            response = _last_assistant_content_from_session(f"cron:{job.id}")
 
         if job.payload.deliver and isinstance(message_tool, MessageTool) and message_tool._sent_in_turn:
             return response
