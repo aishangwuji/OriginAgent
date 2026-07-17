@@ -71,7 +71,16 @@ class ChannelManager:
         self._webui_runtime_model_name = webui_runtime_model_name
         self._webui_runtime_introspection = webui_runtime_introspection
         self.channels: dict[str, BaseChannel] = {}
-        self._inbound_only_channels: frozenset[str] = frozenset({"cron"})
+        # Inbound-only channels: these channels can send messages TO the
+        # agent but the agent cannot send messages back TO them. Outbound
+        # messages to these channels are silently discarded (INFO level,
+        # not WARNING — this is expected behavior, not an error).
+        # - "cron": cron jobs trigger inbound messages; agent responses
+        #   are delivered via job.payload.deliver/to, not back to cron.
+        # - "system": system messages (e.g. agent_active nudges) are
+        #   internal triggers; agent responses are delivered via the
+        #   original user channel, not back to the system channel.
+        self._inbound_only_channels: frozenset[str] = frozenset({"cron", "system"})
         self._dispatch_task: asyncio.Task | None = None
         self._origin_reply_fingerprints: dict[tuple[str, str, str], tuple[str, float]] = {}
 
