@@ -1,6 +1,6 @@
 # OriginAgent 业务域全景
 
-> **last_verified**: 2026-07-17
+> **last_verified**: 2026-07-18
 > **schema_version**: 1
 > **状态**: 初始版本(渐进式补全中,按规则 38.3)
 > **核验方法**: 代码静态分析 + 执行流程追踪 + 已有技术债交叉验证
@@ -243,6 +243,11 @@ proposed ──→ staged ──→ verified ──→ active
 6. **工具循环**必须维护 turn-scoped 幂等 key 集合,阻断重复执行同一 tool call
 7. **continuity_checkpoint_v1** 必须包含 `recent_turns_summary`,跨会话保留近期对话上下文
 8. **Cron 主动通知**通过 `MessageTool.set_delivery_target` 机制实现,delivery_target 来源必须是 `job.payload.to`(用户预设投递目标),Agent 不得自行指定任意通道。向非 delivery_target 的通道发送仍受 `can_send_cross_target` 约束
+9. **行动-结果因果链**(三层架构, BDI/ACT-R/Soar/EPIC 具象体现):
+   - **数据层 `action_trace`**: runner 自动捕获每次 `(tool_call, result, event)` 到 `session.metadata["_action_trace"]`(FIFO 50),Agent 无需主动调用。敏感参数自动脱敏(规则 18)
+   - **评估层 `evaluate_action`**: Agent 主动调用工具评估 action_id 的 outcome(progressed/no_progress/regressed/blocked/uncertain)和 goal_alignment,持久化到 `session.metadata["_action_evaluations"]`(FIFO 50)
+   - **状态机层 `task_state`**: EXPLORE→BLOCKED→WAITING→{RECOVERED|ABANDONED}→SATISFIED 状态机,持久化到 `session.metadata["_task_state"]`(history FIFO 20)。transition 可关联 action_id 和 evaluation_id 形成完整 `action→result→evaluation→state` 因果链
+   - **上下文注入**: `<task_state>` block 在 `_task_state` 存在时条件注入(独立 block,非 recovered_continuity 内),包含最近 5 条 action_trace 摘要供 Agent 引用 action_id
 
 ---
 
@@ -263,6 +268,9 @@ proposed ──→ staged ──→ verified ──→ active
 | TD-2026-009 | VoicePipeline 启动条件与 schema 偏差 | P3 | 待评估 |
 | TD-2026-010 | 三处静默吞异常影响可观测性 | P0 | 待评估 |
 | TD-2026-011 | LocalAwareness 配置镜像潜在违规 | P3 | 待评估 |
+| TD-2026-012 | BDI WorldStateWatcher 部分空转 + MetaCognition policy_denied 过滤器未集成 | P2 | 待评估 |
+| TD-2026-013 | denied_tools reminder 与 note 工具功能重叠 | P3 | 待评估 |
+| TD-2026-014 | MetaCognition 反思桥与新因果链三层架构功能重叠 | P3 | 待评估 |
 
 ---
 
