@@ -555,23 +555,37 @@ class AgentRunner:
             clean = hook.finalize_content(context, response.content)
             if response.finish_reason != "error" and is_blank_text(clean):
                 empty_content_retries += 1
+                # Include reasoning_content length in the warning for diagnosis.
+                # When the model returns reasoning but no content, this helps
+                # distinguish "model thought but didn't answer" from "model
+                # returned nothing at all". See production logs 2026-07-17
+                # where reasoning_chars=93 but content_chars=0.
+                reasoning_chars = len(
+                    getattr(response, "reasoning_content", "") or ""
+                )
                 if empty_content_retries < _MAX_EMPTY_RETRIES:
                     logger.warning(
-                        "Empty response on turn {} for {} ({}/{}); retrying",
+                        "Empty response on turn {} for {} ({}/{}); retrying. "
+                        "reasoning_chars={} content_chars={}",
                         iteration,
                         spec.session_key or "default",
                         empty_content_retries,
                         _MAX_EMPTY_RETRIES,
+                        reasoning_chars,
+                        len(clean or ""),
                     )
                     if hook.wants_streaming():
                         await hook.on_stream_end(context, resuming=False)
                     await hook.after_iteration(context)
                     continue
                 logger.warning(
-                    "Empty response on turn {} for {} after {} retries; attempting finalization",
+                    "Empty response on turn {} for {} after {} retries; attempting finalization. "
+                    "reasoning_chars={} content_chars={}",
                     iteration,
                     spec.session_key or "default",
                     empty_content_retries,
+                    reasoning_chars,
+                    len(clean or ""),
                 )
                 if hook.wants_streaming():
                     await hook.on_stream_end(context, resuming=False)

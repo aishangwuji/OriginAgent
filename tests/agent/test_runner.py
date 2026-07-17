@@ -3504,3 +3504,78 @@ async def test_runner_binds_on_retry_wait_to_retry_callback_not_progress():
 
     assert captured["on_retry_wait"] is retry_wait_cb
     assert captured["on_retry_wait"] is not progress_cb
+
+
+@pytest.mark.asyncio
+async def test_runner_empty_response_warning_includes_reasoning_chars():
+    """The empty-response warning must include ``reasoning_chars`` for diagnosis.
+
+    Regression (production logs 2026-07-17 22:27): model returned
+    ``content_chars=0`` but ``reasoning_chars=93``. The original warning
+    was just ``"Empty response on turn 0 for cron:8d88e717 (1/2);
+    retrying"`` with no indication that the model had actually produced
+    reasoning. Adding ``reasoning_chars`` to the warning lets operators
+    distinguish "model thought but didn't answer" from "model returned
+    nothing at all".
+    """
+    from OriginAgent.agent.runner import AgentRunSpec, AgentRunner
+    import loguru
+
+    provider = MagicMock()
+    calls: list[dict] = []
+
+    async def chat_with_retry(*, messages, tools=None, **kwargs):
+        calls.append({"messages": messages, "tools": tools})
+        if len(calls) == 1:
+            # First call: empty content but non-empty reasoning_content
+            return LLMResponse(
+                content=None,
+                reasoning_content="I should think about this but not answer yet.",
+                tool_calls=[],
+                usage={"prompt_tokens": 5, "completion_tokens": 1},
+            )
+        return LLMResponse(
+            content="final answer",
+            tool_calls=[],
+            usage={"prompt_tokens": 3, "completion_tokens": 7},
+        )
+
+    provider.chat_with_retry = chat_with_retry
+    tools = MagicMock()
+    tools.get_definitions.return_value = []
+
+    # Capture warnings
+    warnings: list[str] = []
+
+    def sink(message) -> None:
+        record = message.record
+        if record["level"].name == "WARNING":
+            warnings.append(record["message"])
+
+    handler_id = loguru.logger.add(sink, format="{message}", level="WARNING")
+    try:
+        runner = AgentRunner(provider)
+        result = await runner.run(AgentRunSpec(
+            initial_messages=[{"role": "user", "content": "do task"}],
+            tools=tools,
+            model="test-model",
+            max_iterations=3,
+            max_tool_result_chars=_MAX_TOOL_RESULT_CHARS,
+        ))
+    finally:
+        loguru.logger.remove(handler_id)
+
+    assert result.final_content == "final answer"
+    # Find the empty-response warning
+    empty_warnings = [w for w in warnings if "Empty response" in w]
+    assert len(empty_warnings) >= 1, (
+        f"expected at least 1 empty response warning, got: {warnings}"
+    )
+    # The warning must include reasoning_chars diagnostic
+    assert "reasoning_chars=" in empty_warnings[0], (
+        f"warning must include reasoning_chars for diagnosis: {empty_warnings[0]}"
+    )
+    # The warning must include content_chars diagnostic
+    assert "content_chars=" in empty_warnings[0], (
+        f"warning must include content_chars for diagnosis: {empty_warnings[0]}"
+    )
