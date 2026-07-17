@@ -1572,7 +1572,10 @@ class BackgroundReviewService:
                     ),
                 )
             proposals = self._parse_response(
-                response.content or "",
+                # Fallback to reasoning_content for reasoning models (DeepSeek-R1,
+                # Kimi, MiMo) that may put the JSON payload in reasoning_content
+                # and leave content empty. Mirrors meta_cognition_reflector.py:397.
+                response.content or response.reasoning_content or "",
                 session_key=session_key,
                 turn_id=turn_id,
                 message_id=message_id,
@@ -2113,6 +2116,11 @@ def _message_text(message: dict[str, Any]) -> str:
 
 def _load_json_payload(text: str) -> Any:
     text = text.strip()
+    # Empty/whitespace-only content is not an error — the model may
+    # legitimately return empty when there's nothing to propose.
+    # Skip the warning to avoid flooding logs with noise.
+    if not text:
+        return None
     if text.startswith("```"):
         lines = text.splitlines()
         if lines and lines[0].startswith("```"):
@@ -2131,7 +2139,16 @@ def _load_json_payload(text: str) -> Any:
             return json.loads(match.group(0))
         except json.JSONDecodeError:
             pass
-    logger.warning("Background review returned invalid JSON")
+    # Include char count + preview for diagnosis. The original message
+    # ("Background review returned invalid JSON") had no context, making
+    # it impossible to diagnose what the model actually returned.
+    # Mirrors meta_cognition_reflector.py:609.
+    preview = text[:300]
+    logger.warning(
+        "Background review returned invalid JSON ({} chars). First 300 chars: {}",
+        len(text),
+        preview,
+    )
     return None
 
 

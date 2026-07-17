@@ -375,3 +375,209 @@ async def test_reviews_command_lists_pending_proposals(tmp_path: Path) -> None:
     assert "Background Review Proposals" in out.content
     assert "Remember preferred style" in out.content
     assert "review_" in out.content
+
+
+# ---------------------------------------------------------------------------
+# P1-a: Background review invalid JSON — reasoning_content fallback + diagnostics
+# ---------------------------------------------------------------------------
+
+
+def _capture_loguru_warnings() -> tuple[list[str], int]:
+    """Add a loguru sink that collects WARNING-level messages.
+
+    Returns (messages, handler_id) so the caller can remove the sink.
+    """
+    import loguru
+
+    messages: list[str] = []
+
+    def sink(message) -> None:
+        record = message.record
+        if record["level"].name == "WARNING":
+            messages.append(record["message"])
+
+    handler_id = loguru.logger.add(sink, format="{message}", level="WARNING")
+    return messages, handler_id
+
+
+def test_load_json_payload_empty_string_returns_none_no_warning() -> None:
+    """Empty content must not emit a warning — the model may legitimately
+    return empty when there's nothing to propose.
+
+    Regression: ``Background review returned invalid JSON`` warning fired
+    repeatedly even on empty responses, flooding the logs.
+    """
+    import loguru
+    from OriginAgent.agent.background_review import _load_json_payload
+
+    messages, handler_id = _capture_loguru_warnings()
+    try:
+        result = _load_json_payload("")
+    finally:
+        loguru.logger.remove(handler_id)
+    assert result is None
+    assert not any("invalid JSON" in m for m in messages)
+
+
+def test_load_json_payload_whitespace_only_returns_none_no_warning() -> None:
+    """Whitespace-only content is equivalent to empty — no warning."""
+    import loguru
+    from OriginAgent.agent.background_review import _load_json_payload
+
+    messages, handler_id = _capture_loguru_warnings()
+    try:
+        result = _load_json_payload("   \n  \t  ")
+    finally:
+        loguru.logger.remove(handler_id)
+    assert result is None
+    assert not any("invalid JSON" in m for m in messages)
+
+
+def test_load_json_payload_invalid_json_warns_with_diagnostics() -> None:
+    """Invalid JSON must warn with char count + preview for diagnosis.
+
+    Regression: original warning was just ``"Background review returned
+    invalid JSON"`` with no context, making it impossible to diagnose
+    what the model actually returned.
+    """
+    import loguru
+    from OriginAgent.agent.background_review import _load_json_payload
+
+    bad_text = "This is not JSON at all, just plain text from the model."
+    messages, handler_id = _capture_loguru_warnings()
+    try:
+        result = _load_json_payload(bad_text)
+    finally:
+        loguru.logger.remove(handler_id)
+    assert result is None
+    warnings = [m for m in messages if "invalid JSON" in m]
+    assert len(warnings) == 1, "exactly one warning expected"
+    msg = warnings[0]
+    # Diagnostic info: char count
+    assert str(len(bad_text)) in msg
+    # Diagnostic info: preview of the content
+    assert "This is not JSON" in msg
+
+
+def test_load_json_payload_valid_json_returns_parsed() -> None:
+    """Sanity check: valid JSON still parses correctly."""
+    from OriginAgent.agent.background_review import _load_json_payload
+
+    payload = _load_json_payload('{"proposals": []}')
+    assert payload == {"proposals": []}
+
+
+def test_load_json_payload_fenced_json_returns_parsed() -> None:
+    """Sanity check: ```json fenced content still parses correctly."""
+    from OriginAgent.agent.background_review import _load_json_payload
+
+    payload = _load_json_payload('```json\n{"proposals": []}\n```')
+    assert payload == {"proposals": []}
+
+
+@pytest.mark.asyncio
+async def test_review_turn_falls_back_to_reasoning_content(tmp_path: Path) -> None:
+    """When ``response.content`` is empty, use ``reasoning_content``.
+
+    Regression: DeepSeek-R1 and similar reasoning models sometimes put
+    the JSON payload in ``reasoning_content`` and leave ``content``
+    empty. The original code only checked ``content``, causing every
+    such response to log ``invalid JSON`` and drop all proposals.
+
+    Mirrors the fallback in ``meta_cognition_reflector.py:397``.
+    """
+    proposal_json = json.dumps({
+        "proposals": [
+            {
+                "type": "memory",
+                "domain_id": "core",
+                "title": "From reasoning content",
+                "content": "User prefers concise answers.",
+                "rationale": "Stated explicitly.",
+                "confidence": 0.8,
+            }
+        ]
+    })
+    provider = FakeProvider(LLMResponse(
+        content="",  # empty content
+        reasoning_content=proposal_json,  # JSON in reasoning_content
+        finish_reason="stop",
+    ))
+    service = BackgroundReviewService(
+        workspace=tmp_path,
+        provider=provider,
+        model="fake-model",
+        config=BackgroundReviewConfig(enabled=True),
+    )
+
+    result = await service.review_turn(
+        session_key="websocket:chat1",
+        turn_id="turn-1",
+        channel="websocket",
+        chat_id="chat1",
+        message_id="m1",
+        messages=[{"role": "user", "content": "remember this"}],
+    )
+
+    assert result.status == "ok"
+    assert result.proposals_written == 1
+    # Verify the proposal was actually written
+    records = service.store.iter_all()
+    assert len(records) == 1
+    assert records[0]["title"] == "From reasoning content"
+
+
+@pytest.mark.asyncio
+async def test_review_turn_prefers_content_over_reasoning_content(
+    tmp_path: Path,
+) -> None:
+    """When both fields are present, ``content`` takes precedence.
+
+    Ensures the fallback doesn't accidentally override the primary
+    content path.
+    """
+    content_json = json.dumps({
+        "proposals": [
+            {
+                "type": "memory",
+                "domain_id": "core",
+                "title": "From content",
+                "content": "Primary path.",
+            }
+        ]
+    })
+    reasoning_json = json.dumps({
+        "proposals": [
+            {
+                "type": "memory",
+                "domain_id": "core",
+                "title": "From reasoning",
+                "content": "Should not be used.",
+            }
+        ]
+    })
+    provider = FakeProvider(LLMResponse(
+        content=content_json,
+        reasoning_content=reasoning_json,
+        finish_reason="stop",
+    ))
+    service = BackgroundReviewService(
+        workspace=tmp_path,
+        provider=provider,
+        model="fake-model",
+        config=BackgroundReviewConfig(enabled=True),
+    )
+
+    result = await service.review_turn(
+        session_key="websocket:chat1",
+        turn_id="turn-1",
+        channel="websocket",
+        chat_id="chat1",
+        message_id="m1",
+        messages=[{"role": "user", "content": "remember this"}],
+    )
+
+    assert result.status == "ok"
+    records = service.store.iter_all()
+    assert len(records) == 1
+    assert records[0]["title"] == "From content"
