@@ -1463,21 +1463,36 @@ class AgentRunner:
     def _drop_orphan_tool_results(
         messages: list[dict[str, Any]],
     ) -> list[dict[str, Any]]:
-        """Drop tool results that have no matching assistant tool_call earlier in the history."""
+        """Drop tool results that are orphaned by id or by position.
+
+        A tool result is dropped when either:
+        - its ``tool_call_id`` was never declared by a preceding assistant
+          message's ``tool_calls`` (id-based orphan), or
+        - a user/system message appears between the declaring assistant
+          message and the tool result (position-based orphan). Interleaved
+          tool messages for the same assistant are allowed; only user/system
+          messages break the legal run.
+        """
         declared: set[str] = set()
+        interrupted_since_last_assistant: bool = False
         updated: list[dict[str, Any]] | None = None
         for idx, msg in enumerate(messages):
             role = msg.get("role")
             if role == RoleConstants.ASSISTANT:
+                interrupted_since_last_assistant = False
                 for tc in msg.get("tool_calls") or []:
                     if isinstance(tc, dict) and tc.get("id"):
                         declared.add(str(tc["id"]))
             if role == "tool":
                 tid = msg.get("tool_call_id")
-                if tid and str(tid) not in declared:
+                orphan_by_id = not (tid and str(tid) in declared)
+                orphan_by_position = interrupted_since_last_assistant
+                if orphan_by_id or orphan_by_position:
                     if updated is None:
                         updated = [dict(m) for m in messages[:idx]]
                     continue
+            elif role in (RoleConstants.USER, RoleConstants.SYSTEM):
+                interrupted_since_last_assistant = True
             if updated is not None:
                 updated.append(dict(msg))
 
