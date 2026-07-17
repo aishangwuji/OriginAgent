@@ -825,6 +825,34 @@ class MetaCognitionReflector:
             self._increment(self._working_memory_bridge_counts, "dropped_budget")
             return
         wrote_any = False
+        # learned_rule_candidate → priority_facts (non-decaying, 改进 B)
+        # 高置信度可执行规则（constraint / task_pattern）写入 priority_facts，
+        # 该字段不参与 30 分钟时间衰减（见 WorkingMemoryManager._apply_field_decay），
+        # 使学得规则跨 turn 持久化，防止 Agent 在同一 session 内重复犯同样错误。
+        # 过滤条件与 _bridge_to_memory_candidates 对齐，但 kind 仅取可执行规则——
+        # preference / fact 交给 memory_candidates（长期记忆）处理。
+        candidate = reflection.learned_rule_candidate
+        if isinstance(candidate, dict):
+            if reflection.retention_hint == "candidate":
+                sensitivity = str(candidate.get("sensitivity") or "").strip().lower()
+                if sensitivity != "review-only":
+                    min_confidence = float(
+                        getattr(self.config, "memory_candidate_min_confidence", 0.85) or 0.85
+                    )
+                    confidence = max(0.0, min(float(candidate.get("confidence") or 0.0), 1.0))
+                    if confidence >= min_confidence:
+                        kind = str(candidate.get("kind") or "").strip().lower()
+                        if kind in {"constraint", "task_pattern"}:
+                            summary = redact_meta_text(candidate.get("summary"), max_chars=200)
+                            if summary:
+                                fact_text = f"[learned_rule:{kind}] {summary}"
+                                self.working_memory.append_priority_fact(
+                                    session,
+                                    fact_text,
+                                    identity=getattr(runtime_context, "identity", None) if runtime_context is not None else None,
+                                )
+                                wrote_any = True
+                                self._increment(self._working_memory_bridge_counts, "priority_fact_appended")
         if reflection.what_failed:
             caution = redact_meta_text(reflection.what_failed[0], max_chars=160)
             if caution and len(list(snapshot.attention_items or [])) < max_budget:

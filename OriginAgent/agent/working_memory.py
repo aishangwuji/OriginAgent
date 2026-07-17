@@ -273,6 +273,25 @@ class WorkingMemoryManager:
             snapshot.pending_questions = _normalize_items([*snapshot.pending_questions, text])
         return self.save(session, snapshot)
 
+    def append_priority_fact(
+        self,
+        session: Session,
+        fact: str,
+        *,
+        identity: IdentityDescriptor | None = None,
+    ) -> WorkingMemorySnapshot:
+        """Append a priority fact (non-decaying) to working memory.
+
+        priority_facts 不参与 30 分钟时间衰减（见 _apply_field_decay），
+        适用于写入需要跨 turn 持久化的学得规则（learned rules），
+        防止 Agent 在同一 session 内重复犯同样的错误。
+        """
+        text = str(fact or "").strip()
+        snapshot = self.load(session, identity=identity)
+        if text:
+            snapshot.priority_facts = _normalize_items([*snapshot.priority_facts, text])
+        return self.save(session, snapshot)
+
     @staticmethod
     def _compute_signature(snapshot: WorkingMemorySnapshot) -> str:
         """基于易变字段计算稳定签名，用于日志去重。
