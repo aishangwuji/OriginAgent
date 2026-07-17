@@ -3,12 +3,17 @@
 from __future__ import annotations
 
 import asyncio
+import time
 from dataclasses import dataclass
 from typing import Any, Callable
 
 from OriginAgent.agent.cognitive_events import CognitiveDecision, CognitiveEvent
 from OriginAgent.agent.identity import RuntimeContext
 from OriginAgent.utils.tracing import log_event
+
+# Circuit-breaker tuning constants (session-level cognitive cooldown).
+_COGNITIVE_FAILURE_THRESHOLD = 3
+_COGNITIVE_COOLDOWN_SECONDS = 30 * 60
 
 
 @dataclass
@@ -34,6 +39,76 @@ class AgentCognitiveRuntime:
 
     def __init__(self, deps: CognitiveRuntimeDeps) -> None:
         self._deps = deps
+        # Session-level circuit breaker state for consecutive LLM failures.
+        # session_key -> {"consecutive_failures": int, "last_failure_at": str,
+        #                 "cooldown_until": float | None}
+        self._session_failure_states: dict[str, dict] = {}
+        # session_key -> emitted_at_iso (marks that a nudge was emitted last pass,
+        # so the next pass can inspect whether it produced an LLM error).
+        self._pending_nudges: dict[str, str] = {}
+
+    def _check_session_cooldown(self, session_key: str) -> tuple[bool, str | None]:
+        """Return (True, "cognitive_cooldown") if the session is still in cooldown.
+
+        If the cooldown has expired, the session state is cleared (reset) and
+        (False, None) is returned so the pass proceeds normally.
+        """
+        state = self._session_failure_states.get(session_key)
+        if not state:
+            return False, None
+        cooldown_until = state.get("cooldown_until")
+        if cooldown_until is None:
+            return False, None
+        if time.time() < cooldown_until:
+            return True, "cognitive_cooldown"
+        # Cooldown expired: reset state so subsequent failures count from zero.
+        self._session_failure_states.pop(session_key, None)
+        return False, None
+
+    def _detect_last_turn_failure(self, session: Any) -> bool:
+        """Inspect the last session message to decide if the previous nudge's
+        LLM call ended in an error."""
+        messages = session.messages
+        assert isinstance(messages, list), "session.messages must be a list"
+        if not messages:
+            return False
+        last = messages[-1]
+        if not isinstance(last, dict):
+            return False
+        if last.get("role") != "assistant":
+            return False
+        if last.get("stop_reason") == "error":
+            return True
+        content = last.get("content")
+        if isinstance(content, str) and ("Error:" in content or content.startswith("Error")):
+            return True
+        return False
+
+    def _update_failure_state(self, session_key: str, session: Any) -> None:
+        """Update the consecutive-failure counter based on the outcome of the
+        nudge emitted during the previous cognitive pass.
+
+        Only runs when a nudge was actually emitted last pass (tracked via
+        ``self._pending_nudges``). On success the counter resets to 0; on
+        failure it increments, and once it reaches the threshold a cooldown
+        window is stamped onto the session state.
+        """
+        if session_key not in self._pending_nudges:
+            return
+        del self._pending_nudges[session_key]
+        state = self._session_failure_states.get(session_key, {})
+        if self._detect_last_turn_failure(session):
+            consecutive = int(state.get("consecutive_failures", 0)) + 1
+            state["consecutive_failures"] = consecutive
+            state["last_failure_at"] = self._deps.utcnow_iso()
+            if consecutive >= _COGNITIVE_FAILURE_THRESHOLD:
+                state["cooldown_until"] = time.time() + _COGNITIVE_COOLDOWN_SECONDS
+            self._session_failure_states[session_key] = state
+        else:
+            # Success: reset the counter and clear any stale cooldown marker.
+            state["consecutive_failures"] = 0
+            state.pop("cooldown_until", None)
+            self._session_failure_states[session_key] = state
 
     def start_active_intent_loop(self, active_intent_task: asyncio.Task[None] | None) -> asyncio.Task[None] | None:
         if not self._deps.cognitive_loop.config.enabled or active_intent_task is not None:
@@ -114,6 +189,62 @@ class AgentCognitiveRuntime:
             return [decision]
 
         session = self._deps.sessions.get_or_create(session_key)
+
+        # Update failure counter based on the previous pass's nudge outcome,
+        # then enforce the session-level cognitive cooldown (circuit breaker).
+        self._update_failure_state(session_key, session)
+        in_cooldown, cooldown_reason = self._check_session_cooldown(session_key)
+        if in_cooldown:
+            log_event(
+                "cognitive.pass.skipped",
+                session_key=session_key,
+                reason=cooldown_reason,
+                active_task_count=active_task_count,
+                running_subagents=running_subagents,
+            )
+            cooldown_state = self._session_failure_states.get(session_key, {})
+            cooldown_event = CognitiveEvent(
+                event_id=f"skip:{session_key}:{cooldown_reason}",
+                session_key=session_key,
+                event_type="goal_nudge",
+                source_type="runtime",
+                source_reference="cognitive_cooldown",
+                summary=f"Skipped cognitive pass: {cooldown_reason}",
+                priority="low",
+                payload={
+                    "active_task_count": active_task_count,
+                    "running_subagents": running_subagents,
+                    "cooldown_until": cooldown_state.get("cooldown_until"),
+                },
+            )
+            cooldown_decision = CognitiveDecision(
+                decision_id=f"decision:{cooldown_event.event_id}",
+                event_id=cooldown_event.event_id,
+                session_key=session_key,
+                action="skip",
+                outcome="skipped",
+                suppression_reason=cooldown_reason,
+                payload={
+                    **cooldown_event.payload,
+                    "event_type": cooldown_event.event_type,
+                    "source_type": cooldown_event.source_type,
+                    "source_reference": cooldown_event.source_reference,
+                    "intent_id": cooldown_event.event_id,
+                    "summary": cooldown_event.summary,
+                },
+            )
+            self._deps.cognitive_audit.append_event(cooldown_event)
+            self._deps.cognitive_audit.append_decision(cooldown_decision)
+            self._deps.record_last_scan({
+                "session_key": session_key,
+                "eligible": True,
+                "reason": cooldown_reason,
+                "candidate_count": 0,
+                "decision_count": 1,
+                "timestamp": self._deps.utcnow_iso(),
+            })
+            return [cooldown_decision]
+
         runtime_context = self._deps.build_runtime_context(session_key)
         candidates = self._deps.collect_candidates(session_key)
         decisions: list[CognitiveDecision] = []
@@ -147,6 +278,9 @@ class AgentCognitiveRuntime:
                 await self._deps.bus.publish_inbound(candidate["message"])
                 published_internal_event = True
                 emitted_count += 1
+                # Mark that a nudge was emitted so the next pass can inspect
+                # whether it produced an LLM error (circuit-breaker input).
+                self._pending_nudges[session_key] = self._deps.utcnow_iso()
                 if event.event_type == "scheduled_reminder":
                     self._deps.reminder_store.mark_fired(event.source_reference)
                 log_event("cognitive.event.emitted", session_key=session_key, event_type=event.event_type, summary=str(event.summary)[:80])
