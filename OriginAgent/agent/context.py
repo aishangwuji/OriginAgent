@@ -210,12 +210,19 @@ class ContextBuilder:
         channel: str | None = None,
         session_summary: str | None = None,
         self_model_payload: dict[str, Any] | None = None,
+        capability_snapshot: Any = None,
     ) -> str:
         """Build the trusted system prompt.
 
         ``session_summary`` is accepted for backward-compatible callers, but
         reference data is injected as user-side context blocks instead of
         receiving system-role priority.
+
+        ``capability_snapshot`` injects an explicit capability boundary
+        declaration when the session has restricted capabilities (e.g. cron
+        sessions with ``scheduled_default``). This prevents the LLM from
+        repeatedly attempting denied tool calls — it sees the restrictions
+        upfront instead of discovering them via trial-and-error.
         """
         parts = [self._get_identity(channel=channel)]
 
@@ -236,6 +243,10 @@ class ContextBuilder:
             ).build()
         parts.append(SelfModelRenderer().render(payload))
 
+        capability_boundaries = self.build_capability_boundaries_text(capability_snapshot)
+        if capability_boundaries:
+            parts.append(capability_boundaries)
+
         always_skills = self.skills.get_always_skills()
         if always_skills:
             always_content = self.skills.load_skills_for_context(always_skills)
@@ -252,6 +263,60 @@ class ContextBuilder:
             parts.append(f"# Selected Skills\n\n{selected_content}")
 
         return "\n\n---\n\n".join(parts)
+
+    @staticmethod
+    def build_capability_boundaries_text(capability_snapshot: Any) -> str | None:
+        """Render unavailable capabilities as an explicit hard-constraint block.
+
+        When a session has restricted capabilities (e.g. cron's
+        ``scheduled_default`` with ``can_exec=False``), this produces a text
+        block declaring which tools are unavailable and will be denied. Returns
+        ``None`` when all major capabilities are available (no boundary needed).
+        """
+        if capability_snapshot is None:
+            return None
+
+        # Capability field → human-readable tool name
+        capability_map = [
+            ("can_exec", "exec (shell commands)"),
+            ("can_read_files", "read_files"),
+            ("can_write_files", "write_files"),
+            ("can_send_cross_target", "send cross-target messages"),
+            ("can_create_cron", "create cron jobs"),
+            ("can_spawn", "spawn subagents"),
+        ]
+
+        unavailable = [
+            label
+            for field_name, label in capability_map
+            if not getattr(capability_snapshot, field_name, True)
+        ]
+
+        if not unavailable:
+            return None
+
+        lines = ["# Capability Boundaries (hard constraints)", ""]
+        lines.append(
+            "The following tools are UNAVAILABLE in this session. "
+            "Attempts to call them will be denied by the policy engine:"
+        )
+        lines.append("")
+        for item in unavailable:
+            lines.append(f"- {item}")
+
+        lines.append("")
+        lines.append(
+            "Do NOT attempt to call unavailable tools. If a task requires them, "
+            "notify the user and wait — do not retry denied actions."
+        )
+
+        # Note available MCP scopes if only read-only
+        mcp_scopes = getattr(capability_snapshot, "allowed_mcp_scopes", ())
+        if mcp_scopes and all(s == "read" for s in mcp_scopes):
+            lines.append("")
+            lines.append("Available capabilities: MCP tools (read scope only).")
+
+        return "\n".join(lines)
 
     def build_reference_context_blocks(
         self,
@@ -904,6 +969,7 @@ class ContextBuilder:
         recovered_continuity_block: dict[str, Any] | None = None,
         context_window_tokens: int | None = None,
         max_completion_tokens: int | None = None,
+        capability_snapshot: Any = None,
     ) -> list[dict[str, Any]]:
         """Build the complete message list for an LLM call."""
         messages = [
@@ -913,6 +979,7 @@ class ContextBuilder:
                     skill_names,
                     channel=channel,
                     self_model_payload=self_model_payload,
+                    capability_snapshot=capability_snapshot,
                 ),
             },
             *history,

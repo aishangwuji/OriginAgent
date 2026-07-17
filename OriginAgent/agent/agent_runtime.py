@@ -1438,10 +1438,14 @@ class AgentRuntime:
         """Build the initial message list for the LLM turn."""
         d = self._deps
         self_model_payload = self._build_prompt_self_model()
+        # capability_snapshot 已在 state_build 阶段由 set_tool_context 设置到 tools 上
+        # （agent_turn_pipeline.py:489-498），此处读取用于注入 system prompt 的能力边界声明
+        capability_snapshot = getattr(d.tools, "_capability_snapshot", None)
         if pending_ask_id:
             system_prompt = d.context.build_system_prompt(
                 channel=msg.channel, session_summary=pending_summary,
                 self_model_payload=self_model_payload,
+                capability_snapshot=capability_snapshot,
             )
             messages = ask_user_tool_result_messages(
                 system_prompt, history, pending_ask_id,
@@ -1512,6 +1516,7 @@ class AgentRuntime:
             recovered_continuity_block=recovered_continuity_block,
             context_window_tokens=d.context_window_tokens,
             max_completion_tokens=getattr(d.provider.generation, "max_tokens", 4096),
+            capability_snapshot=capability_snapshot,
         )
         state = d.state_holder.get(session.key)
         state.last_context_assembly = dict(
