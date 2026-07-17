@@ -326,6 +326,14 @@ def _spill_overflow_into_warm_store(session: Session, max_turns: int = 50) -> No
 
         # 热区只保留最后 max_turns 轮（已按 user turn 边界对齐）。
         session.messages = session.messages[hot_start_idx:]
+        # P1-B: adjust ``last_consolidated`` to reflect the trimmed prefix.
+        # Without this, ``last_consolidated`` becomes stale (points past the
+        # end of the trimmed messages), and subsequent
+        # ``_consolidate_replay_overflow`` / ``pick_consolidation_boundary``
+        # calls would misbehave. Same pattern as
+        # ``Session.retain_recent_legal_suffix()``.
+        session.last_consolidated = max(0, session.last_consolidated - hot_start_idx)
+        session._rebuild_episode_indices()
     except Exception:
         logger.exception("Warm buffer fill failed during turn save")
 

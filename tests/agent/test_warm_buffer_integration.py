@@ -183,6 +183,45 @@ def test_spill_overflow_preserves_tool_call_pairing() -> None:
         ), f"orphan tool_result at index {idx} with id={tool_call_id}"
 
 
+def test_spill_overflow_adjusts_last_consolidated_pointer() -> None:
+    """P1-B: ``_spill_overflow_into_warm_store`` trims ``session.messages``
+    and must adjust ``last_consolidated`` to stay within bounds.
+
+    Without the fix, ``last_consolidated`` stays at its pre-trim value
+    (e.g. 6), pointing past the end of the trimmed messages, and
+    ``_consolidate_replay_overflow`` / ``pick_consolidation_boundary``
+    would misbehave on the next turn. Same pattern as
+    ``Session.retain_recent_legal_suffix()``.
+    """
+    session = Session(key="cli:warm-pointer")
+    _populate_turns(session, turn_count=53)
+    # Simulate a prior consolidation that advanced the pointer to 6
+    # (first 3 turns already archived by _consolidate_replay_overflow).
+    session.last_consolidated = 6
+
+    _spill_overflow_into_warm_store(session, max_turns=50)
+
+    # hot_start_idx = 6 (first 3 turns = 6 messages trimmed)
+    # last_consolidated should shift by hot_start_idx: max(0, 6 - 6) = 0
+    assert session.last_consolidated == 0
+    assert len(session.messages) == 100
+    assert session.messages[0]["content"] == "u-3"
+
+
+def test_spill_overflow_keeps_last_consolidated_at_zero_when_already_zero() -> None:
+    """When ``last_consolidated`` is 0 (no prior consolidation), the pointer
+    stays at 0 after trimming — ``max(0, 0 - hot_start_idx)``.
+    """
+    session = Session(key="cli:warm-zero-pointer")
+    _populate_turns(session, turn_count=53)
+    session.last_consolidated = 0
+
+    _spill_overflow_into_warm_store(session, max_turns=50)
+
+    assert session.last_consolidated == 0
+    assert len(session.messages) == 100
+
+
 def _build_minimal_deps(session: Session) -> TurnPipelineDeps:
     """构造最小可用的 TurnPipelineDeps，所有依赖均 mock 化。"""
     consolidator = MagicMock()

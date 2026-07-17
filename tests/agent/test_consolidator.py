@@ -187,7 +187,11 @@ class TestConsolidatorTokenBudget:
         archived_chunk = consolidator.archive.await_args.args[0]
         assert archived_chunk[0]["content"] == "u0"
         assert archived_chunk[-1]["content"] == "a6"
-        assert session.last_consolidated == 14
+        # P1-B: consolidation now trims session.messages and resets
+        # last_consolidated to 0 (previously pointer advanced to 14 but
+        # messages were never trimmed, causing cron session bloat).
+        assert session.last_consolidated == 0
+        assert len(session.messages) == 6  # 20 - 14 trimmed
         assert session.metadata["_recent_summaries"][0]["text"] == "old conversation summary"
         assert session.metadata["_recent_summaries"][0]["history_cursor"] == 7
         assert "_last_summary" not in session.metadata
@@ -220,7 +224,9 @@ class TestConsolidatorTokenBudget:
 
         archived_chunk = consolidator.archive.await_args.args[0]
         assert [m["role"] for m in archived_chunk] == ["user", "assistant", "tool"]
-        assert session.last_consolidated == 3
+        # P1-B: consolidation trims messages and resets pointer to 0
+        assert session.last_consolidated == 0
+        assert len(session.messages) == 1  # 4 - 3 trimmed
         assert session.get_history(max_messages=2) == [{"role": "assistant", "content": "final answer"}]
 
     async def test_large_chunk_archived_without_cap(self, consolidator):
@@ -249,7 +255,8 @@ class TestConsolidatorTokenBudget:
         archived_chunk = consolidator.archive.await_args.args[0]
         # pick_consolidation_boundary returns (50, tokens) — user turn at idx 50
         assert archived_chunk[0]["content"] == "m0"
-        assert session.last_consolidated > 0
+        # P1-B: consolidation trims messages and resets pointer to 0
+        assert session.last_consolidated == 0
 
     async def test_raw_archive_fallback_advances_last_consolidated(self, consolidator):
         """When archive() falls back to raw-archive (LLM failed), the cursor
@@ -275,9 +282,11 @@ class TestConsolidatorTokenBudget:
         await consolidator.maybe_consolidate_by_tokens(session)
 
         consolidator.archive.assert_awaited_once()
+        # P1-B: consolidation trims messages and resets pointer to 0.
         # The chunk is considered "materialized" (as a raw-archive breadcrumb),
-        # so last_consolidated must have moved past it.
-        assert session.last_consolidated == 50
+        # so messages must be trimmed and pointer reset.
+        assert session.last_consolidated == 0
+        assert len(session.messages) == 20  # 70 - 50 trimmed
 
     async def test_raw_archive_fallback_breaks_round_loop(self, consolidator):
         """A degraded LLM should not trigger more archive() calls within the
@@ -323,8 +332,10 @@ class TestConsolidatorTokenBudget:
         await consolidator.maybe_consolidate_by_tokens(session)
 
         consolidator.archive.assert_awaited_once()
-        # pick_consolidation_boundary finds the only boundary at idx=61
-        assert session.last_consolidated == 61
+        # P1-B: consolidation trims messages and resets pointer to 0.
+        # The archived chunk ends at idx=61, so 61 messages are trimmed.
+        assert session.last_consolidated == 0
+        assert len(session.messages) == 9  # 70 - 61 trimmed
 
 
 class TestRecentSessionSummaries:

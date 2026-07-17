@@ -1229,7 +1229,16 @@ class Consolidator:
             replay_max_messages,
         )
         result = await self.archive(chunk)
-        session.last_consolidated = end_idx
+        # P1-B: trim archived prefix from session.messages and reset pointer.
+        # Previously only ``last_consolidated`` was advanced, leaving the
+        # archived messages in ``session.messages``. They were skipped by the
+        # replay window but still serialized to disk on every turn, causing
+        # cron session bloat (message_count grew unbounded: 25 → 59 → 61 …).
+        # Trimming the prefix keeps on-disk size proportional to the replay
+        # window. Episode indices are rebuilt to drop trimmed-away episodes.
+        session.messages = session.messages[end_idx:]
+        session.last_consolidated = 0
+        session._rebuild_episode_indices()
         self.sessions.save(session)
         return result
 
