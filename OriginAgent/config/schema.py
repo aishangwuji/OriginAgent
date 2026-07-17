@@ -396,6 +396,13 @@ class BackgroundReviewConfig(Base):
         validation_alias=AliasChoices("maxConcurrentReviews", "max_concurrent_reviews"),
         serialization_alias="maxConcurrentReviews",
     )
+    max_tokens: int = Field(
+        default=8192,
+        ge=256,
+        le=65536,
+        validation_alias=AliasChoices("maxTokens", "max_tokens"),
+        serialization_alias="maxTokens",
+    )
     allowed_proposal_types: list[str] = Field(
         default_factory=lambda: ["memory", "fact", "skill", "workflow"],
         validation_alias=AliasChoices("allowedProposalTypes", "allowed_proposal_types"),

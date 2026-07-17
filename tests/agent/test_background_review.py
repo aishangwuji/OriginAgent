@@ -700,3 +700,100 @@ async def test_review_turn_warns_once_when_both_content_and_reasoning_invalid(
         f"expected exactly 1 invalid JSON warning, got {len(invalid_json_warnings)}: "
         f"{invalid_json_warnings}"
     )
+
+
+@pytest.mark.asyncio
+async def test_review_turn_uses_configured_max_tokens(tmp_path: Path) -> None:
+    """``max_tokens`` must be read from ``BackgroundReviewConfig`` and passed
+    to the LLM call, not hardcoded.
+
+    Regression (production logs 2026-07-17 22:44-22:50): deepseek-v4-flash
+    is a reasoning model. With ``max_tokens=2048`` (the old hardcoded value),
+    reasoning_content consumed the entire completion budget (8505-9377 chars
+    ≈ 2000-3500 tokens) and ``content`` was left empty — the model never had
+    room to output the final JSON. Raising to 8192 gives reasoning and
+    content separate headroom. See rule 17 (no hardcoded magic values).
+    """
+    provider = FakeProvider(_proposal_response())
+    service = BackgroundReviewService(
+        workspace=tmp_path,
+        provider=provider,
+        model="fake-model",
+        config=BackgroundReviewConfig(enabled=True, max_tokens=8192),
+    )
+
+    await service.review_turn(
+        session_key="websocket:chat1",
+        turn_id="turn-1",
+        channel="websocket",
+        chat_id="chat1",
+        message_id="m1",
+        messages=[{"role": "user", "content": "remember this"}],
+    )
+
+    assert len(provider.calls) == 1
+    assert provider.calls[0]["max_tokens"] == 8192, (
+        f"expected max_tokens=8192 from config, got {provider.calls[0].get('max_tokens')}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_review_turn_default_max_tokens_is_8192(tmp_path: Path) -> None:
+    """Default ``max_tokens`` must be 8192 (not the old hardcoded 2048).
+
+    The default must be large enough for reasoning models to output both
+    reasoning_content AND the final JSON in content.
+    """
+    provider = FakeProvider(_proposal_response())
+    service = BackgroundReviewService(
+        workspace=tmp_path,
+        provider=provider,
+        model="fake-model",
+        config=BackgroundReviewConfig(enabled=True),
+    )
+
+    await service.review_turn(
+        session_key="websocket:chat1",
+        turn_id="turn-1",
+        channel="websocket",
+        chat_id="chat1",
+        message_id="m1",
+        messages=[{"role": "user", "content": "remember this"}],
+    )
+
+    assert len(provider.calls) == 1
+    assert provider.calls[0]["max_tokens"] == 8192, (
+        f"expected default max_tokens=8192, got {provider.calls[0].get('max_tokens')}"
+    )
+
+
+def test_background_review_prompt_guides_reasoning_model_to_output_json(
+    tmp_path: Path,
+) -> None:
+    """The system prompt must explicitly guide reasoning models to put their
+    final JSON in the ``content`` field.
+
+    Reasoning models (DeepSeek-R1, Kimi, MiMo, deepseek-v4-flash) may put
+    their entire thinking process in ``reasoning_content`` and leave
+    ``content`` empty if not explicitly told otherwise. The prompt must
+    contain an instruction that makes the output location unambiguous.
+    """
+    from OriginAgent.utils.prompt_templates import render_template
+
+    rendered = render_template(
+        "agent/background_review.md",
+        strip=True,
+        allowed_types="memory, fact, skill",
+        max_proposals=8,
+    )
+    # The prompt must explicitly mention "content" as the output location
+    # to prevent reasoning models from leaving it empty.
+    assert "content" in rendered.lower(), (
+        "prompt must mention 'content' to guide reasoning models where to put JSON"
+    )
+    # Must explicitly tell reasoning models not to leave content empty.
+    guidance_keywords = ["do not leave", "must appear", "in the content", "content field"]
+    assert any(kw in rendered.lower() for kw in guidance_keywords), (
+        f"prompt must contain explicit guidance for reasoning models "
+        f"(looked for {guidance_keywords})"
+    )
