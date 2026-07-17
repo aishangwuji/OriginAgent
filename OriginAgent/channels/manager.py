@@ -71,6 +71,7 @@ class ChannelManager:
         self._webui_runtime_model_name = webui_runtime_model_name
         self._webui_runtime_introspection = webui_runtime_introspection
         self.channels: dict[str, BaseChannel] = {}
+        self._inbound_only_channels: frozenset[str] = frozenset({"cron"})
         self._dispatch_task: asyncio.Task | None = None
         self._origin_reply_fingerprints: dict[tuple[str, str, str], tuple[str, float]] = {}
 
@@ -377,7 +378,13 @@ class ChannelManager:
                             continue
                     await self._send_with_retry(channel, msg)
                 else:
-                    logger.warning("Unknown channel: {}", msg.channel)
+                    if msg.channel in self._inbound_only_channels:
+                        logger.info(
+                            "inbound-only channel '{}', discarding outbound message to {}",
+                            msg.channel, msg.chat_id,
+                        )
+                    else:
+                        logger.warning("Unknown channel: {}", msg.channel)
 
             except asyncio.TimeoutError:
                 continue
