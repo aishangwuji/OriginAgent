@@ -660,6 +660,15 @@ class ContextConfig(Base):
         validation_alias=AliasChoices("proactiveHomeSuggestions", "proactive_home_suggestions"),
         serialization_alias="proactiveHomeSuggestions",
     )
+    # continuity checkpoint 中 recent_turns_summary 每条消息的截断长度。
+    # 原硬编码 500 字符导致跨 session 恢复时长对话关键信息丢失，改为可配置。
+    recent_turns_summary_max_chars: int = Field(
+        default=800,
+        ge=100,
+        le=10_000,
+        validation_alias=AliasChoices("recentTurnsSummaryMaxChars", "recent_turns_summary_max_chars"),
+        serialization_alias="recentTurnsSummaryMaxChars",
+    )
 
 
 class ConfirmationConfig(Base):

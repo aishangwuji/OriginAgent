@@ -10,6 +10,7 @@ from unittest.mock import MagicMock
 
 from OriginAgent.agent.agent_runtime import AgentRuntime, RuntimeDependencies
 from OriginAgent.agent.context import ContextBuilder
+from OriginAgent.config.schema import ContextConfig
 
 
 def _build_runtime_for_checkpoint() -> AgentRuntime:
@@ -23,9 +24,15 @@ def _build_runtime_for_checkpoint() -> AgentRuntime:
     working_memory = MagicMock()
     working_memory.load.return_value = working
 
+    # _save_continuity_checkpoint 会读取 context._context_config.recent_turns_summary_max_chars，
+    # 这里用真实 ContextConfig 提供默认值（800），避免 AttributeError。
+    context = MagicMock()
+    context._context_config = ContextConfig()
+
     deps = RuntimeDependencies(
         working_memory=working_memory,
         nearline_memory=None,
+        context=context,
     )
     return AgentRuntime(deps)
 
