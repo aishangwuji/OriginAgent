@@ -1122,6 +1122,11 @@ class AgentRuntime:
                     d.sessions, session_key,
                     metadata=session.metadata if session is not None else None,
                 ),
+                # Phase 1: pass SessionManager so _run_tool_core can persist
+                # denied_tools to session.metadata (session-scoped short-circuit).
+                # Only the main conversation path needs this; dream/subagent
+                # paths leave sessions=None (no session-level persistence).
+                sessions=d.sessions,
             ))
         finally:
             reset_file_states(file_state_token)

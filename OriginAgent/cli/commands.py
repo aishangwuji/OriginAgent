@@ -911,7 +911,17 @@ def _run_gateway(
         # 追加"不要重试"硬约束，防止 Agent 反复尝试被拒工具（"清醒地犯蠢"）。
         try:
             cron_session = agent.sessions.get_or_create(f"cron:{job.id}")
-            denied_tools = _scan_recent_policy_denials(cron_session.messages)
+            # Phase 1: prefer session.metadata["_denied_tools"] (authoritative,
+            # persisted across cron turns, only contains capability_* denials)
+            # over message scanning (limited to recent 20 messages, may include
+            # non-session-permanent denials like SSRF). Fall back to message
+            # scanning only when the _denied_tools key is absent (old sessions
+            # created before Phase 1).
+            denied_meta = cron_session.metadata.get("_denied_tools")
+            if denied_meta is not None:
+                denied_tools = list(denied_meta)
+            else:
+                denied_tools = _scan_recent_policy_denials(cron_session.messages)
         except Exception:
             denied_tools = []
         reminder_note = _build_cron_reminder_note(job.payload.message, denied_tools=denied_tools)

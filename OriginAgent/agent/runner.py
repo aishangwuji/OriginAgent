@@ -13,6 +13,7 @@ from typing import Any
 from loguru import logger
 
 from OriginAgent.agent.hook import AgentHook, AgentHookContext
+from OriginAgent.agent.action_trace import record_action_trace
 from OriginAgent.utils.tracing import log_event
 from OriginAgent.agent.tools.ask import AskUserInterrupt
 from OriginAgent.agent.tools.registry import (
@@ -129,6 +130,9 @@ class AgentRunSpec:
     checkpoint_callback: Any | None = None
     injection_callback: Any | None = None
     llm_timeout_s: float | None = None
+    # SessionManager reference for session-scoped state (e.g. denied_tools).
+    # None for dream/subagent paths that don't need session-level persistence.
+    sessions: Any = None
 
 
 @dataclass(slots=True)
@@ -436,6 +440,32 @@ class AgentRunner:
                     tool_call_counts=_tool_call_counts,
                     once_per_turn_called=_once_per_turn_called,
                 )
+                # ─── Phase D: action_trace capture (data layer of causal chain) ──
+                # Automatically record each (tool_call, result, event) tuple to
+                # session.metadata["_action_trace"]. This is the percept-capture
+                # path — the Agent does NOT need to call any tool for this data
+                # to be collected. The evaluation layer (evaluate_action) and
+                # state-machine layer (task_state) build on top of this data.
+                #
+                # BDI: percept → Belief update; ACT-R: declarative chunk creation;
+                # Soar: elaboration phase; EPIC: perceptual processor output.
+                #
+                # error=None is safe because ``success`` is derived from
+                # ``event["status"] == "ok"`` (per-tool status is already
+                # encoded in the event dict by _run_tool_core).
+                if spec.sessions is not None and spec.session_key:
+                    for tc, res, evt in zip(tool_calls, results, new_events):
+                        try:
+                            record_action_trace(
+                                spec, tc, res, evt,
+                                error=None,
+                                iteration=iteration,
+                            )
+                        except Exception:
+                            logger.exception(
+                                "action_trace recording failed for tool {}",
+                                getattr(tc, "name", "<unknown>"),
+                            )
                 tool_events.extend(new_events)
                 context.tool_results = list(results)
                 context.tool_events = list(new_events)
@@ -1101,6 +1131,84 @@ class AgentRunner:
         )
         return result, event, exc
 
+    # ─── Phase 1: session-scoped denied_tools persistence helpers ──────────
+    # These helpers unify policy-denial handling across all three denial paths
+    # in _run_tool_core (prep_error, PolicyDeniedError exception, string Error
+    # result). They ensure that capability denials — which are session-permanent
+    # because the capability snapshot doesn't change mid-session — are persisted
+    # to session.metadata["_denied_tools"] so subsequent calls (even across cron
+    # turns) are short-circuited at _run_tool_core entry.
+
+    def _persist_session_denied_tool(
+        self,
+        spec: AgentRunSpec,
+        tool_name: str,
+        policy_rule: str | None,
+    ) -> None:
+        """Persist a denied tool into ``session.metadata["_denied_tools"]``.
+
+        Only ``capability_*`` denials are persisted because they are
+        session-permanent: the capability snapshot is set at session start
+        and does not change mid-session. SSRF, protected-path, and workspace
+        violations are per-target (a different URL/path may be valid) and
+        must NOT block future calls with different params.
+
+        Known limitation: if capabilities are granted mid-session via the
+        interactive approval flow, ``_denied_tools`` is NOT automatically
+        cleared. The short-circuit will continue to block the tool until the
+        session ends. This is acceptable for cron sessions (no interactive
+        approval) but may need refinement for interactive sessions.
+        """
+        if not policy_rule or not policy_rule.startswith("capability_"):
+            return
+        if spec.sessions is None or not spec.session_key:
+            return
+        try:
+            session = spec.sessions.get_or_create(spec.session_key)
+            denied = list(session.metadata.get("_denied_tools") or [])
+            if tool_name not in denied:
+                denied.append(tool_name)
+                session.metadata["_denied_tools"] = denied
+                logger.info(
+                    "event.tool.denied.persisted session_key={} tool={} policy_rule={}",
+                    spec.session_key,
+                    tool_name,
+                    policy_rule,
+                )
+        except Exception:
+            logger.debug(
+                "Failed to persist denied_tools for session={}",
+                spec.session_key,
+            )
+
+    @staticmethod
+    def _structured_denied_prefix(
+        policy_rule: str | None,
+        *,
+        code: str | None = None,
+    ) -> str:
+        """Build a ``[POLICY_DENIED ...]`` prefix for the LLM-visible payload.
+
+        The prefix lets the LLM distinguish permanent policy denials from
+        transient failures without parsing free-text error messages. The
+        ``session_permanent`` field reflects whether the denial is
+        session-scoped (``capability_*`` rules) or per-target (SSRF, etc.).
+
+        Returns an empty string when ``policy_rule`` is falsy (validation
+        errors like bad params do not get the prefix).
+        """
+        if not policy_rule:
+            return ""
+        session_permanent = policy_rule.startswith("capability_")
+        code_part = f" code={code} " if code else " "
+        return (
+            f"[POLICY_DENIED policy_rule={policy_rule}"
+            f"{code_part}retryable=false "
+            f"session_permanent={'true' if session_permanent else 'false'}]\n"
+        )
+
+    # ─── End Phase 1 helpers ────────────────────────────────────────────────
+
     async def _run_tool_core(
         self,
         spec: AgentRunSpec,
@@ -1113,6 +1221,36 @@ class AgentRunner:
         once_per_turn_called: set[str] | None = None,
     ) -> tuple[Any, dict[str, str], BaseException | None]:
         hint = "\n\n[Analyze the error above and try a different approach.]"
+
+        # Session-scoped denied_tools short-circuit (Phase 1 of action-result
+        # causal chain). If this tool was previously denied by PolicyDeniedError
+        # in the same session, short-circuit without executing. This is the
+        # bottom-line defense that works even if the LLM ignores hints.
+        # Checked before once_per_turn/circuit breaker because session-level
+        # denial is a harder constraint than turn-level limits.
+        if spec.sessions is not None and spec.session_key:
+            try:
+                session = spec.sessions.get_or_create(spec.session_key)
+                denied_tools = session.metadata.get("_denied_tools") or []
+                if tool_call.name in denied_tools:
+                    return (
+                        f"[SESSION_PERMANENTLY_DENIED] Tool '{tool_call.name}' was "
+                        f"denied by policy earlier in this session and will not be "
+                        f"retried. It is unavailable in this session (hard policy "
+                        f"boundary, not a transient failure). Choose a different "
+                        f"action or respond to the user directly.{hint}",
+                        {
+                            "name": tool_call.name,
+                            "status": "skipped",
+                            "detail": "session_denied short-circuit",
+                        },
+                        None,
+                    )
+            except Exception:
+                logger.debug(
+                    "session_denied short-circuit check failed for session={}",
+                    spec.session_key,
+                )
 
         # Fix B: once_per_turn enforcement — block if this tool was already
         # called successfully in this turn. Checked before idempotency because
@@ -1203,6 +1341,13 @@ class AgentRunner:
             prep_error = f"Error: Tool '{tool_call.name}' requires an explicit capability snapshot"
         if prep_error:
             policy_rule = self._policy_rule_from_error(prep_error)
+            # Phase 1: persist capability denials to session.metadata so
+            # subsequent calls (even across cron turns) are short-circuited.
+            # Must happen before _classify_violation which may early-return
+            # for SSRF/workspace violations (those are per-target, not
+            # session-permanent, and _persist_session_denied_tool correctly
+            # skips them via the capability_* prefix check).
+            self._persist_session_denied_tool(spec, tool_call.name, policy_rule)
             await self._audit_tool_from_runner(
                 spec,
                 name=tool_call.name,
@@ -1234,7 +1379,10 @@ class AgentRunner:
             )
             if handled is not None:
                 return handled
-            return prep_error + hint, event, (
+            # Prepend structured prefix for policy denials (empty string for
+            # validation errors where policy_rule is None — no-op).
+            structured_prefix = self._structured_denied_prefix(policy_rule)
+            return structured_prefix + prep_error + hint, event, (
                 RuntimeError(prep_error) if spec.fail_on_tool_error else None
             )
         try:
@@ -1265,6 +1413,19 @@ class AgentRunner:
                 return "", event, exc
             payload = f"Error: {type(exc).__name__}: {exc}"
             policy_rule = exc.policy_rule if isinstance(exc, PolicyDeniedError) else None
+            # Phase 1: unify persistence + structured prefix across all three
+            # denial paths. _persist_session_denied_tool only persists
+            # capability_* denials (session-permanent); _structured_denied_prefix
+            # adds the [POLICY_DENIED ...] prefix for all policy denials.
+            # For PolicyDeniedError, pass exc.code so the prefix includes the
+            # structured error code (e.g. code=capability_denied).
+            self._persist_session_denied_tool(spec, tool_call.name, policy_rule)
+            if policy_rule:
+                code = exc.code if isinstance(exc, PolicyDeniedError) else None
+                structured_prefix = self._structured_denied_prefix(
+                    policy_rule, code=code,
+                )
+                payload = structured_prefix + payload
             await self._audit_tool_from_runner(
                 spec,
                 name=tool_call.name,
@@ -1299,6 +1460,10 @@ class AgentRunner:
         if isinstance(result, str) and result.startswith("Error"):
             policy_denied = is_policy_denial_text(result)
             policy_rule = self._policy_rule_from_error(result)
+            # Phase 1: persist capability denials (third path: string Error
+            # result from tool.execute()). Same unified handling as the
+            # prep_error and PolicyDeniedError paths above.
+            self._persist_session_denied_tool(spec, tool_call.name, policy_rule)
             await self._audit_tool_from_runner(
                 spec,
                 name=tool_call.name,
@@ -1330,9 +1495,12 @@ class AgentRunner:
             )
             if handled is not None:
                 return handled
+            # Prepend structured prefix for policy denials (no-op for
+            # non-policy errors where policy_rule is None).
+            structured_prefix = self._structured_denied_prefix(policy_rule)
             if spec.fail_on_tool_error:
-                return result + hint, event, RuntimeError(result)
-            return result + hint, event, None
+                return structured_prefix + result + hint, event, RuntimeError(result)
+            return structured_prefix + result + hint, event, None
 
         await self._audit_tool_from_runner(
             spec,

@@ -174,6 +174,11 @@ class ContextAssemblerV2:
                 for block in continuity_blocks
                 if isinstance(block, dict)
             ),
+            "task_state_included": any(
+                block.get("_meta", {}).get("kind") == self._builder.TASK_STATE_CONTEXT_KIND
+                for block in continuity_blocks
+                if isinstance(block, dict)
+            ),
             "media": audit_artifacts["media"],
             "blocks": [
                 self._block_trace(

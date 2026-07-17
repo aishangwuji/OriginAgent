@@ -78,6 +78,10 @@ class ContextBuilder:
     WORLD_STATE_CONTEXT_KIND = "world_state_context"
     RECOVERED_CONTINUITY_CONTEXT_KIND = "recovered_continuity_context"
     CLOSED_EPISODE_SUMMARIES_KIND = "closed_episode_summaries"
+    # task_state block: Agent's meta-cognitive state machine (action-result
+    # causal chain). Conditionally injected — only when the Agent has
+    # called TaskStateTool at least once in the current session.
+    TASK_STATE_CONTEXT_KIND = "task_state_context"
 
     CONTRACT_VERSION = "continuity.v1.freeze"
     ASSEMBLY_ORDER = [
@@ -615,6 +619,65 @@ class ContextBuilder:
             },
         }
 
+    # Maximum number of action_trace entries to render in the task_state block.
+    # 5 entries balances token budget against causal-chain visibility — the
+    # Agent needs to see recent action_ids to reference them in evaluate_action
+    # and task_state(transition, action_id=...), but showing all 50 FIFO entries
+    # would bloat the context window.
+    _TASK_STATE_ACTION_TRACE_LIMIT = 5
+
+    @staticmethod
+    def build_task_state_block(
+        snapshot: Mapping[str, Any],
+        *,
+        action_trace: list[dict[str, Any]] | None = None,
+    ) -> dict[str, Any]:
+        """Render the Agent's task state machine as a ``<task_state>`` block.
+
+        This is the BDI/ACT-R/Soar/EPIC meta-cognitive state — the Agent's
+        belief about its current progress in the action-result causal
+        chain. Unlike ``<world_state>`` (external world), ``<task_state>``
+        is the Agent's *internal* belief about its own task progression.
+
+        Injected conditionally: only when the Agent has called
+        ``TaskStateTool`` at least once in the current session (i.e.,
+        ``session.metadata["_task_state"]`` exists). A new session gets
+        no task_state block — the block is opt-in to avoid noise.
+
+        When ``action_trace`` is provided and non-empty, a summary of the
+        most recent N entries (capped at ``_TASK_STATE_ACTION_TRACE_LIMIT``)
+        is appended to the block. This lets the Agent see the action_ids
+        it needs to reference when calling evaluate_action or
+        task_state(transition, action_id=...), completing the
+        action→result→evaluation→state causal chain visibility.
+        """
+        parts: list[str] = [
+            "<task_state trust='internal'>",
+            "Current task state machine — action-result causal chain.",
+            json.dumps(dict(snapshot), ensure_ascii=False, indent=2),
+        ]
+        if action_trace:
+            limit = ContextBuilder._TASK_STATE_ACTION_TRACE_LIMIT
+            recent = action_trace[-limit:] if len(action_trace) > limit else action_trace
+            parts.append("Recent actions (for action_id referencing):")
+            for entry in recent:
+                status = "DENIED" if entry.get("denied") else (
+                    "ok" if entry.get("success") else "failed"
+                )
+                parts.append(
+                    f"  [{status}] {entry.get('action_id', '?')} "
+                    f"{entry.get('tool_name', '?')}({entry.get('params_summary', '')})"
+                )
+        parts.append("</task_state>")
+        return {
+            "type": "text",
+            "text": "\n".join(parts),
+            "_meta": {
+                "kind": ContextBuilder.TASK_STATE_CONTEXT_KIND,
+                "trust": "internal",
+            },
+        }
+
     @staticmethod
     def build_recovered_continuity_context(snapshot: Mapping[str, Any]) -> dict[str, Any]:
         # 提取最近轮次摘要，单独渲染以便 Agent 识别恢复后的对话上下文
@@ -757,6 +820,33 @@ class ContextBuilder:
                 "version": "phase1",
                 "updated_at": current_time_str(self.timezone),
             }))
+        # task_state block: Agent's meta-cognitive state machine.
+        # CONDITIONALLY injected — only when the Agent has called
+        # TaskStateTool at least once in this session (i.e.,
+        # session.metadata["_task_state"] exists). A new session gets no
+        # task_state block, avoiding noise on turns where the Agent hasn't
+        # engaged its meta-cognitive layer.
+        #
+        # Positioning rationale: task_state comes AFTER world_state because
+        # world_state is the Agent's belief about the EXTERNAL world (more
+        # stable), while task_state is the Agent's belief about its OWN
+        # progress (more volatile). This mirrors the BDI ordering:
+        # Beliefs (world) → Desires (goal) → Intentions (task state).
+        #
+        # Rule 5 compliance: state is re-read from session.metadata on
+        # every call (no stale snapshots). If the Agent transitions state
+        # via TaskStateTool, the next turn's block reflects the new state.
+        if session is not None:
+            task_state = session.metadata.get("_task_state")
+            if task_state is not None:
+                # Pass the action_trace so the Agent can see recent action_ids
+                # for evaluate_action / task_state(transition, action_id=...).
+                # Re-read on every call (rule 5: no stale snapshots).
+                action_trace = session.metadata.get("_action_trace") or []
+                blocks.append(self.build_task_state_block(
+                    task_state,
+                    action_trace=action_trace,
+                ))
         return blocks
 
     def build_action_continuity_inputs(
