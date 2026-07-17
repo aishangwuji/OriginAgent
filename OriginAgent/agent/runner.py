@@ -1470,12 +1470,22 @@ class AgentRunner:
         """Drop tool results that are orphaned by id or by position.
 
         A tool result is dropped when either:
-        - its ``tool_call_id`` was never declared by a preceding assistant
-          message's ``tool_calls`` (id-based orphan), or
+        - its ``tool_call_id`` was not declared by the most recent preceding
+          assistant message's ``tool_calls`` (id-based orphan), or
         - a user/system message appears between the declaring assistant
           message and the tool result (position-based orphan). Interleaved
           tool messages for the same assistant are allowed; only user/system
           messages break the legal run.
+
+        ``declared`` is reset on every assistant message so that only the
+        most recent assistant's tool_call_ids are valid targets. This
+        prevents a tool message from matching an ID declared by an earlier,
+        now-superseded assistant — which is what happens after
+        ``_append_model_error_placeholder`` inserts an assistant without
+        ``tool_calls``: a stale tool result from a previous assistant would
+        otherwise pass the id check and reach the provider, triggering
+        "Messages with role 'tool' must be a response to a preceding message
+        with 'tool_calls'".
         """
         declared: set[str] = set()
         interrupted_since_last_assistant: bool = False
@@ -1484,6 +1494,11 @@ class AgentRunner:
             role = msg.get("role")
             if role == RoleConstants.ASSISTANT:
                 interrupted_since_last_assistant = False
+                # Only the most recent assistant's tool_call_ids are valid
+                # targets. Clearing here prevents stale IDs from an earlier
+                # assistant (e.g. one before an error placeholder) from
+                # validating a positionally-orphaned tool result.
+                declared.clear()
                 for tc in msg.get("tool_calls") or []:
                     if isinstance(tc, dict) and tc.get("id"):
                         declared.add(str(tc["id"]))

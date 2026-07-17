@@ -82,6 +82,36 @@ def test_drop_orphan_tool_results_handles_multiple_tool_results_for_same_assista
     assert kept_ids == {"call_1", "call_2"}
 
 
+def test_drop_orphan_tool_results_clears_declared_on_assistant_without_tool_calls():
+    """A tool result after an assistant without tool_calls (e.g. error placeholder)
+    must be dropped even if its tool_call_id was declared by an earlier assistant.
+
+    This is the exact production scenario that caused the cron death loop:
+    assistant(tool_calls=[call_1]) -> tool(call_1) -> assistant(error placeholder,
+    no tool_calls) -> tool(call_1, stale) -> LLM rejects with "Messages with role
+    'tool' must be a response to a preceding message with 'tool_calls'".
+
+    Root cause: ``declared`` set was never cleared, so the stale tool_call_id
+    from the first assistant survived past the error placeholder assistant.
+    Fix: clear ``declared`` on every assistant message so only the most recent
+    assistant's tool_call_ids are valid.
+    """
+    messages = [
+        _assistant_with_tool_calls(["call_1"]),
+        _tool_result("call_1", "result"),
+        # Error placeholder written by _append_model_error_placeholder — no tool_calls
+        {"role": "assistant", "content": "[Assistant reply unavailable due to model error.]"},
+        # Stale tool result referencing the old call_1 — must be dropped
+        _tool_result("call_1", "stale result"),
+    ]
+
+    result = AgentRunner._drop_orphan_tool_results(messages)
+
+    tool_msgs = [m for m in result if m.get("role") == "tool"]
+    assert len(tool_msgs) == 1, f"expected 1 tool message, got {len(tool_msgs)}"
+    assert tool_msgs[0].get("content") == "result", "first tool result should survive"
+
+
 def test_snip_then_drop_orphans_cleans_tools_left_by_removed_assistant():
     """Simulate post-snip state: assistant was removed but its tool result remains.
 
