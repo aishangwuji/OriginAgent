@@ -22,6 +22,13 @@ _COGNITIVE_COOLDOWN_SECONDS = 30 * 60
 _LOOP_REPEAT_THRESHOLD = 3
 _LOOP_SILENT_PERIOD_SECONDS = 60 * 60
 
+# Session activity awareness (politeness gate).
+# If the session was updated within this window, the user is considered
+# active and cognitive pass is skipped — don't nudge while the user is
+# right there typing. After the window elapses with no activity, cognitive
+# pass resumes normally.
+_USER_ACTIVE_WINDOW_SECONDS = 5 * 60
+
 
 @dataclass
 class CognitiveRuntimeDeps:
@@ -127,6 +134,38 @@ class AgentCognitiveRuntime:
         if int(state["consecutive_repeats"]) >= _LOOP_REPEAT_THRESHOLD:
             state["silent_until"] = time.time() + _LOOP_SILENT_PERIOD_SECONDS
         self._loop_detection[session_key] = state
+
+    def _check_user_active(self, session: Any) -> tuple[bool, str | None]:
+        """Return (True, "user_active") if the session was updated within
+        the user-active window (last ``_USER_ACTIVE_WINDOW_SECONDS`` seconds).
+
+        This is the "politeness" gate (P6 / 方案 C): don't nudge while the
+        user is actively interacting with the session — it would interrupt
+        their train of thought and compete for the LLM's attention. After
+        the window elapses with no activity, cognitive pass resumes.
+
+        Uses ``session.updated_at`` (a datetime updated on every session
+        mutation). Gracefully returns (False, None) if the session doesn't
+        expose ``updated_at`` or the value can't be parsed — older test
+        fakes and edge cases shouldn't break the cognitive pass.
+        """
+        updated_at = getattr(session, "updated_at", None)
+        if updated_at is None:
+            return False, None
+        # Accept both datetime objects and ISO 8601 strings.
+        if isinstance(updated_at, str):
+            from datetime import datetime
+            try:
+                updated_at = datetime.fromisoformat(updated_at)
+            except (ValueError, TypeError):
+                return False, None
+        try:
+            updated_ts = float(updated_at.timestamp())
+        except (ValueError, TypeError, OSError, OverflowError):
+            return False, None
+        if time.time() - updated_ts < _USER_ACTIVE_WINDOW_SECONDS:
+            return True, "user_active"
+        return False, None
 
     def _detect_last_turn_failure(self, session: Any) -> bool:
         """Inspect the last session message to decide if the previous nudge's
@@ -258,6 +297,32 @@ class AgentCognitiveRuntime:
             return [decision]
 
         session = self._deps.sessions.get_or_create(session_key)
+
+        # P6 (方案 C): session activity awareness. If the user is actively
+        # interacting with this session (updated within the last
+        # _USER_ACTIVE_WINDOW_SECONDS), skip the cognitive pass entirely —
+        # don't nudge while they're right there. This gate runs BEFORE
+        # _update_failure_state so a user-active pass doesn't consume the
+        # _pending_nudges flag (it'll be consumed next pass when the user
+        # goes idle).
+        in_user_active, active_reason = self._check_user_active(session)
+        if in_user_active:
+            log_event(
+                "cognitive.pass.skipped",
+                session_key=session_key,
+                reason=active_reason,
+                active_task_count=active_task_count,
+                running_subagents=running_subagents,
+            )
+            self._deps.record_last_scan({
+                "session_key": session_key,
+                "eligible": True,
+                "reason": active_reason,
+                "candidate_count": 0,
+                "decision_count": 0,
+                "timestamp": self._deps.utcnow_iso(),
+            })
+            return []
 
         # Update failure counter based on the previous pass's nudge outcome,
         # then enforce the session-level cognitive cooldown (circuit breaker).
