@@ -397,7 +397,12 @@ class BackgroundReviewConfig(Base):
         serialization_alias="maxConcurrentReviews",
     )
     max_tokens: int = Field(
-        default=8192,
+        # Raised from 8192 to 16384 on 2026-07-18 to accommodate reasoning
+        # models (deepseek-v4-flash) that consume significant tokens in
+        # reasoning_content — production logs showed ~8000+ tokens eaten by
+        # reasoning alone under the 8192 budget, truncating the JSON in
+        # ``content``. 16384 gives reasoning and content separate headroom.
+        default=16384,
         ge=256,
         le=65536,
         validation_alias=AliasChoices("maxTokens", "max_tokens"),

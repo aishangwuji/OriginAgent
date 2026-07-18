@@ -1535,12 +1535,15 @@ class BackgroundReviewService:
                     ],
                     tools=None,
                     tool_choice=None,
-                    # Read from config (default 8192) instead of hardcoded 2048.
+                    # Read from config (default 16384, raised from 8192 on
+                    # 2026-07-18) instead of hardcoded 2048.
                     # Reasoning models (deepseek-v4-flash) need headroom for both
                     # reasoning_content AND final JSON in content — 2048 was too
                     # small, reasoning consumed the entire budget and content was
                     # left empty. See production logs 2026-07-17 22:44-22:50.
-                    max_tokens=int(getattr(cfg, "max_tokens", 8192) or 8192),
+                    # Default must stay in sync with BackgroundReviewConfig.max_tokens
+                    # in OriginAgent/config/schema.py.
+                    max_tokens=int(getattr(cfg, "max_tokens", 16384) or 16384),
                     temperature=0.1,
                 )
 

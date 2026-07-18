@@ -738,11 +738,15 @@ async def test_review_turn_uses_configured_max_tokens(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_review_turn_default_max_tokens_is_8192(tmp_path: Path) -> None:
-    """Default ``max_tokens`` must be 8192 (not the old hardcoded 2048).
+async def test_review_turn_default_max_tokens_is_16384(tmp_path: Path) -> None:
+    """Default ``max_tokens`` must be 16384 (raised from 8192 on 2026-07-18).
 
     The default must be large enough for reasoning models to output both
-    reasoning_content AND the final JSON in content.
+    reasoning_content AND the final JSON in content. Production logs
+    (2026-07-17 22:44-22:50) showed deepseek-v4-flash consuming ~8000+
+    tokens in reasoning_content alone under the 8192 budget, leaving the
+    JSON in ``content`` truncated. Raising to 16384 gives reasoning and
+    content separate headroom.
     """
     provider = FakeProvider(_proposal_response())
     service = BackgroundReviewService(
@@ -762,8 +766,8 @@ async def test_review_turn_default_max_tokens_is_8192(tmp_path: Path) -> None:
     )
 
     assert len(provider.calls) == 1
-    assert provider.calls[0]["max_tokens"] == 8192, (
-        f"expected default max_tokens=8192, got {provider.calls[0].get('max_tokens')}"
+    assert provider.calls[0]["max_tokens"] == 16384, (
+        f"expected default max_tokens=16384, got {provider.calls[0].get('max_tokens')}"
     )
 
 
