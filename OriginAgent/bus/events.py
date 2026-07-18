@@ -12,7 +12,13 @@ OUTBOUND_META_AGENT_UI = "_agent_ui"
 
 @dataclass
 class InboundMessage:
-    """Message received from a chat channel."""
+    """Message received from a chat channel.
+
+    ``is_internal`` distinguishes user-originated messages from system-originated
+    ones (cron jobs, cognitive nudges, scheduled reminders, subagent results).
+    Internal messages are routed to a separate bus queue so a busy agent never
+    starves real users behind a backlog of self-generated nudges.
+    """
 
     channel: str  # telegram, discord, slack, whatsapp
     sender_id: str  # User identifier
@@ -23,6 +29,9 @@ class InboundMessage:
     metadata: dict[str, Any] = field(default_factory=dict)  # Channel-specific data
     session_key_override: str | None = None  # Optional override for thread-scoped sessions
     episode_id: str | None = None  # Active episode at time of message (set by bus)
+    # False for real user messages; True for cron/cognitive/reminder/subagent.
+    # Defaults to False so every existing call site keeps its current behavior.
+    is_internal: bool = False
 
     @property
     def session_key(self) -> str:
