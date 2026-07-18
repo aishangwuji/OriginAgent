@@ -1041,6 +1041,12 @@ class AgentLoop:
         that bypass __init__.
         """
         if hasattr(self, "_runtime") and self._runtime is not None:
+            # RuntimeDependencies is a frozen dataclass; use object.__setattr__
+            # to update max_iterations from loop's dynamic value. Without this,
+            # deps.max_iterations stays frozen at __init__ time and updates to
+            # loop.max_iterations (e.g. via config hot-reload) never reach
+            # AgentRunSpec.max_iterations or subagents.
+            object.__setattr__(self._runtime.deps, "max_iterations", self.max_iterations)
             self._runtime._sync_subagent_runtime_limits()
         else:
             self.subagents.max_iterations = self.max_iterations
@@ -1552,6 +1558,13 @@ class AgentLoop:
         """Run the agent iteration loop via AgentRuntime."""
         async def _checkpoint_cb(sess: Session, payload: dict[str, Any]) -> None:
             self._set_runtime_checkpoint(sess, payload)
+
+        # Sync deps.max_iterations from loop's dynamic value before
+        # delegating to runtime. Without this, deps.max_iterations stays
+        # frozen at __init__ time and updates to loop.max_iterations
+        # (e.g. via config hot-reload or direct assignment in tests)
+        # never reach AgentRunSpec.max_iterations or subagents.
+        self._sync_subagent_runtime_limits()
 
         result = await self._runtime._run_agent_loop(
             initial_messages,
