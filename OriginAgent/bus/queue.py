@@ -40,6 +40,18 @@ class MessageBus:
     3. If the timeout expires, spills to the *persistence sink* if one is
        configured, so the message is not lost.
     4. Only as a last resort increments the drop counter and logs a warning.
+
+    Two-queue priority model:
+
+    - ``inbound`` holds user-originated messages (``is_internal=False``).
+    - ``inbound_internal`` holds system-originated messages (cron jobs,
+      cognitive nudges, scheduled reminders, subagent results). When this
+      queue is full, internal messages are dropped immediately — they must
+      never starve real users by blocking the publish path.
+    - ``consume_inbound`` drains ``inbound`` first; only when it is empty
+      does it block on ``inbound_internal``. This guarantees that any
+      pending user message is processed before any internal nudge, even if
+      the nudge was enqueued earlier.
     """
 
     def __init__(
@@ -50,6 +62,11 @@ class MessageBus:
         overflow_timeout: float = _DEFAULT_OVERFLOW_TIMEOUT,
     ):
         self.inbound: asyncio.Queue[InboundMessage] = asyncio.Queue(maxsize=maxsize)
+        # Internal queue: cron/nudge/reminder/subagent. Same maxsize so a
+        # burst of cron jobs doesn't crowd out nudge tracking, but overflow
+        # policy is "drop immediately" (see publish_inbound) instead of the
+        # four-level user-queue overflow.
+        self.inbound_internal: asyncio.Queue[InboundMessage] = asyncio.Queue(maxsize=maxsize)
         self.outbound: asyncio.Queue[OutboundMessage] = asyncio.Queue(maxsize=maxsize)
         self._subscribers: list[MessageBusSubscriber] = []
         self._persistence = persistence
@@ -58,6 +75,7 @@ class MessageBus:
         self._published_outbound: int = 0
         self._dropped_inbound: int = 0
         self._dropped_outbound: int = 0
+        self._dropped_inbound_internal: int = 0
         self._persisted_inbound: int = 0
         self._persisted_outbound: int = 0
         self._subscriber_failures_inbound: int = 0
@@ -80,6 +98,12 @@ class MessageBus:
         Returns True if the message was accepted (enqueued or persisted).
         Returns False only when the message was definitively dropped.
 
+        Internal messages (``msg.is_internal=True``) go to
+        ``inbound_internal`` and are dropped immediately if that queue is
+        full — they never block the publish path or spill to persistence,
+        because they are regenerable (cron will fire again, nudge will
+        re-emit next pass) and must not crowd out real users.
+
         Note: Subscriber callbacks are fire-and-forget — failures are counted
         in stats() but do not affect the return value. Messages with failed
         subscribers are still enqueued for processing.
@@ -94,6 +118,24 @@ class MessageBus:
                     "MessageBus subscriber on_inbound failed: {}: {}",
                     type(exc).__name__, exc,
                 )
+
+        # Internal messages: drop-fast path. No blocking, no persistence —
+        # they are regenerable and must never starve user messages.
+        if msg.is_internal:
+            try:
+                self.inbound_internal.put_nowait(msg)
+                return True
+            except asyncio.QueueFull:
+                self._dropped_inbound_internal += 1
+                logger.warning(
+                    "MessageBus inbound_internal queue full ({} items, max {}); "
+                    "internal message dropped (regenerable, will retry next cycle). "
+                    "In total {} internal message(s) dropped this session.",
+                    self.inbound_internal.qsize(),
+                    self.inbound_internal.maxsize,
+                    self._dropped_inbound_internal,
+                )
+                return False
 
         # Phase 1: non-blocking fast path
         try:
@@ -139,8 +181,39 @@ class MessageBus:
         return False
 
     async def consume_inbound(self) -> InboundMessage:
-        """Consume the next inbound message (blocks until available)."""
-        return await self.inbound.get()
+        """Consume the next inbound message (blocks until available).
+
+        User messages (``inbound``) are always drained first. Only when the
+        user queue is empty does this block on ``inbound_internal``. This
+        means a user message enqueued *after* an internal nudge is still
+        consumed *before* the nudge.
+        """
+        # Fast non-blocking drain of user queue first.
+        try:
+            return self.inbound.get_nowait()
+        except asyncio.QueueEmpty:
+            pass
+        # User queue empty — block on either queue. We use a task-per-queue
+        # race so that a user message arriving while we wait on the internal
+        # queue still wins.
+        user_task = asyncio.create_task(self.inbound.get())
+        internal_task = asyncio.create_task(self.inbound_internal.get())
+        try:
+            done, pending = await asyncio.wait(
+                {user_task, internal_task},
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+        except BaseException:
+            user_task.cancel()
+            internal_task.cancel()
+            raise
+        # If both completed (rare race), prefer the user message.
+        if user_task in done:
+            internal_task.cancel()
+            return user_task.result()
+        # Only internal_task completed.
+        user_task.cancel()
+        return internal_task.result()
 
     # -- outbound --------------------------------------------------------------
 
@@ -216,8 +289,8 @@ class MessageBus:
 
     @property
     def inbound_size(self) -> int:
-        """Number of pending inbound messages."""
-        return self.inbound.qsize()
+        """Number of pending inbound messages (user + internal)."""
+        return self.inbound.qsize() + self.inbound_internal.qsize()
 
     @property
     def outbound_size(self) -> int:
@@ -231,6 +304,7 @@ class MessageBus:
             "published_inbound": self._published_inbound,
             "published_outbound": self._published_outbound,
             "dropped_inbound": self._dropped_inbound,
+            "dropped_inbound_internal": self._dropped_inbound_internal,
             "dropped_outbound": self._dropped_outbound,
             "persisted_inbound": self._persisted_inbound,
             "persisted_outbound": self._persisted_outbound,
@@ -240,6 +314,8 @@ class MessageBus:
             "outbound_persist_failures": self._persist_failures_outbound,
             "inbound_queue_depth": self.inbound.qsize(),
             "inbound_queue_max": self.inbound.maxsize,
+            "inbound_internal_queue_depth": self.inbound_internal.qsize(),
+            "inbound_internal_queue_max": self.inbound_internal.maxsize,
             "outbound_queue_depth": self.outbound.qsize(),
             "outbound_queue_max": self.outbound.maxsize,
             "overflow_timeout": self._overflow_timeout,
