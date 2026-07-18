@@ -989,6 +989,11 @@ class AgentLoop:
     def _record_cognitive_scan(self, payload: dict[str, Any]) -> None:
         state_key = self._resolve_state_key()
         self._state_holder.get(state_key).last_cognitive_scan = dict(payload)
+        # Also mirror to loop instance attribute: cognition_summary()
+        # (introspection/service.py:401) reads from loop._last_cognitive_scan.
+        # Without this mirror, latest_scan would always be {} — a write/read
+        # disconnect likely introduced when scan state moved to state_holder.
+        self._last_cognitive_scan = dict(payload)
 
     def _get_turn_orchestrator(self) -> TurnOrchestrator:
         return self._turn_orchestrator

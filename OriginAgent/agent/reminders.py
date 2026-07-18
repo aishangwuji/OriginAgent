@@ -217,6 +217,21 @@ class ReminderStore:
         return sorted(due, key=lambda item: item.due_at)
 
     def mark_fired(self, reminder_id: str, *, now: datetime | None = None) -> ReminderRecord | None:
+        if self._sqlite is not None:
+            try:
+                raw = self._sqlite.transition_status(
+                    reminder_id, status="fired", field_name="fired_at", now=now
+                )
+                if raw is not None:
+                    if self._jsonl_fallback_enabled:
+                        try:
+                            self._jsonl_upsert(ReminderRecord.from_dict(raw))
+                        except Exception:
+                            logger.opt(exception=True).warning("reminders: jsonl cold backup failed for mark_fired")
+                    return ReminderRecord.from_dict(raw)
+                return None
+            except Exception:
+                logger.opt(exception=True).warning("reminders: sqlite mark_fired failed, falling back to JSONL")
         current = (now or _utcnow()).isoformat()
         with self.lock:
             records = self.read_all_unlocked()
@@ -273,6 +288,21 @@ class ReminderStore:
         field_name: str,
         now: datetime | None = None,
     ) -> ReminderRecord | None:
+        if self._sqlite is not None:
+            try:
+                raw = self._sqlite.transition_status(
+                    reminder_id, status=status, field_name=field_name, now=now
+                )
+                if raw is not None:
+                    if self._jsonl_fallback_enabled:
+                        try:
+                            self._jsonl_upsert(ReminderRecord.from_dict(raw))
+                        except Exception:
+                            logger.opt(exception=True).warning("reminders: jsonl cold backup failed for _transition")
+                    return ReminderRecord.from_dict(raw)
+                return None
+            except Exception:
+                logger.opt(exception=True).warning("reminders: sqlite _transition failed, falling back to JSONL")
         current = (now or _utcnow()).isoformat()
         with self.lock:
             records = self.read_all_unlocked()

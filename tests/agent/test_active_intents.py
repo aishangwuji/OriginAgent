@@ -390,6 +390,12 @@ async def test_disabled_agent_loop_does_not_auto_emit_due_reminder(tmp_path: Pat
         allow_agent_initiated_messages=False,
     )
     session = loop.sessions.get_or_create("cli:test")
+    # Age updated_at past _USER_ACTIVE_WINDOW_SECONDS (5 min) so the
+    # cognitive pass is not skipped by the _check_user_active gate.
+    # Without this, decisions would be empty (pass short-circuited as
+    # "user_active") and the test cannot verify the "agent_messages_disabled"
+    # suppression path.
+    session.updated_at = datetime.now() - timedelta(minutes=6)
     loop.sessions.save(session)
     due_at = (datetime.now(timezone.utc) - timedelta(minutes=1)).isoformat()
     loop._reminder_store.upsert(ReminderRecord.create(
@@ -498,6 +504,11 @@ async def test_agent_loop_cognitive_pass_emits_due_reminder_and_writes_working_m
         allow_agent_initiated_messages=True,
     )
     session = loop.sessions.get_or_create("cli:test")
+    # Age updated_at past _USER_ACTIVE_WINDOW_SECONDS (5 min) so the
+    # cognitive pass is not skipped by the _check_user_active gate
+    # (agent_cognitive_runtime.py:166). Without this, decisions would
+    # be empty because the pass is short-circuited as "user_active".
+    session.updated_at = datetime.now() - timedelta(minutes=6)
     loop.sessions.save(session)
     due_at = (datetime.now(timezone.utc) - timedelta(minutes=1)).isoformat()
     loop._reminder_store.upsert(ReminderRecord.create(
@@ -520,8 +531,10 @@ async def test_agent_loop_cognitive_pass_emits_due_reminder_and_writes_working_m
     assert msg.metadata["injected_event"] == "cognitive_event"
     assert msg.metadata["cognitive_event_type"] == "scheduled_reminder"
     snapshot = loop.working_memory.inspect(session)
-    assert "Follow up on the current plan" in snapshot["attention_items"]
-    assert "Is this due reminder still relevant and ready to act on?" in snapshot["pending_questions"]
+    # attention_items now carry event-type prefixes (e.g. "[reminder] ...",
+    # "[cognitive_event] ...") injected by working_memory; check containment.
+    assert any("Follow up on the current plan" in item for item in snapshot["attention_items"])
+    assert any("Is this due reminder still relevant and ready to act on?" in item for item in snapshot["pending_questions"])
     reminder = loop._reminder_store.get("r-1")
     assert reminder is not None
     assert reminder.status == "fired"
