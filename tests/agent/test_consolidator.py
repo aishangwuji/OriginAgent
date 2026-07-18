@@ -230,8 +230,8 @@ class TestConsolidatorTokenBudget:
         assert session.get_history(max_messages=2) == [{"role": "assistant", "content": "final answer"}]
 
     async def test_large_chunk_archived_without_cap(self, consolidator):
-        """Without chunk cap, the full range from pick_consolidation_boundary is archived."""
-        consolidator._SAFETY_BUFFER = 0
+        """Replay-window overflow archives the full prefix up to the first
+        visible user turn inside the window (no chunk cap on the archived range)."""
         session = MagicMock()
         session.last_consolidated = 0
         session.key = "test:key"
@@ -243,17 +243,14 @@ class TestConsolidatorTokenBudget:
             }
             for i in range(70)
         ]
-        consolidator.estimate_session_prompt_tokens = MagicMock(
-            side_effect=[(1200, "tiktoken"), (400, "tiktoken")]
-        )
-        # Use real pick_consolidation_boundary — it will find boundary at idx=50
-        # (user message at 50, token budget met)
         consolidator.archive = AsyncMock(return_value=_archive_result("large chunk summary"))
 
-        await consolidator.maybe_consolidate_by_tokens(session)
+        # replay_max_messages=20 → window covers idx 50-69, first user at 50,
+        # so messages[0:50] is archived as a single breadcrumb chunk.
+        await consolidator.maybe_consolidate_by_tokens(session, replay_max_messages=20)
 
         archived_chunk = consolidator.archive.await_args.args[0]
-        # pick_consolidation_boundary returns (50, tokens) — user turn at idx 50
+        # Archived prefix starts at m0 (last_consolidated=0) up to idx=50.
         assert archived_chunk[0]["content"] == "m0"
         # P1-B: consolidation trims messages and resets pointer to 0
         assert session.last_consolidated == 0
@@ -263,7 +260,6 @@ class TestConsolidatorTokenBudget:
         must still advance. Otherwise the same chunk gets raw-archived again
         on every subsequent maybe_consolidate_by_tokens() call, spamming
         duplicate [RAW] entries into history.jsonl."""
-        consolidator._SAFETY_BUFFER = 0
         session = MagicMock()
         session.last_consolidated = 0
         session.key = "test:key"
@@ -273,13 +269,13 @@ class TestConsolidatorTokenBudget:
             for i in range(70)
         ]
         session.metadata = {}
-        consolidator.estimate_session_prompt_tokens = MagicMock(
-            side_effect=[(1200, "tiktoken"), (400, "tiktoken")]
-        )
         # LLM consolidation fails — archive() returns None (raw_archive fired).
         consolidator.archive = AsyncMock(return_value=None)
 
-        await consolidator.maybe_consolidate_by_tokens(session)
+        # replay_max_messages=20 → window covers idx 50-69, first user at 50,
+        # so messages[0:50] is archived. Even on raw-archive fallback the
+        # prefix is trimmed and pointer reset to 0.
+        await consolidator.maybe_consolidate_by_tokens(session, replay_max_messages=20)
 
         consolidator.archive.assert_awaited_once()
         # P1-B: consolidation trims messages and resets pointer to 0.
@@ -289,9 +285,11 @@ class TestConsolidatorTokenBudget:
         assert len(session.messages) == 20  # 70 - 50 trimmed
 
     async def test_raw_archive_fallback_breaks_round_loop(self, consolidator):
-        """A degraded LLM should not trigger more archive() calls within the
-        same maybe_consolidate_by_tokens invocation — bail after one fallback."""
-        consolidator._SAFETY_BUFFER = 0
+        """Phase 5 Task 7 deprecated the token-estimation round loop, so
+        archive() is invoked at most once per maybe_consolidate_by_tokens()
+        call (single replay-window overflow pass). This test guards against
+        reintroducing a multi-round loop that could spam archive() on a
+        degraded LLM."""
         session = MagicMock()
         session.last_consolidated = 0
         session.key = "test:key"
@@ -300,20 +298,19 @@ class TestConsolidatorTokenBudget:
             for i in range(70)
         ]
         session.metadata = {}
-        # Keep estimates high so the loop would otherwise run multiple rounds.
-        consolidator.estimate_session_prompt_tokens = MagicMock(
-            return_value=(1200, "tiktoken")
-        )
         consolidator.archive = AsyncMock(return_value=None)
 
-        await consolidator.maybe_consolidate_by_tokens(session)
+        # replay_max_messages=20 → window covers idx 50-69, first user at 60,
+        # so messages[0:60] is archived in a single pass (no round loop).
+        await consolidator.maybe_consolidate_by_tokens(session, replay_max_messages=20)
 
-        # Exactly one fallback per call — not _MAX_CONSOLIDATION_ROUNDS.
+        # Exactly one archive call per invocation — the deprecated round loop
+        # is gone, so a degraded LLM cannot trigger repeated archive() calls.
         assert consolidator.archive.await_count == 1
 
     async def test_boundary_respected_when_no_intermediate_user_turn(self, consolidator):
-        """When boundary points past a long tool chain, the full chunk is archived."""
-        consolidator._SAFETY_BUFFER = 0
+        """When the replay window's first visible user turn sits past a long
+        tool chain, the full prefix (including the tool chain) is archived."""
         session = MagicMock()
         session.last_consolidated = 0
         session.key = "test:key"
@@ -324,12 +321,11 @@ class TestConsolidatorTokenBudget:
             }
             for i in range(70)
         ]
-        consolidator.estimate_session_prompt_tokens = MagicMock(
-            side_effect=[(1200, "tiktoken"), (400, "tiktoken")]
-        )
         consolidator.archive = AsyncMock(return_value=_archive_result("tool chain summary"))
 
-        await consolidator.maybe_consolidate_by_tokens(session)
+        # replay_max_messages=20 → window covers idx 50-69, first user at 61,
+        # so messages[0:61] (including the long tool chain 1-60) is archived.
+        await consolidator.maybe_consolidate_by_tokens(session, replay_max_messages=20)
 
         consolidator.archive.assert_awaited_once()
         # P1-B: consolidation trims messages and resets pointer to 0.
