@@ -747,6 +747,7 @@ async def test_drain_pending_blocks_while_subagents_running(tmp_path):
             usage={},
             had_injections=False,
             tools_used=[],
+            last_sent_messages=None,
         )
 
     loop.runner.run = AsyncMock(side_effect=fake_runner_run)
@@ -790,10 +791,13 @@ async def test_drain_pending_blocks_while_subagents_running(tmp_path):
         metadata={},
     ))
 
-    # Should unblock and return results
+    # Should unblock and return results.
+    # sender_id="subagent" → _is_internal_event → role=SYSTEM (rule 18:
+    # internal events must not be disguised as user role to avoid LLM
+    # misinterpretation).
     results = await asyncio.wait_for(drain_task, timeout=2.0)
     assert len(results) >= 1
-    assert results[0]["role"] == "user"
+    assert results[0]["role"] == "system"
     assert "Sub-agent result" in str(results[0]["content"])
 
     # Cleanup
@@ -879,6 +883,7 @@ async def test_drain_pending_timeout(tmp_path):
             usage={},
             had_injections=False,
             tools_used=[],
+            last_sent_messages=None,
         )
 
     loop.runner.run = AsyncMock(side_effect=fake_runner_run)
