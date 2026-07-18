@@ -954,13 +954,49 @@ def _run_gateway(
                 sender_id="cron",
                 chat_id=job.id,
                 content=reminder_note,
+                # P3 (方案 A): cron 是内部消息。虽然 on_cron_job 不走 bus
+                # （需同步管理 cron_tool / message_tool 的 context token），
+                # 但 is_internal 标记让任何下游消费者（如 system_turn_handler）
+                # 能识别这是系统触发的 turn，而非用户主动消息。
+                is_internal=True,
             )
-            resp = await agent._process_message(
-                msg,
-                session_key=f"cron:{job.id}",
-                on_progress=_silent,
-                capability_snapshot=capability_snapshot,
+            # P3 (方案 A): 把 _process_message 包成 task 并注册到
+            # _active_tasks[session_key]，让 cognitive_scheduler 的
+            # _active_task_count 检查能感知到 cron session 正在处理——
+            # 否则 cognitive_scheduler 会持续为 cron session 发射 nudge
+            # （"自产自消"死循环的根因）。
+            #
+            # 不走 bus.publish_inbound 的原因：on_cron_job 需要同步设置/
+            # 重置 cron_tool 和 message_tool 的 context token，且需要
+            # 同步获取 resp 用于后续 Path B 恢复和 delivery 决策——这些
+            # 都要求 _process_message 在当前调用栈内执行，不能委托给
+            # dispatcher 的异步 task。
+            cron_session_key = f"cron:{job.id}"
+            process_task = asyncio.create_task(
+                agent._process_message(
+                    msg,
+                    session_key=cron_session_key,
+                    on_progress=_silent,
+                    capability_snapshot=capability_snapshot,
+                )
             )
+            # Register to _active_tasks so cognitive_scheduler can see this
+            # cron session is busy (root-cause fix for "自产自消"). Some
+            # test fakes don't expose _active_tasks — degrade gracefully
+            # (the cron turn still runs, just without cognitive visibility).
+            active_tasks = getattr(agent, "_active_tasks", None)
+            if isinstance(active_tasks, dict):
+                active_tasks.setdefault(cron_session_key, []).append(process_task)
+                process_task.add_done_callback(
+                    lambda t, k=cron_session_key: (
+                        active_tasks.get(k, []).remove(t)
+                        if t in active_tasks.get(k, [])
+                        else None
+                    )
+                )
+            # _process_message 异常时 task 已 done，done_callback 会清理
+            # _active_tasks；await 自然向上抛出，让上层 cron 处理。
+            resp = await process_task
         finally:
             if isinstance(cron_tool, CronTool) and cron_token is not None:
                 cron_tool.reset_cron_context(cron_token)
