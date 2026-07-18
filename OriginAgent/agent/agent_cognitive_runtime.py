@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import time
 from dataclasses import dataclass
 from typing import Any, Callable
@@ -14,6 +15,12 @@ from OriginAgent.utils.tracing import log_event
 # Circuit-breaker tuning constants (session-level cognitive cooldown).
 _COGNITIVE_FAILURE_THRESHOLD = 3
 _COGNITIVE_COOLDOWN_SECONDS = 30 * 60
+
+# Self-loop detection constants (content-fingerprint based).
+# If the same nudge content hash is emitted this many consecutive passes,
+# the session enters a silent period to break the "自产自消" loop.
+_LOOP_REPEAT_THRESHOLD = 3
+_LOOP_SILENT_PERIOD_SECONDS = 60 * 60
 
 
 @dataclass
@@ -46,6 +53,16 @@ class AgentCognitiveRuntime:
         # session_key -> emitted_at_iso (marks that a nudge was emitted last pass,
         # so the next pass can inspect whether it produced an LLM error).
         self._pending_nudges: dict[str, str] = {}
+        # P5 (方案 C): content-fingerprint self-loop detection.
+        # session_key -> {"last_hash": str | None, "consecutive_repeats": int,
+        #                 "silent_until": float | None}
+        # When the same nudge content hash is emitted _LOOP_REPEAT_THRESHOLD
+        # consecutive passes, the session enters a silent period
+        # (_LOOP_SILENT_PERIOD_SECONDS) to break the "自产自消" loop where
+        # cognitive_scheduler keeps re-firing the same nudge without progress.
+        # Independent from the LLM-failure circuit breaker above — that one
+        # catches "LLM errored 3x", this one catches "same nudge 3x".
+        self._loop_detection: dict[str, dict] = {}
 
     def _check_session_cooldown(self, session_key: str) -> tuple[bool, str | None]:
         """Return (True, "cognitive_cooldown") if the session is still in cooldown.
@@ -64,6 +81,52 @@ class AgentCognitiveRuntime:
         # Cooldown expired: reset state so subsequent failures count from zero.
         self._session_failure_states.pop(session_key, None)
         return False, None
+
+    def _check_loop_silent_period(self, session_key: str) -> tuple[bool, str | None]:
+        """Return (True, "loop_silent_period") if the session is in a
+        content-fingerprint-induced silent period.
+
+        If the silent period has expired, the loop state is reset (so the next
+        emit starts a fresh repeat count) and (False, None) is returned.
+        """
+        state = self._loop_detection.get(session_key)
+        if not state:
+            return False, None
+        silent_until = state.get("silent_until")
+        if silent_until is None:
+            return False, None
+        if time.time() < silent_until:
+            return True, "loop_silent_period"
+        # Silent period expired: reset so the next emit starts fresh.
+        self._loop_detection.pop(session_key, None)
+        return False, None
+
+    def _update_loop_detection(self, session_key: str, content_hash: str) -> None:
+        """Track consecutive same-content nudge emissions. After
+        ``_LOOP_REPEAT_THRESHOLD`` consecutive repeats, trigger a silent
+        period to break the self-loop.
+
+        Different content resets the counter — only *repeated identical*
+        nudges count as a loop signal. This catches the "自产自消" pattern
+        where a pending_confirmation or goal_nudge re-fires with the same
+        content because the underlying item isn't being resolved (user
+        absent, LLM can't progress, etc.).
+        """
+        state = self._loop_detection.get(session_key, {
+            "last_hash": None,
+            "consecutive_repeats": 0,
+            "silent_until": None,
+        })
+        if state.get("last_hash") == content_hash:
+            state["consecutive_repeats"] = int(state.get("consecutive_repeats", 0)) + 1
+        else:
+            # Different content: reset counter, clear any stale silent marker.
+            state["last_hash"] = content_hash
+            state["consecutive_repeats"] = 1
+            state.pop("silent_until", None)
+        if int(state["consecutive_repeats"]) >= _LOOP_REPEAT_THRESHOLD:
+            state["silent_until"] = time.time() + _LOOP_SILENT_PERIOD_SECONDS
+        self._loop_detection[session_key] = state
 
     def _detect_last_turn_failure(self, session: Any) -> bool:
         """Inspect the last session message to decide if the previous nudge's
@@ -251,6 +314,31 @@ class AgentCognitiveRuntime:
             })
             return [cooldown_decision]
 
+        # P5 (方案 C): content-fingerprint silent period. If the previous
+        # passes emitted the same nudge content _LOOP_REPEAT_THRESHOLD
+        # consecutive times, the session is in a self-loop — skip the pass
+        # entirely until _LOOP_SILENT_PERIOD_SECONDS elapses. Independent
+        # from the failure-based cooldown above (that one catches LLM
+        # errors; this one catches "same nudge, no progress").
+        in_silent, silent_reason = self._check_loop_silent_period(session_key)
+        if in_silent:
+            log_event(
+                "cognitive.pass.skipped",
+                session_key=session_key,
+                reason=silent_reason,
+                active_task_count=active_task_count,
+                running_subagents=running_subagents,
+            )
+            self._deps.record_last_scan({
+                "session_key": session_key,
+                "eligible": True,
+                "reason": silent_reason,
+                "candidate_count": 0,
+                "decision_count": 0,
+                "timestamp": self._deps.utcnow_iso(),
+            })
+            return []
+
         runtime_context = self._deps.build_runtime_context(session_key)
         candidates = self._deps.collect_candidates(session_key)
         decisions: list[CognitiveDecision] = []
@@ -287,6 +375,14 @@ class AgentCognitiveRuntime:
                 # Mark that a nudge was emitted so the next pass can inspect
                 # whether it produced an LLM error (circuit-breaker input).
                 self._pending_nudges[session_key] = self._deps.utcnow_iso()
+                # P5 (方案 C): update content-fingerprint loop detection.
+                # Hash the nudge content (not the LLM response) — same content
+                # across consecutive passes means the underlying pending item
+                # isn't being resolved, which is the "自产自消" signal.
+                content_hash = hashlib.sha256(
+                    candidate["message"].content.encode("utf-8", errors="replace")
+                ).hexdigest()[:16]
+                self._update_loop_detection(session_key, content_hash)
                 if event.event_type == "scheduled_reminder":
                     self._deps.reminder_store.mark_fired(event.source_reference)
                 log_event("cognitive.event.emitted", session_key=session_key, event_type=event.event_type, summary=str(event.summary)[:80])

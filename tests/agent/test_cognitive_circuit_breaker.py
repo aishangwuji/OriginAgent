@@ -30,11 +30,11 @@ def _make_event(session_key: str) -> CognitiveEvent:
     )
 
 
-def _make_candidate(session_key: str) -> dict:
+def _make_candidate(session_key: str, content: str = "nudge") -> dict:
     return {
         "event": _make_event(session_key),
         "cooldown_key": f"pending_confirmation:{session_key}:conf-1",
-        "message": SimpleNamespace(content="nudge"),
+        "message": SimpleNamespace(content=content),
     }
 
 
@@ -69,6 +69,15 @@ def _build_runtime(session: SimpleNamespace) -> AgentCognitiveRuntime:
         config=SimpleNamespace(enabled=True, max_messages_per_session_per_pass=1),
     )
     sessions = SimpleNamespace(get_or_create=lambda _sk: session)
+    # P5 适配：failure-circuit-breaker 测试本意是测 LLM 失败熔断，不是测
+    # 内容指纹循环检测。每次 pass 用不同的 nudge 内容，避免触发 P5 新增
+    # 的 loop_detection（相同内容 3 次触发静默期）。
+    _counter = [0]
+
+    def _collect(_sk: str) -> list[dict]:
+        _counter[0] += 1
+        return [_make_candidate(_sk, content=f"nudge-{_counter[0]}")]
+
     deps = CognitiveRuntimeDeps(
         cognitive_loop=cognitive_loop,
         cognitive_scheduler=cognitive_scheduler,
@@ -83,7 +92,7 @@ def _build_runtime(session: SimpleNamespace) -> AgentCognitiveRuntime:
         ),
         running_flag=lambda: False,
         build_runtime_context=lambda _sk: None,
-        collect_candidates=lambda _sk: [_make_candidate(_sk)],
+        collect_candidates=_collect,
         write_cognitive_event_to_working_memory=lambda *a, **kw: False,
         record_last_scan=lambda _p: None,
         utcnow_iso=lambda: "2026-07-17T00:00:00+00:00",
