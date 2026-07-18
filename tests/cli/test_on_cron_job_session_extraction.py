@@ -297,3 +297,374 @@ def test_on_cron_job_registers_to_active_tasks(monkeypatch, tmp_path: Path) -> N
     # We can't inspect the fake_agent directly (it's a new instance); instead
     # verify _process_message was called (task ran) and no exception raised.
     assert result.exit_code == 0 or isinstance(result.exception, _StopGatewayError)
+
+
+def test_on_cron_job_uses_payload_session_key_when_provided(
+    monkeypatch, tmp_path: Path
+) -> None:
+    """P0 修复验证（规则 34 验证先行）：on_cron_job 必须尊重
+    ``job.payload.session_key``，而非硬编码 ``cron:{job.id}``。
+
+    当 payload.session_key="tenant:guest" 时：
+    - ``_process_message`` 必须收到 ``session_key="tenant:guest"``
+    - ``_active_tasks`` 必须注册到 ``"tenant:guest"`` key
+
+    否则 cron 会在独立 ``cron:{job.id}`` session 执行，与用户主动消息
+    的 ``tenant:guest`` session 形成"两个对话重复"现象。
+    """
+    config_file = tmp_path / "instance" / "config.json"
+    config_file.parent.mkdir(parents=True)
+    config_file.write_text("{}")
+
+    config = Config()
+    config.agents.defaults.workspace = str(tmp_path / "config-workspace")
+    bus = MagicMock()
+    bus.publish_outbound = AsyncMock()
+    seen: dict[str, object] = {}
+
+    monkeypatch.setattr("OriginAgent.config.loader.set_config_path", lambda _path: None)
+    monkeypatch.setattr("OriginAgent.config.loader.load_config", lambda _path=None: config)
+    monkeypatch.setattr("OriginAgent.config.loader.resolve_config_env_vars", lambda c: c)
+    monkeypatch.setattr("OriginAgent.cli.commands.sync_workspace_templates", lambda _path: None)
+    monkeypatch.setattr("OriginAgent.providers.factory.make_provider", lambda _config: _fake_provider())
+    monkeypatch.setattr(
+        "OriginAgent.providers.factory.build_provider_snapshot",
+        lambda _config: _test_provider_snapshot(_fake_provider(), _config),
+    )
+    monkeypatch.setattr(
+        "OriginAgent.providers.factory.load_provider_snapshot",
+        lambda _config_path=None: _test_provider_snapshot(_fake_provider(), config),
+    )
+    monkeypatch.setattr("OriginAgent.bus.queue.MessageBus", lambda: bus)
+    monkeypatch.setattr("OriginAgent.session.manager.SessionManager", lambda _workspace: object())
+    monkeypatch.setattr(
+        "OriginAgent.cli.commands.snapshot_for_cron_payload",
+        lambda _payload, _grant_store: MagicMock(),
+    )
+    monkeypatch.setattr(
+        "OriginAgent.utils.evaluator.evaluate_response",
+        AsyncMock(return_value=False),
+    )
+
+    class _FakeAgentLoop:
+        @classmethod
+        def from_config(cls, config, bus=None, **extra):
+            # Expose the instance so the test can inspect call_args / _active_tasks
+            instance = cls(**extra)
+            seen["agent"] = instance
+            return instance
+
+        def __init__(self, *args, **kwargs) -> None:
+            self.model = "test-model"
+            self.provider = _fake_provider()
+            self.tools = {}
+            self._process_message = AsyncMock(return_value=None)
+            self._active_tasks: dict[str, list] = {}
+            self.sessions = MagicMock()
+            self.sessions.get_or_create.return_value = SimpleNamespace(messages=[])
+            self.dream = MagicMock()
+            self.dream.run = AsyncMock(return_value=None)
+            self._host = MagicMock()
+
+        async def close_mcp(self) -> None:
+            return None
+
+        async def run(self) -> None:
+            return None
+
+        def stop(self) -> None:
+            return None
+
+    class _StopAfterCronSetup:
+        def __init__(self, *_args, **_kwargs) -> None:
+            raise _StopGatewayError("stop")
+
+    class _FakeCron:
+        def __init__(self, _store_path: Path) -> None:
+            self.on_job = None
+            seen["cron"] = self
+
+    monkeypatch.setattr("OriginAgent.cron.service.CronService", _FakeCron)
+    monkeypatch.setattr("OriginAgent.cli.commands.AgentLoop", _FakeAgentLoop)
+    monkeypatch.setattr("OriginAgent.channels.manager.ChannelManager", _StopAfterCronSetup)
+
+    result = runner.invoke(app, ["gateway", "--config", str(config_file)])
+    assert isinstance(result.exception, _StopGatewayError)
+
+    cron = seen["cron"]
+    agent = seen["agent"]
+    job = CronJob(
+        id="cron-payload-sk-1",
+        name="test-payload-session-key",
+        schedule=CronSchedule(kind="every", every_ms=60000),
+        payload=CronPayload(
+            kind="agent_turn",
+            message="提醒",
+            deliver=False,
+            session_key="tenant:guest",
+        ),
+    )
+
+    asyncio.run(cron.on_job(job))
+
+    # _process_message 必须收到 payload.session_key，而非硬编码 cron:{job.id}
+    assert agent._process_message.called
+    assert agent._process_message.call_args.kwargs["session_key"] == "tenant:guest"
+    # _active_tasks 必须注册到 "tenant:guest" key（done_callback 清理 list 但保留 key）
+    assert "tenant:guest" in agent._active_tasks
+
+
+def test_on_cron_job_falls_back_to_cron_job_id_when_session_key_empty(
+    monkeypatch, tmp_path: Path
+) -> None:
+    """向后兼容：当 ``payload.session_key`` 为 None 时，session_key 必须
+    fallback 到 ``cron:{job.id}``，保持既有 cron job 行为不变。
+
+    这是规则 19（变更可回滚）的回归测试——修复不能破坏未配置
+    session_key 的存量 cron job。
+    """
+    config_file = tmp_path / "instance" / "config.json"
+    config_file.parent.mkdir(parents=True)
+    config_file.write_text("{}")
+
+    config = Config()
+    config.agents.defaults.workspace = str(tmp_path / "config-workspace")
+    bus = MagicMock()
+    bus.publish_outbound = AsyncMock()
+    seen: dict[str, object] = {}
+
+    monkeypatch.setattr("OriginAgent.config.loader.set_config_path", lambda _path: None)
+    monkeypatch.setattr("OriginAgent.config.loader.load_config", lambda _path=None: config)
+    monkeypatch.setattr("OriginAgent.config.loader.resolve_config_env_vars", lambda c: c)
+    monkeypatch.setattr("OriginAgent.cli.commands.sync_workspace_templates", lambda _path: None)
+    monkeypatch.setattr("OriginAgent.providers.factory.make_provider", lambda _config: _fake_provider())
+    monkeypatch.setattr(
+        "OriginAgent.providers.factory.build_provider_snapshot",
+        lambda _config: _test_provider_snapshot(_fake_provider(), _config),
+    )
+    monkeypatch.setattr(
+        "OriginAgent.providers.factory.load_provider_snapshot",
+        lambda _config_path=None: _test_provider_snapshot(_fake_provider(), config),
+    )
+    monkeypatch.setattr("OriginAgent.bus.queue.MessageBus", lambda: bus)
+    monkeypatch.setattr("OriginAgent.session.manager.SessionManager", lambda _workspace: object())
+    monkeypatch.setattr(
+        "OriginAgent.cli.commands.snapshot_for_cron_payload",
+        lambda _payload, _grant_store: MagicMock(),
+    )
+    monkeypatch.setattr(
+        "OriginAgent.utils.evaluator.evaluate_response",
+        AsyncMock(return_value=False),
+    )
+
+    class _FakeAgentLoop:
+        @classmethod
+        def from_config(cls, config, bus=None, **extra):
+            instance = cls(**extra)
+            seen["agent"] = instance
+            return instance
+
+        def __init__(self, *args, **kwargs) -> None:
+            self.model = "test-model"
+            self.provider = _fake_provider()
+            self.tools = {}
+            self._process_message = AsyncMock(return_value=None)
+            self._active_tasks: dict[str, list] = {}
+            self.sessions = MagicMock()
+            self.sessions.get_or_create.return_value = SimpleNamespace(messages=[])
+            self.dream = MagicMock()
+            self.dream.run = AsyncMock(return_value=None)
+            self._host = MagicMock()
+
+        async def close_mcp(self) -> None:
+            return None
+
+        async def run(self) -> None:
+            return None
+
+        def stop(self) -> None:
+            return None
+
+    class _StopAfterCronSetup:
+        def __init__(self, *_args, **_kwargs) -> None:
+            raise _StopGatewayError("stop")
+
+    class _FakeCron:
+        def __init__(self, _store_path: Path) -> None:
+            self.on_job = None
+            seen["cron"] = self
+
+    monkeypatch.setattr("OriginAgent.cron.service.CronService", _FakeCron)
+    monkeypatch.setattr("OriginAgent.cli.commands.AgentLoop", _FakeAgentLoop)
+    monkeypatch.setattr("OriginAgent.channels.manager.ChannelManager", _StopAfterCronSetup)
+
+    result = runner.invoke(app, ["gateway", "--config", str(config_file)])
+    assert isinstance(result.exception, _StopGatewayError)
+
+    cron = seen["cron"]
+    agent = seen["agent"]
+    job = CronJob(
+        id="cron-fallback-1",
+        name="test-fallback",
+        schedule=CronSchedule(kind="every", every_ms=60000),
+        payload=CronPayload(
+            kind="agent_turn",
+            message="提醒",
+            deliver=False,
+            # session_key 未设置（默认 None）——必须 fallback 到 cron:{job.id}
+        ),
+    )
+
+    asyncio.run(cron.on_job(job))
+
+    # session_key 必须 fallback 到 cron:{job.id}（向后兼容）
+    assert agent._process_message.called
+    assert agent._process_message.call_args.kwargs["session_key"] == f"cron:{job.id}"
+    # _active_tasks 也注册到 cron:{job.id}
+    assert f"cron:{job.id}" in agent._active_tasks
+
+
+def test_on_cron_job_path_b_recovery_uses_resolved_session_key(
+    monkeypatch, tmp_path: Path
+) -> None:
+    """P0 修复验证（规则 34 验证先行）：Path B 必须从 payload.session_key
+    指定的 session 提取 response，而非从 cron:{job.id} session。
+
+    当 payload.session_key="tenant:guest" + deliver=True 时：
+    - ``_process_message`` 返回 None（Path A 抑制）
+    - Path B 从 ``tenant:guest`` session 提取最后一条 assistant 消息
+    - 提取的 response 经 ``_deliver_to_channel`` 投递到 ``bus.publish_outbound``
+
+    如果 Path B 仍用 cron:{job.id} session（修复前 bug），response 会是空
+    （cron:{job.id} session 不含 turn 响应），用户收不到 cron 触发的消息。
+    """
+    config_file = tmp_path / "instance" / "config.json"
+    config_file.parent.mkdir(parents=True)
+    config_file.write_text("{}")
+
+    config = Config()
+    config.agents.defaults.workspace = str(tmp_path / "config-workspace")
+    bus = MagicMock()
+    bus.publish_outbound = AsyncMock()
+    seen: dict[str, object] = {}
+
+    monkeypatch.setattr("OriginAgent.config.loader.set_config_path", lambda _path: None)
+    monkeypatch.setattr("OriginAgent.config.loader.load_config", lambda _path=None: config)
+    monkeypatch.setattr("OriginAgent.config.loader.resolve_config_env_vars", lambda c: c)
+    monkeypatch.setattr("OriginAgent.cli.commands.sync_workspace_templates", lambda _path: None)
+    monkeypatch.setattr("OriginAgent.providers.factory.make_provider", lambda _config: _fake_provider())
+    monkeypatch.setattr(
+        "OriginAgent.providers.factory.build_provider_snapshot",
+        lambda _config: _test_provider_snapshot(_fake_provider(), _config),
+    )
+    monkeypatch.setattr(
+        "OriginAgent.providers.factory.load_provider_snapshot",
+        lambda _config_path=None: _test_provider_snapshot(_fake_provider(), config),
+    )
+    monkeypatch.setattr("OriginAgent.bus.queue.MessageBus", lambda: bus)
+    monkeypatch.setattr("OriginAgent.session.manager.SessionManager", lambda _workspace: object())
+    monkeypatch.setattr(
+        "OriginAgent.cli.commands.snapshot_for_cron_payload",
+        lambda _payload, _grant_store: MagicMock(),
+    )
+    monkeypatch.setattr(
+        "OriginAgent.utils.evaluator.evaluate_response",
+        AsyncMock(return_value=True),  # 通知评估通过，进入 Path B 投递
+    )
+
+    # Path B 期望从 tenant:guest session 提取的 assistant content
+    expected_response = "提醒：该喝水了（来自 tenant session）"
+
+    class _FakeAgentLoop:
+        @classmethod
+        def from_config(cls, config, bus=None, **extra):
+            instance = cls(**extra)
+            seen["agent"] = instance
+            return instance
+
+        def __init__(self, *args, **kwargs) -> None:
+            self.model = "test-model"
+            self.provider = _fake_provider()
+            self.tools = {}
+            # _process_message 返回 None（模拟 _assemble_outbound 抑制 Path A）
+            self._process_message = AsyncMock(return_value=None)
+            self._active_tasks: dict[str, list] = {}
+            self.sessions = MagicMock()
+            # 默认返回空 session；测试主体在 job 创建后重新设置 side_effect
+            self.sessions.get_or_create.return_value = SimpleNamespace(messages=[])
+            self.dream = MagicMock()
+            self.dream.run = AsyncMock(return_value=None)
+            self._host = MagicMock()
+
+        async def close_mcp(self) -> None:
+            return None
+
+        async def run(self) -> None:
+            return None
+
+        def stop(self) -> None:
+            return None
+
+    class _StopAfterCronSetup:
+        def __init__(self, *_args, **_kwargs) -> None:
+            raise _StopGatewayError("stop")
+
+    class _FakeCron:
+        def __init__(self, _store_path: Path) -> None:
+            self.on_job = None
+            seen["cron"] = self
+
+    monkeypatch.setattr("OriginAgent.cron.service.CronService", _FakeCron)
+    monkeypatch.setattr("OriginAgent.cli.commands.AgentLoop", _FakeAgentLoop)
+    monkeypatch.setattr("OriginAgent.channels.manager.ChannelManager", _StopAfterCronSetup)
+
+    result = runner.invoke(app, ["gateway", "--config", str(config_file)])
+    assert isinstance(result.exception, _StopGatewayError)
+
+    cron = seen["cron"]
+    agent = seen["agent"]
+    job = CronJob(
+        id="cron-pathb-1",
+        name="test-path-b-recovery",
+        schedule=CronSchedule(kind="every", every_ms=60000),
+        payload=CronPayload(
+            kind="agent_turn",
+            message="提醒喝水",
+            deliver=True,
+            channel="telegram",
+            to="7715515124",
+            session_key="tenant:guest",
+        ),
+    )
+
+    # 关键：sessions.get_or_create 根据 session_key 返回不同 session
+    # - "tenant:guest" → 带 assistant content 的 session（Path B 提取来源）
+    # - "cron:{job.id}" → 空 session（denied_tools 扫描用，L913 不受本次修复影响）
+    tenant_session = SimpleNamespace(
+        messages=[
+            {"role": "user", "content": "The scheduled time has arrived."},
+            {"role": "assistant", "content": expected_response},
+        ],
+        metadata={},
+    )
+    cron_session = SimpleNamespace(messages=[], metadata={})
+
+    def fake_get_or_create(session_key):
+        if session_key == "tenant:guest":
+            return tenant_session
+        if session_key == f"cron:{job.id}":
+            return cron_session
+        return SimpleNamespace(messages=[])
+
+    agent.sessions.get_or_create.side_effect = fake_get_or_create
+
+    response = asyncio.run(cron.on_job(job))
+
+    # Path B 必须从 tenant:guest session 提取 response（修复后行为）
+    assert response == expected_response
+    # 必须经 _deliver_to_channel → bus.publish_outbound 投递
+    assert bus.publish_outbound.called
+    delivered = bus.publish_outbound.call_args.args[0]
+    assert delivered.channel == "telegram"
+    assert delivered.chat_id == "7715515124"
+    assert delivered.content == expected_response

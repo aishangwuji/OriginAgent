@@ -206,7 +206,7 @@ proposed ──→ staged ──→ verified ──→ active
 
 **投递机制(2026-07-17 新增)**:
 - Cron 通道是 inbound-only(`_inbound_only_channels = frozenset({"cron"})`),OutboundMessages 到 cron 通道被静默丢弃
-- **Path B(最终响应投递)**:`on_cron_job` 从 `cron:{job.id}` session 提取最后一条 assistant 消息,包装为 `OutboundMessage(channel=job.payload.channel, chat_id=job.payload.to)` 经 bus 投递。`MessageTool._sent_in_turn=True` 时跳过 Path B(Agent 已主动发送)
+- **Path B(最终响应投递)**:`on_cron_job` 从 resolved session(`job.payload.session_key or f"cron:{job.id}"`,2026-07-18 修复前硬编码为 `cron:{job.id}`)提取最后一条 assistant 消息,包装为 `OutboundMessage(channel=job.payload.channel, chat_id=job.payload.to)` 经 bus 投递。`MessageTool._sent_in_turn=True` 时跳过 Path B(Agent 已主动发送)。注意:denied_tools 扫描仍用 `cron:{job.id}` session(cron-job-specific 能力边界历史,与 turn 执行 session 解耦)
 - **主动通知(delivery_target 机制)**:`on_cron_job` 调用 `MessageTool.set_delivery_target(channel, chat_id)` 设置 ContextVar 覆盖。Agent 在 turn 中途调用 `message(content="...")` 无显式 channel/chat_id 时,自动路由到 delivery_target(用户真实通道如 Telegram)。向 delivery_target 发送视为 same-target,豁免 `can_send_cross_target` 检查。仅允许向该特定目标发送,向其他通道发送仍被 `PolicyDeniedError` 拒绝
 - **安全授权链**:delivery_target 来源是 `job.payload.to`(用户创建 cron job 时显式配置的投递目标),属受信任配置数据,非 Agent 可控输入
 

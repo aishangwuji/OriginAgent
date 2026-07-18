@@ -971,7 +971,11 @@ def _run_gateway(
             # 同步获取 resp 用于后续 Path B 恢复和 delivery 决策——这些
             # 都要求 _process_message 在当前调用栈内执行，不能委托给
             # dispatcher 的异步 task。
-            cron_session_key = f"cron:{job.id}"
+            # P0 修复：尊重 payload.session_key——若配置则用 payload 指定的 session，
+            # 否则 fallback 到 cron:{job.id}（向后兼容）。
+            # denied_tools 扫描（L913）仍用 cron:{job.id}，因为那是 cron-job-specific
+            # 的能力边界历史记录，与 turn 执行 session 解耦。
+            cron_session_key = job.payload.session_key or f"cron:{job.id}"
             process_task = asyncio.create_task(
                 agent._process_message(
                     msg,
@@ -1016,7 +1020,7 @@ def _run_gateway(
         elif isinstance(message_tool, MessageTool) and message_tool._sent_in_turn:
             response = ""
         else:
-            response = _last_assistant_content_from_session(f"cron:{job.id}")
+            response = _last_assistant_content_from_session(cron_session_key)
 
         if job.payload.deliver and isinstance(message_tool, MessageTool) and message_tool._sent_in_turn:
             return response
