@@ -881,6 +881,9 @@ class SubagentManager:
             chat_id=f"{origin['channel']}:{origin['chat_id']}",
             content=announce_content,
             session_key_override=override,
+            # P4 (方案 A): subagent result 是系统自发消息，走 inbound_internal
+            # 队列，与用户消息隔离——避免 subagent 结果与用户消息抢资源。
+            is_internal=True,
             metadata=metadata,
         )
 

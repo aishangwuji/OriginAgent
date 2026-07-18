@@ -444,6 +444,9 @@ class AgentRuntime:
                 channel="system", sender_id="agent_cognitive",
                 chat_id=record.chat_id or session_key, content=content,
                 session_key_override=session_key,
+                # P4 (方案 A): 系统触发的 scheduled reminder 走 inbound_internal
+                # 队列，与用户消息隔离。
+                is_internal=True,
                 metadata=build_origin_metadata(
                     {
                         "injected_event": "cognitive_event",

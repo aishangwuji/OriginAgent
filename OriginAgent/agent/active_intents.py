@@ -583,6 +583,10 @@ class ActiveIntentService:
             chat_id=f"{channel}:{chat_id}",
             content=candidate.content,
             session_key_override=session.key,
+            # P4 (方案 A): cognitive nudge 是系统自发消息，走 inbound_internal
+            # 队列，让用户消息优先消费——避免 nudge 与用户消息在单一 FIFO
+            # 队列里抢资源。
+            is_internal=True,
             metadata=build_origin_metadata(
                 {
                     "injected_event": "active_intent",
