@@ -28,8 +28,10 @@ class DispatcherAwareLoop(Protocol):
     auto_compact: Any
     commands: Any
     _pending_queues: dict[str, asyncio.Queue[InboundMessage]]
-    _active_tasks: dict[str, list[asyncio.Task[Any]]]
-    _session_locks: dict[str, asyncio.Lock]
+    # Each entry is (task, created_at_timestamp) — the timestamp is used by
+    # ``AgentLoop._reap_stale_tasks`` to cancel hung tasks older than
+    # ``stale_task_timeout_seconds`` (spec: Stale Active Task Reaper).
+    _active_tasks: dict[str, list[tuple[asyncio.Task[Any], float]]]
     _concurrency_gate: AbstractContextManager[Any] | None
     sessions: Any
     provider: Any
@@ -136,19 +138,26 @@ class MessageDispatcher:
                     continue
 
             task = asyncio.create_task(self.loop._dispatch(msg))
-            self.loop._active_tasks.setdefault(effective_key, []).append(task)
-            task.add_done_callback(
-                lambda t, k=effective_key: self.loop._active_tasks.get(k, [])
-                and self.loop._active_tasks[k].remove(t)
-                if t in self.loop._active_tasks.get(k, [])
-                else None
+            # Store (task, created_at) tuple so ``_reap_stale_tasks`` can
+            # cancel hung tasks. The done_callback removes the matching tuple.
+            self.loop._active_tasks.setdefault(effective_key, []).append(
+                (task, time.time())
             )
+
+            def _remove_done_task(done_task, k=effective_key):
+                tasks = self.loop._active_tasks.get(k, [])
+                for it in tasks:
+                    if it[0] is done_task:
+                        tasks.remove(it)
+                        break
+
+            task.add_done_callback(_remove_done_task)
 
     async def dispatch_message(self, msg: InboundMessage) -> None:
         session_key = self.loop._effective_session_key(msg)
         if session_key != msg.session_key:
             msg = dataclasses.replace(msg, session_key_override=session_key)
-        lock = self.loop._session_locks.setdefault(session_key, asyncio.Lock())
+        lock = self.loop.sessions.get_lock(session_key)
         gate = self.loop._concurrency_gate or nullcontext()
         pending = asyncio.Queue(maxsize=self.PENDING_QUEUE_MAXSIZE)
         self.loop._pending_queues[session_key] = pending

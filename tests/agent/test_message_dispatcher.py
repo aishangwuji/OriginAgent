@@ -302,7 +302,6 @@ async def test_message_dispatcher_cleans_pending_queue() -> None:
     queue.put_nowait(_message(content="leftover"))
     loop = SimpleNamespace(
         _effective_session_key=MagicMock(return_value="cli:c"),
-        _session_locks={},
         _concurrency_gate=None,
         _pending_queues={"cli:c": queue},
         _process_message=AsyncMock(return_value=None),
@@ -312,6 +311,7 @@ async def test_message_dispatcher_cleans_pending_queue() -> None:
         _clear_pending_user_turn=MagicMock(),
         sessions=SimpleNamespace(
             get_or_create=MagicMock(return_value=SimpleNamespace(metadata={}, messages=[])),
+            get_lock=MagicMock(return_value=asyncio.Lock()),
             save=MagicMock(),
         ),
         bus=SimpleNamespace(publish_outbound=AsyncMock(), publish_inbound=AsyncMock()),
@@ -336,7 +336,6 @@ async def test_message_dispatcher_republishes_leftover_messages() -> None:
 
     loop = SimpleNamespace(
         _effective_session_key=MagicMock(return_value="cli:c"),
-        _session_locks={},
         _concurrency_gate=None,
         _pending_queues={},
         _process_message=AsyncMock(side_effect=process_message),
@@ -346,6 +345,7 @@ async def test_message_dispatcher_republishes_leftover_messages() -> None:
         _clear_pending_user_turn=MagicMock(),
         sessions=SimpleNamespace(
             get_or_create=MagicMock(return_value=SimpleNamespace(metadata={}, messages=[])),
+            get_lock=MagicMock(return_value=asyncio.Lock()),
             save=MagicMock(),
         ),
         bus=SimpleNamespace(publish_outbound=AsyncMock(), publish_inbound=AsyncMock()),
@@ -371,7 +371,6 @@ async def test_message_dispatcher_cancelled_dispatch_restores_checkpoint() -> No
 
     loop = SimpleNamespace(
         _effective_session_key=MagicMock(return_value="cli:c"),
-        _session_locks={},
         _concurrency_gate=None,
         _pending_queues={},
         _process_message=AsyncMock(side_effect=process_message),
@@ -381,6 +380,7 @@ async def test_message_dispatcher_cancelled_dispatch_restores_checkpoint() -> No
         _clear_pending_user_turn=MagicMock(),
         sessions=SimpleNamespace(
             get_or_create=MagicMock(return_value=session),
+            get_lock=MagicMock(return_value=asyncio.Lock()),
             save=MagicMock(),
         ),
         bus=SimpleNamespace(publish_outbound=AsyncMock(), publish_inbound=AsyncMock()),
@@ -407,7 +407,6 @@ async def test_message_dispatcher_cancelled_dispatch_restores_checkpoint() -> No
 async def test_message_dispatcher_error_publishes_fallback() -> None:
     loop = SimpleNamespace(
         _effective_session_key=MagicMock(return_value="cli:c"),
-        _session_locks={},
         _concurrency_gate=None,
         _pending_queues={},
         _process_message=AsyncMock(side_effect=RuntimeError("boom")),
@@ -417,6 +416,7 @@ async def test_message_dispatcher_error_publishes_fallback() -> None:
         _clear_pending_user_turn=MagicMock(),
         sessions=SimpleNamespace(
             get_or_create=MagicMock(return_value=SimpleNamespace(metadata={}, messages=[])),
+            get_lock=MagicMock(return_value=asyncio.Lock()),
             save=MagicMock(),
         ),
         bus=SimpleNamespace(publish_outbound=AsyncMock(), publish_inbound=AsyncMock()),
@@ -445,7 +445,6 @@ async def test_message_dispatcher_websocket_turn_end_and_title_background() -> N
 
     loop = SimpleNamespace(
         _effective_session_key=MagicMock(return_value="websocket:c"),
-        _session_locks={},
         _concurrency_gate=None,
         _pending_queues={},
         _process_message=AsyncMock(
@@ -457,6 +456,7 @@ async def test_message_dispatcher_websocket_turn_end_and_title_background() -> N
         _clear_pending_user_turn=MagicMock(),
         sessions=SimpleNamespace(
             get_or_create=MagicMock(return_value=session),
+            get_lock=MagicMock(return_value=asyncio.Lock()),
             save=MagicMock(),
         ),
         bus=SimpleNamespace(publish_outbound=AsyncMock(), publish_inbound=AsyncMock()),
