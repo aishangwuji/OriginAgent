@@ -49,7 +49,8 @@
       "general": "Umum",
       "byok": "BYOK",
       "mcp": "MCP",
-      "skills": "Skills"
+      "skills": "Skills",
+      "approvals": "Persetujuan"
     },
     "tieredRouter": {
       "overview": "Routing LLM berlapis",
@@ -308,6 +309,32 @@
         "activate": "Activate this verified skill for normal discovery?",
         "alwaysOn": "Always load this skill into the system prompt? Use only for highly trusted skills."
       }
+    }
+  },
+  "approvals": {
+    "title": "Persetujuan Tertunda",
+    "empty": "Tidak ada item yang menunggu persetujuan",
+    "approve": "Setujui",
+    "reject": "Tolak",
+    "confirm_approve": "Setujui operasi ini?",
+    "confirm_reject": "Tolak operasi ini?",
+    "risk": {
+      "high": "Risiko tinggi",
+      "medium": "Risiko sedang",
+      "low": "Risiko rendah"
+    },
+    "tool": "Alat",
+    "expires_at": "Kedaluwarsa pada",
+    "created_at": "Dibuat pada",
+    "permission_denied": "Izin ditolak",
+    "refresh": "Segarkan",
+    "success": {
+      "approved": "Disetujui",
+      "rejected": "Ditolak"
+    },
+    "error": {
+      "not_found": "Item persetujuan tidak ada atau telah kedaluwarsa",
+      "network": "Kesalahan jaringan, coba lagi nanti"
     }
   },
   "reviews": {

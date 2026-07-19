@@ -49,7 +49,8 @@
       "general": "Général",
       "byok": "BYOK",
       "mcp": "MCP",
-      "skills": "Skills"
+      "skills": "Skills",
+      "approvals": "Approbations"
     },
     "tieredRouter": {
       "overview": "Routage LLM par niveaux",
@@ -308,6 +309,32 @@
         "activate": "Activate this verified skill for normal discovery?",
         "alwaysOn": "Always load this skill into the system prompt? Use only for highly trusted skills."
       }
+    }
+  },
+  "approvals": {
+    "title": "Approbations en attente",
+    "empty": "Aucune approbation en attente",
+    "approve": "Approuver",
+    "reject": "Rejeter",
+    "confirm_approve": "Approuver cette opération ?",
+    "confirm_reject": "Rejeter cette opération ?",
+    "risk": {
+      "high": "Risque élevé",
+      "medium": "Risque moyen",
+      "low": "Risque faible"
+    },
+    "tool": "Outil",
+    "expires_at": "Expire le",
+    "created_at": "Créé le",
+    "permission_denied": "Permission refusée",
+    "refresh": "Actualiser",
+    "success": {
+      "approved": "Approuvé",
+      "rejected": "Rejeté"
+    },
+    "error": {
+      "not_found": "L'élément d'approbation n'existe pas ou a expiré",
+      "network": "Erreur réseau, veuillez réessayer plus tard"
     }
   },
   "reviews": {

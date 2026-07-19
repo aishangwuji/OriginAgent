@@ -49,7 +49,8 @@
       "general": "Chung",
       "byok": "BYOK",
       "mcp": "MCP",
-      "skills": "Skills"
+      "skills": "Skills",
+      "approvals": "Phê duyệt"
     },
     "tieredRouter": {
       "overview": "Định tuyến LLM theo tầng",
@@ -308,6 +309,32 @@
         "activate": "Activate this verified skill for normal discovery?",
         "alwaysOn": "Always load this skill into the system prompt? Use only for highly trusted skills."
       }
+    }
+  },
+  "approvals": {
+    "title": "Phê duyệt đang chờ",
+    "empty": "Không có mục nào chờ phê duyệt",
+    "approve": "Phê duyệt",
+    "reject": "Từ chối",
+    "confirm_approve": "Phê duyệt thao tác này?",
+    "confirm_reject": "Từ chối thao tác này?",
+    "risk": {
+      "high": "Rủi ro cao",
+      "medium": "Rủi ro trung bình",
+      "low": "Rủi ro thấp"
+    },
+    "tool": "Công cụ",
+    "expires_at": "Hết hạn lúc",
+    "created_at": "Tạo lúc",
+    "permission_denied": "Không đủ quyền",
+    "refresh": "Làm mới",
+    "success": {
+      "approved": "Đã phê duyệt",
+      "rejected": "Đã từ chối"
+    },
+    "error": {
+      "not_found": "Mục phê duyệt không tồn tại hoặc đã hết hạn",
+      "network": "Lỗi mạng, vui lòng thử lại sau"
     }
   },
   "reviews": {

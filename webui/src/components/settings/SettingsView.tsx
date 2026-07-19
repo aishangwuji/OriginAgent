@@ -6,6 +6,7 @@ import {
   ArrowLeft,
   ChevronDown,
   Check,
+  ClipboardCheck,
   Cloud,
   Cpu,
   Database,
@@ -29,6 +30,7 @@ import {
   Settings,
   Sparkles,
   Triangle,
+  Users,
   Waves,
   Zap,
   type LucideIcon,
@@ -40,6 +42,8 @@ import { supportedLocales } from "@/i18n/config";
 import { ModelInputWithFetch } from "@/components/settings/ModelInputWithFetch";
 import { Button } from "@/components/ui/button";
 import { LearningSettings } from "@/components/settings/LearningSettings";
+import { TenantsSettings } from "@/components/settings/TenantsSettings";
+import { ApprovalsPanel } from "@/components/approvals/ApprovalsPanel";
 import { TieredRoutingSettings } from "@/components/settings/TieredRoutingSettings";
 import {
   DropdownMenu,
@@ -90,7 +94,7 @@ import type {
   WebSearchSettingsUpdate,
 } from "@/lib/types";
 
-type SettingsSectionKey = "general" | "self" | "byok" | "skills" | "learning" | "domains" | "mcp" | "routing";
+type SettingsSectionKey = "general" | "self" | "byok" | "skills" | "learning" | "domains" | "mcp" | "routing" | "tenants" | "approvals";
 type ByokPaneKey = "llm" | "web-search";
 type McpFormState = {
   name: string;
@@ -954,6 +958,10 @@ export function SettingsView({
                     return (payload.models ?? []).map((m) => m.id);
                   }}
                 />
+              ) : activeSection === "tenants" ? (
+                <TenantsSettings token={token} baseUrl="" />
+              ) : activeSection === "approvals" ? (
+                <ApprovalsPanel token={token} baseUrl="" />
               ) : (
                 <McpSettings
                   settings={settings}
@@ -1000,6 +1008,8 @@ const SETTINGS_NAV_ITEMS = [
   { key: "domains", icon: Boxes },
   { key: "mcp", icon: Server },
   { key: "routing", icon: Layers },
+  { key: "tenants", icon: Users },
+  { key: "approvals", icon: ClipboardCheck },
 ] as const;
 
 function SettingsSidebar({

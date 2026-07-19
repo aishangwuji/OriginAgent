@@ -67,7 +67,9 @@
       "skills": "技能",
       "learning": "学习",
       "domains": "领域包",
-      "routing": "路由配置"
+      "routing": "路由配置",
+      "tenants": "租户管理",
+      "approvals": "待审批"
     },
     "tieredRouter": {
       "overview": "分层 LLM 路由",
@@ -633,6 +635,99 @@
         "warning": "警告",
         "error": "错误"
       }
+    },
+    "tenants": {
+      "title": "租户管理",
+      "description": "配置谁可以访问这个 OriginAgent 实例。",
+      "intro": {
+        "title": "什么是租户？",
+        "body": "租户是家里能和 Agent 对话的身份。每个人对应一个租户，Agent 会记住每个租户的偏好、对话历史和权限。owner 自己也是一个租户，但通常预绑定 Telegram 账号，无需走配对流程。",
+        "ownerTitle": "Owner（你自己）",
+        "ownerBody": "在配置里写死你的 Telegram 账号，启动时自动绑定。claimableByPairing 必须关闭，防止别人冒充你。",
+        "familyTitle": "家人",
+        "familyBody": "创建一个未绑定的租户并开启 claimableByPairing，家人通过 /pairing 命令拿到配对码，你在 WebUI 或对话里 approve 后，家人 /pairing claim 完成绑定。"
+      },
+      "add": "新增租户",
+      "addSelf": "添加我自己",
+      "addFamily": "添加家人",
+      "edit": "编辑",
+      "editTitle": "编辑租户",
+      "delete": "删除",
+      "tenantId": "租户 ID",
+      "tenantIdHelp": "内部标识符，你自己起一个名字，例如 dad、mom、owner。创建后不可修改，仅用于系统内部识别。",
+      "tenantIdPlaceholder": "例如：dad",
+      "displayName": "显示名称",
+      "displayNameHelp": "Agent 在对话中会用这个名字称呼这个用户。",
+      "displayNamePlaceholder": "例如：爸爸",
+      "bindings": "通道绑定",
+      "bindingsHelp": "把这个租户绑定到一个具体的聊天账号。Owner 自己通常在这里填 Telegram 账号；家人留空，让他们通过配对流程自助绑定。",
+      "bdiEnabled": "启用 BDI",
+      "bdiEnabledHelp": "启用高级认知能力：长期记忆、目标管理、主动计划。owner 自己建议开启；家人按需关闭（关闭后 Agent 不记得家人跨会话的偏好）。",
+      "claimableByPairing": "可被配对认领",
+      "claimableByPairingHelp": "允许家人通过配对码自助绑定这个身份。Owner 自己必须关闭（防止别人冒充你）；给家人创建租户时开启，他们发消息时会收到认领提示。",
+      "permissions": "权限",
+      "permissionsHelp": "控制这个租户能让 Agent 做什么。Owner 建议全开；家人按需限制。",
+      "exec": "执行命令",
+      "writeFiles": "写入文件",
+      "deviceControl": "设备控制",
+      "confirmDelete": "确认删除租户",
+      "deleteWarning": "此操作不可恢复，将级联删除：租户 {{id}} 的通道绑定、对话历史（session 文件）、workspace 目录。如果这是你自己（owner），删除后你发消息会落到 guest 身份。",
+      "save": "保存",
+      "saving": "保存中...",
+      "cancel": "取消",
+      "channel": "通道",
+      "channelHelp": "选择家人用什么应用和 Agent 对话。",
+      "senderId": "发送者 ID",
+      "senderIdHelp": "Telegram 用户 ID（纯数字）。发消息给 @userinfobot 可以获取自己的 ID。",
+      "senderIdPlaceholder": "例如：7715515124",
+      "label": "标签",
+      "labelHelp": "这个绑定的备注名，方便区分多个设备。",
+      "labelPlaceholder": "例如：我的手机",
+      "addBinding": "新增绑定",
+      "removeBinding": "移除绑定",
+      "noBindings": "暂无通道绑定。Owner 在这里添加自己的 Telegram；家人留空。",
+      "actionsLabel": "操作",
+      "loading": "正在加载租户列表...",
+      "empty": "还没有租户。点击右上角选择添加自己或添加家人。",
+      "loadFailed": "加载租户列表失败",
+      "createFailed": "创建租户失败",
+      "updateFailed": "更新租户失败",
+      "deleteFailed": "删除租户失败",
+      "deleting": "删除中...",
+      "errors": {
+        "tenantIdRequired": "请填写租户 ID。",
+        "displayNameRequired": "请填写显示名称。"
+      },
+      "values": {
+        "yes": "是",
+        "no": "否"
+      }
+    }
+  },
+  "approvals": {
+    "title": "待审批",
+    "empty": "暂无待审批项",
+    "approve": "批准",
+    "reject": "拒绝",
+    "confirm_approve": "确认批准此操作？",
+    "confirm_reject": "确认拒绝此操作？",
+    "risk": {
+      "high": "高风险",
+      "medium": "中风险",
+      "low": "低风险"
+    },
+    "tool": "工具",
+    "expires_at": "过期时间",
+    "created_at": "创建时间",
+    "permission_denied": "权限不足",
+    "refresh": "刷新",
+    "success": {
+      "approved": "已批准",
+      "rejected": "已拒绝"
+    },
+    "error": {
+      "not_found": "审批项不存在或已过期",
+      "network": "网络错误，请稍后重试"
     }
   },
   "reviews": {

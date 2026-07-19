@@ -18,6 +18,9 @@ import type {
   SkillLifecycleResult,
   SkillLifecycleStats,
   SkillRecord,
+  Tenant,
+  TenantCreateUpdate,
+  TenantsListResponse,
   VoiceSettingsUpdate,
   SlashCommand,
   WebSearchSettingsUpdate,
@@ -570,3 +573,133 @@ export async function fetchEvolutionStatus(
     token,
   );
 }
+
+// -- Tenant management --------------------------------------------------------
+// All tenant write operations go through GET + ?config=<json> because the
+// WebUI is served over the WebSocket handshake port, which only accepts GET
+// (see _handle_settings_mcp_upsert for the same pattern).
+
+export async function fetchTenants(
+  token: string,
+  base: string = "",
+): Promise<TenantsListResponse> {
+  return request<TenantsListResponse>(apiUrl("/api/tenants", base), token);
+}
+
+export async function createTenant(
+  token: string,
+  body: TenantCreateUpdate,
+  base: string = "",
+): Promise<Tenant> {
+  return request<Tenant>(
+    buildUrl(apiUrl("/api/tenants/create", base), { config: JSON.stringify(body) }),
+    token,
+  );
+}
+
+export async function updateTenant(
+  token: string,
+  tenantId: string,
+  body: TenantCreateUpdate,
+  base: string = "",
+): Promise<Tenant> {
+  return request<Tenant>(
+    buildUrl(apiUrl(`/api/tenants/${encodeURIComponent(tenantId)}/update`, base), {
+      config: JSON.stringify(body),
+    }),
+    token,
+  );
+}
+
+export async function deleteTenant(
+  token: string,
+  tenantId: string,
+  base: string = "",
+): Promise<void> {
+  // The server returns a small JSON body ({"deleted": "<id>"}); use the
+  // shared request helper so errors are funneled through ApiError consistently.
+  await request<{ deleted: string }>(
+    apiUrl(`/api/tenants/${encodeURIComponent(tenantId)}/delete`, base),
+    token,
+  );
+}
+
+// -- approvals ----------------------------------------------------------------
+
+export interface Approval {
+  confirmation_id: string;
+  kind: string;
+  prompt: string;
+  action: string | null;
+  risk: string | null;
+  created_at: string;
+  expires_at: string;
+  owner_id: string | null;
+  metadata: Record<string, string>;
+}
+
+/**
+ * Lists pending tool approvals for the given owner.
+ *
+ * Backend route: GET /api/approvals?owner_id=<tenant_id>
+ * Backend already filters out expired entries (D6 lazy expire_old on read),
+ * so the caller does not need to re-filter by expires_at.
+ */
+export async function listApprovals(
+  token: string,
+  ownerId: string,
+  base: string = "",
+): Promise<Approval[]> {
+  const body = await request<{ approvals: Approval[] }>(
+    buildUrl(apiUrl("/api/approvals", base), { owner_id: ownerId }),
+    token,
+  );
+  return body.approvals ?? [];
+}
+
+/**
+ * Approves a pending confirmation.
+ *
+ * Backend route: POST /api/approvals/{confirmation_id}/approve?owner_id=<tenant_id>
+ * Cross-owner approval is rejected by the backend with 403 (D10 owner_id check),
+ * so the WebUI cannot bypass tenant isolation by tampering with the path.
+ */
+export async function approveApproval(
+  token: string,
+  confirmationId: string,
+  ownerId: string,
+  base: string = "",
+): Promise<{ grantId: string }> {
+  const body = await request<{ grant_id: string; decision: string }>(
+    buildUrl(
+      apiUrl(`/api/approvals/${encodeURIComponent(confirmationId)}/approve`, base),
+      { owner_id: ownerId },
+    ),
+    token,
+    { method: "POST" },
+  );
+  return { grantId: body.grant_id };
+}
+
+/**
+ * Rejects a pending confirmation.
+ *
+ * Backend route: POST /api/approvals/{confirmation_id}/reject?owner_id=<tenant_id>
+ * Cross-owner rejection is rejected by the backend with 403.
+ */
+export async function rejectApproval(
+  token: string,
+  confirmationId: string,
+  ownerId: string,
+  base: string = "",
+): Promise<void> {
+  await request<{ decision: string }>(
+    buildUrl(
+      apiUrl(`/api/approvals/${encodeURIComponent(confirmationId)}/reject`, base),
+      { owner_id: ownerId },
+    ),
+    token,
+    { method: "POST" },
+  );
+}
+

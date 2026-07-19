@@ -49,7 +49,8 @@
       "general": "一般",
       "byok": "BYOK",
       "mcp": "MCP",
-      "skills": "Skills"
+      "skills": "Skills",
+      "approvals": "承認"
     },
     "tieredRouter": {
       "overview": "階層型 LLM ルーティング",
@@ -308,6 +309,32 @@
         "activate": "Activate this verified skill for normal discovery?",
         "alwaysOn": "Always load this skill into the system prompt? Use only for highly trusted skills."
       }
+    }
+  },
+  "approvals": {
+    "title": "承認待ち",
+    "empty": "承認待ちの項目はありません",
+    "approve": "承認",
+    "reject": "拒否",
+    "confirm_approve": "この操作を承認しますか？",
+    "confirm_reject": "この操作を拒否しますか？",
+    "risk": {
+      "high": "高リスク",
+      "medium": "中リスク",
+      "low": "低リスク"
+    },
+    "tool": "ツール",
+    "expires_at": "有効期限",
+    "created_at": "作成日時",
+    "permission_denied": "権限が不足しています",
+    "refresh": "更新",
+    "success": {
+      "approved": "承認済み",
+      "rejected": "拒否済み"
+    },
+    "error": {
+      "not_found": "承認項目が存在しないか、期限切れです",
+      "network": "ネットワークエラー、後でもう一度お試しください"
     }
   },
   "reviews": {

@@ -51,7 +51,8 @@
       "byok": "BYOK",
       "mcp": "MCP",
       "skills": "技能",
-      "domains": "領域包"
+      "domains": "領域包",
+      "approvals": "待審批"
     },
     "tieredRouter": {
       "overview": "分層 LLM 路由",
@@ -371,6 +372,32 @@
         "activate": "Activate this verified skill for normal discovery?",
         "alwaysOn": "Always load this skill into the system prompt? Use only for highly trusted skills."
       }
+    }
+  },
+  "approvals": {
+    "title": "待審批",
+    "empty": "暫無待審批項",
+    "approve": "批准",
+    "reject": "拒絕",
+    "confirm_approve": "確認批准此操作？",
+    "confirm_reject": "確認拒絕此操作？",
+    "risk": {
+      "high": "高風險",
+      "medium": "中風險",
+      "low": "低風險"
+    },
+    "tool": "工具",
+    "expires_at": "過期時間",
+    "created_at": "建立時間",
+    "permission_denied": "權限不足",
+    "refresh": "重新整理",
+    "success": {
+      "approved": "已批准",
+      "rejected": "已拒絕"
+    },
+    "error": {
+      "not_found": "審批項不存在或已過期",
+      "network": "網路錯誤，請稍後重試"
     }
   },
   "reviews": {

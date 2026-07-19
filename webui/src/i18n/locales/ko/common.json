@@ -49,7 +49,8 @@
       "general": "일반",
       "byok": "BYOK",
       "mcp": "MCP",
-      "skills": "Skills"
+      "skills": "Skills",
+      "approvals": "승인"
     },
     "tieredRouter": {
       "overview": "계층형 LLM 라우팅",
@@ -308,6 +309,32 @@
         "activate": "Activate this verified skill for normal discovery?",
         "alwaysOn": "Always load this skill into the system prompt? Use only for highly trusted skills."
       }
+    }
+  },
+  "approvals": {
+    "title": "승인 대기",
+    "empty": "대기 중인 승인 항목이 없습니다",
+    "approve": "승인",
+    "reject": "거부",
+    "confirm_approve": "이 작업을 승인하시겠습니까?",
+    "confirm_reject": "이 작업을 거부하시겠습니까?",
+    "risk": {
+      "high": "고위험",
+      "medium": "중위험",
+      "low": "저위험"
+    },
+    "tool": "도구",
+    "expires_at": "만료 시간",
+    "created_at": "생성 시간",
+    "permission_denied": "권한이 부족합니다",
+    "refresh": "새로고침",
+    "success": {
+      "approved": "승인됨",
+      "rejected": "거부됨"
+    },
+    "error": {
+      "not_found": "승인 항목이 존재하지 않거나 만료되었습니다",
+      "network": "네트워크 오류, 나중에 다시 시도하세요"
     }
   },
   "reviews": {

@@ -971,4 +971,45 @@ export type Outbound =
       webui?: true;
     };
 
+// ── Tenant Management ──────────────────────────────────────────────
+// Backend serializes TenantConfig with by_alias=True, so all fields
+// arrive in camelCase. The frontend types mirror that shape directly
+// to avoid extra mapping layers at the API boundary.
+
+export interface TenantBinding {
+  channel: string;
+  senderId: string;
+  label: string;
+}
+
+export interface TenantPermissions {
+  exec: boolean;
+  writeFiles: boolean;
+  deviceControl: boolean;
+}
+
+export interface Tenant {
+  tenantId: string;
+  displayName: string;
+  bindings: TenantBinding[];
+  bdiEnabled: boolean;
+  claimableByPairing: boolean;
+  permissions: TenantPermissions;
+}
+
+export interface TenantsListResponse {
+  tenants: Tenant[];
+  guestTenantEnabled: boolean;
+  defaultTenantId: string;
+}
+
+export interface TenantCreateUpdate {
+  tenantId: string;
+  displayName: string;
+  bindings: TenantBinding[];
+  bdiEnabled: boolean;
+  claimableByPairing: boolean;
+  permissions: TenantPermissions;
+}
+
 

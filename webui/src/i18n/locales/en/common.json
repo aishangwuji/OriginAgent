@@ -74,7 +74,9 @@
       "skills": "Skills",
       "learning": "Learning",
       "domains": "Domains",
-      "routing": "Routing"
+      "routing": "Routing",
+      "tenants": "Tenants",
+      "approvals": "Approvals"
     },
     "tieredRouter": {
       "overview": "Tiered LLM Routing",
@@ -640,6 +642,99 @@
         "warning": "Warning",
         "error": "Error"
       }
+    },
+    "tenants": {
+      "title": "Tenant Management",
+      "description": "Configure who can access this OriginAgent instance.",
+      "intro": {
+        "title": "What is a tenant?",
+        "body": "A tenant is an identity in your household that can talk to the Agent. Each person maps to one tenant; the Agent remembers each tenant's preferences, conversation history, and permissions. The owner is also a tenant, but typically pre-binds their Telegram account and skips the pairing flow.",
+        "ownerTitle": "Owner (you)",
+        "ownerBody": "Hardcode your Telegram account in the config; it auto-binds on startup. claimableByPairing must be OFF to prevent impersonation.",
+        "familyTitle": "Family members",
+        "familyBody": "Create an unbound tenant with claimableByPairing ON. Family members run /pairing to get a code, you approve it (in WebUI or chat), then they /pairing claim to bind."
+      },
+      "add": "Add Tenant",
+      "addSelf": "Add Myself",
+      "addFamily": "Add Family Member",
+      "edit": "Edit",
+      "editTitle": "Edit Tenant",
+      "delete": "Delete",
+      "tenantId": "Tenant ID",
+      "tenantIdHelp": "Internal identifier — pick any name, e.g. dad, mom, owner. Cannot be changed after creation; used only for system-internal recognition.",
+      "tenantIdPlaceholder": "e.g. dad",
+      "displayName": "Display Name",
+      "displayNameHelp": "How the Agent addresses this user in conversation.",
+      "displayNamePlaceholder": "e.g. Dad",
+      "bindings": "Channel Bindings",
+      "bindingsHelp": "Bind this tenant to a specific chat account. Owner typically fills in their Telegram here; leave empty for family so they can self-bind via pairing.",
+      "bdiEnabled": "Enable BDI",
+      "bdiEnabledHelp": "Enable advanced cognition: long-term memory, goal management, proactive planning. Recommended ON for owner; optional for family (when OFF, the Agent won't remember their cross-session preferences).",
+      "claimableByPairing": "Claimable by Pairing",
+      "claimableByPairingHelp": "Allow family members to self-bind this identity via a pairing code. MUST be OFF for owner (prevents impersonation); turn ON for family tenants so they get a claim prompt when they message the bot.",
+      "permissions": "Permissions",
+      "permissionsHelp": "What this tenant can ask the Agent to do. Recommend all ON for owner; restrict as needed for family.",
+      "exec": "Execute Commands",
+      "writeFiles": "Write Files",
+      "deviceControl": "Device Control",
+      "confirmDelete": "Confirm Delete Tenant",
+      "deleteWarning": "This cannot be undone. It will cascade-delete: tenant {{id}}'s channel bindings, conversation history (session file), and workspace directory. If this is you (owner), your messages will fall back to the guest identity after deletion.",
+      "save": "Save",
+      "saving": "Saving...",
+      "cancel": "Cancel",
+      "channel": "Channel",
+      "channelHelp": "Which app the family member uses to talk to the Agent.",
+      "senderId": "Sender ID",
+      "senderIdHelp": "Telegram user ID (digits only). Message @userinfobot to get yours.",
+      "senderIdPlaceholder": "e.g. 7715515124",
+      "label": "Label",
+      "labelHelp": "A note for this binding, useful to tell multiple devices apart.",
+      "labelPlaceholder": "e.g. My phone",
+      "addBinding": "Add Binding",
+      "removeBinding": "Remove Binding",
+      "noBindings": "No channel bindings yet. Owner adds their Telegram here; leave empty for family.",
+      "actionsLabel": "Actions",
+      "loading": "Loading tenants...",
+      "empty": "No tenants yet. Pick \"Add Myself\" or \"Add Family Member\" above to get started.",
+      "loadFailed": "Failed to load tenants",
+      "createFailed": "Failed to create tenant",
+      "updateFailed": "Failed to update tenant",
+      "deleteFailed": "Failed to delete tenant",
+      "deleting": "Deleting...",
+      "errors": {
+        "tenantIdRequired": "Tenant ID is required.",
+        "displayNameRequired": "Display name is required."
+      },
+      "values": {
+        "yes": "Yes",
+        "no": "No"
+      }
+    }
+  },
+  "approvals": {
+    "title": "Pending Approvals",
+    "empty": "No pending approvals",
+    "approve": "Approve",
+    "reject": "Reject",
+    "confirm_approve": "Approve this operation?",
+    "confirm_reject": "Reject this operation?",
+    "risk": {
+      "high": "High risk",
+      "medium": "Medium risk",
+      "low": "Low risk"
+    },
+    "tool": "Tool",
+    "expires_at": "Expires at",
+    "created_at": "Created at",
+    "permission_denied": "Permission denied",
+    "refresh": "Refresh",
+    "success": {
+      "approved": "Approved",
+      "rejected": "Rejected"
+    },
+    "error": {
+      "not_found": "Approval item does not exist or has expired",
+      "network": "Network error, please try again later"
     }
   },
   "reviews": {
