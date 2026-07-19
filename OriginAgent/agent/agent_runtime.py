@@ -24,7 +24,7 @@ from OriginAgent.agent.agent_runtime_context import (
 )
 from OriginAgent.agent.agent_turn_persist import TurnPersistManager
 from OriginAgent.agent.cognitive_events import CognitiveEvent
-from OriginAgent.agent.confirmation import classify_confirmation_reply
+from OriginAgent.agent.confirmation import classify_confirmation_reply, classify_confirmation_reply_with_ttl
 from OriginAgent.agent.error_classifier import (
     ClassifiedError,
     ErrorKind,
@@ -532,8 +532,9 @@ class AgentRuntime:
         confirmation = d.confirmation_manager.latest_pending_tool_approval(session_key) if d.confirmation_manager else None
         if confirmation is None:
             return None, False
-        classification = classify_confirmation_reply(reply)
-        if classification not in {"confirmed", "rejected"}:
+        # 方案 C1: 使用带 TTL 解析的分类器
+        classification, ttl_seconds = classify_confirmation_reply_with_ttl(reply)
+        if classification not in {"confirmed", "rejected", "persistent"}:
             return None, False
         result = d.confirmation_manager.resolve_user_reply(confirmation.confirmation_id, reply)
         tool_name = confirmation.metadata.get("tool_name") or confirmation.action or "tool"
@@ -542,6 +543,19 @@ class AgentRuntime:
             return (("tool_approval",
                      f"Tool approval confirmed for {tool_name}. "
                      f"Short-lived grant {grant.grant_id} is active for this session. "
+                     "Continue the pending task using the newly approved capability."), True)
+        if result.decision == "persistent":
+            # 方案 C3: 持久授权（受 grant_store 分级限制，高危工具会被降级为单次）
+            grant = issue_tool_approval_grant(
+                confirmation, d.grant_store,
+                approved_by=actor_id,
+                persistent=True,
+                ttl_seconds=ttl_seconds,
+            )
+            ttl_desc = f"{ttl_seconds}秒" if ttl_seconds else "默认7天"
+            return (("tool_approval",
+                     f"Tool approval granted persistently for {tool_name} (TTL={ttl_desc}, "
+                     f"grant={grant.grant_id}). 高危工具会被自动降级为单次。"
                      "Continue the pending task using the newly approved capability."), True)
         if result.decision == "rejected":
             return (("tool_approval",

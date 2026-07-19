@@ -308,15 +308,20 @@ def test_no_reply_logs_rejected_event(tmp_path):
 
 
 @pytest.mark.parametrize("reply", ["以后都这样", "设为规则", "以后不用问", "always", "remember this"])
-def test_persistent_language_is_unclear_and_does_not_create_rule(tmp_path, reply):
+def test_persistent_language_creates_persistent_rule(tmp_path, reply):
+    """方案 C3: 持久授权现在被支持（旧版本返回 unclear，已变更）。
+
+    需求来源：用户明确要求支持"以后都这样"持久授权。
+    受规则 18 安全边界分级限制：exec/cron/spawn 仍会被 grant_store 降级为单次。
+    """
     manager = ConfirmationManager(tmp_path)
     confirmation = manager.create_from_action_decision(request(), decision(), now=NOW)
 
     result = manager.resolve_user_reply(confirmation.confirmation_id, reply, now=NOW)
 
-    assert result.decision == "unclear"
+    assert result.decision == "persistent"
     assert "persistent" in result.reason
-    assert manager.store.read_all()[0].status == "pending"
+    assert manager.store.read_all()[0].status == "confirmed_persistent"
 
 
 def test_unclear_reply_leaves_confirmation_pending(tmp_path):
@@ -654,4 +659,110 @@ def test_medium_scheduled_unknown_gate_deny_creates_no_confirmation(tmp_path):
     assert action_decision.decision == "deny"
     assert confirmation is None
     assert manager.store.read_all() == []
+
+
+# ─── 方案 C：自然语言授权 + 持久授权 ───────────────────────────
+
+
+def test_classify_reply_recognizes_natural_chinese_confirmations(tmp_path):
+    """方案 C1: 扩充自然语言同义词。
+
+    用户可以用"好的，授权吧"、"行，做吧"、"批准"、"没问题"等自然语言回复。
+    """
+    from OriginAgent.agent.confirmation import classify_confirmation_reply
+
+    natural_confirmations = [
+        "好的，授权吧",
+        "行，做吧",
+        "批准",
+        "没问题",
+        "OK",
+        "准了",
+        "同意",
+        "可以的",
+        "去吧",
+        "嗯，可以",
+        "好",
+        "行",
+        "可以",
+        "yes, go ahead",
+        "approve",
+        "授权",
+    ]
+    for reply in natural_confirmations:
+        result = classify_confirmation_reply(reply)
+        assert result == "confirmed", f"Expected 'confirmed' for reply={reply!r}, got {result!r}"
+
+
+def test_classify_reply_recognizes_natural_rejections(tmp_path):
+    """方案 C1: 自然语言拒绝识别。
+
+    "不行"、"别"、"算了"、"先不要"等都应识别为 rejected。
+    """
+    from OriginAgent.agent.confirmation import classify_confirmation_reply
+
+    natural_rejections = [
+        "不行",
+        "别",
+        "算了",
+        "先不要",
+        "不要",
+        "不批准",
+        "不同意",
+        "拒绝",
+        "no, stop",
+        "别执行",
+        "取消",
+        "先别",
+    ]
+    for reply in natural_rejections:
+        result = classify_confirmation_reply(reply)
+        assert result == "rejected", f"Expected 'rejected' for reply={reply!r}, got {result!r}"
+
+
+def test_classify_reply_parses_persistent_with_ttl(tmp_path):
+    """方案 C1: 持久授权 + TTL 解析。
+
+    "以后都这样 3 天" → persistent + ttl_seconds=259200
+    "always 7 days" → persistent + ttl_seconds=604800
+    "以后不用问" → persistent + ttl_seconds=None（使用默认）
+    """
+    from OriginAgent.agent.confirmation import classify_confirmation_reply_with_ttl
+
+    # 带 TTL 的持久授权
+    cases = [
+        ("以后都这样 3 天", "persistent", 3 * 24 * 3600),
+        ("以后都这样 1 天", "persistent", 24 * 3600),
+        ("always 7 days", "persistent", 7 * 24 * 3600),
+        ("以后都这样 12 小时", "persistent", 12 * 3600),
+        ("以后不用问", "persistent", None),  # 默认 TTL
+        ("以后都这样", "persistent", None),
+    ]
+    for reply, expected_decision, expected_ttl in cases:
+        decision, ttl_seconds = classify_confirmation_reply_with_ttl(reply)
+        assert decision == expected_decision, (
+            f"Expected decision={expected_decision!r} for reply={reply!r}, got {decision!r}"
+        )
+        assert ttl_seconds == expected_ttl, (
+            f"Expected ttl_seconds={expected_ttl!r} for reply={reply!r}, got {ttl_seconds!r}"
+        )
+
+
+def test_classify_reply_ambiguous_falls_back_to_unclear(tmp_path):
+    """方案 C1: 含糊回复默认 unclear（不静默同意，规则 18 安全边界）。"""
+    from OriginAgent.agent.confirmation import classify_confirmation_reply
+
+    ambiguous_replies = [
+        "可能吧",
+        "不确定",
+        "你说呢",
+        "看看情况",
+        "再想想",
+        "你来定吧",  # 委托型回复，规则 18 安全边界从严判 unclear
+        "",
+        "   ",
+    ]
+    for reply in ambiguous_replies:
+        result = classify_confirmation_reply(reply)
+        assert result == "unclear", f"Expected 'unclear' for reply={reply!r}, got {result!r}"
 

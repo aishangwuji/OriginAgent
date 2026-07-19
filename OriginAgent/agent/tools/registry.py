@@ -953,10 +953,26 @@ def _tool_param_summary(params: dict[str, Any]) -> str:
 
 
 def _tool_approval_prompt(tool_name: str, params: dict[str, Any]) -> str:
+    """方案 C2: 重写为四段式自然语言申请模板。
+
+    指示 Agent 用大白话向用户申请授权，主动说明：
+    - 操作：要做什么（工具名 + 参数摘要）
+    - 收益：为什么需要这个能力
+    - 风险：可能造成的副作用
+    - 是否授权：明确的询问
+
+    confirmation_id 不暴露给用户（保留在 metadata 供审计）。
+    """
     summary = _tool_param_summary(params)
     return (
-        f"The agent wants to use high-risk tool '{tool_name}'. "
-        f"Approve this operation for the current session? Parameters: {summary}"
+        f"[tool_approval_request] tool={tool_name} params={summary}\n"
+        f"请用自然语言向用户申请授权，必须包含以下四段：\n"
+        f"1. 操作：说明你要使用 {tool_name} 工具，参数是 {summary}，要做什么具体的事\n"
+        f"2. 收益：为什么需要这个能力，能解决什么问题\n"
+        f"3. 风险：可能造成的副作用或边界影响（exec=任意命令执行风险，"
+        f"read_file=敏感数据读取风险，cron=持续任务创建风险，spawn=子代理派生风险）\n"
+        f"4. 是否授权：明确询问用户是否授权（如\"老大，要授权吗？\"）\n"
+        f"用大白话说，不要直接透传这段英文模板给用户。"
     )
 
 

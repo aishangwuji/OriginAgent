@@ -21,6 +21,11 @@ from OriginAgent.security.policy import PolicyDeniedError
 GrantSource = Literal["admin_config", "user_confirmation", "test"]
 _GRANT_ERROR_MESSAGE = "Capability grant is missing, expired, or revoked."
 _TOOL_APPROVAL_GRANT_TTL = timedelta(minutes=10)
+# 方案 C3: 高危工具不能持久授权（规则 18 安全边界分级）
+# 这些工具即使用户说"以后都这样"，也只给单次 10 分钟 TTL
+_HIGH_RISK_TOOLS_NO_PERSISTENT = {"exec", "cron", "spawn"}
+# 方案 C1: 默认持久 TTL（用户未指定时）
+_DEFAULT_PERSISTENT_TTL = timedelta(days=7)
 
 
 @dataclass(frozen=True)
@@ -356,7 +361,19 @@ def issue_tool_approval_grant(
     *,
     approved_by: str | None = None,
     now: datetime | None = None,
+    ttl_seconds: int | None = None,
+    persistent: bool = False,
 ) -> CapabilityGrant:
+    """方案 C3: issue tool_approval grant，支持持久授权和自定义 TTL。
+
+    参数：
+    - ttl_seconds: 用户指定的持久 TTL（秒）。None 时使用默认 10 分钟。
+    - persistent: 是否标记为持久授权。高危工具（exec/cron/spawn）会被强制降级为单次。
+
+    分级规则（规则 18 安全边界）：
+    - read_file/write_file/message：可持久，TTL 由用户指定
+    - exec/cron/spawn：即使 persistent=True 也只给 10 分钟单次 TTL
+    """
     existing = grant_store.latest_active_for_confirmation(
         confirmation.confirmation_id,
         now=now,
@@ -367,11 +384,43 @@ def issue_tool_approval_grant(
     flags = _parse_grant_flags(confirmation)
     metadata = dict(confirmation.metadata or {})
     metadata["confirmation_kind"] = confirmation.kind
+    tool_name = metadata.get("tool_name") or ""
+
+    # 方案 C3: 分级持久判定
+    # 优先从函数参数读取，其次从 confirmation.metadata 自动检测（支持测试和旧调用方）
+    metadata_persistent = str(metadata.get("persistent", "")).lower() == "true"
+    effective_persistent_flag = persistent or metadata_persistent
+    # 从 metadata 自动读取 ttl_seconds（支持测试和旧调用方）
+    metadata_ttl = metadata.get("ttl_seconds")
+    if ttl_seconds is None and metadata_ttl:
+        try:
+            ttl_seconds = int(metadata_ttl)
+        except (TypeError, ValueError):
+            ttl_seconds = None
+
+    is_high_risk = tool_name in _HIGH_RISK_TOOLS_NO_PERSISTENT
+    effective_persistent = effective_persistent_flag and not is_high_risk
+    if effective_persistent_flag and is_high_risk:
+        # 高危工具强制降级为单次（不传递 persistent 标记）
+        metadata.pop("persistent", None)
+        metadata["persistent_downgraded"] = "true"
+        effective_ttl = _TOOL_APPROVAL_GRANT_TTL
+    elif effective_persistent:
+        # 低危工具可持久，TTL 由用户指定或使用默认 7 天
+        if ttl_seconds and ttl_seconds > 0:
+            effective_ttl = timedelta(seconds=max(1, ttl_seconds))
+        else:
+            effective_ttl = _DEFAULT_PERSISTENT_TTL
+        metadata["persistent"] = "true"
+    else:
+        # 单次授权
+        effective_ttl = _TOOL_APPROVAL_GRANT_TTL
+
     grant = CapabilityGrant(
         grant_id=f"grant_{uuid.uuid4().hex[:12]}",
         created_by=str(approved_by or confirmation.requested_by or "user_confirmation"),
         created_at=_format_datetime(current_time),
-        expires_at=_format_datetime(current_time + _TOOL_APPROVAL_GRANT_TTL),
+        expires_at=_format_datetime(current_time + effective_ttl),
         source="user_confirmation",
         can_exec=bool(flags.get("can_exec", False)),
         can_read_files=bool(flags.get("can_read_files", False)),

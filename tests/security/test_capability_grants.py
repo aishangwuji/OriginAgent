@@ -266,3 +266,95 @@ def test_issue_tool_approval_grant_persists_session_scoped_capability(tmp_path) 
     assert grant.session_key == "websocket:chat-1"
     assert grant.tool_name == "exec"
     assert store.latest_active_for_confirmation("confirmation_exec_1", now=_now()) == grant
+
+
+# ─── 方案 C3：持久授权分级 + TTL 参数化 ───────────────────────
+
+
+def test_issue_tool_approval_grant_with_custom_ttl_for_persistent(tmp_path) -> None:
+    """方案 C3: 持久授权使用用户指定的 TTL，而非默认 10 分钟。
+
+    用户回复"以后都这样 3 天"后，grant 的 expires_at 应为 now + 3 天。
+    """
+    from OriginAgent.security.grants import issue_tool_approval_grant
+
+    confirmation = ConfirmationRequest(
+        confirmation_id="confirmation_persistent_read",
+        kind="tool_approval",
+        status="confirmed_persistent",
+        prompt="approve read_file persistently",
+        action="tool:read_file",
+        scope=None,
+        trigger="user_initiated",
+        risk="medium",
+        requested_by="alice",
+        decision_reason="read_file persistent approval",
+        presence_status="unknown",
+        related_fact_ids=[],
+        created_at=_now().isoformat(),
+        expires_at=(_now() + timedelta(minutes=2)).isoformat(),
+        action_payload={"grant_flags": "{\"can_read_files\": true}"},
+        metadata={
+            "session_key": "websocket:chat-1",
+            "tool_name": "read_file",
+            "persistent": "true",
+            "ttl_seconds": str(3 * 24 * 3600),  # 用户指定 3 天
+        },
+    )
+    store = CapabilityGrantStore(tmp_path)
+
+    grant = issue_tool_approval_grant(confirmation, store, approved_by="alice", now=_now())
+
+    # 持久授权的 TTL 应为用户指定的 3 天，而非默认 10 分钟
+    expected_expires = _now() + timedelta(days=3)
+    actual_expires = datetime.fromisoformat(grant.expires_at.replace("Z", "+00:00"))
+    delta = abs((actual_expires - expected_expires).total_seconds())
+    assert delta < 5, f"Expected expires_at ≈ now+3d, got delta={delta}s"
+
+    # 持久标记应传递到 grant metadata
+    assert grant.metadata.get("persistent") == "true"
+    assert grant.tool_name == "read_file"
+
+
+def test_persistent_grant_blocked_for_high_risk_tools(tmp_path) -> None:
+    """方案 C3: exec/cron/spawn 不能持久授权（规则 18 安全边界分级）。
+
+    即使回复"以后都这样"，对 exec 也只能获得单次授权（10 分钟 TTL）。
+    """
+    from OriginAgent.security.grants import issue_tool_approval_grant
+
+    confirmation = ConfirmationRequest(
+        confirmation_id="confirmation_exec_persistent_blocked",
+        kind="tool_approval",
+        status="confirmed_persistent",
+        prompt="approve exec persistently",
+        action="tool:exec",
+        scope=None,
+        trigger="user_initiated",
+        risk="high",
+        requested_by="alice",
+        decision_reason="exec persistent attempt",
+        presence_status="unknown",
+        related_fact_ids=[],
+        created_at=_now().isoformat(),
+        expires_at=(_now() + timedelta(minutes=2)).isoformat(),
+        action_payload={"grant_flags": "{\"can_exec\": true}"},
+        metadata={
+            "session_key": "websocket:chat-1",
+            "tool_name": "exec",
+            "persistent": "true",
+            "ttl_seconds": str(7 * 24 * 3600),  # 用户想持久 7 天
+        },
+    )
+    store = CapabilityGrantStore(tmp_path)
+
+    grant = issue_tool_approval_grant(confirmation, store, approved_by="alice", now=_now())
+
+    # exec 是高危工具，即使 persistent=true 也只给 10 分钟 TTL
+    expected_expires = _now() + timedelta(minutes=10)
+    actual_expires = datetime.fromisoformat(grant.expires_at.replace("Z", "+00:00"))
+    delta = abs((actual_expires - expected_expires).total_seconds())
+    assert delta < 5, f"Expected expires_at ≈ now+10min (high-risk override), got delta={delta}s"
+
+    # 高危工具不标记 persistent
+    assert grant.metadata.get("persistent") != "true"

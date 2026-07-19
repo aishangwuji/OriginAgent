@@ -30,8 +30,9 @@ VALID_STATUSES = {
     "rejected",
     "expired",
     "cancelled",
+    "deferred",
 }
-VALID_RESULT_DECISIONS = {"confirmed", "rejected", "expired", "cancelled", "unclear"}
+VALID_RESULT_DECISIONS = {"confirmed", "rejected", "persistent", "expired", "cancelled", "unclear"}
 ACTION_SNAPSHOT_FORBIDDEN_KEYS = {
     "mac",
     "ip",
@@ -66,6 +67,7 @@ CONFIRM_TTL_BY_RISK = {
 }
 
 CONFIRM_ONCE_EXACT_PHRASES = {
+    # 原有固定短语
     "是",
     "可以",
     "继续",
@@ -75,11 +77,67 @@ CONFIRM_ONCE_EXACT_PHRASES = {
     "yes",
     "continue",
     "just this time",
+    # 方案 C1: 自然语言扩充（中文常用确认）
+    "好",
+    "好的",
+    "行",
+    "行吧",
+    "批准",
+    "同意",
+    "没问题",
+    "可以的",
+    "去吧",
+    "准了",
+    "授权",
+    "嗯",
+    "嗯嗯",
+    "ok",
+    "approve",
+    "authorized",
+    "you decide",
 }
-CONFIRM_ONCE_BOUNDARY_PHRASES = {"yes", "continue", "just this time"}
-REJECT_EXACT_PHRASES = {"不", "不可以", "不是", "取消", "不要", "别执行", "no", "cancel"}
-REJECT_BOUNDARY_PHRASES = {"no", "cancel"}
-PERSISTENT_PHRASES = {"以后都这样", "设为规则", "以后不用问", "always", "remember this"}
+CONFIRM_ONCE_BOUNDARY_PHRASES = {"yes", "continue", "just this time", "ok", "approve", "yes, go ahead", "go ahead"}
+REJECT_EXACT_PHRASES = {
+    # 原有
+    "不",
+    "不可以",
+    "不是",
+    "取消",
+    "不要",
+    "别执行",
+    "no",
+    "cancel",
+    # 方案 C1: 自然语言扩充
+    "不行",
+    "别",
+    "算了",
+    "先不要",
+    "不批准",
+    "不同意",
+    "拒绝",
+    "先别",
+    "stop",
+    "reject",
+    "denied",
+}
+REJECT_BOUNDARY_PHRASES = {"no", "cancel", "stop", "reject", "denied"}
+PERSISTENT_PHRASES = {
+    "以后都这样",
+    "设为规则",
+    "以后不用问",
+    "always",
+    "remember this",
+    "永久",
+    "永远",
+    "permanent",
+}
+# 方案 C1: 持久授权 TTL 解析正则（支持"3 天/1 天/12 小时/3600 秒/7 days/12 hours"等）
+_PERSISTENT_TTL_PATTERN = re.compile(
+    r"(?P<value>\d+)\s*(?P<unit>天|日|days?|day|小时|hours?|hour|hrs?|h|分钟|minutes?|minute|min|m|秒|seconds?|second|sec|s)",
+    re.IGNORECASE,
+)
+# 默认持久 TTL（用户未指定时）：7 天（与"以后都这样"语义匹配，但仍受 grant_store 分级限制）
+_DEFAULT_PERSISTENT_TTL_SECONDS = 7 * 24 * 3600
 
 _PRIVATE_KEY_RE = re.compile(
     r"-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----.*?-----END [A-Z0-9 ]*PRIVATE KEY-----",
@@ -505,6 +563,10 @@ class ConfirmationManager:
         if session_key:
             confirmation_metadata.setdefault("session_key", session_key)
         confirmation_metadata.setdefault("tool_name", tool_name)
+        # 方案 B: cron 触发的 tool_approval 标记为 deferred，等用户下次对话时主动询问
+        # 用户触发的 tool_approval 不标记（用户就在线，可立即询问）
+        if trigger == "scheduled":
+            confirmation_metadata.setdefault("deferred_for_user", "true")
         confirmation = ConfirmationRequest(
             confirmation_id=f"confirmation_{uuid.uuid4().hex[:12]}",
             kind="tool_approval",
@@ -641,14 +703,20 @@ class ConfirmationManager:
                         now=current_time,
                     )
                 elif classification == "persistent":
+                    # 方案 C3: 持久授权支持（受 grant_store 分级限制）
+                    # 标记 confirmation 为 confirmed_persistent，让 _consume_tool_approval_reply
+                    # 能识别并传递 TTL 给 issue_tool_approval_grant
+                    target.status = "confirmed_persistent"
+                    self.store.write_all_unlocked(confirmations)
                     result = ConfirmationResult(
                         confirmation_id=target.confirmation_id,
-                        decision="unclear",
-                        reason="persistent rules are not supported in this phase",
+                        decision="persistent",
+                        reason="user granted persistent approval",
+                        applies_once=False,
                     )
                     audit_event = self._confirmation_audit_event(
                         target,
-                        decision="unclear_reply",
+                        decision="confirmed_persistent",
                         reason=result.reason,
                         now=current_time,
                     )
@@ -883,6 +951,34 @@ class ConfirmationManager:
             return None
         return approvals[-1]
 
+    def list_deferred_tool_approvals(
+        self,
+        *,
+        session_key: str | None = None,
+        now: datetime | None = None,
+    ) -> list[ConfirmationRequest]:
+        """方案 B: 列出 cron 触发且等待用户下次对话时询问的 tool_approvals。
+
+        只返回 status=pending 且 metadata.deferred_for_user=true 的 confirmation。
+        已被用户处理（confirmed/rejected/expired）的不返回。
+        """
+        current_time = _normalize_datetime(now)
+        results: list[ConfirmationRequest] = []
+        for confirmation in self.store.read_all():
+            if confirmation.kind != "tool_approval":
+                continue
+            if confirmation.status != "pending":
+                continue
+            if confirmation.metadata.get("deferred_for_user") != "true":
+                continue
+            if _is_expired(confirmation, now=current_time):
+                continue
+            if session_key and confirmation.metadata.get("session_key") != session_key:
+                continue
+            results.append(confirmation)
+        results.sort(key=lambda item: (item.created_at, item.confirmation_id))
+        return results
+
     def _audit_confirmation_event(
         self,
         confirmation: ConfirmationRequest,
@@ -1008,6 +1104,40 @@ def classify_confirmation_reply(reply: str) -> str:
     return _classify_reply(reply)
 
 
+def classify_confirmation_reply_with_ttl(reply: str) -> tuple[str, int | None]:
+    """方案 C1: 分类回复并解析持久授权的 TTL。
+
+    返回 (decision, ttl_seconds)：
+    - ("persistent", Some(n)): 用户要求持久授权并指定了 TTL（如"以后都这样 3 天"）
+    - ("persistent", None): 用户要求持久授权但未指定 TTL（使用默认 7 天）
+    - ("confirmed", None): 单次确认
+    - ("rejected", None): 拒绝
+    - ("unclear", None): 含糊不清
+
+    ttl_seconds 的实际生效仍受 grant_store 分级限制（exec/cron/spawn 不能持久）。
+    """
+    decision = _classify_reply(reply)
+    if decision != "persistent":
+        return (decision, None)
+    # 解析 TTL（如"3 天"、"12 小时"、"7 days"）
+    normalized = re.sub(r"\s+", " ", reply.strip().casefold())
+    match = _PERSISTENT_TTL_PATTERN.search(normalized)
+    if match is None:
+        return ("persistent", None)  # 用户说"以后都这样"但没给时长
+    value = int(match.group("value"))
+    unit = match.group("unit").lower()
+    # 单位换算到秒
+    if unit in {"天", "日", "day", "days"}:
+        return ("persistent", value * 24 * 3600)
+    if unit in {"小时", "hour", "hours", "hrs", "hr", "h"}:
+        return ("persistent", value * 3600)
+    if unit in {"分钟", "minute", "minutes", "min", "m"}:
+        return ("persistent", value * 60)
+    if unit in {"秒", "second", "seconds", "sec", "s"}:
+        return ("persistent", value)
+    return ("persistent", None)
+
+
 def _classify_reply(reply: str) -> str:
     normalized = re.sub(r"\s+", " ", reply.strip().casefold())
     if not normalized:
@@ -1022,7 +1152,29 @@ def _classify_reply(reply: str) -> str:
         return "rejected"
     if _contains_boundary_phrase(normalized, CONFIRM_ONCE_BOUNDARY_PHRASES):
         return "confirmed"
+    # 方案 C1: 复合短语兜底匹配（如"好的，授权吧"、"行，做吧"）
+    # 只要包含确认关键词且不含拒绝关键词，就视为 confirmed
+    if _contains_confirmation_keyword(normalized) and not _contains_rejection_keyword(normalized):
+        return "confirmed"
     return "unclear"
+
+
+# 方案 C1: 确认关键词子串匹配（处理"好的，授权吧"等复合短语）
+_CONFIRM_KEYWORDS = {
+    "好", "行", "可以", "批准", "同意", "授权", "准了", "没问题", "去吧",
+    "ok", "approve", "yes",
+}
+_REJECT_KEYWORDS = {
+    "不", "别", "取消", "拒绝", "算了", "stop", "no", "cancel", "reject",
+}
+
+
+def _contains_confirmation_keyword(text: str) -> bool:
+    return any(keyword in text for keyword in _CONFIRM_KEYWORDS)
+
+
+def _contains_rejection_keyword(text: str) -> bool:
+    return any(keyword in text for keyword in _REJECT_KEYWORDS)
 
 
 def _contains_boundary_phrase(text: str, phrases: set[str]) -> bool:
