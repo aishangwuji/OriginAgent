@@ -26,7 +26,6 @@ def mock_loop():
         loop = AgentLoop()
         loop.sessions = MagicMock()
         loop._pending_queues = {}
-        loop._session_locks = {}
         loop._active_tasks = {}
         loop._concurrency_gate = None
         loop._RUNTIME_CHECKPOINT_KEY = "runtime_checkpoint"

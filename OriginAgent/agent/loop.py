@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Awaitable, Callable
@@ -98,6 +99,7 @@ from OriginAgent.session.goal_state import goal_state_raw, goal_state_ws_blob, p
 from OriginAgent.session.manager import Session, SessionManager
 from OriginAgent.utils.constants import RoleConstants
 from OriginAgent.utils.image_generation_intent import image_generation_prompt
+from OriginAgent.utils.tracing import log_event
 from OriginAgent.utils.webui_titles import mark_webui_session
 from OriginAgent.utils.webui_transcript import append_transcript_object, delete_webui_transcript
 
@@ -1372,8 +1374,14 @@ class AgentLoop:
                 self._state_holder.get(session.key).last_context_assembly = dict(assembled.audit)
                 messages.append({"role": RoleConstants.USER, "content": assembled.blocks})
                 return self.context._apply_prompt_budget(messages, context_window_tokens=self.context_window_tokens, max_completion_tokens=getattr(self.provider.generation, "max_tokens", 4096))
-            messages.append({"role": RoleConstants.USER, "content": [self.context.build_runtime_context_block(msg.channel, self._runtime_chat_id(msg), self.context.timezone, sender_id=msg.sender_id, session_metadata=session.metadata)] + ([recovered_continuity_block] if recovered_continuity_block else []) + list(self.context.build_reference_context_blocks(session_summary=pending_summary, session_key=session.key, runtime_context=self._state_holder.get(session.key).last_runtime_context, current_message=msg.content))})
-            self._state_holder.get(session.key).last_context_assembly = {"enabled": False, "session_key": session.key, "reason": "phase1_continuity_disabled", "block_kinds": [self.context.RUNTIME_CONTEXT_KIND] + [block.get("_meta", {}).get("kind") for block in self.context.build_reference_context_blocks(session_summary=pending_summary, session_key=session.key, runtime_context=self._state_holder.get(session.key).last_runtime_context, current_message=msg.content)]}
+            # 分支 B：pending_ask_id 存在 + phase1 禁用。
+            # 统一走 ContextAssemblerV2.assemble（经 assemble_user_content），
+            # 确保 context.assembled 事件被发射且 build_reference_context_blocks
+            # 仅调用一次。enable_phase1_continuity=False 跳过 continuity 块，
+            # 与原内联构造行为一致；current_message=msg.content 保留原检索语义。
+            assembled = self.context.assemble_user_content(current_message=msg.content, media=None, channel=msg.channel, chat_id=self._runtime_chat_id(msg), sender_id=msg.sender_id, session_summary=pending_summary, session_metadata=session.metadata, internal_event=None, runtime_context=self._state_holder.get(session.key).last_runtime_context, session_key=session.key, recovered_continuity_block=recovered_continuity_block, include_current_message=False, enable_phase1_continuity=False)
+            self._state_holder.get(session.key).last_context_assembly = dict(assembled.audit)
+            messages.append({"role": RoleConstants.USER, "content": assembled.blocks})
             return self.context._apply_prompt_budget(messages, context_window_tokens=self.context_window_tokens, max_completion_tokens=getattr(self.provider.generation, "max_tokens", 4096))
         state = self._state_holder.get(session.key)
         built = self.context.build_messages(history=history, current_message=image_generation_prompt(msg.content, msg.metadata), media=msg.media if msg.media else None, channel=msg.channel, chat_id=self._runtime_chat_id(msg), sender_id=msg.sender_id, session_summary=pending_summary, session_metadata=session.metadata, internal_event=internal_event, self_model_payload=self_model_payload, runtime_context=state.last_runtime_context, session_key=session.key, recovered_continuity_block=recovered_continuity_block, context_window_tokens=self.context_window_tokens, max_completion_tokens=getattr(self.provider.generation, "max_tokens", 4096))
@@ -1496,9 +1504,10 @@ class AgentLoop:
             logger.warning("Command '{}' matched but dispatch returned None", raw)
 
     async def _cancel_active_tasks(self, key: str) -> int:
+        # Each entry is (task, created_at); unpack to cancel/await the task.
         tasks = self._active_tasks.pop(key, [])
-        cancelled = sum(1 for t in tasks if not t.done() and t.cancel())
-        for t in tasks:
+        cancelled = sum(1 for t, _ts in tasks if not t.done() and t.cancel())
+        for t, _ts in tasks:
             try:
                 await t
             except asyncio.CancelledError:
@@ -1619,7 +1628,56 @@ class AgentLoop:
             if not msg.session_key_override:
                 msg.session_key_override = tenant.unified_session_key
 
+            # ── Claim hint for __pairing_pending__ state ───────────────────
+            # A paired-but-unbound sender lands in __pairing_pending__ until
+            # they /pairing claim a tenant. On their first message we show
+            # them the list of claimable tenants and the claim command.
+            # Dedup via pairing.json hint_shown (rule 12 idempotency); the
+            # hint is sent BEFORE the agent processes the message so the
+            # user sees the action they need to take (spec: Task 2.4).
+            if tenant.tenant_id == "__pairing_pending__":
+                await self._maybe_show_claim_hint(msg)
+
         return await self._get_message_dispatcher().dispatch_message(msg)
+
+    async def _maybe_show_claim_hint(self, msg: InboundMessage) -> None:
+        """Send the claim hint to a paired-but-unbound sender exactly once.
+
+        Idempotent: ``is_hint_shown`` / ``mark_hint_shown`` persist the
+        dedup state in ``pairing.json`` so the hint survives process restarts
+        and is never spammed on every message (rule 12). Only claimable
+        tenants are included in the hint body (rule 18: never leak non-
+        claimable tenant info to an unbound sender).
+        """
+        from OriginAgent.pairing import (
+            format_claim_hint,
+            is_hint_shown,
+            mark_hint_shown,
+        )
+
+        if is_hint_shown(msg.channel, msg.sender_id):
+            return
+        registry = getattr(self, "_tenant_registry", None)
+        if registry is None:
+            return
+        claimable = registry.list_claimable_tenants()
+        hint = format_claim_hint(claimable)
+        ok = await self.bus.publish_outbound(OutboundMessage(
+            channel=msg.channel,
+            chat_id=msg.chat_id,
+            content=hint,
+        ))
+        # Mark as shown only after the outbound publish attempt so a failed
+        # publish (e.g. bus queue full) gives the user another chance on the
+        # next message. publish_outbound returns False when the bus dropped
+        # the message; in that case we do not record dedup.
+        if ok:
+            mark_hint_shown(msg.channel, msg.sender_id)
+        else:
+            logger.warning(
+                "Failed to deliver claim hint to {}:{} — will retry on next message",
+                msg.channel, msg.sender_id,
+            )
 
     def expire_stale_sessions(self) -> int:
         """Periodic maintenance: expire stale SessionStateHolder entries.
@@ -1690,9 +1748,65 @@ class AgentLoop:
         )
 
     def _active_task_count(self, session_key: str) -> int:
-        """Runtime provider used by cognitive scheduling and compatibility tests."""
+        """Runtime provider used by cognitive scheduling and compatibility tests.
+
+        Each entry in ``_active_tasks[session_key]`` is a ``(task, created_at)``
+        tuple (spec: Stale Active Task Reaper); only the ``not task.done()``
+        count is returned — reaped tasks are removed from the list by
+        ``_reap_stale_tasks`` before this is consulted.
+        """
         active_tasks = self._active_tasks.get(session_key, [])
-        return sum(1 for task in active_tasks if not task.done())
+        return sum(1 for task, _ts in active_tasks if not task.done())
+
+    def _reap_stale_tasks(self, session_key: str) -> int:
+        """Cancel and remove stale tasks for ``session_key``.
+
+        Spec: fix-cron-runtime-and-context-gaps P1-2 / Requirement: Stale Active
+        Task Reaper. A task is stale when ``not task.done()`` AND
+        ``now - created_at > self._stale_task_timeout_seconds`` (default 600 s).
+        Stale tasks (e.g. a dispatcher task hung on ``await call(**kw)`` for
+        10+ minutes) are cancelled and removed so cognitive passes are no longer
+        skipped indefinitely with ``reason=active_tasks``.
+
+        Rule 8 (async timing): this runs synchronously before the cognitive
+        scheduler reads ``_active_task_count`` — no new race. ``task.cancel()``
+        is non-blocking; cleanup of the list entry happens via the
+        ``add_done_callback`` registered at task creation, but we also remove
+        the tuple here so the count drops immediately (the done_callback's
+        identity-based removal is a no-op once the tuple is already gone).
+
+        Rule 14 (assertions): the assumption "a task older than the threshold
+        is safe to cancel" is backed by
+        ``tests/agent/test_active_task_reaper.py`` (configurable threshold +
+        fresh-task-preserved cases).
+
+        Returns the count of reaped tasks.
+        """
+        tasks = self._active_tasks.get(session_key, [])
+        if not tasks:
+            return 0
+        now = time.time()
+        threshold = self._stale_task_timeout_seconds
+        stale = [(t, ts) for t, ts in tasks if not t.done() and (now - ts) > threshold]
+        if not stale:
+            return 0
+        oldest_age = int(max(now - ts for _, ts in stale))
+        stale_task_ids = {id(t) for t, _ in stale}
+        for t, _ in stale:
+            # asyncio.Task.cancel() is non-blocking and never raises; for
+            # already-done tasks it returns False (we filtered done() above).
+            t.cancel()
+        # Remove reaped tuples in place so the count drops immediately.
+        self._active_tasks[session_key] = [
+            (t, ts) for t, ts in tasks if id(t) not in stale_task_ids
+        ]
+        log_event(
+            "active_task.reaped",
+            session_key=session_key,
+            task_count=len(stale),
+            oldest_age_seconds=oldest_age,
+        )
+        return len(stale)
 
     def _build_cognitive_runtime_context(self, session_key: str) -> RuntimeContext:
         if hasattr(self, "_runtime") and self._runtime is not None:

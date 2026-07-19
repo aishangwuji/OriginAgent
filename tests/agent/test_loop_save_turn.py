@@ -1,4 +1,5 @@
 import asyncio
+import time
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
@@ -647,7 +648,7 @@ async def test_stop_preserves_runtime_checkpoint_for_next_turn(tmp_path: Path) -
 
     first_msg = InboundMessage(channel="feishu", sender_id="u1", chat_id="c4", content="keep progress")
     task = asyncio.create_task(loop._process_message(first_msg))
-    loop._active_tasks[first_msg.session_key] = [task]
+    loop._active_tasks[first_msg.session_key] = [(task, time.time())]
     await asyncio.wait_for(checkpoint_saved.wait(), timeout=1.0)
 
     stop_msg = InboundMessage(channel="feishu", sender_id="u1", chat_id="c4", content="/stop")

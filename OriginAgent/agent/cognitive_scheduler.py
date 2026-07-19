@@ -116,6 +116,7 @@ class CognitiveScheduler:
         active_task_count_provider: Callable[[str], int],
         running_subagents_provider: Callable[[str], int],
         session_processor: Callable[..., Awaitable[list[CognitiveDecision]]],
+        reap_stale_tasks_provider: Callable[[str], int] | None = None,
     ) -> None:
         self.workspace = Path(workspace)
         self.config = config
@@ -124,6 +125,12 @@ class CognitiveScheduler:
         self._active_task_count_provider = active_task_count_provider
         self._running_subagents_provider = running_subagents_provider
         self._session_processor = session_processor
+        # Stale-task reaper (spec: Stale Active Task Reaper). Optional for
+        # backward compat with existing test fakes; when None, no reaping
+        # happens (behavior matches pre-reaper). When wired, ``run_once``
+        # calls it BEFORE ``active_task_count_provider`` so stale tasks no
+        # longer block cognitive passes with ``reason=active_tasks``.
+        self._reap_stale_tasks_provider = reap_stale_tasks_provider
         self.ledger = JsonlCognitiveSchedulerLedger(workspace)
         self._registered = False
         self._last_run: dict[str, Any] = {}
@@ -167,6 +174,21 @@ class CognitiveScheduler:
 
         for session_key in session_keys:
             try:
+                # Spec: Stale Active Task Reaper — reap hung tasks BEFORE
+                # reading the active-task count, so stale tasks no longer
+                # block cognitive passes with reason=active_tasks. The reaper
+                # is optional (None in legacy test fakes); a None provider is
+                # a no-op preserving pre-reaper behavior.
+                reap_provider = self._reap_stale_tasks_provider
+                if reap_provider is not None:
+                    try:
+                        reap_provider(session_key)
+                    except Exception as exc:
+                        # Reaper failures must not abort the sweep; the count
+                        # provider below still runs and may skip the session
+                        # (acceptable degradation — better than blocking the
+                        # whole scheduler loop on one session's reap error).
+                        session_stats[session_key] = {"reap_error": exc.__class__.__name__}
                 decisions = await self._session_processor(
                     session_key,
                     active_task_count=self._active_task_count_provider(session_key),

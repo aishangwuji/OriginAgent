@@ -505,7 +505,7 @@ class AgentRuntime:
         d = self._deps
         written = False
         if event.summary:
-            d.working_memory.append_attention_item(session, event.summary, identity=runtime_context.identity)
+            d.working_memory.append_attention_item(session, event.summary, identity=runtime_context.identity, source="cognitive_event")
             written = True
         if event.event_type in {"pending_confirmation_nudge", "scheduled_reminder"}:
             question = (
@@ -702,17 +702,22 @@ class AgentRuntime:
         max_chars 控制每条消息的截断长度，默认 800（向后兼容）。
         配置来源：ContextConfig.recent_turns_summary_max_chars，由
         _save_continuity_checkpoint 调用时传入。
+
+        is_internal 过滤（spec P2-4）：cron turn / cognitive nudge / reminder
+        等内部消息会稀释连续性上下文，导致 recent_turns_count 被重置。先过滤掉
+        ``metadata.is_internal=True`` 的消息，保留真实 USER/ASSISTANT 对话；
+        若过滤后剩余 < 2 条（极端情况：全是内部消息），放宽限制保留所有
+        USER/ASSISTANT 消息，避免空 summary。
         """
         # Session 类使用 messages 属性；兼容可能使用 history 的 mock
         history = getattr(session, "messages", None)
         if history is None:
             history = getattr(session, "history", None) or []
-        # 取最后 4 条消息（2 轮 = 2 user + 2 assistant）
-        recent = history[-4:] if len(history) >= 4 else history
-        summary: list[dict[str, str]] = []
-        for msg in recent:
+
+        def _to_summary_entry(msg: Any) -> dict[str, str] | None:
+            """提取 (role, content) 并按 max_chars 截断；不满足条件返回 None。"""
             if not isinstance(msg, dict):
-                continue
+                return None
             role = msg.get("role", "")
             content = msg.get("content", "")
             # content 可能是 list（多模态）或 str
@@ -727,8 +732,33 @@ class AgentRuntime:
             # 截断到 max_chars 字符（可配置，避免长对话关键信息丢失）
             content = str(content)[:max_chars]
             if role in (RoleConstants.USER, RoleConstants.ASSISTANT) and content.strip():
-                summary.append({"role": role, "content": content})
-        return summary[-4:]  # 最多 4 条（2 轮）
+                return {"role": role, "content": content}
+            return None
+
+        # 第一遍过滤：USER/ASSISTANT 且 not metadata.is_internal
+        # 同时累积 all_summary 供放宽回退使用
+        real_summary: list[dict[str, str]] = []
+        all_summary: list[dict[str, str]] = []
+        for msg in history:
+            entry = _to_summary_entry(msg)
+            if entry is None:
+                continue
+            all_summary.append(entry)
+            metadata = msg.get("metadata") if isinstance(msg, dict) else None
+            if isinstance(metadata, dict) and metadata.get("is_internal"):
+                continue
+            real_summary.append(entry)
+
+        # 若过滤后 < 2 条，放宽限制保留所有 USER/ASSISTANT 消息（避免空 summary）
+        if len(real_summary) < 2:
+            if len(all_summary) > len(real_summary):
+                logger.debug(
+                    "recent_turns_summary relaxed to include internal messages: "
+                    "real_count={}, total_count={}",
+                    len(real_summary), len(all_summary),
+                )
+            return all_summary[-4:]
+        return real_summary[-4:]
 
     @staticmethod
     def _load_continuity_checkpoint(session: Any, workspace: Any = None) -> dict | None:
@@ -913,6 +943,14 @@ class AgentRuntime:
         d = self._deps
         if (mt := d.tools.get("message")) and isinstance(mt, MessageTool) and mt._sent_in_turn:
             if not had_injections or stop_reason == "empty_final_response":
+                # 路径 B 抑制：MessageTool 已主动发送（路径 A），此处不再
+                # 发出 OutboundMessage。补日志记录抑制原因，避免"影子回复"
+                # 在日志中完全不可见（呼应规则1：全链路追踪）。
+                logger.info(
+                    "Path B suppressed: _sent_in_turn=True, had_injections={}, stop_reason={}",
+                    had_injections,
+                    stop_reason,
+                )
                 return None
 
         # Cron 触发的 turn 不通过 channel 系统回流产出——cron 通道是 inbound-only
@@ -1210,13 +1248,17 @@ class AgentRuntime:
             payload = trigger.payload if isinstance(trigger.payload, dict) else {}
             preview = _trim_text(payload.get("user_message_preview"), max_chars=160)
             text = f"user_correction: {preview or 'correction recorded'}".strip()
-            if text in list(getattr(snapshot, "attention_items", []) or []):
+            # 存储格式为 "[user_correction] {text}"（见 append_attention_item 的 source 参数），
+            # 查重需匹配存储后的格式，避免重复写入同一 user_correction。
+            stored_form = f"[user_correction] {text}"
+            if stored_form in list(getattr(snapshot, "attention_items", []) or []):
                 d.meta_coordinator.add_fast_path_ref(trigger.source_reference)
                 d.meta_coordinator.record_fast_path_decision("fast_path_duplicate_skipped")
                 return
             d.working_memory.append_attention_item(
                 session, text,
                 identity=getattr(runtime_context, "identity", None) if runtime_context is not None else None,
+                source="user_correction",
             )
             d.meta_coordinator.add_fast_path_ref(trigger.source_reference)
             d.meta_coordinator.record_fast_path_decision("fast_path_working_memory_written")
@@ -1477,35 +1519,24 @@ class AgentRuntime:
                     context_window_tokens=d.context_window_tokens,
                     max_completion_tokens=getattr(d.provider.generation, "max_tokens", 4096),
                 )
-            messages.append({
-                "role": RoleConstants.USER,
-                "content": [
-                    d.context.build_runtime_context_block(
-                        msg.channel, self._runtime_chat_id(msg),
-                        d.context.timezone, sender_id=msg.sender_id,
-                        session_metadata=session.metadata,
-                    ),
-                    *([recovered_continuity_block] if recovered_continuity_block is not None else []),
-                    *d.context.build_reference_context_blocks(
-                        session_summary=pending_summary, session_key=session.key,
-                        runtime_context=d.state_holder.get(session.key).last_runtime_context,
-                        current_message=msg.content,
-                    ),
-                ],
-            })
-            d.state_holder.get(session.key).last_context_assembly = {
-                "enabled": False,
-                "session_key": session.key,
-                "reason": "phase1_continuity_disabled",
-                "block_kinds": [d.context.RUNTIME_CONTEXT_KIND] + [
-                    block.get("_meta", {}).get("kind")
-                    for block in d.context.build_reference_context_blocks(
-                        session_summary=pending_summary, session_key=session.key,
-                        runtime_context=d.state_holder.get(session.key).last_runtime_context,
-                        current_message=msg.content,
-                    )
-                ],
-            }
+            # 分支 B：pending_ask_id 存在 + phase1 禁用。
+            # 统一走 ContextAssemblerV2.assemble（经 assemble_user_content），
+            # 确保 context.assembled 事件被发射且 build_reference_context_blocks
+            # 仅调用一次。enable_phase1_continuity=False 跳过 continuity 块，
+            # 与原内联构造行为一致；current_message=msg.content 保留原检索语义。
+            assembled = d.context.assemble_user_content(
+                current_message=msg.content, media=None,
+                channel=msg.channel, chat_id=self._runtime_chat_id(msg),
+                sender_id=msg.sender_id, session_summary=pending_summary,
+                session_metadata=session.metadata, internal_event=None,
+                runtime_context=d.state_holder.get(session.key).last_runtime_context,
+                session_key=session.key,
+                recovered_continuity_block=recovered_continuity_block,
+                include_current_message=False,
+                enable_phase1_continuity=False,
+            )
+            d.state_holder.get(session.key).last_context_assembly = dict(assembled.audit)
+            messages.append({"role": RoleConstants.USER, "content": assembled.blocks})
             return d.context._apply_prompt_budget(
                 messages,
                 context_window_tokens=d.context_window_tokens,

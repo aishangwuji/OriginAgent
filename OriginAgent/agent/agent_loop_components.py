@@ -154,8 +154,10 @@ class AgentLoopAttributes:
     _active_intent_task: Any = None  # type: ignore[assignment]
     _mcp_startup_error: str | None = None
     _active_tasks: Any = None  # type: ignore[assignment]
+    # Stale-task reaper threshold (seconds). Loaded from
+    # ``AgentDefaults.stale_task_timeout_seconds``. See ``_reap_stale_tasks``.
+    _stale_task_timeout_seconds: int = 600
     _background_tasks: Any = None  # type: ignore[assignment]
-    _session_locks: Any = None  # type: ignore[assignment]
     _pending_queues: Any = None  # type: ignore[assignment]
     context: Any = None  # type: ignore[assignment]
     memory_governance: Any = None  # type: ignore[assignment]
@@ -507,8 +509,12 @@ def build_loop_components(
     values["_active_intent_task"] = None
     values["_mcp_startup_error"] = None
     values["_active_tasks"] = {}
+    # Rule 6 (single source of truth): read the reaper threshold from
+    # AgentDefaults rather than a second hardcoded constant.
+    values["_stale_task_timeout_seconds"] = int(
+        getattr(defaults, "stale_task_timeout_seconds", 600)
+    )
     values["_background_tasks"] = set()
-    values["_session_locks"] = {}
     values["_pending_queues"] = {}
     values["context"] = context_builder_cls(
         workspace,
@@ -693,6 +699,7 @@ def build_loop_components(
         active_task_count_provider=loop._active_task_count,
         running_subagents_provider=values["subagents"].get_running_count_by_session,
         session_processor=loop._run_cognitive_pass_for_session,
+        reap_stale_tasks_provider=loop._reap_stale_tasks,
     )
 
     # 先构造 CognitiveLoopConfig,供 EPIC motor 与 CognitiveLoop 共享同一份配置

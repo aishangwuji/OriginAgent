@@ -869,6 +869,7 @@ class MetaCognitionReflector:
                         session,
                         caution,
                         identity=getattr(runtime_context, "identity", None) if runtime_context is not None else None,
+                        source="meta_reflection",
                     )
                     wrote_any = True
                     self._increment(self._working_memory_bridge_counts, "attention_appended")

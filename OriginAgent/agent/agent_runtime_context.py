@@ -19,6 +19,7 @@ Responsibility boundary (spec 1.10 / tech-debt Batch C1):
 
 from __future__ import annotations
 
+import logging
 from typing import Any, Awaitable, Callable
 
 from OriginAgent.agent.identity import RuntimeContext
@@ -27,13 +28,61 @@ from OriginAgent.bus.events import InboundMessage, OutboundMessage
 from OriginAgent.bus.queue import MessageBus
 from OriginAgent.security.capabilities import CapabilitySnapshot
 
+logger = logging.getLogger(__name__)
+
+# Canonical capability flag keys. A well-formed ``payload_snapshot`` dict
+# should contain at least one of these so that ``CapabilitySnapshot.from_dict``
+# produces a meaningful snapshot rather than an all-default one. Used by
+# ``snapshot_for_trigger`` to detect malformed payloads and fall back safely.
+_CAPABILITY_FLAG_KEYS: frozenset[str] = frozenset({
+    "can_exec",
+    "can_read_files",
+    "can_write_files",
+    "can_send_cross_target",
+    "can_create_cron",
+    "can_spawn",
+})
+
 
 def runtime_chat_id(msg: InboundMessage) -> str:
     """Return the chat id shown in runtime metadata for the model."""
     return str(msg.metadata.get("context_chat_id") or msg.chat_id)
 
 
-def snapshot_for_trigger(trigger: str | None) -> CapabilitySnapshot:
+def snapshot_for_trigger(
+    trigger: str | None,
+    payload_snapshot: dict | None = None,
+) -> CapabilitySnapshot:
+    """Select a ``CapabilitySnapshot`` for the given trigger.
+
+    Resolution order (spec P0-1):
+    1. If ``payload_snapshot`` is a non-empty dict, reconstruct a
+       ``CapabilitySnapshot`` from it (overriding trigger-based selection).
+       - If the dict contains no recognized capability flag keys, log a
+         warning and fall back to ``scheduled_default()`` (fail-safe: invalid
+         input must not silently grant capabilities — rule 18).
+       - If ``CapabilitySnapshot.from_dict`` raises (KeyError/TypeError/
+         ValueError), log a warning and fall through to trigger-based logic.
+    2. Else, fall back to the existing trigger-based mapping
+       (``scheduled_default()`` for ``"scheduled"``, ``user_turn()`` for user,
+       etc.).
+    """
+    if payload_snapshot:
+        try:
+            if not (_CAPABILITY_FLAG_KEYS & set(payload_snapshot)):
+                logger.warning(
+                    "payload_snapshot contains no recognized capability flag "
+                    "keys; falling back to scheduled_default(); keys=%s",
+                    list(payload_snapshot.keys()),
+                )
+                return CapabilitySnapshot.scheduled_default()
+            return CapabilitySnapshot.from_dict(payload_snapshot)
+        except (KeyError, TypeError, ValueError) as exc:
+            logger.warning(
+                "Failed to reconstruct CapabilitySnapshot from payload_snapshot "
+                "(%s); falling back to trigger=%r selection",
+                exc, trigger,
+            )
     if trigger == "scheduled":
         return CapabilitySnapshot.scheduled_default()
     if trigger == "automation":
