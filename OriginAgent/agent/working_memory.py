@@ -19,6 +19,13 @@ from OriginAgent.utils.tracing import log_event
 
 WORKING_MEMORY_METADATA_KEY = "working_memory_v1"
 
+# 内部触发源身份标识（identity.user_id 为这些值时表示是系统内部任务，
+# 不是真实用户身份）。当 session.metadata 中已存在的 owner_id 是这些
+# 内部值时，允许被后续真实用户 identity 覆盖；反之真实用户 owner_id
+# 不应被内部身份覆盖（防止 cron 任务霸占用户 session 的所有权）。
+# 见 identity.py:114-116（channel in {"system", "cron"} → user_id=channel）。
+_INTERNAL_OWNER_IDS = frozenset({"cron", "system", "agent_cognitive", "unknown", ""})
+
 
 def _utcnow_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -42,6 +49,26 @@ def _normalize_items(values: Any, *, limit: int = 8, max_chars: int = 240) -> li
         if len(out) >= limit:
             break
     return out
+
+
+def _count_attention_items_sources(items: list[str]) -> dict[str, int]:
+    """按 [source] 前缀分组计数 attention_items。
+
+    无前缀或格式异常的归为 "user"（向后兼容旧数据）。用于 working_memory.saved
+    事件的审计字段，定位 attention_items 增长的来源（user / cognitive_event /
+    user_correction / meta_reflection / reminder 等）。
+    """
+    sources: dict[str, int] = {}
+    for item in items:
+        source = "user"
+        if item.startswith("[") and "]" in item:
+            bracket_end = item.index("]")
+            candidate = item[1:bracket_end]
+            rest = item[bracket_end + 1:].strip()
+            if candidate and rest:
+                source = candidate
+        sources[source] = sources.get(source, 0) + 1
+    return sources
 
 
 @dataclass
@@ -117,8 +144,22 @@ class WorkingMemoryManager:
             session.key,
             session.metadata.get(WORKING_MEMORY_METADATA_KEY),
         )
-        if identity is not None and not snapshot.owner_id:
-            snapshot.owner_id = identity.user_id
+        if identity is not None:
+            # owner_id 覆盖策略（修复 owner_id=cron 污染根因）：
+            # - 真实用户 identity（非 _INTERNAL_OWNER_IDS）总是优先，覆盖任何现有值
+            # - 内部 identity（cron/system/agent_cognitive）只在 owner_id 为空或同为内部值时写入，
+            #   不允许霸占真实用户已写入的 owner_id
+            identity_user_id = identity.user_id
+            existing_owner_id = snapshot.owner_id or ""
+            is_internal_identity = identity_user_id in _INTERNAL_OWNER_IDS
+            is_internal_existing = existing_owner_id in _INTERNAL_OWNER_IDS
+            if not is_internal_identity:
+                # 真实用户身份：强制覆盖（防止 cron 写入的 owner_id 残留）
+                snapshot.owner_id = identity_user_id
+            elif is_internal_existing:
+                # 内部身份 + 现有值也是内部/空：允许写入（向后兼容 cron 任务首次 load）
+                snapshot.owner_id = identity_user_id
+            # else: 内部身份 + 现有值是真实用户 → 不覆盖，保护用户身份
         # 时间衰减：在 goal 注入前清空陈旧的易失真字段，
         # 避免 LLM confabulate 的内容被每轮反复注入形成自我强化的虚假记忆。
         self._apply_field_decay(snapshot)
@@ -200,6 +241,7 @@ class WorkingMemoryManager:
                 session_key=session.key,
                 goal_changed=(existing.current_goal != snapshot.current_goal) if existing else True,
                 attention_items_count=len(snapshot.attention_items or []),
+                attention_items_sources=_count_attention_items_sources(snapshot.attention_items or []),
             )
             self._last_emitted_signature[session.key] = signature
         else:
@@ -264,11 +306,13 @@ class WorkingMemoryManager:
         item: str,
         *,
         identity: IdentityDescriptor | None = None,
+        source: str = "user",
     ) -> WorkingMemorySnapshot:
         text = str(item or "").strip()
         snapshot = self.load(session, identity=identity)
         if text:
-            snapshot.attention_items = _normalize_items([*snapshot.attention_items, text])
+            stored = f"[{source}] {text}"
+            snapshot.attention_items = _normalize_items([*snapshot.attention_items, stored])
         return self.save(session, snapshot)
 
     def append_pending_question(

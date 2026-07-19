@@ -13,6 +13,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import patch
 
+from OriginAgent.agent.scope import IdentityDescriptor
 from OriginAgent.agent.working_memory import WorkingMemoryManager, WorkingMemorySnapshot
 from OriginAgent.session.manager import SessionManager
 
@@ -479,3 +480,202 @@ def test_saved_event_deduped_on_no_change(tmp_path: Path, caplog):
         from loguru import logger as loguru_logger
 
         loguru_logger.remove(handler_id)
+
+
+# ---------------------------------------------------------------------------
+# attention_items source 标记（Task 7）
+# ---------------------------------------------------------------------------
+
+
+def test_append_attention_item_with_source_prefix(tmp_path: Path):
+    """append_attention_item 传入 source 时，存储格式应为 "[source] item"。"""
+    sessions = SessionManager(tmp_path)
+    session = sessions.get_or_create("cli:test")
+
+    manager = WorkingMemoryManager(sessions)
+    manager.append_attention_item(session, "foo", source="cognitive_event")
+
+    snapshot = manager.load(session)
+    assert snapshot.attention_items == ["[cognitive_event] foo"]
+
+
+def test_append_attention_item_default_source_is_user(tmp_path: Path):
+    """append_attention_item 不传 source 时，默认 source="user"，存储为 "[user] item"。"""
+    sessions = SessionManager(tmp_path)
+    session = sessions.get_or_create("cli:test")
+
+    manager = WorkingMemoryManager(sessions)
+    manager.append_attention_item(session, "foo")
+
+    snapshot = manager.load(session)
+    assert snapshot.attention_items == ["[user] foo"]
+
+
+def test_working_memory_saved_event_includes_attention_items_sources(tmp_path: Path):
+    """working_memory.saved 事件应包含 attention_items_sources 字段，
+    按 [source] 前缀分组计数；无前缀的归为 "user"（向后兼容旧数据）。
+    """
+    sessions = SessionManager(tmp_path)
+    session = sessions.get_or_create("cli:test")
+
+    manager = WorkingMemoryManager(sessions)
+
+    with patch("OriginAgent.agent.working_memory.log_event") as mock_log_event:
+        # 写入两个不同 source 的 item：每次 append 内部 load+save，
+        # 第二次 save 的 attention_items 签名变化会触发 saved 事件。
+        manager.append_attention_item(session, "foo", source="user")
+        manager.append_attention_item(session, "bar", source="cognitive_event")
+
+    saved_calls = [
+        c for c in mock_log_event.call_args_list
+        if c.args and c.args[0] == "working_memory.saved"
+    ]
+    assert saved_calls, "working_memory.saved 未被记录"
+    # 取最后一次 saved 事件：此时 attention_items 已含两个不同 source 的 item
+    last_saved = saved_calls[-1]
+    kwargs = last_saved.kwargs
+
+    assert "attention_items_sources" in kwargs, (
+        "working_memory.saved 事件应包含 attention_items_sources 字段"
+    )
+    assert kwargs["attention_items_sources"] == {"user": 1, "cognitive_event": 1}
+
+
+# ---------------------------------------------------------------------------
+# owner_id 污染修复（P0）：cron 写入的 owner_id 必须被真实用户身份覆盖
+#
+# 故障链：
+# 1. cron 任务通过 upsert(identity=cron_identity) 把 owner_id="cron" 写入 session.metadata
+# 2. 同一 session（如 tenant:guest）后续被真实用户消息触发 load()
+# 3. 旧逻辑：`if identity is not None and not snapshot.owner_id` — owner_id 非空，不覆盖
+# 4. 用户消息被以 "cron 所有者" 身份处理 → 上下文污染
+#
+# 修复：当 identity 是真实用户身份时，强制覆盖非用户 owner_id（cron/system/agent_cognitive）
+# ---------------------------------------------------------------------------
+
+
+def _cron_identity() -> IdentityDescriptor:
+    """cron 任务的 identity（channel="cron" 时 identity.user_id="cron"）。"""
+    return IdentityDescriptor(
+        actor_id="cron",
+        user_id="cron",
+        session_id="tenant:guest",
+        device_id=None,
+    )
+
+
+def _real_user_identity() -> IdentityDescriptor:
+    """真实 Telegram 用户的 identity。"""
+    return IdentityDescriptor(
+        actor_id="telegram:7715515124",
+        user_id="telegram:7715515124",
+        session_id="tenant:guest",
+        device_id=None,
+    )
+
+
+def test_load_overwrites_cron_owner_id_with_real_user_identity(tmp_path: Path):
+    """当 session.metadata 中 owner_id="cron" 时，load() 用真实用户 identity 覆盖。
+
+    场景：cron 任务先写入了 owner_id="cron"，随后同一 session 收到用户消息。
+    load() 传入用户 identity，应把 owner_id 从 "cron" 改为真实 user_id。
+    """
+    sessions = SessionManager(tmp_path)
+    session = sessions.get_or_create("tenant:guest")
+    fresh_at = (datetime.now(timezone.utc) - timedelta(minutes=2)).isoformat()
+    # 模拟 cron 任务通过 upsert 写入的 metadata
+    session.metadata["working_memory_v1"] = _snapshot_raw(
+        updated_at=fresh_at,
+        current_goal="cron-scheduled-task",
+    )
+    session.metadata["working_memory_v1"]["owner_id"] = "cron"
+
+    manager = WorkingMemoryManager(sessions)
+    # 用户消息触发 load，传入真实用户 identity
+    snapshot = manager.load(session, identity=_real_user_identity())
+
+    assert snapshot.owner_id == "telegram:7715515124", (
+        f"真实用户 identity 应覆盖 cron owner_id，实际 owner_id={snapshot.owner_id!r}"
+    )
+
+
+def test_load_preserves_real_user_owner_id_against_cron_identity(tmp_path: Path):
+    """当 session.metadata 中 owner_id 是真实用户时，cron identity 不应覆盖。
+
+    场景：用户先在 session 中写过 owner_id="telegram:xxx"，随后 cron 任务
+    通过 upsert(identity=cron_identity) 触发 load()。cron 不应霸占真实用户的
+    session 所有者身份。
+    """
+    sessions = SessionManager(tmp_path)
+    session = sessions.get_or_create("tenant:guest")
+    fresh_at = (datetime.now(timezone.utc) - timedelta(minutes=2)).isoformat()
+    session.metadata["working_memory_v1"] = _snapshot_raw(
+        updated_at=fresh_at,
+        current_goal="user-goal",
+    )
+    session.metadata["working_memory_v1"]["owner_id"] = "telegram:7715515124"
+
+    manager = WorkingMemoryManager(sessions)
+    # cron 任务触发 load，传入 cron identity
+    snapshot = manager.load(session, identity=_cron_identity())
+
+    assert snapshot.owner_id == "telegram:7715515124", (
+        f"cron identity 不应覆盖真实用户 owner_id，实际 owner_id={snapshot.owner_id!r}"
+    )
+
+
+def test_load_keeps_empty_owner_id_when_no_identity(tmp_path: Path):
+    """无 identity 传入时，owner_id 保持原值（向后兼容）。
+
+    场景：某些旧调用路径不传 identity（如 meta_cognition_reflector 的
+    无身份 load）。此时 owner_id 应保持原值，不应被清空或改为默认值。
+    """
+    sessions = SessionManager(tmp_path)
+    session = sessions.get_or_create("cli:test")
+    fresh_at = (datetime.now(timezone.utc) - timedelta(minutes=2)).isoformat()
+    session.metadata["working_memory_v1"] = _snapshot_raw(updated_at=fresh_at)
+    session.metadata["working_memory_v1"]["owner_id"] = "cron"
+
+    manager = WorkingMemoryManager(sessions)
+    snapshot = manager.load(session, identity=None)
+
+    # 无 identity 时不应修改 owner_id
+    assert snapshot.owner_id == "cron"
+
+
+def test_load_cron_owner_id_unchanged_when_only_cron_identity(tmp_path: Path):
+    """仅 cron identity 时，owner_id="cron" 保持不变（避免无意义覆盖）。
+
+    场景：cron 任务先写入 owner_id="cron"，后续同一 session 又被 cron
+    任务再次 load。两次都是 cron 身份，owner_id 保持 "cron" 是合法的。
+    """
+    sessions = SessionManager(tmp_path)
+    session = sessions.get_or_create("cron:job-1")
+    fresh_at = (datetime.now(timezone.utc) - timedelta(minutes=2)).isoformat()
+    session.metadata["working_memory_v1"] = _snapshot_raw(updated_at=fresh_at)
+    session.metadata["working_memory_v1"]["owner_id"] = "cron"
+
+    manager = WorkingMemoryManager(sessions)
+    snapshot = manager.load(session, identity=_cron_identity())
+
+    assert snapshot.owner_id == "cron"
+
+
+def test_load_overwrites_empty_owner_id_with_any_identity(tmp_path: Path):
+    """空 owner_id 时，任何 identity（包括 cron）都应写入（向后兼容原行为）。
+
+    场景：新 session 的 owner_id 为空，cron 任务第一次 load 时应把 owner_id
+    设为 "cron"。这是原逻辑 `not snapshot.owner_id` 分支的既有行为，修复后
+    应保持不变。
+    """
+    sessions = SessionManager(tmp_path)
+    session = sessions.get_or_create("cron:job-2")
+    fresh_at = (datetime.now(timezone.utc) - timedelta(minutes=2)).isoformat()
+    raw = _snapshot_raw(updated_at=fresh_at)
+    raw["owner_id"] = None  # 空 owner_id
+    session.metadata["working_memory_v1"] = raw
+
+    manager = WorkingMemoryManager(sessions)
+    snapshot = manager.load(session, identity=_cron_identity())
+
+    assert snapshot.owner_id == "cron"
