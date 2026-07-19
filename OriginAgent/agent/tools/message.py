@@ -5,6 +5,8 @@ from contextvars import ContextVar
 from pathlib import Path
 from typing import Any, Awaitable, Callable
 
+from loguru import logger
+
 from OriginAgent.agent.tools.base import Tool, tool_parameters
 from OriginAgent.agent.tools.schema import ArraySchema, StringSchema, tool_parameters_schema
 from OriginAgent.agent.tools.security import ToolSecurityClass
@@ -423,6 +425,19 @@ class MessageTool(Tool):
                 self._turn_delivered_media_paths_var.set(tuple(dict.fromkeys([*existing, *media])))
             media_info = f" with {len(media)} attachments" if media else ""
             button_info = f" with {sum(len(row) for row in buttons)} button(s)" if buttons else ""
+            # 路径 A（mid-turn message tool send）：LLM 主动调用 message 工具发送
+            # 到 Telegram 等通道，绕过 _assemble_outbound 的 "Response to..." 日志，
+            # 此处补一条可观测性日志，用于追踪"影子回复"（无最终响应日志但消息已发送）。
+            # 见 _assemble_outbound:944-946 的路径 B 抑制分支。
+            content_preview = (content[:80] + "...") if len(content) > 80 else content
+            logger.info(
+                "Path A message tool send to {}:{}: {}{}{}",
+                channel,
+                chat_id,
+                content_preview,
+                media_info,
+                button_info,
+            )
             return f"Message sent to {channel}:{chat_id}{media_info}{button_info}"
         except Exception as e:
             return f"Error sending message: {str(e)}"

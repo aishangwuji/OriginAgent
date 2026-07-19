@@ -82,6 +82,14 @@ _COMPACTABLE_TOOLS = frozenset({
     "web_search", "web_fetch", "list_dir",
 })
 _BACKFILL_CONTENT = "[Tool result unavailable — call was interrupted or lost]"
+
+# Cache-miss WARN dedup: same (provider, model) pair only warns once per
+# ``_CACHE_MISS_WARN_COOLDOWN_S`` seconds to avoid log spam on every turn.
+# Rationale: prompt prefix drift (e.g. timestamps, random ids) typically
+# affects every consecutive call, so one WARN per cooldown is enough signal.
+_CACHE_MISS_WARN_COOLDOWN_S = 300.0
+_cache_miss_warn_last: dict[tuple[str, str], float] = {}
+
 @dataclass(slots=True, frozen=True)
 class ToolError:
     """Structured tool error — unified replacement for string/exception/tuple mix (A7)."""
@@ -859,6 +867,7 @@ class AgentRunner:
 
         def _log_llm_response(resp: LLMResponse) -> None:
             # 结构化记录 LLM 响应的关键属性，便于审计 token 用量/工具调用/推理内容
+            cached_tokens = (resp.usage or {}).get("cached_tokens", 0)
             log_event(
                 "llm.response",
                 model=spec.model,
@@ -869,7 +878,28 @@ class AgentRunner:
                 content_chars=len(resp.content or ""),
                 reasoning_chars=len(getattr(resp, "reasoning_content", "") or ""),
                 usage_completion=(resp.usage or {}).get("completion_tokens", 0),
+                cached_tokens=cached_tokens,
             )
+            # Cache-miss WARN: only when provider declares prompt caching
+            # support yet this response hit nothing. Common cause: prompt
+            # prefix contains volatile content (current_time, random ids).
+            # Dedup per (provider, model) to avoid spamming every turn.
+            provider_spec = getattr(provider, "_spec", None)
+            if (
+                provider_spec is not None
+                and getattr(provider_spec, "supports_prompt_caching", False)
+                and cached_tokens == 0
+            ):
+                dedup_key = (provider_spec.name, spec.model)
+                now = time.monotonic()
+                last = _cache_miss_warn_last.get(dedup_key)
+                if last is None or (now - last) >= _CACHE_MISS_WARN_COOLDOWN_S:
+                    _cache_miss_warn_last[dedup_key] = now
+                    logger.warning(
+                        "Prompt cache miss: provider={} model={} cached_tokens=0; "
+                        "check prompt prefix stability (e.g., current_time, random ids)",
+                        provider_spec.name, spec.model,
+                    )
 
         if wants_streaming:
             async def _stream(delta: str) -> None:
@@ -1189,11 +1219,26 @@ class AgentRunner:
     ) -> None:
         """Persist a denied tool into ``session.metadata["_denied_tools"]``.
 
-        Only ``capability_*`` denials are persisted because they are
-        session-permanent: the capability snapshot is set at session start
-        and does not change mid-session. SSRF, protected-path, and workspace
-        violations are per-target (a different URL/path may be valid) and
-        must NOT block future calls with different params.
+        Session-permanent denials are persisted so subsequent calls (even
+        across cron turns) are short-circuited at ``_run_tool_core`` entry.
+        A denial is considered session-permanent when its ``policy_rule``
+        matches one of:
+
+        - ``capability_*`` — capability snapshot is set at session start and
+          does not change mid-session. This also covers all
+          ``capability_*_denied`` rules (e.g. ``capability_exec_denied``,
+          ``capability_domain_send_cross_target_denied``).
+        - ``*_grant_required`` / ``*_requires_grant`` — the operation needs
+          an explicit user grant that has not been given (e.g. cron
+          high-capability, message cross-target). The corresponding denial
+          ``code`` (e.g. ``cross_target_denied``) is the user-visible
+          category, but the ``policy_rule`` is what the filter matches on.
+
+        SSRF (``ssrf_denied``), symlink (``symlink_path_denied``),
+        protected-path, and workspace violations are per-target (a different
+        URL/path may be valid) and must NOT block future calls with different
+        params; their ``policy_rule`` values do not match the patterns above
+        and are correctly skipped.
 
         Known limitation: if capabilities are granted mid-session via the
         interactive approval flow, ``_denied_tools`` is NOT automatically
@@ -1201,7 +1246,13 @@ class AgentRunner:
         session ends. This is acceptable for cron sessions (no interactive
         approval) but may need refinement for interactive sessions.
         """
-        if not policy_rule or not policy_rule.startswith("capability_"):
+        if not policy_rule:
+            return
+        if not (
+            policy_rule.startswith("capability_")
+            or policy_rule.endswith("_grant_required")
+            or policy_rule.endswith("_requires_grant")
+        ):
             return
         if spec.sessions is None or not spec.session_key:
             return
@@ -1395,7 +1446,7 @@ class AgentRunner:
             # Must happen before _classify_violation which may early-return
             # for SSRF/workspace violations (those are per-target, not
             # session-permanent, and _persist_session_denied_tool correctly
-            # skips them via the capability_* prefix check).
+            # skips them via the session-permanent pattern check).
             self._persist_session_denied_tool(spec, tool_call.name, policy_rule)
             await self._audit_tool_from_runner(
                 spec,
@@ -1463,8 +1514,9 @@ class AgentRunner:
             payload = f"Error: {type(exc).__name__}: {exc}"
             policy_rule = exc.policy_rule if isinstance(exc, PolicyDeniedError) else None
             # Phase 1: unify persistence + structured prefix across all three
-            # denial paths. _persist_session_denied_tool only persists
-            # capability_* denials (session-permanent); _structured_denied_prefix
+            # denial paths. _persist_session_denied_tool persists
+            # session-permanent denials (capability_*, *_grant_required,
+            # *_requires_grant); _structured_denied_prefix
             # adds the [POLICY_DENIED ...] prefix for all policy denials.
             # For PolicyDeniedError, pass exc.code so the prefix includes the
             # structured error code (e.g. code=capability_denied).

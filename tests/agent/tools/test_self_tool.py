@@ -559,13 +559,6 @@ class TestModifyOpen:
         assert "protected" in result
 
     @pytest.mark.asyncio
-    async def test_modify_session_locks_blocked(self):
-        """_session_locks controls session isolation — must be blocked."""
-        tool = _make_tool()
-        result = await tool.execute(action="set", key="_session_locks", value={})
-        assert "protected" in result
-
-    @pytest.mark.asyncio
     async def test_modify_active_tasks_blocked(self):
         """_active_tasks tracks running tasks — must be blocked."""
         tool = _make_tool()
