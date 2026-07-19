@@ -15,6 +15,7 @@ from typing import Any
 from loguru import logger
 
 from OriginAgent.utils.helpers import image_placeholder_text
+from OriginAgent.utils.tracing import log_event
 
 
 @dataclass
@@ -744,12 +745,50 @@ class LLMProvider(ABC):
         last_response: LLMResponse | None = None
         last_error_key: str | None = None
         identical_error_count = 0
+        # Tracks the most recent error (exception or response content) for
+        # the ``event.llm.retry_exhausted`` audit event emitted at exhaustion.
+        last_error: BaseException | str | None = None
         while True:
             attempt += 1
-            response = await call(**kw)
+            try:
+                response = await call(**kw)
+            except Exception as exc:
+                # ``ConnectionError`` / ``asyncio.TimeoutError`` and similar
+                # transient network failures must be surfaced via the retry
+                # strategy rather than propagated. ``_safe_chat`` already
+                # converts most exceptions to error responses, but we catch
+                # here as a safety net so the outcome is always logged and
+                # retried. The synthesized response is tagged with
+                # ``error_kind`` so the existing ``_is_transient_response``
+                # classifier treats it as retryable without relying on
+                # content text matching (which fails for empty messages).
+                logger.warning(
+                    "LLM call raised exception on attempt {}/{}: {}: {}",
+                    attempt,
+                    len(delays),
+                    type(exc).__name__,
+                    exc,
+                )
+                last_error = exc
+                error_kind = (
+                    "timeout" if isinstance(exc, asyncio.TimeoutError) else "connection"
+                )
+                response = LLMResponse(
+                    content=f"Error calling LLM: {exc}",
+                    finish_reason="error",
+                    error_kind=error_kind,
+                )
             if response.finish_reason != "error":
+                if attempt > 1:
+                    logger.info(
+                        "LLM retry succeeded on attempt {}/{}",
+                        attempt,
+                        len(delays),
+                    )
                 return response
             last_response = response
+            if response.content:
+                last_error = response.content
             error_key = ((response.content or "").strip().lower() or None)
             if error_key and error_key == last_error_key:
                 identical_error_count += 1
@@ -790,6 +829,14 @@ class LLMProvider(ABC):
                     "LLM request failed after {} retries, giving up: {}",
                     attempt,
                     (response.content or "")[:120].lower(),
+                )
+                final_error = (
+                    str(last_error) if last_error is not None else "unknown error"
+                )
+                log_event(
+                    "llm.retry_exhausted",
+                    attempts=attempt,
+                    final_error=final_error,
                 )
                 if on_retry_wait:
                     await on_retry_wait(

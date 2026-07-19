@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import time
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
@@ -424,7 +425,7 @@ async def test_priority_stop_uses_effective_session_key_in_unified_mode(
         await asyncio.sleep(10)
 
     task = asyncio.create_task(long_running())
-    loop._active_tasks[UNIFIED_SESSION_KEY] = [task]
+    loop._active_tasks[UNIFIED_SESSION_KEY] = [(task, time.time())]
     msg = InboundMessage(
         channel="websocket",
         sender_id="webui",

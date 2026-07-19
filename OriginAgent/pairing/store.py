@@ -13,7 +13,7 @@ import string
 import threading
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from loguru import logger
 
@@ -43,14 +43,19 @@ def _load() -> dict[str, Any]:
         with open(path, encoding="utf-8") as f:
             data = json.load(f)
     except FileNotFoundError:
-        return {"approved": {}, "pending": {}}
+        return {"approved": {}, "pending": {}, "hint_shown": {}}
     except (json.JSONDecodeError, OSError):
         logger.warning("Corrupted pairing store, resetting")
-        return {"approved": {}, "pending": {}}
+        return {"approved": {}, "pending": {}, "hint_shown": {}}
 
     # Convert approved lists to sets for O(1) lookup
     for channel, users in data.get("approved", {}).items():
         data["approved"][channel] = set(users)
+    # hint_shown has the same shape as approved (channel → sender_id set).
+    # Older stores created before the claim-hint feature will not have it;
+    # default to an empty dict so callers can treat it uniformly.
+    for channel, users in data.get("hint_shown", {}).items():
+        data["hint_shown"][channel] = set(users)
     return data
 
 
@@ -61,6 +66,7 @@ def _save(data: dict[str, Any]) -> None:
     payload = {
         "approved": {ch: sorted(list(users)) for ch, users in data.get("approved", {}).items()},
         "pending": dict(data.get("pending", {})),
+        "hint_shown": {ch: sorted(list(users)) for ch, users in data.get("hint_shown", {}).items()},
     }
     _write_text_atomic(path, json.dumps(payload, indent=2, ensure_ascii=False))
 
@@ -183,6 +189,52 @@ def get_approved(channel: str) -> list[str]:
         return sorted(data.get("approved", {}).get(channel, set()))
 
 
+def is_hint_shown(channel: str, sender_id: str) -> bool:
+    """Return True if the claim hint has already been shown to *sender_id* on *channel*.
+
+    Used to deduplicate the ``__pairing_pending__`` claim hint so a paired-
+    but-unbound sender sees it at most once (rule 12 idempotency).
+    """
+    with _LOCK:
+        data = _load()
+        return str(sender_id) in data.get("hint_shown", {}).get(channel, set())
+
+
+def mark_hint_shown(channel: str, sender_id: str) -> None:
+    """Record that the claim hint has been shown to *sender_id* on *channel*.
+
+    Idempotent: repeated calls with the same arguments have no additional
+    effect. Persisted to ``pairing.json`` so dedup survives process restarts.
+    """
+    with _LOCK:
+        data = _load()
+        data.setdefault("hint_shown", {}).setdefault(channel, set()).add(str(sender_id))
+        _save(data)
+
+
+def format_claim_hint(claimable_tenants: list[tuple[str, str]]) -> str:
+    """Format the claim-hint message shown to a ``__pairing_pending__`` sender.
+
+    Args:
+        claimable_tenants: list of ``(tenant_id, display_name)`` tuples,
+            pre-filtered by the caller to only those with
+            ``claimable_by_pairing=True``. Filtering at the caller keeps this
+            function pure and ensures non-claimable tenant info is never
+            leaked to an unbound sender (rule 18 security boundary).
+    """
+    if not claimable_tenants:
+        return (
+            "You have been approved, but no claimable identity is currently available. "
+            "Please ask the owner to enable a claimable tenant."
+        )
+    lines = ["You have been approved! To bind your identity, send:"]
+    for tid, name in claimable_tenants:
+        lines.append(f"  /pairing claim {tid}   # {name}")
+    lines.append("")
+    lines.append("Once claimed, you will have full access to your assistant.")
+    return "\n".join(lines)
+
+
 def format_pairing_reply(code: str) -> str:
     """Return the pairing-code message sent to unrecognised DM senders."""
     return (
@@ -199,11 +251,32 @@ def format_expiry(expires_at: float) -> str:
     return f"{remaining}s" if remaining > 0 else "expired"
 
 
-def handle_pairing_command(channel: str, subcommand_text: str) -> str:
+def handle_pairing_command(
+    channel: str,
+    subcommand_text: str,
+    *,
+    sender_id: str | None = None,
+    tenant_registry: Any = None,
+    on_claim_success: Callable[[Any], None] | None = None,
+) -> str:
     """Execute a pairing subcommand and return the reply text.
 
     This is a pure function (no side effects other than store mutations)
     so it can be used from both the CLI and the agent CommandRouter.
+
+    For the ``claim`` subcommand, *sender_id* and *tenant_registry* must be
+    supplied so the handler can verify the sender has been approved via
+    pairing (rule 18 security boundary) and is not already bound to another
+    tenant (rule 12 idempotency).
+
+    *on_claim_success* is an optional callback invoked with the claimed
+    ``Tenant`` after a successful ``claim_pairing``. It lets the caller
+    perform post-claim work (BDI lazy-load, session migration) without
+    leaking that concern into the pairing store (rule 16 domain isolation).
+    Exceptions raised by the callback are logged but do not undo the
+    binding — the binding already happened, and the success reply is still
+    returned so the user is not left without feedback. The operator can
+    then re-trigger any failed post-claim work on the next message.
     """
     parts = subcommand_text.split()
     sub = parts[0] if parts else "list"
@@ -252,7 +325,56 @@ def handle_pairing_command(channel: str, subcommand_text: str) -> str:
             )
         return "Usage: `/pairing revoke <user_id>` or `/pairing revoke <channel> <user_id>`"
 
+    elif sub == "claim":
+        if arg is None:
+            return "Usage: `/pairing claim <tenant_id>`"
+        if sender_id is None or tenant_registry is None:
+            return "Claim command requires sender_id and tenant_registry context"
+        # Idempotency (rule 12): if the sender is already bound to a real
+        # tenant (either pre-bound via config or claimed via a previous
+        # /pairing claim call), refuse to silently rebind them. This check
+        # comes BEFORE the is_approved check because a pre-bound sender
+        # (bound via config) is not in the pairing store but is still
+        # already claimed — telling them "not approved" would be misleading.
+        # lookup() falls back to the guest tenant for unbound senders, so a
+        # non-guest result means a real binding already exists.
+        existing = tenant_registry.lookup(channel, sender_id)
+        if existing is not None and existing.tenant_id != "guest":
+            return (
+                f"You are already bound to tenant `{existing.tenant_id}`. "
+                "Contact owner to change."
+            )
+        # Authorization (rule 18): sender must have been approved via pairing
+        # on this channel. Without this check, any user could claim any tenant.
+        if not is_approved(channel, sender_id):
+            return (
+                f"You have not been approved on {channel}. "
+                "Ask the owner to approve your pairing code first."
+            )
+        # Boundary validation (rule 3): tenant_id must exist and be claimable.
+        tenant = tenant_registry.get(arg)
+        if tenant is None:
+            return f"Unknown tenant: `{arg}`"
+        if not getattr(tenant, "claimable_by_pairing", False):
+            return f"Tenant `{arg}` is not claimable via pairing"
+        tenant_registry.claim_pairing(channel, sender_id, arg)
+        if on_claim_success is not None:
+            # Reason: the pairing store stays domain-isolated from agent_host
+            # (rule 16) — post-claim BDI lazy-load and session migration are
+            # the caller's responsibility. Swallow exceptions so a callback
+            # failure does not surface as a claim failure to the user (the
+            # binding is already persisted). The operator sees the error log.
+            try:
+                on_claim_success(tenant)
+            except Exception:
+                logger.exception(
+                    "on_claim_success callback failed for tenant={} sender={}@{}",
+                    arg, sender_id, channel,
+                )
+        return f"Claimed tenant `{arg}` successfully. Welcome, {tenant.display_name}!"
+
     return (
         "Unknown pairing command.\n"
-        "Usage: `/pairing [list|approve <code>|deny <code>|revoke <user_id>|revoke <channel> <user_id>]`"
+        "Usage: `/pairing [list|approve <code>|deny <code>|"
+        "revoke <user_id>|revoke <channel> <user_id>|claim <tenant_id>]`"
     )

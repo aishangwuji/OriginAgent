@@ -3,13 +3,16 @@
 from OriginAgent.pairing.store import (
     approve_code,
     deny_code,
+    format_claim_hint,
     format_expiry,
     format_pairing_reply,
     generate_code,
     get_approved,
     handle_pairing_command,
     is_approved,
+    is_hint_shown,
     list_pending,
+    mark_hint_shown,
     revoke,
 )
 
@@ -20,13 +23,16 @@ PAIRING_COMMAND_META_KEY = "_pairing_command"
 __all__ = [
     "approve_code",
     "deny_code",
+    "format_claim_hint",
     "format_expiry",
     "format_pairing_reply",
     "generate_code",
     "get_approved",
     "handle_pairing_command",
     "is_approved",
+    "is_hint_shown",
     "list_pending",
+    "mark_hint_shown",
     "revoke",
     "PAIRING_CODE_META_KEY",
     "PAIRING_COMMAND_META_KEY",

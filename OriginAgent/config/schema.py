@@ -1479,6 +1479,26 @@ class AgentDefaults(Base):
         ),
         serialization_alias="activeIntentMaxMessagesPerSessionPerPass",
     )
+    # Stale active-task reaper threshold (spec: fix-cron-runtime-and-context-gaps
+    # P1-2 / Requirement: Stale Active Task Reaper). Tasks registered in
+    # ``AgentLoop._active_tasks`` older than this (in seconds) are cancelled and
+    # removed by ``_reap_stale_tasks`` before cognitive eligibility is evaluated,
+    # so hung dispatcher/cron tasks no longer block cognitive passes indefinitely
+    # with ``reason=active_tasks``. Default 600 s = 10 min (matches the observed
+    # "stuck on await call(**kw)" threshold in production logs).
+    # Note: spec named the container ``RuntimeControls``; that class does not
+    # exist in the codebase, so the field lives on ``AgentDefaults`` alongside
+    # the other scalar runtime knobs (rule 32/33 — no speculative new class).
+    stale_task_timeout_seconds: int = Field(
+        default=600,
+        ge=30,
+        le=86_400,
+        validation_alias=AliasChoices(
+            "staleTaskTimeoutSeconds",
+            "stale_task_timeout_seconds",
+        ),
+        serialization_alias="staleTaskTimeoutSeconds",
+    )
     consolidation_ratio: float = Field(
         default=0.5,
         ge=0.1,
@@ -1624,6 +1644,7 @@ class TenantConfig(Base):
     display_name: str = ""                          # "爸爸", "妈妈", "姐姐"
     bindings: list[TenantChannelBinding] = Field(default_factory=list)
     bdi_enabled: bool = True
+    claimable_by_pairing: bool = False              # may a paired sender claim this tenant?
     permissions: dict[str, bool] = Field(default_factory=lambda: {
         "exec": False, "write_files": False, "device_control": True,
     })

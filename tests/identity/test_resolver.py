@@ -57,6 +57,33 @@ class TestTenantRegistry:
             reg.register_binding("telegram", "x", "nobody")
 
 
+class TestClaimableByPairing:
+    def test_tenant_config_claimable_by_pairing_default_false(self) -> None:
+        cfg = TenantConfig(tenant_id="dad")
+        assert cfg.claimable_by_pairing is False
+
+    def test_tenant_config_claimable_by_pairing_true(self, tmp_path: Path) -> None:
+        cfg = TenantsConfig(
+            tenants=[
+                TenantConfig(
+                    tenant_id="dad",
+                    display_name="爸爸",
+                    claimable_by_pairing=True,
+                ),
+            ],
+            guest_tenant_enabled=False,
+        )
+        reg = TenantRegistry(tmp_path, cfg)
+        tenant = reg.get("dad")
+        assert tenant is not None
+        assert tenant.claimable_by_pairing is True
+
+    def test_claimable_by_pairing_field_exists(self) -> None:
+        import dataclasses
+        field_names = {f.name for f in dataclasses.fields(Tenant)}
+        assert "claimable_by_pairing" in field_names
+
+
 class TestIdentityResolver:
     def test_resolve_known_sender(self, tmp_path: Path) -> None:
         reg = TenantRegistry(tmp_path, _make_config())

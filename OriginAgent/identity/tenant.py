@@ -23,6 +23,9 @@ class Tenant:
     bdi_enabled: bool = True
     bdi_engine: Any = None             # DeliberationEngine (set during agent start)
 
+    # Pairing
+    claimable_by_pairing: bool = False  # may a paired sender claim this tenant?
+
     # Permissions
     permissions: dict[str, bool] = field(default_factory=dict)
 
@@ -57,6 +60,7 @@ class TenantRegistry:
             unified_session_key=f"tenant:{tc.tenant_id}",
             workspace_dir=self._workspace / "tenants" / tc.tenant_id,
             bdi_enabled=tc.bdi_enabled,
+            claimable_by_pairing=tc.claimable_by_pairing,
             permissions=dict(tc.permissions),
             bindings=[{
                 "channel": b.channel,
@@ -93,6 +97,20 @@ class TenantRegistry:
         if self._guest_tenant:
             tenants.append(self._guest_tenant)
         return tenants
+
+    def list_claimable_tenants(self) -> list[tuple[str, str]]:
+        """Return ``(tenant_id, display_name)`` for every tenant with ``claimable_by_pairing=True``.
+
+        Used by the ``__pairing_pending__`` claim-hint flow to show an
+        approved-but-unbound sender which identities they may claim. Only
+        claimable tenants are returned, so non-claimable tenant info is never
+        leaked to an unbound sender (rule 18 security boundary).
+        """
+        return [
+            (t.tenant_id, t.display_name)
+            for t in self._tenants.values()
+            if getattr(t, "claimable_by_pairing", False)
+        ]
 
     def register_binding(self, channel: str, sender_id: str, tenant_id: str) -> None:
         """Register a new channel binding for a tenant (e.g. via pairing flow)."""

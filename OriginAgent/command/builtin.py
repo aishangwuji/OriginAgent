@@ -247,7 +247,7 @@ async def cmd_status(ctx: CommandContext) -> OutboundMessage:
             usage = await fetch_search_usage(provider=provider, api_key=api_key)
             search_usage_text = usage.format()
     active_tasks = loop._active_tasks.get(ctx.key, [])
-    task_count = sum(1 for t in active_tasks if not t.done())
+    task_count = sum(1 for t, _ts in active_tasks if not t.done())
     with suppress(Exception):
         task_count += loop.subagents.get_running_count_by_session(ctx.key)
     return OutboundMessage(
@@ -329,7 +329,7 @@ async def cmd_goal(ctx: CommandContext) -> OutboundMessage | None:
         )
 
     active_tasks = ctx.loop._active_tasks.get(ctx.key, [])
-    if any(not task.done() for task in active_tasks):
+    if any(not task.done() for task, _ts in active_tasks):
         return OutboundMessage(
             channel=ctx.msg.channel,
             chat_id=ctx.msg.chat_id,
@@ -422,6 +422,11 @@ def _pairing_command_allowed(ctx: CommandContext, subcommand: str) -> bool:
         return True
     if config.allow_self_approve:
         return True
+    # claim is a sender-side action: a paired sender claims a tenant on their
+    # own channel. The actual authorization (sender must be approved via
+    # pairing on this channel) is enforced inside handle_pairing_command.
+    if subcommand == "claim":
+        return True
     return False
 
 
@@ -446,7 +451,27 @@ async def cmd_pairing(ctx: CommandContext) -> OutboundMessage:
             content="Pairing approval commands are restricted to trusted approval channels.",
             metadata=meta,
         )
-    reply = handle_pairing_command(ctx.msg.channel, ctx.args)
+    # Pass sender_id and tenant_registry so the `claim` subcommand can
+    # authorize the sender against the pairing store and tenant registry.
+    # For owner-only subcommands (list/approve/deny/revoke) these are ignored.
+    sender_id = str(ctx.msg.sender_id) if ctx.msg.sender_id else None
+    tenant_registry = getattr(ctx.loop, "_tenant_registry", None)
+    # post-claim hook: trigger BDI lazy-load and session migration on the
+    # agent_host. Guarded so owner-only subcommands (which never hit the
+    # claim branch) and tests without a host still work. The callback is
+    # invoked by handle_pairing_command only on a successful claim.
+    host = getattr(ctx.loop, "_host", None)
+    on_claim_success = None
+    if host is not None and sender_id is not None:
+        def on_claim_success(tenant, _channel=ctx.msg.channel, _sender_id=sender_id, _host=host):
+            _host.post_claim_init(_channel, _sender_id, tenant)
+    reply = handle_pairing_command(
+        ctx.msg.channel,
+        ctx.args,
+        sender_id=sender_id,
+        tenant_registry=tenant_registry,
+        on_claim_success=on_claim_success,
+    )
     return OutboundMessage(
         channel=ctx.msg.channel,
         chat_id=ctx.msg.chat_id,

@@ -198,7 +198,10 @@ class TestRestartCommand:
         finished_task.done.return_value = True
 
         msg = InboundMessage(channel="telegram", sender_id="u1", chat_id="c1", content="/status")
-        loop._active_tasks[msg.session_key] = [running_task, finished_task]
+        loop._active_tasks[msg.session_key] = [
+            (running_task, time.time()),
+            (finished_task, time.time()),
+        ]
         loop.subagents.get_running_count_by_session.return_value = 2
 
         response = await loop._process_message(msg)

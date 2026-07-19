@@ -49,6 +49,7 @@ from rich.table import Table
 from rich.text import Text
 
 from OriginAgent import __logo__, __version__
+from OriginAgent.agent.agent_runtime_context import snapshot_for_trigger
 from OriginAgent.agent.loop import AgentLoop
 from OriginAgent.bus.events import InboundMessage
 from OriginAgent.security.grants import (
@@ -907,6 +908,20 @@ def _run_gateway(
             )
             raise
 
+        # P0-1 (Issue 1): respect an explicit ``payload.capability_snapshot``.
+        # Previously this dict was silently ignored and cron always used
+        # ``scheduled_default()`` (all False), causing every cron-triggered
+        # tool call to be denied with ``capability_*_denied``. When non-empty,
+        # reconstruct the snapshot via ``snapshot_for_trigger`` so the cron job
+        # runs with the user-configured capabilities (and the reconstructed
+        # snapshot still goes through normal ``ToolRegistry._assert_capability``
+        # checks — this is a SOURCE of the snapshot, not a bypass).
+        payload_snapshot = job.payload.capability_snapshot or None
+        if payload_snapshot:
+            capability_snapshot = snapshot_for_trigger(
+                "scheduled", payload_snapshot=payload_snapshot
+            )
+
         # 改进 C：扫描 session 近期 PolicyDeniedError，若存在则在 reminder_note
         # 追加"不要重试"硬约束，防止 Agent 反复尝试被拒工具（"清醒地犯蠢"）。
         try:
@@ -976,28 +991,39 @@ def _run_gateway(
             # denied_tools 扫描（L913）仍用 cron:{job.id}，因为那是 cron-job-specific
             # 的能力边界历史记录，与 turn 执行 session 解耦。
             cron_session_key = job.payload.session_key or f"cron:{job.id}"
-            process_task = asyncio.create_task(
-                agent._process_message(
-                    msg,
-                    session_key=cron_session_key,
-                    on_progress=_silent,
-                    capability_snapshot=capability_snapshot,
-                )
-            )
+
+            async def _run_cron_turn() -> OutboundMessage | None:
+                # 方案 B：cron 路径补锁，与 dispatch_message (user 路径) 共享同一 per-session 锁。
+                # 修复"cron 与 user 消息并发处理导致响应丢失和时序混乱"（spec: Issue 5）。
+                async with agent.sessions.get_lock(cron_session_key):
+                    return await agent._process_message(
+                        msg,
+                        session_key=cron_session_key,
+                        on_progress=_silent,
+                        capability_snapshot=capability_snapshot,
+                    )
+
+            process_task = asyncio.create_task(_run_cron_turn())
             # Register to _active_tasks so cognitive_scheduler can see this
             # cron session is busy (root-cause fix for "自产自消"). Some
             # test fakes don't expose _active_tasks — degrade gracefully
             # (the cron turn still runs, just without cognitive visibility).
+            # Store (task, created_at) tuple so ``_reap_stale_tasks`` can
+            # cancel hung cron tasks (spec: Stale Active Task Reaper).
             active_tasks = getattr(agent, "_active_tasks", None)
             if isinstance(active_tasks, dict):
-                active_tasks.setdefault(cron_session_key, []).append(process_task)
-                process_task.add_done_callback(
-                    lambda t, k=cron_session_key: (
-                        active_tasks.get(k, []).remove(t)
-                        if t in active_tasks.get(k, [])
-                        else None
-                    )
+                active_tasks.setdefault(cron_session_key, []).append(
+                    (process_task, time.time())
                 )
+
+                def _remove_done_cron_task(done_task, k=cron_session_key):
+                    tasks = active_tasks.get(k, [])
+                    for it in tasks:
+                        if it[0] is done_task:
+                            tasks.remove(it)
+                            break
+
+                process_task.add_done_callback(_remove_done_cron_task)
             # _process_message 异常时 task 已 done，done_callback 会清理
             # _active_tasks；await 自然向上抛出，让上层 cron 处理。
             resp = await process_task
@@ -1030,6 +1056,17 @@ def _run_gateway(
                 response, reminder_note, agent.provider, agent.model,
             )
             if should_notify:
+                # Cron Path B delivery：cron turn 完成后通过 _deliver_to_channel
+                # 把最终响应投递到真实通道（如 Telegram）。补日志记录投递意图，
+                # 用于追踪 cron 任务的双回复路径（路径 A 在 message 工具内、
+                # 路径 B 在此处），避免"影子回复"无日志可查。
+                preview = response[:120] + "..." if len(response) > 120 else response
+                logger.info(
+                    "Cron Path B delivery to {}:{}: {}",
+                    job.payload.channel or "cli",
+                    job.payload.to,
+                    preview,
+                )
                 await _deliver_to_channel(
                     OutboundMessage(
                         channel=job.payload.channel or "cli",

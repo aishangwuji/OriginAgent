@@ -286,6 +286,10 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
         supports_max_completion_tokens=True,
     ),
     # DeepSeek: OpenAI-compatible at api.deepseek.com
+    # supports_prompt_caching=True enables cache observability (cached_tokens
+    # logging in runner._log_llm_response). DeepSeek uses automatic prefix
+    # caching, so no explicit cache_control markers are injected (only
+    # Anthropic/Claude receive marker injection in _build_kwargs).
     ProviderSpec(
         name="deepseek",
         keywords=("deepseek",),
@@ -294,6 +298,7 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
         backend="openai_compat",
         default_api_base="https://api.deepseek.com",
         thinking_style="thinking_type",
+        supports_prompt_caching=True,
     ),
     # Gemini: Google's OpenAI-compatible endpoint
     ProviderSpec(

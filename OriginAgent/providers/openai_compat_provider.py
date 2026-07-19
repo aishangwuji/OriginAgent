@@ -501,8 +501,13 @@ class OpenAICompatProvider(LLMProvider):
         if stripped_attachments is not None:
             messages = stripped_attachments
 
+        # Prompt cache handling: ``supports_prompt_caching`` is the gate for
+        # *both* cache_control marker injection AND cache observability
+        # (cached_tokens logging in runner._log_llm_response). DeepSeek and
+        # other auto-prefix-cache providers set this flag to enable
+        # observability without requiring explicit markers — only
+        # Anthropic/Claude models receive cache_control injection here.
         if spec and spec.supports_prompt_caching:
-            model_name = model or self.default_model
             if any(model_name.lower().startswith(k) for k in ("anthropic/", "claude")):
                 messages, tools = self._apply_cache_control(messages, tools)
 
