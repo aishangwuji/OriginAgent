@@ -716,6 +716,16 @@ class ConfirmationConfig(Base):
         validation_alias=AliasChoices("confirmTtlByRisk", "confirm_ttl_by_risk"),
         serialization_alias="confirmTtlByRisk",
     )
+    tool_approval_cron_ttl_seconds: int = Field(
+        default=3600,
+        ge=60,
+        le=86400,
+        validation_alias=AliasChoices("toolApprovalCronTtlSeconds", "tool_approval_cron_ttl_seconds"),
+        serialization_alias="toolApprovalCronTtlSeconds",
+        description="TTL for tool_approval confirmations triggered by scheduled (cron) tasks. "
+        "Default 1h to accommodate cron cadence; user-triggered tool_approval still uses "
+        "confirm_ttl_by_risk (high=2min).",
+    )
 
 
 class TaskRuntimeConfig(Base):

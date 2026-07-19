@@ -180,6 +180,9 @@ class ConfirmationRequest:
     idempotency_key: str | None = None
     consumed_at: str | None = None
     metadata: dict[str, str] = field(default_factory=dict)
+    # D10: confirmation 所属 owner 身份（如 "tenant:owner"）。
+    # None 表示历史遗留数据（D10 修复前），向后兼容；规则 18 安全边界：跨 owner 审批必须被拒绝。
+    owner_id: str | None = None
 
     def __post_init__(self) -> None:
         self.confirmation_id = _required_str(self.confirmation_id, "confirmation_id")
@@ -197,6 +200,7 @@ class ConfirmationRequest:
         self.idempotency_key = _optional_str(self.idempotency_key)
         self.consumed_at = _optional_str(self.consumed_at)
         self.metadata = _sanitize_confirmation_metadata(self.metadata)
+        self.owner_id = _optional_str(self.owner_id)
 
     @classmethod
     def from_dict(cls, raw: dict[str, Any]) -> "ConfirmationRequest":
@@ -228,6 +232,8 @@ class ConfirmationRequest:
                 if isinstance(raw.get("metadata"), dict)
                 else {}
             ),
+            # D10: 旧 json 无 owner_id 字段时 _optional_str(None) 返回 None（向后兼容）
+            owner_id=_optional_str(raw.get("owner_id")),
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -546,6 +552,7 @@ class ConfirmationManager:
         metadata: dict[str, Any] | None = None,
         action_payload: dict[str, Any] | None = None,
         idempotency_key: str | None = None,
+        owner_id: str | None = None,
         now: datetime | None = None,
     ) -> ConfirmationRequest:
         current_time = _normalize_datetime(now)
@@ -558,7 +565,7 @@ class ConfirmationManager:
                     and existing.idempotency_key == idempotency_key
                 ):
                     return existing
-        expires_at = current_time + _ttl_for("tool_approval", risk, self.config)
+        expires_at = current_time + _ttl_for("tool_approval", risk, self.config, trigger=trigger)
         confirmation_metadata = dict(metadata or {})
         if session_key:
             confirmation_metadata.setdefault("session_key", session_key)
@@ -585,6 +592,8 @@ class ConfirmationManager:
             action_payload=_sanitize_action_payload_snapshot(action_payload or {}),
             idempotency_key=_optional_str(idempotency_key),
             metadata=_sanitize_confirmation_metadata(confirmation_metadata),
+            # D10: 写入 owner_id（None 时维持旧行为，向后兼容）
+            owner_id=_optional_str(owner_id),
         )
         stored = self.store.upsert(confirmation)
         self._audit_confirmation_event(
@@ -607,6 +616,7 @@ class ConfirmationManager:
         reply: str,
         *,
         now: datetime | None = None,
+        caller_actor_id: str | None = None,
     ) -> ConfirmationResult:
         current_time = _normalize_datetime(now)
         audit_event: dict[str, Any] | None = None
@@ -670,6 +680,34 @@ class ConfirmationManager:
                     decision="unclear_reply",
                     reason=result.reason,
                     now=current_time,
+                )
+            elif (
+                # D10 规则 18 安全边界：request.owner_id 与 caller_actor_id 都存在时
+                # 必须严格匹配；不匹配直接拒绝并审计，不进入 reply 分类逻辑。
+                # 当 request.owner_id is None（历史遗留）或 caller_actor_id is None
+                # （旧调用方）时维持现有行为，向后兼容。
+                target.owner_id is not None
+                and caller_actor_id is not None
+                and caller_actor_id != target.owner_id
+            ):
+                result = ConfirmationResult(
+                    confirmation_id=target.confirmation_id,
+                    decision="rejected",
+                    reason=(
+                        f"caller_actor_id={caller_actor_id!r} does not match "
+                        f"confirmation owner_id={target.owner_id!r}"
+                    ),
+                )
+                audit_event = self._confirmation_audit_event(
+                    target,
+                    decision="approval_denied_owner_mismatch",
+                    reason=result.reason,
+                    now=current_time,
+                    metadata={
+                        "denial_reason": "approval_denied_owner_mismatch",
+                        "caller_actor_id": caller_actor_id,
+                        "confirmation_owner_id": target.owner_id,
+                    },
                 )
             else:
                 classification = _classify_reply(reply)
@@ -926,6 +964,15 @@ class ConfirmationManager:
         include_non_pending: bool = False,
         now: datetime | None = None,
     ) -> list[ConfirmationRequest]:
+        # 方向 D 修复（D6 根因）：
+        # ``expire_old`` 此前从未被任何 caller 调用，导致 pending_confirmations.json
+        # 堆积 status=pending 但 expires_at < now 的"假 pending"。功能上虽被
+        # 下面的 _is_expired 过滤掉，但 status 字段不更新，让用户以为还有 N 个
+        # 待审批其实早已过期。list_tool_approvals 是用户/Agent 查看 pending 的
+        # 唯一公开入口，此处做 lazy 清理覆盖率最高，且 expire_old 内部有
+        # store._locked 保护、与 read_all 的 _locked 互不嵌套（无死锁风险）。
+        if not include_non_pending:
+            self.expire_old(now=now)
         current_time = _normalize_datetime(now)
         results: list[ConfirmationRequest] = []
         for confirmation in self.store.read_all():
@@ -950,6 +997,42 @@ class ConfirmationManager:
         if not approvals:
             return None
         return approvals[-1]
+
+    def list_pending_for_owner(
+        self,
+        owner_id: str | None,
+        *,
+        now: datetime | None = None,
+    ) -> list[ConfirmationRequest]:
+        """D10: 列出某 owner 名下所有未过期的 pending tool_approval。
+
+        复用 D6 lazy ``expire_old`` 模式（与 ``list_tool_approvals`` 入口一致），
+        先清理过期 pending 再过滤。
+
+        - ``owner_id`` 非 None：返回 ``request.owner_id == owner_id`` 的 pending
+        - ``owner_id`` 为 None：返回 ``request.owner_id is None`` 的 pending
+          （向后兼容历史遗留数据，spec 边界 3 要求 owner 能清理 D10 修复前的死锁 pending）
+
+        规则 18 安全边界：调用方（REST API / Telegram 命令）需自行校验
+        caller 身份，本方法只做数据过滤不做鉴权。
+        """
+        self.expire_old(now=now)
+        current_time = _normalize_datetime(now)
+        results: list[ConfirmationRequest] = []
+        for confirmation in self.store.read_all():
+            if confirmation.kind != "tool_approval":
+                continue
+            if confirmation.status != "pending":
+                continue
+            if _is_expired(confirmation, now=current_time):
+                continue
+            if confirmation.owner_id != owner_id:
+                # 注意：None != None 为 False，因此 owner_id=None 时只匹配
+                # confirmation.owner_id is None 的项（向后兼容历史遗留）
+                continue
+            results.append(confirmation)
+        results.sort(key=lambda item: (item.created_at, item.confirmation_id))
+        return results
 
     def list_deferred_tool_approvals(
         self,
@@ -1087,8 +1170,15 @@ def _ttl_for(
     kind: str,
     risk: str | None,
     config: ConfirmationConfig | None = None,
+    trigger: str | None = None,
 ) -> timedelta:
     cfg = config or _DEFAULT_CONFIRMATION_CONFIG
+    # D7: cron 触发的 tool_approval 使用独立 TTL（默认 1h），
+    # 以适应 cron 调度节奏——用户可能不在线，2min TTL 会让 pending
+    # 在用户下次对话前就过期。规则 19（可回滚）：TTL 通过 config
+    # 字段 tool_approval_cron_ttl_seconds 暴露，可动态调整无需代码改动。
+    if kind == "tool_approval" and trigger == "scheduled":
+        return timedelta(seconds=max(60, int(cfg.tool_approval_cron_ttl_seconds)))
     if kind == "notify_only":
         return timedelta(seconds=max(0, int(cfg.notify_ttl_seconds)))
     ttl_map = {

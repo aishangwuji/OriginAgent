@@ -514,6 +514,9 @@ class ToolRegistry:
                 "grant_flags": json.dumps(grant_flags, ensure_ascii=False, sort_keys=True),
             },
             idempotency_key=idempotency_key,
+            # D10: 透传 actor_id 作为 owner_id，支持跨 session 审批（规则 18 安全边界）。
+            # 当 actor_id 为 None（旧调用方未设置 runtime_context）时维持旧行为。
+            owner_id=self._runtime_context.actor_id,
         )
 
     def _effective_snapshot_for_tool(

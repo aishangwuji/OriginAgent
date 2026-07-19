@@ -990,6 +990,10 @@ class EvolutionControlPlane:
                 "reason_digest": _reason_digest(reason),
             },
             idempotency_key=f"evolution_override:{action}:{target_id}:{_reason_digest(reason)}",
+            # D10: 透传 requested_by 作为 owner_id，支持跨 session 审批（规则 18 安全边界）。
+            # requested_by 来自 caller 的 self._actor（见 evolution_control.py），
+            # 是发起此次 evolution 控制操作的 owner 身份。
+            owner_id=requested_by,
         )
         return {
             "ok": True,
