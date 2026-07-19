@@ -268,3 +268,106 @@ def test_repeated_save_updates_checkpoint(mock_log_event):
         if call.args and call.args[0] == "continuity.checkpoint.saved"
     ]
     assert len(saved_calls) == 2
+
+
+# ── Task 8: recent_turns_summary 排除 internal 消息（验证先行） ──────
+
+
+def test_extract_recent_turns_summary_excludes_internal_messages():
+    """_extract_recent_turns_summary 应过滤 metadata.is_internal=True 的消息。
+
+    场景（spec P2-4）：4 条消息 = 2 条 real user/assistant + 2 条 is_internal=True
+    （cron turn / cognitive nudge / reminder 等内部消息会稀释连续性上下文）。
+    预期：summary 只含 2 条 real 消息，is_internal 消息被排除。
+    """
+    messages = [
+        {"role": "user", "content": "real user question"},
+        {"role": "assistant", "content": "real assistant reply"},
+        {"role": "user", "content": "cron triggered turn", "metadata": {"is_internal": True}},
+        {"role": "assistant", "content": "cron assistant reply", "metadata": {"is_internal": True}},
+    ]
+    session = _make_session_with_messages(messages)
+
+    summary = AgentRuntime._extract_recent_turns_summary(session)
+
+    assert len(summary) == 2
+    contents = [s["content"] for s in summary]
+    assert "real user question" in contents
+    assert "real assistant reply" in contents
+    # is_internal 消息不应出现在 summary 中
+    assert "cron triggered turn" not in contents
+    assert "cron assistant reply" not in contents
+
+
+def test_extract_recent_turns_summary_relaxes_when_all_internal():
+    """若过滤后剩余 < 2 条，应放宽限制保留所有 USER/ASSISTANT 消息。
+
+    场景（spec P2-4 Scenario: All recent messages are internal）：
+    4 条消息全部 metadata.is_internal=True（如连续多次 cron 触发）。
+    预期：放宽过滤，summary 含 4 条消息（避免空 summary）。
+    """
+    messages = [
+        {"role": "user", "content": "cron turn 1", "metadata": {"is_internal": True}},
+        {"role": "assistant", "content": "cron reply 1", "metadata": {"is_internal": True}},
+        {"role": "user", "content": "cron turn 2", "metadata": {"is_internal": True}},
+        {"role": "assistant", "content": "cron reply 2", "metadata": {"is_internal": True}},
+    ]
+    session = _make_session_with_messages(messages)
+
+    summary = AgentRuntime._extract_recent_turns_summary(session)
+
+    # 放宽限制：保留全部 4 条（好过空 summary）
+    assert len(summary) == 4
+    contents = [s["content"] for s in summary]
+    assert "cron turn 1" in contents
+    assert "cron reply 2" in contents
+
+
+@patch("OriginAgent.agent.agent_runtime.log_event")
+def test_cron_turn_does_not_reset_recent_turns_count(mock_log_event):
+    """cron 写入用户 session 后，recent_turns_count 不应被重置为 1 或 2。
+
+    回归 bug：原 _extract_recent_turns_summary 不过滤 is_internal=True 消息，
+    取 history[-4:] 时被 cron 的 [user(internal), assistant] 挤占窗口，
+    导致 summary 只剩 2 或 1 条，recent_turns_count 被重置。
+
+    场景（spec P2-4 Scenario: Cron turn written to user session）：
+    - session 已有 4 条 real 消息 [u, a, u, a]
+    - cron turn 追加 [u(internal), a(internal)]，total = 6 条
+    - _save_continuity_checkpoint 触发后，recent_turns_count 应为 4（非 1/2）
+    """
+    runtime = _build_runtime_for_checkpoint()
+    session = SimpleNamespace(
+        key="tenant:guest",
+        metadata={},
+        messages=[
+            {"role": "user", "content": "real q1"},
+            {"role": "assistant", "content": "real a1"},
+            {"role": "user", "content": "real q2"},
+            {"role": "assistant", "content": "real a2"},
+            # cron turn 写入的内部消息（不应挤占 recent_turns_summary 窗口）
+            {"role": "user", "content": "cron turn", "metadata": {"is_internal": True}},
+            {"role": "assistant", "content": "cron reply", "metadata": {"is_internal": True}},
+        ],
+    )
+
+    checkpoint = runtime._save_continuity_checkpoint(session)
+
+    # recent_turns_summary 应保留 4 条 real 消息（不是 2 或 1）
+    recent_summary = checkpoint["recent_turns_summary"]
+    assert len(recent_summary) == 4
+    contents = [s["content"] for s in recent_summary]
+    # 不含 cron 内部消息
+    assert "cron turn" not in contents
+    assert "cron reply" not in contents
+    # 含全部 4 条 real 消息
+    assert "real q1" in contents
+    assert "real a2" in contents
+
+    # 验证 continuity.checkpoint.saved 事件中 recent_turns_count 字段为 4
+    saved_calls = [
+        call for call in mock_log_event.call_args_list
+        if call.args and call.args[0] == "continuity.checkpoint.saved"
+    ]
+    assert len(saved_calls) == 1
+    assert saved_calls[0].kwargs["recent_turns_count"] == 4

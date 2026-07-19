@@ -47,6 +47,7 @@ class ContextAssemblerV2:
         session_key: str | None,
         recovered_continuity_block: dict[str, Any] | None = None,
         include_current_message: bool = True,
+        enable_phase1_continuity: bool = True,
     ) -> ContextAssemblyResult:
         user_content = (
             self._builder.build_user_content(current_message, media)
@@ -76,12 +77,19 @@ class ContextAssemblerV2:
             session_key,
             runtime_context,
         )
-        continuity_blocks = self._builder.build_phase1_continuity_blocks(
-            session_key=session_key,
-            runtime_context=runtime_context,
-            current_message=current_message,
-            prewarm_bundle=prewarm_bundle,
-        )
+        # enable_phase1_continuity=False 时跳过 working_memory/world_state/
+        # task_state 等 continuity 块，与原分支 B 的内联构造行为一致。
+        # 这使所有触发路径（含 cron + phase1 禁用）都能统一走 assemble，
+        # 同时发射 context.assembled 事件。
+        if enable_phase1_continuity:
+            continuity_blocks = self._builder.build_phase1_continuity_blocks(
+                session_key=session_key,
+                runtime_context=runtime_context,
+                current_message=current_message,
+                prewarm_bundle=prewarm_bundle,
+            )
+        else:
+            continuity_blocks = []
         reference_blocks = self._builder.build_reference_context_blocks(
             session_summary=session_summary,
             session_key=session_key,
@@ -90,11 +98,57 @@ class ContextAssemblerV2:
             prewarm_bundle=prewarm_bundle,
         )
 
+        # DeepSeek prompt-cache stability gradient: stable blocks first,
+        # volatile last. Reference blocks are partitioned by source stability
+        # (stable → session-stable → volatile); continuity blocks are ordered
+        # working_memory → world_state → continuity → task_state.
+        # runtime_context (per-minute current_time clock) moves to the tail so
+        # the stable prefix survives across turns (rule 22: resource
+        # governance). Tag structure (<runtime_context>...</runtime_context>)
+        # and block contents are unchanged — only ordering is adjusted.
+        ref_source_rank = {
+            "user_profile": 0,
+            "archived_session_summary": 1,
+            "closed_episode_summaries": 2,
+            "retrieval_prewarm_seed": 3,
+            "recent_history": 4,
+            "memory_retrieval": 5,
+            "retrieval_session_search": 6,
+        }
+        stable_sources = {"user_profile", "archived_session_summary", "closed_episode_summaries"}
+        session_stable_sources = {"retrieval_prewarm_seed"}
+        ref_sorted = sorted(
+            reference_blocks,
+            key=lambda b: ref_source_rank.get(
+                b.get("_meta", {}).get("source") if isinstance(b, dict) else None, 99
+            ),
+        )
+        ref_stable = [b for b in ref_sorted if b.get("_meta", {}).get("source") in stable_sources]
+        ref_session_stable = [b for b in ref_sorted if b.get("_meta", {}).get("source") in session_stable_sources]
+        ref_volatile = [
+            b for b in ref_sorted
+            if b.get("_meta", {}).get("source") not in stable_sources
+            and b.get("_meta", {}).get("source") not in session_stable_sources
+        ]
+        continuity_rank = {
+            self._builder.WORKING_MEMORY_CONTEXT_KIND: 0,
+            self._builder.WORLD_STATE_CONTEXT_KIND: 1,
+            self._builder.CONTINUITY_CONTEXT_KIND: 2,
+            self._builder.TASK_STATE_CONTEXT_KIND: 3,
+        }
+        continuity_ordered = sorted(
+            continuity_blocks,
+            key=lambda b: continuity_rank.get(
+                b.get("_meta", {}).get("kind") if isinstance(b, dict) else None, 99
+            ),
+        )
         merged: list[dict[str, Any]] = [
-            runtime_block,
+            *ref_stable,
+            *ref_session_stable,
+            *continuity_ordered,
             *([recovered_continuity_block] if recovered_continuity_block is not None else []),
-            *continuity_blocks,
-            *reference_blocks,
+            *ref_volatile,
+            runtime_block,
         ]
         if internal_event is not None:
             source, content = internal_event
@@ -211,7 +265,12 @@ class ContextAssemblerV2:
             session_key=session_key,
             block_count=len(merged),
             block_kinds=[
-                block.get("_meta", {}).get("kind")
+                (
+                    f"{meta.get('kind')}:{meta.get('source')}"
+                    if (meta := block.get("_meta", {})).get("source")
+                    and meta.get("kind") is not None
+                    else meta.get("kind")
+                )
                 for block in merged
                 if isinstance(block, dict)
             ],

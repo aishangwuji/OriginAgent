@@ -177,7 +177,14 @@ def test_runtime_context_is_separate_untrusted_user_message(tmp_path) -> None:
     assert messages[-1]["role"] == "user"
     user_content = messages[-1]["content"]
     assert isinstance(user_content, list)
-    assert user_content[0]["_meta"]["kind"] == ContextBuilder.RUNTIME_CONTEXT_KIND
+    # runtime_context is now ordered near the tail (cache-stability gradient,
+    # see ContextAssemblerV2.assemble) rather than first; the test's actual
+    # contract is "runtime metadata is merged with the user message", so we
+    # verify presence rather than position.
+    assert any(
+        block.get("_meta", {}).get("kind") == ContextBuilder.RUNTIME_CONTEXT_KIND
+        for block in user_content
+    )
     joined = _joined_text_blocks(user_content)
     payload = _runtime_payload(user_content)
     assert ContextBuilder._RUNTIME_CONTEXT_TAG in joined

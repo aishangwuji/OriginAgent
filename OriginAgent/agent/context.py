@@ -40,6 +40,26 @@ from OriginAgent.utils.prompt_templates import render_template
 from OriginAgent.agent.context_assembler import ContextAssemblerV2, ContextAssemblyResult
 
 
+def current_time_str_minutes(timezone: str | None = None) -> str:
+    """Return the current time at minute precision as ``YYYY-MM-DD HH:MM``.
+
+    Used in the system prompt's runtime_context so the prefix stays byte-stable
+    within the same minute, enabling DeepSeek's automatic prefix cache to hit.
+    Tools and BDI deliberation that need second-level precision must call
+    ``datetime.now()`` directly rather than parsing this field.
+    """
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+
+    try:
+        tz = ZoneInfo(timezone) if timezone else None
+    except (KeyError, Exception):
+        tz = None
+
+    now = datetime.now(tz=tz) if tz else datetime.now().astimezone()
+    return now.strftime("%Y-%m-%d %H:%M")
+
+
 class ContextBuilder:
     """Builds the context (system prompt + messages) for the agent.
 
@@ -476,7 +496,8 @@ class ContextBuilder:
     ) -> str:
         """Build untrusted runtime metadata text."""
         payload = {
-            "current_time": current_time_str(timezone),
+            "current_time": current_time_str_minutes(timezone),
+            "time_precision": "minute; tools needing second-level precision should call datetime.now()",
             "channel": ContextBuilder._escape_runtime_metadata(channel),
             "chat_id": ContextBuilder._escape_runtime_metadata(chat_id),
             "sender_id": ContextBuilder._escape_runtime_metadata(sender_id),
@@ -1012,6 +1033,7 @@ class ContextBuilder:
         session_key: str | None = None,
         recovered_continuity_block: dict[str, Any] | None = None,
         include_current_message: bool = True,
+        enable_phase1_continuity: bool = True,
     ) -> ContextAssemblyResult:
         """Assemble user-turn content blocks for an LLM call.
 
@@ -1021,6 +1043,11 @@ class ContextBuilder:
 
         ContextAssemblerV2 通过公共接口访问 ContextBuilder 的审计数据,
         不再直接访问私有属性;审计字典由本方法从返回值回写。
+
+        ``enable_phase1_continuity=False`` 时跳过 working_memory/world_state/
+        task_state 等 continuity 块，与 phase1 禁用场景下的内联构造行为一致，
+        但仍通过 ``ContextAssemblerV2.assemble`` 统一拼装并发射
+        ``context.assembled`` 事件。
         """
         result = self.assembler_v2.assemble(
             current_message=current_message,
@@ -1035,6 +1062,7 @@ class ContextBuilder:
             session_key=session_key,
             recovered_continuity_block=recovered_continuity_block,
             include_current_message=include_current_message,
+            enable_phase1_continuity=enable_phase1_continuity,
         )
         # 从返回值回写审计字典(替代 ContextAssemblerV2.assemble 中的私有写回)
         self._last_context_assembly_audit = dict(result.audit)
@@ -1095,19 +1123,51 @@ class ContextBuilder:
                 self._last_context_assembly_audit = dict(assembled.audit)
                 merged = assembled.blocks
             else:
+                # Cache-stability gradient (mirrors ContextAssemblerV2.assemble):
+                # stable reference → session-stable reference → recovered_continuity
+                # → volatile reference → runtime_context. runtime_context (per-minute
+                # clock) goes last so the stable prefix survives across turns
+                # (rule 22). No continuity blocks in this branch (phase1 disabled).
+                reference_blocks = self.build_reference_context_blocks(
+                    session_summary=session_summary,
+                    session_key=session_key,
+                    runtime_context=runtime_context,
+                )
+                ref_source_rank = {
+                    "user_profile": 0,
+                    "archived_session_summary": 1,
+                    "closed_episode_summaries": 2,
+                    "retrieval_prewarm_seed": 3,
+                    "recent_history": 4,
+                    "memory_retrieval": 5,
+                    "retrieval_session_search": 6,
+                }
+                stable_sources = {"user_profile", "archived_session_summary", "closed_episode_summaries"}
+                session_stable_sources = {"retrieval_prewarm_seed"}
+                ref_sorted = sorted(
+                    reference_blocks,
+                    key=lambda b: ref_source_rank.get(
+                        b.get("_meta", {}).get("source") if isinstance(b, dict) else None, 99
+                    ),
+                )
+                ref_stable = [b for b in ref_sorted if b.get("_meta", {}).get("source") in stable_sources]
+                ref_session_stable = [b for b in ref_sorted if b.get("_meta", {}).get("source") in session_stable_sources]
+                ref_volatile = [
+                    b for b in ref_sorted
+                    if b.get("_meta", {}).get("source") not in stable_sources
+                    and b.get("_meta", {}).get("source") not in session_stable_sources
+                ]
                 merged = [
+                    *ref_stable,
+                    *ref_session_stable,
+                    *([recovered_continuity_block] if recovered_continuity_block is not None else []),
+                    *ref_volatile,
                     self.build_runtime_context_block(
                         channel,
                         chat_id,
                         self.timezone,
                         sender_id=sender_id,
                         session_metadata=session_metadata,
-                    ),
-                    *([recovered_continuity_block] if recovered_continuity_block is not None else []),
-                    *self.build_reference_context_blocks(
-                        session_summary=session_summary,
-                        session_key=session_key,
-                        runtime_context=runtime_context,
                     ),
                 ]
                 if internal_event is not None:
