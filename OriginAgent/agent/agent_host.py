@@ -455,6 +455,104 @@ class AgentHost:
         )
         self._bdi_engines[tenant.tenant_id] = engine
 
+    def post_claim_init(
+        self, channel: str, sender_id: str, tenant: Any
+    ) -> None:
+        """Post-``claim_pairing`` wiring: migrate the pairing-pending session
+        file to the tenant's session key, then lazy-load the BDI engine.
+
+        Called from ``cmd_pairing`` via the ``on_claim_success`` hook on
+        ``handle_pairing_command``. The pairing store itself stays free of
+        agent_host / session_manager concerns (rule 16 domain isolation):
+        this method owns the post-claim side-effects.
+
+        Session migration rationale: while a sender is in
+        ``__pairing_pending__`` state, ``IdentityResolver.resolve`` returns
+        a synthetic Tenant whose ``unified_session_key`` is
+        ``tenant:pairing:{channel}:{sender_id}``, and the SessionManager
+        persists that sender's turns under that key (file:
+        ``sessions/tenant_pairing_<channel>_<sender>.jsonl``). After claim,
+        the same sender resolves to the real Tenant with key
+        ``tenant:<tenant_id>`` (file: ``sessions/tenant_<tenant_id>.jsonl``).
+        Without migration, the user's pending-session history would be
+        orphaned under the old key and invisible to the new tenant.
+
+        BDI lazy-load: ``_init_bdi_engine_for_tenant`` is idempotent — it
+        short-circuits when ``tenant.tenant_id`` is already in
+        ``self._bdi_engines`` (rule 12). Calling it here eagerly at claim
+        time satisfies the spec requirement "next message from this sender
+        triggers ``_init_bdi_engine_for_tenant``" without needing a lazy
+        hook on the message path.
+
+        Note: ``tenants/_pairing/`` workspace directory is **not** migrated
+        because the synthetic ``__pairing_pending__`` Tenant has
+        ``bdi_enabled=False`` (see ``resolver.py:58-63``), so no BDI /
+        DesireStore / CronObservationStore data was ever written there.
+        Only the session JSONL file (under ``sessions/``) is migrated.
+        """
+        self._migrate_pairing_session_file(channel, sender_id, tenant)
+        self._init_bdi_engine_for_tenant(tenant)
+
+    def _migrate_pairing_session_file(
+        self, channel: str, sender_id: str, tenant: Any
+    ) -> None:
+        """Rename the pairing-pending session file to the tenant's key.
+
+        Source key matches ``IdentityResolver``'s ``__pairing_pending__``
+        synthetic tenant: ``tenant:pairing:{channel}:{sender_id}``.
+        Target key is ``tenant.unified_session_key`` (e.g. ``tenant:dad``).
+        Both are run through ``SessionManager.safe_key`` so the on-disk
+        filenames agree with what SessionManager will look up next.
+
+        If the source file does not exist (sender never sent a turn while
+        in ``__pairing_pending__``), this is a no-op. If the target file
+        already exists, the source is left in place and a warning is
+        logged — the operator can merge manually. Overwriting the target
+        would silently destroy the tenant's prior session history.
+        """
+        from OriginAgent.session.manager import SessionManager
+        from OriginAgent.utils.helpers import ensure_dir
+
+        workspace = self._deps.workspace
+        if workspace is None:
+            logger.warning(
+                "post_claim_init: no workspace on AgentHost — skipping session migration"
+            )
+            return
+
+        source_key = f"tenant:pairing:{channel}:{sender_id}"
+        target_key = tenant.unified_session_key
+        sessions_dir = ensure_dir(workspace / "sessions")
+        source_path = sessions_dir / f"{SessionManager.safe_key(source_key)}.jsonl"
+        target_path = sessions_dir / f"{SessionManager.safe_key(target_key)}.jsonl"
+
+        if not source_path.exists():
+            # Sender never sent a turn while in __pairing_pending__ state —
+            # nothing to migrate. This is the common case when claim happens
+            # immediately after pairing approval.
+            logger.debug(
+                "post_claim_init: no pairing-pending session file at {} — nothing to migrate",
+                source_path,
+            )
+            return
+
+        if target_path.exists():
+            # Rule 12 (idempotency) + rule 5 (don't destroy existing state):
+            # do NOT overwrite. The operator must merge manually.
+            logger.warning(
+                "post_claim_init: target session file {} already exists; "
+                "leaving source {} in place for manual merge",
+                target_path, source_path,
+            )
+            return
+
+        import os
+        os.rename(str(source_path), str(target_path))
+        logger.info(
+            "post_claim_init: migrated pairing-pending session {} → {} for tenant={}",
+            source_path.name, target_path.name, tenant.tenant_id,
+        )
+
     def _on_bdi_intention_for(self, tenant: Any):
         """Create an on_intention callback scoped to *tenant*."""
         async def handler(intent: Any) -> None:
