@@ -530,6 +530,31 @@ class RestApi:
         if got == "/api/settings/mcp/delete":
             return self._handle_settings_mcp_delete(request)
 
+        if got == "/api/tenants":
+            return self._handle_tenants_list(request)
+
+        if got == "/api/tenants/create":
+            return self._handle_tenants_create(request)
+
+        m = re.match(r"^/api/tenants/([^/]+)/update$", got)
+        if m:
+            return self._handle_tenants_update(request, unquote(m.group(1)))
+
+        m = re.match(r"^/api/tenants/([^/]+)/delete$", got)
+        if m:
+            return self._handle_tenants_delete(request, unquote(m.group(1)))
+
+        # ── Approvals (Task 3, spec: unify-approval-flow-and-cross-session) ──
+        # 路由顺序：精确匹配优先于正则；list 在前，action 在后。
+        if got == "/api/approvals":
+            return self._handle_approvals_list(request)
+
+        m = re.match(r"^/api/approvals/([^/]+)/(approve|reject)$", got)
+        if m:
+            return self._handle_approval_action(
+                request, unquote(m.group(1)), m.group(2)
+            )
+
         m = re.match(r"^/api/reviews/([^/]+)$", got)
         if m:
             return self._handle_review_detail(request, m.group(1))
@@ -1842,6 +1867,386 @@ class RestApi:
         payload = self._settings_payload(requires_restart=deleted)
         payload["deleted"] = deleted
         return http_json_response(payload)
+
+    # ── Tenants (WebUI admin) ──────────────────────────────────────────────
+
+    def _handle_tenants_list(self, request: WsRequest) -> Response:
+        if not self._check_api_token(request):
+            return http_error(401, "Unauthorized")
+        config = self._load_config()
+        tenants_cfg = config.gateway.tenants
+        return http_json_response({
+            "tenants": [self._tenant_to_dict(tc) for tc in tenants_cfg.tenants],
+            "guestTenantEnabled": tenants_cfg.guest_tenant_enabled,
+            "defaultTenantId": tenants_cfg.default_tenant_id,
+        })
+
+    def _handle_tenants_create(self, request: WsRequest) -> Response:
+        if not self._check_api_token(request):
+            return http_error(401, "Unauthorized")
+        from pydantic import ValidationError
+
+        from OriginAgent.config.loader import save_config
+        from OriginAgent.config.schema import TenantConfig
+
+        # WebSocket handshake requests are always GET; write operations
+        # receive their payload via the ?config=<json> query parameter,
+        # mirroring /api/settings/mcp/upsert (see _handle_settings_mcp_upsert).
+        query = _parse_query(request.path)
+        raw = _query_first(query, "config")
+        if not raw:
+            return http_error(400, "config is required")
+        try:
+            data = json.loads(raw)
+        except json.JSONDecodeError:
+            return http_error(400, "config must be valid JSON")
+        data = self._normalize_tenant_data(data)
+        try:
+            tc = TenantConfig.model_validate(data)
+        except ValidationError as exc:
+            return http_error(400, f"invalid tenant config: {exc.errors()[0]['msg']}")
+
+        # Reason: mutate the live TenantRegistry when a provider is wired
+        # (production — changes take effect on the running agent without
+        # restart); fall back to a per-request reconstruction from config
+        # so the same handler works in tests that wire WebSocketChannel
+        # directly without a provider. Both paths persist via save_config
+        # below, so disk state always matches the returned response.
+        registry = self._get_tenant_registry()
+        try:
+            registry.add_tenant(tc)
+        except ValueError as exc:
+            # Idempotency check (rule 12): duplicate create returns 409, not 500.
+            return http_error(409, str(exc))
+
+        config = self._load_config()
+        config.gateway.tenants = registry.to_config()
+        save_config(config)
+        return http_json_response(
+            {"tenant": self._tenant_to_dict(tc)}, status=201
+        )
+
+    def _handle_tenants_update(self, request: WsRequest, tenant_id: str) -> Response:
+        if not self._check_api_token(request):
+            return http_error(401, "Unauthorized")
+        from pydantic import ValidationError
+
+        from OriginAgent.config.loader import save_config
+        from OriginAgent.config.schema import TenantConfig
+
+        # See _handle_tenants_create for why config comes via ?config=<json>.
+        query = _parse_query(request.path)
+        raw = _query_first(query, "config")
+        if not raw:
+            return http_error(400, "config is required")
+        try:
+            data = json.loads(raw)
+        except json.JSONDecodeError:
+            return http_error(400, "config must be valid JSON")
+        data = self._normalize_tenant_data(data)
+        try:
+            tc = TenantConfig.model_validate(data)
+        except ValidationError as exc:
+            return http_error(400, f"invalid tenant config: {exc.errors()[0]['msg']}")
+
+        registry = self._get_tenant_registry()
+        try:
+            updated = registry.update_tenant(tenant_id, tc)
+        except KeyError as exc:
+            return http_error(404, str(exc))
+        except ValueError as exc:
+            return http_error(400, str(exc))
+
+        config = self._load_config()
+        config.gateway.tenants = registry.to_config()
+        save_config(config)
+        # Re-serialize from the live Tenant so the response reflects any
+        # server-side normalization (e.g. tenant_id forced to the path id).
+        return http_json_response(
+            {"tenant": self._tenant_to_dict_from_runtime(updated)}
+        )
+
+    def _handle_tenants_delete(self, request: WsRequest, tenant_id: str) -> Response:
+        if not self._check_api_token(request):
+            return http_error(401, "Unauthorized")
+        from OriginAgent.config.loader import save_config
+
+        registry = self._get_tenant_registry()
+        try:
+            registry.delete_tenant(tenant_id)
+        except KeyError as exc:
+            return http_error(404, str(exc))
+        except ValueError as exc:
+            # Guest tenant or has-active-bindings rejection (rule 18).
+            return http_error(400, str(exc))
+
+        config = self._load_config()
+        config.gateway.tenants = registry.to_config()
+        save_config(config)
+        return http_json_response({"deleted": tenant_id})
+
+    def _get_tenant_registry(self):
+        """Return a TenantRegistry for the current request.
+
+        Production wires ``_tenant_registry_provider`` on WebSocketChannel
+        (parallel to ``runtime_introspection``) so mutations hit the running
+        agent's live registry. When unset (e.g. tests that build
+        WebSocketChannel directly), fall back to reconstructing from the
+        on-disk config — sufficient for the round-trip assertions in
+        ``tests/gateway/test_tenants_api.py``.
+        """
+        provider = getattr(self._ch, "_tenant_registry_provider", None)
+        if provider is not None:
+            reg = provider()
+            if reg is not None:
+                return reg
+        from OriginAgent.identity.tenant import TenantRegistry
+
+        config = self._load_config()
+        return TenantRegistry(config.workspace_path, config.gateway.tenants)
+
+    @staticmethod
+    def _normalize_tenant_data(data: Any) -> Any:
+        """Normalize permissions keys from camelCase to snake_case before validate.
+
+        The Base class's ``to_camel`` alias generator handles top-level
+        fields (tenantId→tenant_id, etc.), but ``permissions`` is a free
+        ``dict[str, bool]`` — pydantic does not rewrite dict keys. The
+        frontend sends ``writeFiles``/``deviceControl``; translate them
+        to the snake_case keys TenantConfig.permissions expects.
+        """
+        if not isinstance(data, dict):
+            return data
+        perms = data.get("permissions")
+        if isinstance(perms, dict):
+            data["permissions"] = {
+                "write_files": perms.get("writeFiles", perms.get("write_files", False)),
+                "device_control": perms.get("deviceControl", perms.get("device_control", False)),
+                "exec": perms.get("exec", False),
+            }
+        return data
+
+    @staticmethod
+    def _tenant_to_dict(tc: Any) -> dict[str, Any]:
+        """Serialize a TenantConfig to the WebUI response shape (camelCase).
+
+        Hand-mapped (not model_dump) because ``permissions`` is a free
+        ``dict[str, bool]`` whose keys (``write_files``, ``device_control``)
+        are NOT rewritten by the Base class's ``to_camel`` alias generator —
+        only top-level model fields get aliases. The frontend's
+        ``TenantPermissions`` interface expects camelCase keys.
+        """
+        return {
+            "tenantId": tc.tenant_id,
+            "displayName": tc.display_name,
+            "bindings": [
+                {
+                    "channel": b.channel,
+                    "senderId": b.sender_id,
+                    "label": b.label,
+                }
+                for b in tc.bindings
+            ],
+            "bdiEnabled": tc.bdi_enabled,
+            "claimableByPairing": tc.claimable_by_pairing,
+            "permissions": {
+                "exec": tc.permissions.get("exec", False),
+                "writeFiles": tc.permissions.get("write_files", False),
+                "deviceControl": tc.permissions.get("device_control", False),
+            },
+        }
+
+    @staticmethod
+    def _tenant_to_dict_from_runtime(tenant: Any) -> dict[str, Any]:
+        """Serialize a runtime Tenant (dataclass) to the WebUI response shape.
+
+        Tenant is a plain dataclass (not a pydantic model), so we map
+        snake_case fields to camelCase by hand to match the frontend's
+        Tenant interface (see webui/src/lib/types.ts). Same permissions
+        key mapping as _tenant_to_dict.
+        """
+        return {
+            "tenantId": tenant.tenant_id,
+            "displayName": tenant.display_name,
+            "bindings": [
+                {
+                    "channel": b["channel"],
+                    "senderId": b["sender_id"],
+                    "label": b.get("label", ""),
+                }
+                for b in tenant.bindings
+            ],
+            "bdiEnabled": tenant.bdi_enabled,
+            "claimableByPairing": tenant.claimable_by_pairing,
+            "permissions": {
+                "exec": tenant.permissions.get("exec", False),
+                "writeFiles": tenant.permissions.get("write_files", False),
+                "deviceControl": tenant.permissions.get("device_control", False),
+            },
+        }
+
+    # ── Approvals (Task 3, spec: unify-approval-flow-and-cross-session) ────
+    #
+    # 这组方法实现 REST API 审批端点，让 owner 通过 Web UI / 外部 HTTP 客户端
+    # 审批 cron 触发的 tool_approval（D10 已支持跨 session 审批；D7 已让 cron
+    # pending 1h 不过期）。规则 18 安全边界（红线闭集 P0）：跨 owner 审批必须
+    # 返回 403 + 审计事件 ``approval_denied_owner_mismatch``（D10 已在
+    # ``ConfirmationManager.resolve_user_reply`` 内实现拒绝逻辑，handler 只
+    # 需把 rejected + status 仍为 pending 的情况映射为 403）。
+    #
+    # caller_actor_id 解析路径（规则 26 假设显式化，选项 A）：
+    # 通过 ``?owner_id=`` query 参数显式传入。理由：(1) 最简化、不引入新抽象
+    # 层（规则 32）；(2) 与现有"写操作通过 query 参数传 payload"模式一致
+    # （如 ``?config=<json>``）；(3) REST API 已在 ``_check_api_token`` 后，
+    # caller 已通过 token 鉴权，``owner_id`` 只是声明"我代表哪个 owner 行事"。
+    # 生产部署后续可演进为从 token 派生 owner_id（不在 Task 3 范围内）。
+
+    def _get_confirmation_manager(self):
+        """Return a ConfirmationManager for the current request.
+
+        Production wires ``_confirmation_manager_provider`` on WebSocketChannel
+        (parallel to ``_tenant_registry_provider``) so mutations hit the
+        running agent's live manager. When unset (e.g. tests that build
+        WebSocketChannel directly), fall back to reconstructing from the
+        on-disk config workspace_path — sufficient for the round-trip
+        assertions in ``tests/gateway/test_approvals_api.py``.
+        """
+        provider = getattr(self._ch, "_confirmation_manager_provider", None)
+        if provider is not None:
+            manager = provider()
+            if manager is not None:
+                return manager
+        from OriginAgent.agent.confirmation import ConfirmationManager
+
+        config = self._load_config()
+        return ConfirmationManager(config.workspace_path)
+
+    def _get_grant_store(self):
+        """Return a CapabilityGrantStore for the current request.
+
+        Mirrors ``_get_confirmation_manager``: provider-injected in
+        production, reconstructed from config workspace_path in tests.
+        """
+        provider = getattr(self._ch, "_grant_store_provider", None)
+        if provider is not None:
+            store = provider()
+            if store is not None:
+                return store
+        from OriginAgent.security.grants import CapabilityGrantStore
+
+        config = self._load_config()
+        return CapabilityGrantStore(config.workspace_path)
+
+    def _handle_approvals_list(self, request: WsRequest) -> Response:
+        """GET /api/approvals — 列出当前 owner 的未过期 pending tool_approval。
+
+        复用 D10 ``list_pending_for_owner``：内部已调用 ``expire_old`` 清理
+        过期 pending（D6 lazy 模式），并按 owner_id 过滤。
+
+        规则 18 安全边界：本方法只做数据过滤，鉴权由 ``_check_api_token``
+        完成；跨 owner 审批拒绝由 ``resolve_user_reply`` 内部处理（D10）。
+        """
+        if not self._check_api_token(request):
+            return http_error(401, "Unauthorized")
+        query = _parse_query(request.path)
+        caller_actor_id = _query_first(query, "owner_id")
+        manager = self._get_confirmation_manager()
+        pending = manager.list_pending_for_owner(caller_actor_id)
+        return http_json_response({
+            "approvals": [confirmation.to_dict() for confirmation in pending],
+        })
+
+    def _handle_approval_action(
+        self,
+        request: WsRequest,
+        confirmation_id: str,
+        action: str,
+    ) -> Response:
+        """POST /api/approvals/{confirmation_id}/approve|reject — 审批通过或拒绝。
+
+        规则 18 安全边界（红线闭集 P0）：
+        - ``caller_actor_id`` 通过 ``?owner_id=`` query 参数显式传递；
+        - 跨 owner 审批由 ``resolve_user_reply`` 内部拒绝并发射审计事件
+          ``approval_denied_owner_mismatch``（D10 已实现）；
+        - 跨 owner 拒绝时 confirmation 状态保持 ``pending``（D10 实现保证），
+          handler 据此区分"跨 owner 拒绝"（返回 403）与"用户主动 reject"
+          （返回 200），避免依赖 reason 字符串匹配（脆弱）。
+
+        审批通过时调用 ``issue_tool_approval_grant`` 发放 grant，与
+        ``agent/loop.py:_consume_tool_approval_reply`` 同模式。
+        """
+        if not self._check_api_token(request):
+            return http_error(401, "Unauthorized")
+        query = _parse_query(request.path)
+        caller_actor_id = _query_first(query, "owner_id")
+
+        # action → reply 映射（与 _consume_tool_approval_reply 的 reply 入参一致；
+        # _classify_reply 会把 "yes" → "confirmed"，"no" → "rejected"）
+        if action == "approve":
+            reply = "yes"
+        elif action == "reject":
+            reply = "no"
+        else:
+            return http_error(400, f"unknown action: {action}")
+
+        manager = self._get_confirmation_manager()
+        result = manager.resolve_user_reply(
+            confirmation_id,
+            reply,
+            caller_actor_id=caller_actor_id,
+        )
+
+        if result.decision == "confirmed":
+            # 审批通过：发放 grant（与 agent/loop.py:_consume_tool_approval_reply
+            # 同一调用模式，确保 REST API 与会话内审批产生等价的 grant）
+            confirmation = manager.store.get(confirmation_id)
+            if confirmation is None:
+                # 兜底：理论不该发生，因为 resolve_user_reply 已确认存在并
+                # 把 status 改为 confirmed_once；若并发被删则返回 404
+                return http_error(404, "confirmation not found after approve")
+            from OriginAgent.security.grants import issue_tool_approval_grant
+
+            grant_store = self._get_grant_store()
+            grant = issue_tool_approval_grant(
+                confirmation,
+                grant_store,
+                approved_by=caller_actor_id,
+            )
+            return http_json_response({
+                "decision": "confirmed",
+                "confirmation_id": confirmation_id,
+                "grant_id": grant.grant_id,
+            })
+
+        if result.decision == "rejected":
+            # 区分跨 owner 拒绝 vs 用户主动 reject：
+            # - 跨 owner 拒绝：confirmation 状态保持 pending（D10 实现）
+            # - 用户主动 reject：confirmation 状态变为 rejected
+            # 通过 status 区分比依赖 result.reason 字符串匹配更稳健。
+            reloaded = manager.store.get(confirmation_id)
+            if reloaded is not None and reloaded.status == "pending":
+                # 规则 18：跨 owner 审批拒绝，返回 403
+                return http_json_response(
+                    {
+                        "error": "approval_denied_owner_mismatch",
+                        "decision": "rejected",
+                    },
+                    status=403,
+                )
+            # 用户主动 reject
+            return http_json_response({
+                "decision": "rejected",
+                "confirmation_id": confirmation_id,
+            })
+
+        # 其他状态：expired / unclear
+        if result.decision == "expired":
+            return http_error(410, "confirmation expired")
+        if result.decision == "unclear":
+            # reason 可能是 "confirmation not found" 或 "confirmation is X"
+            return http_error(404, result.reason or "confirmation not found")
+        # 兜底（理论不会进入）
+        return http_error(409, f"unexpected decision: {result.decision}")
 
     # ── Session read / write / delete ──────────────────────────────────────
 
