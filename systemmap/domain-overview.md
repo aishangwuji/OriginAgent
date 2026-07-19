@@ -1,6 +1,6 @@
 # OriginAgent 业务域全景
 
-> **last_verified**: 2026-07-18T22:45:00+08:00
+> **last_verified**: 2026-07-20T02:00:00+08:00
 > **schema_version**: 1
 > **状态**: 初始版本(渐进式补全中,按规则 38.3)
 > **核验方法**: 代码静态分析 + 执行流程追踪 + 已有技术债交叉验证
@@ -210,6 +210,18 @@ proposed ──→ staged ──→ verified ──→ active
 - **主动通知(delivery_target 机制)**:`on_cron_job` 调用 `MessageTool.set_delivery_target(channel, chat_id)` 设置 ContextVar 覆盖。Agent 在 turn 中途调用 `message(content="...")` 无显式 channel/chat_id 时,自动路由到 delivery_target(用户真实通道如 Telegram)。向 delivery_target 发送视为 same-target,豁免 `can_send_cross_target` 检查。仅允许向该特定目标发送,向其他通道发送仍被 `PolicyDeniedError` 拒绝
 - **安全授权链**:delivery_target 来源是 `job.payload.to`(用户创建 cron job 时显式配置的投递目标),属受信任配置数据,非 Agent 可控输入
 
+**权限继承(D1+D2+D3 修复,2026-07-19/20)**:
+- **修复前根因**: `CronTool._add_job`([cron.py:367](file:///d:/Demo/OpenHome/OriginAgentclient/OriginAgent/agent/tools/cron.py#L367))硬编码 `CapabilitySnapshot.scheduled_default().to_dict()`(全 False)写入 `job.payload.capability_snapshot`。触发端([cli/commands.py:919-923](file:///d:/Demo/OpenHome/OriginAgentclient/OriginAgent/cli/commands.py#L919-L923))通过 `snapshot_for_trigger` 重建时读到全 False → 所有 tool call 被 `PolicyDeniedError` 拦死 → 生成 `tool_approval` confirmation 永远无法在 cron 会话通过审批 → 循环死锁
+- **D1 修复(2026-07-19)**: `_add_job` 把 `snapshot.to_dict()`(用户当前 capability snapshot,在 line 285 已读取并校验 `can_create_cron=True`)持久化到 `job.payload`。触发端 `snapshot_for_trigger` 重建出真实权限,正常执行 tool call,不再生成无法通过的 confirmation
+- **D2 修复(2026-07-20,grant 透传)**: D1 的 snapshot 是创建时刻的静态快照——若用户后续批准新权限(如新增 exec 持久授权),D1 的 cron job 不会感知。D2 通过 `CronTool.__init__` 注入 `grant_store: CapabilityGrantStore | None`,在 `_add_job` 内调用 `grant_store.latest_active_for_session(session_key, tool_name="cron")` 查询 active grant,把 `grant_id` 透传到 `CronPayload`。触发端 ([cli/commands.py:902](file:///d:/Demo/OpenHome/OriginAgentclient/OriginAgent/cli/commands.py#L902))优先调用 `snapshot_for_cron_payload` 重新加载最新授权(覆盖 D1 的静态 snapshot)。`grant_store` 未注入或无 active grant 时 `grant_id=None`,触发端 fallback 到 D1 的静态 snapshot(向后兼容)
+- **D3 修复(2026-07-20,真实 owner_id)**: `_add_job` 把 `self._actor_id.get() or "user"` 传给 `cron_bridge.on_cron_job_created` 作为 `owner_id`(原硬编码 `"user"`)。`set_context` 新增 `actor_id: str | None = None` 参数,由 `agent_runtime_context.py:190` 透传。让 BDI Desire 关联到正确的用户身份(如 `tenant:owner`)。旧调用方未传 `actor_id` 时 fallback 到 `"user"` 保持向后兼容
+- **安全约束**(rule 18): snapshot 来源必须是 `CronTool.set_capability_snapshot` 在 user-initiated turn 中注入的受信任 snapshot,非 LLM 可控输入;`_add_job` 在 line 287-298 已做 `None` 与 `can_create_cron` 双重校验。`grant_store` 是受信任来源(admin_config 或 user_confirmation),`CronTool` 只读取不写入;`grant_id` 不暴露在 tool schema 中(LLM 无法注入伪造的 grant_id)
+- **D10+D7+方向 C 闭环(2026-07-20)**: 见下文"审批流"章节(§12 身份与安全,审批流)
+
+**过期清理(D6 修复,2026-07-19)**:
+- **修复前根因**: `ConfirmationManager.expire_old`([confirmation.py:739](file:///d:/Demo/OpenHome/OriginAgentclient/OriginAgent/agent/confirmation.py#L739))从未被任何 caller 调用,导致 `pending_confirmations.json` 堆积 status=pending 但 `expires_at < now` 的"假 pending"——功能上虽被 `list_tool_approvals` 内的 `_is_expired` 过滤,但 status 字段不更新,让用户/Agent 误以为有 N 个待审批其实早已过期
+- **修复后**: `list_tool_approvals`([confirmation.py:922](file:///d:/Demo/OpenHome/OriginAgentclient/OriginAgent/agent/confirmation.py#L922))在 `include_non_pending=False` 路径入口做 lazy `expire_old(now=now)` 调用,把过期的 status 字段同步更新为 `expired`。`list_tool_approvals` 是用户/Agent 查看 pending 的唯一公开入口,覆盖率最高;`expire_old` 内部用 `store._locked` 与 `read_all` 的 `_locked` 顺序(非嵌套),无 FileLock 死锁风险
+
 ### 11. 配置系统(Config)
 
 **职责**: 分层配置,profile 覆盖,doctor 校验
@@ -265,7 +277,67 @@ proposed ──→ staged ──→ verified ──→ active
 - 配对批准后,`hint_shown` 字段记录已提示的 sender,避免每次发消息都重复提示
 - `__pairing_pending__` workspace 仅含 session 文件(无 BDI/DesireStore 数据,因为该 tenant `bdi_enabled=False`)
 
----
+**运行时租户管理**(WebUI admin surface,2026-07-19 引入):
+```
+Owner 通过 WebUI 调用 REST API
+  → POST /api/tenants       (创建,重复返回 409 — rule 12 幂等)
+  → PATCH /api/tenants/{id} (更新,绑定重建以防 stale 映射泄漏 — rule 7)
+  → DELETE /api/tenants/{id}(删除,guest 与有 bindings 的拒绝 — rule 18)
+  → GET /api/tenants        (列出)
+  → TenantRegistry.add_tenant/update_tenant/delete_tenant/to_config (线程安全: threading.RLock)
+  → save_config 原子写入 (tmp + os.replace — rule 19 回滚安全 / rule 5 防半写快照)
+```
+- `TenantRegistry` 实例由 `AgentLoop._tenant_registry` 持有,通过 `tenant_registry_provider` (Callable) 注入到 WebSocketChannel → RestApi,平行于 `runtime_introspection` 模式
+- 无 provider 时(测试场景)RestApi 从 on-disk config 重建 TenantRegistry,保证 round-trip 断言成立
+- 删除 guest tenant 或仍有 channel bindings 的 tenant 会被拒绝(防止 inbound 消息成为孤儿)
+
+**审批流(D10 + D7 + 方向 C 统一修复,2026-07-20)**:
+
+**背景**: cron 任务执行时生成 tool_approval 后,用户在 cron 专属 session 无审批入口,导致审批永远无法完成——D10 解决"谁可以审批"(owner_id 字段),D7 解决"审批窗口多长"(TTL 分级),方向 C 解决"在哪审批"(Telegram 命令 + WebUI 面板 + REST API)。
+
+**D10 — `ConfirmationRequest.owner_id` 字段与跨会话审批**:
+- 核心数据模型 `ConfirmationRequest`([confirmation.py:161](file:///d:/Demo/OpenHome/OriginAgentclient/OriginAgent/agent/confirmation.py#L161))新增 `owner_id: str | None = None` 字段,表示 confirmation 所属 owner 身份(如 `tenant:owner`)。None 表示历史遗留数据(D10 修复前),向后兼容。
+- `from_dict`([confirmation.py:236](file:///d:/Demo/OpenHome/OriginAgentclient/OriginAgent/agent/confirmation.py#L236)): `owner_id=_optional_str(raw.get("owner_id"))` → 旧 json 无此字段时返回 None,不破坏已有 pending
+- `create_tool_approval`([confirmation.py:555](file:///d:/Demo/OpenHome/OriginAgentclient/OriginAgent/agent/confirmation.py#L555)): 新增 `owner_id: str | None = None` 参数,写入 ConfirmationRequest
+  - 调用点: `tools/registry.py:519` 透传 `self._runtime_context.actor_id`; `evolution_control_plane.py:996` 透传 `requested_by`
+- `list_pending_for_owner(owner_id: str | None)`([confirmation.py:1001-1035](file:///d:/Demo/OpenHome/OriginAgentclient/OriginAgent/agent/confirmation.py#L1001-L1035)): 先调用 `expire_old()` 清理过期,再按 owner_id 过滤。owner_id=None 时仅返回 owner_id=None 的请求(向后兼容历史 pending)
+- `resolve_user_reply`([confirmation.py:619](file:///d:/Demo/OpenHome/OriginAgentclient/OriginAgent/agent/confirmation.py#L619)): 新增 `caller_actor_id: str | None = None` 参数。若 `request.owner_id is not None and caller_actor_id != request.owner_id`,返回 `decision="rejected"` + 审计事件 `approval_denied_owner_mismatch`,confirmation 状态保持 pending(不消费)。否则维持现有逻辑
+
+**D7 — tool_approval TTL 分级(用户 2min / cron 1h)**:
+- `ConfirmationConfig`([schema.py:719-728](file:///d:/Demo/OpenHome/OriginAgentclient/OriginAgent/config/schema.py#L719-L728)): 新增 `tool_approval_cron_ttl_seconds: int = Field(default=3600, ge=60, le=86400)`
+- `_ttl_for`([confirmation.py:1095-1116](file:///d:/Demo/OpenHome/OriginAgentclient/OriginAgent/agent/confirmation.py#L1095-L1116)): 签名扩展为 `(kind, risk, config=None, trigger=None)`。当 `kind=="tool_approval" and trigger=="scheduled"` 时返回 `timedelta(seconds=tool_approval_cron_ttl_seconds)`(默认 1h),否则维持既有分级(prompt 10min / low 10min / medium 5min / high 2min)
+- `create_tool_approval`([confirmation.py:561](file:///d:/Demo/OpenHome/OriginAgentclient/OriginAgent/agent/confirmation.py#L561)): 调用 `_ttl_for` 时透传 `trigger=trigger` 参数
+
+**方向 C-1 — REST API `/api/approvals` 端点**:
+- `rest_api.py:dispatch`([rest_api.py:547-556](file:///d:/Demo/OpenHome/OriginAgentclient/OriginAgent/gateway/rest_api.py#L547-L556)): 新增 2 个路由:
+  - `GET /api/approvals` → `_handle_approvals_list`: 查 `?owner_id=` 参数,调 `list_pending_for_owner(owner_id)` 返回 JSON
+  - `POST /api/approvals/{id}/(approve|reject)` → `_handle_approval_action`: 调 `resolve_user_reply(confirmation_id, "yes"/"no", caller_actor_id=owner_id)`
+- `_get_confirmation_manager()`([rest_api.py:2088](file:///d:/Demo/OpenHome/OriginAgentclient/OriginAgent/gateway/rest_api.py#L2088)): provider 注入 + fallback 从 config 重建
+- `_get_grant_store()`([rest_api.py:2100](file:///d:/Demo/OpenHome/OriginAgentclient/OriginAgent/gateway/rest_api.py#L2100)): 同一模式
+- 规则 26 设计决策: `caller_actor_id` 从 `?owner_id=` query 参数显式传入(选项 A),不复用 `_check_api_token`(仅返回 bool)。理由: 规则 32 最小化(不侵入 GatewayAuth 体系)、规则 33 手术式(不改既有鉴权路径)、规则 18 安全(跨 owner 在 resolve_user_reply 层被 D10 拒绝)
+- 鉴权复用 `_check_api_token` 机制,无 token 返回 401;跨 owner 返回 403
+
+**方向 C-2 — Telegram `/approval` 命令**:
+- `telegram.py`([channels/telegram.py:252,356-365](file:///d:/Demo/OpenHome/OriginAgentclient/OriginAgent/channels/telegram.py)): 新增 `BotCommand("approval")` 与 `/approval` Regex filter(与 `/pairing` 同级),channel 仅转发到 bus 不进入 LLM loop
+- `command/builtin.py`([command/builtin.py:490-613](file:///d:/Demo/OpenHome/OriginAgentclient/OriginAgent/command/builtin.py#L490-L613)): `cmd_approval(ctx)` handler:
+  - 命令解析: `/approval list` / `/approval approve <id>` / `/approval reject <id>` / 无参默认 list
+  - 通过 `ctx.loop._identity_resolver` 解析 sender_id → tenant_id(owner_id)
+  - guest 角色直接拒绝(不调用 ConfirmationManager,规则 18)
+  - 调用 `ctx.loop._confirmation_manager.list_pending_for_owner(owner_id)` / `resolve_user_reply(confirmation_id, "yes"/"no", caller_actor_id=owner_id)`
+  - 规则 26 偏离: TelegramChannel 无 confirmation_manager/identity_resolver 注入,沿用 `/pairing` 模式(channel 转发到 bus → cmd_approval 通过 ctx.loop 访问)——最小入侵、与既有 `/pairing` 命令同源(规则 6)
+
+**方向 C-3 — WebUI ApprovalsPanel**:
+- `ApprovalsPanel.tsx`([webui/src/components/approvals/ApprovalsPanel.tsx](file:///d:/Demo/OpenHome/OriginAgentclient/webui/src/components/approvals/ApprovalsPanel.tsx)): 列表渲染(confirmation_id/tool_name/prompt/risk badge/created_at/expires_at)、每行 Approve/Reject 按钮、空状态显示"暂无待审批项"、Loading spinner
+- `api.ts`([webui/src/lib/api.ts](file:///d:/Demo/OpenHome/OriginAgentclient/webui/src/lib/api.ts)): 新增 `listApprovals(token, ownerId, base)` / `approveApproval(token, confirmationId, ownerId, base)` / `rejectApproval(token, confirmationId, ownerId, base)`,复用既有 `request<T>` / `buildUrl` 模式
+- `SettingsView.tsx`([webui/src/components/settings/SettingsView.tsx](file:///d:/Demo/OpenHome/OriginAgentclient/webui/src/components/settings/SettingsView.tsx)): 注入 ApprovalsPanel 作为新 tab(nav key "approvals")
+- i18n: 9 个 locale 文件(en/zh-CN/zh-TW/vi/ko/ja/id/fr/es)新增 `approvals.*` 全套 key + `settings.nav.approvals` key
+- 规则 26 偏离: WebUI 无 useAuth/useUser role context(单 token 模型),owner_id 复用 `fetchTenants().defaultTenantId` 作为单一数据源(与 TenantsSettings 同源);guest 隐藏通过后端 403 + UI permission_denied 状态实现
+
+**关键约束**:
+- owner_id 审批判定优先于权限检查: 即使 caller 有权限,owner_id 不匹配也不得审批(规则 18)
+- 旧 pending(无 owner_id)通过 list_pending_for_owner(None) 可被任何 caller 审批(向后兼容),但 resolve_user_reply 中带 caller_actor_id 且 owner_id=None 时仍通过(不阻断旧数据)
+- TTL 配置项 `tool_approval_cron_ttl_seconds` 范围 60-86400 秒,默认 1 小时,可通过 ConfirmationConfig 动态调整(规则 19 可回滚)
+- 跨 owner 审批被拒绝时不影响 confirmation 状态(保持 pending),允许 owner 自身后续审批
 
 ### 13. Prompt Cache 策略
 
