@@ -475,6 +475,44 @@ class AgentTurnPipeline:
             return TurnEvent.SHORTCUT
         return TurnEvent.DISPATCH
 
+    @staticmethod
+    def _clear_denied_tools_for_user_turn(
+        deps: TurnPipelineDeps,
+        *,
+        session: Any,
+        session_key: str,
+        trigger: str,
+    ) -> None:
+        """方案 A: 用户消息进入时清空 session._denied_tools。
+
+        cron 拒绝工具时会写入 _denied_tools 短路列表（runner._persist_denied_tool）。
+        若 cron 和用户共享 session_key（如 tenant:guest），用户消息进入时必须清空，
+        否则用户的合法工具调用也会被短路阻塞（SESSION_PERMANENTLY_DENIED）。
+
+        只在 trigger=user_initiated 时清空；cron 自己触发时不动。
+        已经为空时不触发 save（避免无谓磁盘写入）。
+        """
+        if trigger != "user_initiated":
+            return
+        try:
+            denied = list(session.metadata.get("_denied_tools") or [])
+            if not denied:
+                return
+            session.metadata["_denied_tools"] = []
+            if hasattr(deps, "sessions") and deps.sessions is not None:
+                deps.sessions.save(session)
+            logger.info(
+                "event.session.denied_tools.cleared session_key={} trigger={} cleared_count={}",
+                session_key,
+                trigger,
+                len(denied),
+            )
+        except Exception:
+            logger.debug(
+                "Failed to clear _denied_tools for session={}",
+                session_key,
+            )
+
     async def state_build(self, ctx: TurnContext) -> TurnEvent:
         consolidator = self._deps.get_consolidator()
         tools = self._deps.get_tools()
@@ -487,6 +525,14 @@ class AgentTurnPipeline:
         self._deps.record_runtime_context(ctx.session_key, runtime_context)
         session = ctx.session
         self._deps.write_continuity_runtime_identity(session, runtime_context)
+        # 方案 A: 用户消息进入时清空 _denied_tools（修复 cron 拒绝阻塞用户的 bug）
+        # cron 和 user 共享 session_key 时，cron 写入的 _denied_tools 会短路用户合法调用
+        self._clear_denied_tools_for_user_turn(
+            self._deps,
+            session=session,
+            session_key=ctx.session_key,
+            trigger=runtime_context.trigger,
+        )
         snapshot = ctx.capability_snapshot or self._deps.snapshot_for_trigger(runtime_context.trigger)
         self._deps.update_working_memory_from_turn(
             session,
