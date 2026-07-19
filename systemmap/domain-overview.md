@@ -1,6 +1,6 @@
 # OriginAgent 业务域全景
 
-> **last_verified**: 2026-07-18
+> **last_verified**: 2026-07-18T22:45:00+08:00
 > **schema_version**: 1
 > **状态**: 初始版本(渐进式补全中,按规则 38.3)
 > **核验方法**: 代码静态分析 + 执行流程追踪 + 已有技术债交叉验证
@@ -223,13 +223,78 @@ proposed ──→ staged ──→ verified ──→ active
 
 ### 12. 身份与安全
 
-**职责**: 身份识别、配对认证、能力管控、操作审批
+**职责**: 身份识别、配对认证、能力管控、操作审批、租户认领
 
 **核心实体**:
 - `SpeakerRecognitionPlugin`(Protocol,需外部注入)
 - `PairingConfig` — 配对认证(默认禁用)
 - `CapabilitySnapshot` — 能力快照
 - `ConfirmationManager` — 操作审批
+- `TenantRegistry` — 租户注册表,维护 `(channel, sender_id) → tenant_id` 映射
+- `Tenant` — 租户实体,含 `bdi_enabled`、`claimable_by_pairing`、`workspace_dir`、`unified_session_key`
+- `__pairing_pending__` — 合成 Tenant,表示已通过 `pairing approve` 但未 `claim` 的临时状态
+
+**关键流程**:
+```
+未注册 sender 发消息
+  → IdentityResolver 在 registry 中找不到匹配
+  → 回退到 guest tenant (bdi_enabled=False)
+  → 触发 pairing 流程,生成 8 位 code
+  → Owner 通过 `/pairing approve <code>` 批准
+  → sender 下次发消息时,被标记为 `__pairing_pending__` tenant
+  → AgentLoop 检测到 `__pairing_pending__` 状态,首次发消息时提示可认领 tenant 列表
+  → sender 发送 `/pairing claim <tenant_id>`
+  → 校验: tenant 存在 + claimable_by_pairing=True + sender 已 approved + 未已绑定(幂等)
+  → 调用 `TenantRegistry.claim_pairing(channel, sender_id, tenant_id)`
+  → 触发 `AgentHost.post_claim_init` 回调
+    → 调用 `_init_bdi_engine_for_tenant(tenant)` 懒加载 BDI 引擎
+    → 迁移 `__pairing_pending__` workspace 的 session 文件到目标 tenant workspace
+  → sender 下次发消息时被解析为正式 tenant,获得 BDI 能力
+```
+
+**关键状态机**(租户 onboarding):
+```
+[未注册/未配对] → [配对码生成] → [Owner 批准] → [__pairing_pending__] → [/pairing claim] → [正式 Tenant]
+       ↓                  ↓              ↓                  ↓                  ↓
+   guest 兜底         10 分钟过期     写入 approved     首次提示认领       BDI 启用 + workspace 迁移
+```
+
+**关键约束**:
+- 仅 `claimable_by_pairing=True` 的 tenant 可通过配对认领(防止冒充 admin 等敏感身份)
+- `claim` 命令幂等: 已绑定的 sender 再次 claim 会被拒绝
+- 配对批准后,`hint_shown` 字段记录已提示的 sender,避免每次发消息都重复提示
+- `__pairing_pending__` workspace 仅含 session 文件(无 BDI/DesireStore 数据,因为该 tenant `bdi_enabled=False`)
+
+---
+
+### 13. Prompt Cache 策略
+
+**职责**: 最大化 LLM prompt 缓存命中率,降低 token 成本
+
+**核心设计**:
+- **稳定性梯度排序**: system prompt 的 user_content blocks 按"稳定在前、易变在后"排列,让 DeepSeek 自动前缀缓存命中稳定段
+- **时间精度分层**: system prompt 中的 `current_time` 为分钟级(`HH:MM`),工具调用与 BDI 内部决策使用 `datetime.now()` 获取秒级精度
+- **provider 适配**: Anthropic 通过显式 `cache_control` 标记注入;DeepSeek 通过 `supports_prompt_caching=True` 启用可观测性(无需显式标记,自动前缀命中)
+
+**block 稳定性梯度**:
+```
+[稳定段] user_profile → archived_session_summary → closed_episode_summaries
+         → retrieval_prewarm_seed
+[中稳定段] working_memory_context → world_state_context → continuity_context
+          → recovered_continuity_context
+[易变段] recent_history → memory_retrieval → retrieval_session_search
+         → runtime_context → internal_event → user_text
+```
+
+**可观测性**:
+- `event.llm.response` 日志输出归一化 `cached_tokens` 字段
+- 缓存命中率为 0 时输出 WARN 日志(5 分钟去重)
+- DeepSeek/Anthropic 等支持 prompt cache 的 provider 都启用可观测性
+
+**关键约束**:
+- `runtime_context` 仍必须在 system prompt 内(LLM 需读取 actor/scope/trigger)
+- 标签化结构(`<runtime_context>...</runtime_context>`)保持不变
+- cron 工具与 BDI deliberation 不依赖 prompt 中的 `current_time`,通过 `datetime.now()` 独立获取
 
 ---
 
