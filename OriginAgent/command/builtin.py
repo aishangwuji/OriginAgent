@@ -100,6 +100,13 @@ BUILTIN_COMMAND_SPECS: tuple[BuiltinCommandSpec, ...] = (
         "[list|approve|deny|revoke]",
     ),
     BuiltinCommandSpec(
+        "/approval",
+        "Manage tool approvals",
+        "List, approve, or reject pending tool approval requests.",
+        "shield-check",
+        "[list|approve <id>|reject <id>]",
+    ),
+    BuiltinCommandSpec(
         "/mcp",
         "Show MCP servers",
         "List configured MCP servers and registered capabilities.",
@@ -476,6 +483,134 @@ async def cmd_pairing(ctx: CommandContext) -> OutboundMessage:
         channel=ctx.msg.channel,
         chat_id=ctx.msg.chat_id,
         content=reply,
+        metadata=meta,
+    )
+
+
+async def cmd_approval(ctx: CommandContext) -> OutboundMessage:
+    """List, approve, or reject pending tool approvals (Task 4 / 方向 C-2).
+
+    规则 18 安全边界：sender 必须通过 identity resolver 解析为非 guest 角色
+    才能执行审批；guest 直接拒绝且**不**调用 ConfirmationManager（避免任何
+    状态变更）。owner 身份用 ``tenant.unified_session_key``（如 "tenant:owner"）
+    作为 ``owner_id`` 过滤 pending 与 ``caller_actor_id`` 校验。
+
+    规则 26 假设显式化：TelegramChannel 本身没有 confirmation_manager /
+    identity_resolver 注入，沿用 ``/pairing`` 模式从 ``ctx.loop`` 取依赖
+    （与 cmd_pairing 同源，规则 6 单一数据源）。
+    """
+    meta = {**dict(ctx.msg.metadata or {}), "render_as": "text"}
+
+    resolver = getattr(ctx.loop, "_identity_resolver", None)
+    if resolver is None:
+        # 没有配置 identity resolver 时无法做安全边界校验，直接拒绝（规则 18）。
+        return OutboundMessage(
+            channel=ctx.msg.channel,
+            chat_id=ctx.msg.chat_id,
+            content="Approval commands require an identity resolver, but none is configured.",
+            metadata=meta,
+        )
+
+    # 规则 18：身份解析必须通过 identity resolver，不得硬编码
+    tenant = resolver.resolve(channel=ctx.msg.channel, sender_id=str(ctx.msg.sender_id))
+    owner_id = tenant.unified_session_key
+
+    # guest / pairing-pending 身份一律拒绝，且不调用 ConfirmationManager
+    # （spec 边界 2；防止 guest 通过命令路径触发任何状态变更）
+    if getattr(tenant, "tenant_id", "") in {"guest", "__pairing_pending__"}:
+        return OutboundMessage(
+            channel=ctx.msg.channel,
+            chat_id=ctx.msg.chat_id,
+            content="权限不足：只有 owner 角色才能执行审批操作。",
+            metadata=meta,
+        )
+
+    manager = getattr(ctx.loop, "_confirmation_manager", None)
+    if manager is None:
+        return OutboundMessage(
+            channel=ctx.msg.channel,
+            chat_id=ctx.msg.chat_id,
+            content="Confirmation manager is not configured.",
+            metadata=meta,
+        )
+
+    args = ctx.args.strip()
+    parts = args.split()
+    subcommand = parts[0].lower() if parts else "list"
+
+    if subcommand == "list":
+        pending = manager.list_pending_for_owner(owner_id)
+        if not pending:
+            return OutboundMessage(
+                channel=ctx.msg.channel,
+                chat_id=ctx.msg.chat_id,
+                content="当前没有待审批项。",
+                metadata=meta,
+            )
+        lines = [f"待审批项（{len(pending)} 个）：", ""]
+        for item in pending:
+            tool_name = (item.metadata or {}).get("tool_name") or item.action or "tool"
+            risk = item.risk or "unknown"
+            prompt_summary = (item.prompt or "").strip()
+            if len(prompt_summary) > 80:
+                prompt_summary = prompt_summary[:77] + "..."
+            lines.append(
+                f"• `{item.confirmation_id}` | tool={tool_name} | risk={risk} | expires={item.expires_at}"
+            )
+            if prompt_summary:
+                lines.append(f"  {prompt_summary}")
+        lines.append("")
+        lines.append("审批: `/approval approve <id>` | 拒绝: `/approval reject <id>`")
+        return OutboundMessage(
+            channel=ctx.msg.channel,
+            chat_id=ctx.msg.chat_id,
+            content="\n".join(lines),
+            metadata=meta,
+        )
+
+    if subcommand in ("approve", "reject"):
+        if len(parts) < 2:
+            return OutboundMessage(
+                channel=ctx.msg.channel,
+                chat_id=ctx.msg.chat_id,
+                content=f"Usage: `/approval {subcommand} <confirmation_id>`",
+                metadata=meta,
+            )
+        confirmation_id = parts[1]
+        reply = "yes" if subcommand == "approve" else "no"
+        # 跨 session 审批：caller_actor_id=owner_id 让 ConfirmationManager
+        # 校验 caller 与 request.owner_id 匹配（D10 规则 18 安全边界）。
+        result = manager.resolve_user_reply(
+            confirmation_id, reply, caller_actor_id=owner_id
+        )
+        # 审计事件由 ConfirmationManager 内部记录（spec 8），此处不重复。
+        if result.decision == "confirmed":
+            content = f"已批准 {confirmation_id}，权限已下发。"
+        elif result.decision == "rejected":
+            # owner mismatch 时 ConfirmationManager 返回 rejected + reason 含
+            # "does not match"；这种情况下回复"权限不足"更准确，与 spec 7 一致。
+            # 其他 rejected（用户拒绝）回复"已拒绝"。
+            if "does not match" in (result.reason or ""):
+                content = f"权限不足：{confirmation_id} 不属于当前 owner。"
+            else:
+                content = f"已拒绝 {confirmation_id}。"
+        elif result.decision == "expired":
+            content = f"审批失败：{confirmation_id} 已过期。"
+        elif result.decision == "persistent":
+            content = f"已批准 {confirmation_id}（持久授权）。"
+        else:  # unclear / unknown / not found / already resolved
+            content = f"无法审批 {confirmation_id}：{result.reason or result.decision}"
+        return OutboundMessage(
+            channel=ctx.msg.channel,
+            chat_id=ctx.msg.chat_id,
+            content=content,
+            metadata=meta,
+        )
+
+    return OutboundMessage(
+        channel=ctx.msg.channel,
+        chat_id=ctx.msg.chat_id,
+        content="Usage: `/approval [list|approve <id>|reject <id>]`",
         metadata=meta,
     )
 
@@ -1579,6 +1714,8 @@ def register_builtin_commands(router: CommandRouter) -> None:
     router.prefix("/model ", cmd_model)
     router.exact("/pairing", cmd_pairing)
     router.prefix("/pairing ", cmd_pairing)
+    router.exact("/approval", cmd_approval)
+    router.prefix("/approval ", cmd_approval)
     router.exact("/mcp", cmd_mcp)
     router.exact("/skill", cmd_skill)
     router.exact("/skills", cmd_skill)

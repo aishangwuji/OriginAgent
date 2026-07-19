@@ -249,6 +249,7 @@ class TelegramChannel(BaseChannel):
         BotCommand("status", "Show bot status"),
         BotCommand("history", "Show recent conversation messages"),
         BotCommand("pairing", "Manage DM pairing"),
+        BotCommand("approval", "List or approve pending tool approvals"),
         BotCommand("dream", "Run Dream memory consolidation now"),
         BotCommand("dream_log", "Show the latest Dream memory change"),
         BotCommand("dream_restore", "Restore Dream memory to an earlier version"),
@@ -349,6 +350,15 @@ class TelegramChannel(BaseChannel):
         self._app.add_handler(
             MessageHandler(
                 filters.Regex(r"^/pairing(?:@\w+)?(?:\s+.*)?$"),
+                self._forward_command,
+            )
+        )
+        # /approval 命令（Task 4 / 方向 C-2）：沿用 /pairing 模式，
+        # 转发到 bus 由 command router 派发到 cmd_approval handler。
+        # 不进入 Agent LLM loop（spec 边界 1：防止 LLM 把 /approval 当 tool 调用）。
+        self._app.add_handler(
+            MessageHandler(
+                filters.Regex(r"^/approval(?:@\w+)?(?:\s+.*)?$"),
                 self._forward_command,
             )
         )
