@@ -35,6 +35,31 @@ class TestTenantRegistry:
         assert t is not None and t.tenant_id == "guest"
         assert t.bdi_enabled is False
 
+    def test_lookup_strips_telegram_username_suffix(self, tmp_path: Path) -> None:
+        """Telegram's _sender_id produces ``"<user_id>|<username>"`` for
+        allowlist dedup, but tenant bindings store just the numeric
+        ``"<user_id>"``. lookup must strip the ``|username`` suffix and
+        retry so users can configure bindings with their bare Telegram ID.
+        """
+        reg = TenantRegistry(tmp_path, TenantsConfig(
+            tenants=[
+                TenantConfig(tenant_id="owner", display_name="阿珍", bindings=[
+                    TenantChannelBinding(channel="telegram", sender_id="7715515124", label="我的tg"),
+                ]),
+            ],
+            guest_tenant_enabled=True,
+        ))
+        # Exact match still works.
+        t = reg.lookup("telegram", "7715515124")
+        assert t is not None and t.tenant_id == "owner"
+        # Username-suffixed sender_id (as produced by telegram._sender_id)
+        # must also resolve to the same tenant via the fallback.
+        t2 = reg.lookup("telegram", "7715515124|guanxue828")
+        assert t2 is not None and t2.tenant_id == "owner"
+        # A totally unknown sender still falls back to guest.
+        t3 = reg.lookup("telegram", "999999999|someone_else")
+        assert t3 is not None and t3.tenant_id == "guest"
+
     def test_register_binding_updates_registry(self, tmp_path: Path) -> None:
         reg = TenantRegistry(tmp_path, _make_config())
         reg.register_binding("telegram", "new-device", "mom")
