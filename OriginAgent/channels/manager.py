@@ -64,12 +64,14 @@ class ChannelManager:
         session_manager: "SessionManager | None" = None,
         webui_runtime_model_name: Callable[[], str | None] | None = None,
         webui_runtime_introspection: Callable[[], dict | None] | None = None,
+        webui_tenant_registry_provider: Callable[[], Any] | None = None,
     ):
         self.config = config
         self.bus = bus
         self._session_manager = session_manager
         self._webui_runtime_model_name = webui_runtime_model_name
         self._webui_runtime_introspection = webui_runtime_introspection
+        self._webui_tenant_registry_provider = webui_tenant_registry_provider
         self.channels: dict[str, BaseChannel] = {}
         # Inbound-only channels: these channels can send messages TO the
         # agent but the agent cannot send messages back TO them. Outbound
@@ -94,6 +96,7 @@ class ChannelManager:
             session_manager=getattr(self, "_session_manager", None),
             webui_runtime_model_name=getattr(self, "_webui_runtime_model_name", None),
             webui_runtime_introspection=getattr(self, "_webui_runtime_introspection", None),
+            webui_tenant_registry_provider=getattr(self, "_webui_tenant_registry_provider", None),
             webui_dist_resolver=_default_webui_dist,
         )
 

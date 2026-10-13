@@ -82,11 +82,13 @@ class DefaultChannelBootstrapAdapter(ChannelBootstrapAdapter):
         session_manager: Any | None = None,
         webui_runtime_model_name: Callable[[], str | None] | None = None,
         webui_runtime_introspection: Callable[[], dict | None] | None = None,
+        webui_tenant_registry_provider: Callable[[], Any] | None = None,
         webui_dist_resolver: Callable[[], Path | None] | None = None,
     ) -> None:
         self._session_manager = session_manager
         self._webui_runtime_model_name = webui_runtime_model_name
         self._webui_runtime_introspection = webui_runtime_introspection
+        self._webui_tenant_registry_provider = webui_tenant_registry_provider
         self._webui_dist_resolver = webui_dist_resolver
 
     def validate(self, *, descriptor: ChannelDescriptor, section: Any, core_config: Config) -> None:
@@ -124,6 +126,8 @@ class DefaultChannelBootstrapAdapter(ChannelBootstrapAdapter):
                 init_kwargs["runtime_introspection"] = self._webui_runtime_introspection
             elif webui_runtime_introspection is not None:
                 init_kwargs["runtime_introspection"] = webui_runtime_introspection
+            if self._webui_tenant_registry_provider is not None:
+                init_kwargs["tenant_registry_provider"] = self._webui_tenant_registry_provider
 
         return ChannelRuntimeSettings(
             transcription_provider=provider,

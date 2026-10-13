@@ -1115,6 +1115,16 @@ def _run_gateway(
         except Exception:
             return None
 
+    def _webui_tenant_registry_provider():
+        # Exposes the running AgentLoop's TenantRegistry to RestApi so
+        # tenant add/update/delete via WebUI takes effect on the live
+        # agent without restart. Returns None if the registry is not
+        # yet initialised (e.g. during early startup).
+        try:
+            return getattr(agent, "_tenant_registry", None)
+        except Exception:
+            return None
+
     # Create channel manager (forwards SessionManager so the WebSocket channel
     # can serve the embedded webui's REST surface).
     channels = ChannelManager(
@@ -1123,6 +1133,7 @@ def _run_gateway(
         session_manager=session_manager,
         webui_runtime_model_name=_webui_runtime_model_name,
         webui_runtime_introspection=_webui_runtime_introspection,
+        webui_tenant_registry_provider=_webui_tenant_registry_provider,
     )
 
     def _pick_heartbeat_target() -> tuple[str, str]:

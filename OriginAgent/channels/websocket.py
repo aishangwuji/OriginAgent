@@ -763,6 +763,7 @@ class WebSocketChannel(BaseChannel):
         static_dist_path: Path | None = None,
         runtime_model_name: Callable[[], str | None] | None = None,
         runtime_introspection: Callable[[], dict | None] | None = None,
+        tenant_registry_provider: Callable[[], Any] | None = None,
     ):
         if isinstance(config, dict):
             config = WebSocketConfig.model_validate(config)
@@ -786,6 +787,12 @@ class WebSocketChannel(BaseChannel):
         )
         self._runtime_model_name = runtime_model_name
         self._runtime_introspection = runtime_introspection
+        # Reason: parallel to runtime_introspection — exposes the running
+        # agent's TenantRegistry to RestApi so tenant mutations via WebUI
+        # take effect on the live agent without restart. None in tests
+        # that construct WebSocketChannel directly; RestApi falls back
+        # to reconstructing from config in that case.
+        self._tenant_registry_provider = tenant_registry_provider
         # Media server — signed URLs + static SPA serving (gateway/media_server.py).
         self._media_server = MediaServer(secrets.token_bytes(32), self._static_dist_path)
         # Cached config to avoid repeated self._load_config() disk I/O (D2).
