@@ -10,6 +10,10 @@ base-test/
 .orion
 .tmp/
 .uv-cache/
+# 本地 agent / 工具运行态（非源码）：worktree 副本与本地设置
+.claude/worktrees/
+.claude/settings.local.json
+.superpowers/
 
 # webui (monorepo frontend)
 webui/node_modules/
@@ -34,6 +38,11 @@ venv/
 .pytest_tmp/
 .pytest_tmp*/
 .pytest_tmp2/
+# pytest --basetemp 泄漏到工作目录的其他变体
+.pytest_basetemp*/
+.pytest_basetmp*/
+# 测试临时目录残留
+_test_tmp/
 # pytest 临时产物泄漏到工作目录的其他变体
 .tmp_pytest/
 temppytest-run/
