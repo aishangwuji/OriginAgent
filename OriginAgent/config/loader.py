@@ -80,7 +80,13 @@ def _apply_ssrf_whitelist(config: Config) -> None:
 
 def save_config(config: Config, config_path: Path | None = None) -> None:
     """
-    Save configuration to file.
+    Save configuration to file atomically.
+
+    Writes to ``<path>.json.tmp`` then ``os.replace``-s onto the final
+    path so that a crash mid-write never leaves a truncated config.json
+    (rule 19 — changes must be rollback-safe; rule 5 — readers must not
+    observe a half-written snapshot). The rename is atomic on POSIX and
+    on Windows when both paths are on the same volume.
 
     Args:
         config: Configuration to save.
@@ -91,8 +97,10 @@ def save_config(config: Config, config_path: Path | None = None) -> None:
 
     data = config.model_dump(mode="json", by_alias=True)
 
-    with open(path, "w", encoding="utf-8") as f:
+    tmp_path = path.with_suffix(path.suffix + ".tmp")
+    with open(tmp_path, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=2, ensure_ascii=False)
+    os.replace(tmp_path, path)
 
 
 _ENV_REF_PATTERN = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}")
