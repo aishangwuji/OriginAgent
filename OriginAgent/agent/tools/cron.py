@@ -15,6 +15,7 @@ from OriginAgent.agent.tools.security import ToolSecurityClass
 from OriginAgent.cron.service import CronService
 from OriginAgent.cron.types import CronJob, CronJobState, CronSchedule
 from OriginAgent.security.capabilities import CapabilitySnapshot
+from OriginAgent.security.grants import CapabilityGrantStore
 from OriginAgent.security.policy import PolicyDeniedError
 
 # Turn-scoped 幂等键：防止同一 turn 内 LLM 重复创建相同 cron job。
@@ -75,9 +76,23 @@ class CronTool(Tool):
 
     security_class = ToolSecurityClass.SENSITIVE_CAPABILITY
 
-    def __init__(self, cron_service: CronService, default_timezone: str = "UTC", *, cron_bridge: Any = None):
+    def __init__(
+        self,
+        cron_service: CronService,
+        default_timezone: str = "UTC",
+        *,
+        cron_bridge: Any = None,
+        grant_store: CapabilityGrantStore | None = None,
+    ):
         self._cron = cron_service
         self._cron_bridge = cron_bridge
+        # D2 修复：注入 grant_store 用于查询当前 session 的 active grant，
+        # 把 grant_id 透传到 CronPayload。触发端 (cli/commands.py) 通过
+        # snapshot_for_cron_payload 重新加载最新授权（而非创建时刻静态快照），
+        # 让用户后续批准的新权限能被 cron job 实时继承。
+        # grant_store 是受信任来源（admin_config 或 user_confirmation），
+        # CronTool 只读取不写入，符合 rule 18 安全边界。
+        self._grant_store = grant_store
         self._default_timezone = default_timezone
         self._channel: ContextVar[str] = ContextVar("cron_channel", default="")
         self._chat_id: ContextVar[str] = ContextVar("cron_chat_id", default="")
@@ -88,16 +103,22 @@ class CronTool(Tool):
             "cron_capability_snapshot",
             default=None,
         )
+        # D3 修复：保存真实 actor_id（如 "tenant:owner"），
+        # 传给 cron_bridge.on_cron_job_created 作为 owner_id，
+        # 让 BDI Desire 关联到正确用户身份（而非硬编码 "user"）。
+        self._actor_id: ContextVar[str | None] = ContextVar("cron_actor_id", default=None)
 
     def set_context(
         self, channel: str, chat_id: str,
         metadata: dict | None = None, session_key: str | None = None,
+        actor_id: str | None = None,
     ) -> None:
         """Set the current session context for delivery."""
         self._channel.set(channel)
         self._chat_id.set(chat_id)
         self._metadata.set(metadata or {})
         self._session_key.set(session_key or f"{channel}:{chat_id}")
+        self._actor_id.set(actor_id)
         # 每个 turn 开始时重置幂等键，确保不同 turn 之间不互相影响
         CronTool.reset_turn_idempotency()
 
@@ -354,6 +375,34 @@ class CronTool(Tool):
                 "已创建，勿重复。"
             )
 
+        # D1 修复（cron 权限继承死锁根因）：
+        # 创建 cron job 时必须持久化用户当前 capability_snapshot，
+        # 触发端 (cli/commands.py:919-923) 通过 snapshot_for_trigger 重建，
+        # 否则 cron 触发时 fallback 到 scheduled_default() (全 False)，
+        # 所有 tool call 被 policy 拦死 → 生成永远无法在 cron 会话通过的
+        # tool_approval → 死锁。snapshot 变量在 line 285 已读取并校验
+        # can_create_cron=True，是受信任来源（CronTool 在 user-initiated
+        # turn 中接收，非 LLM 可注入），符合 rule 18 安全边界。
+        #
+        # D2 修复（grant 透传，让 cron 触发时继承用户最新授权）：
+        # D1 的 snapshot 是创建时刻的静态快照——若用户后续批准新权限
+        # （如新增 exec 持久授权），D1 的 cron job 不会感知。
+        # D2 通过 grant_store.latest_active_for_session 查询当前 session +
+        # tool_name="cron" 的 active grant，把 grant_id 透传到 CronPayload。
+        # 触发端 (cli/commands.py:902) 优先调用 snapshot_for_cron_payload
+        # 重新加载最新授权（覆盖 D1 的静态 snapshot）。
+        # 若 grant_store 未注入或无 active grant，grant_id=None，触发端
+        # fallback 到 D1 的静态 snapshot（向后兼容）。
+        grant_id: str | None = None
+        if self._grant_store is not None:
+            session_key = self._session_key.get() or ""
+            if session_key:
+                active_grant = self._grant_store.latest_active_for_session(
+                    session_key,
+                    tool_name="cron",
+                )
+                if active_grant is not None:
+                    grant_id = active_grant.grant_id
         job = self._cron.add_job(
             name=name or message[:30],
             schedule=schedule,
@@ -364,13 +413,18 @@ class CronTool(Tool):
             delete_after_run=delete_after,
             channel_meta=self._metadata.get(),
             session_key=self._session_key.get() or None,
-            capability_snapshot=CapabilitySnapshot.scheduled_default().to_dict(),
+            capability_snapshot=snapshot.to_dict(),
+            grant_id=grant_id,
         )
         if self._cron_bridge is not None:
+            # D3 修复：传真实 actor_id（如 "tenant:owner"）给 BDI bridge，
+            # 让 Desire 关联到正确用户身份。旧调用方未传 actor_id 时
+            # fallback 到 "user" 保持向后兼容。
+            owner_id = self._actor_id.get() or "user"
             self._cron_bridge.on_cron_job_created(
                 job,
                 session_key=self._session_key.get() or "",
-                owner_id="user",
+                owner_id=owner_id,
             )
         # 记录幂等键，防止同 turn 内重复创建
         new_keys = dict(existing)

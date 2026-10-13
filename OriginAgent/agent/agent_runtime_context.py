@@ -187,7 +187,13 @@ def set_tool_context(
                     if hasattr(tool, "set_origin_message_id"):
                         tool.set_origin_message_id(message_id)
                 elif name == "cron":
-                    tool.set_context(channel, chat_id, metadata=metadata, session_key=session_key)
+                    tool.set_context(
+                        channel,
+                        chat_id,
+                        metadata=metadata,
+                        session_key=session_key,
+                        actor_id=actor_id,
+                    )
                 elif name in {"long_task", "complete_goal"}:
                     tool.set_context(channel, chat_id, session_key=effective_key)
                 elif name == "message":

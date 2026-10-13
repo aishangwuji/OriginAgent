@@ -559,7 +559,12 @@ def register_default_tools(
     if cron_service:
         _register_named(
             "cron",
-            lambda: CronTool(cron_service, default_timezone=timezone or "UTC", cron_bridge=cron_bridge),
+            lambda: CronTool(
+                cron_service,
+                default_timezone=timezone or "UTC",
+                cron_bridge=cron_bridge,
+                grant_store=grant_store,
+            ),
         )
 
     if allowed_tool_names is not None:
