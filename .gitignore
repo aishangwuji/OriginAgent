@@ -22,6 +22,10 @@ webui/coverage/
 webui/.vite/
 *.tsbuildinfo
 
+# bridge (WhatsApp bridge, TypeScript)
+bridge/node_modules/
+bridge/dist/
+
 # Python bytecode & caches
 *.pyc
 *.pyo
@@ -72,9 +76,8 @@ htmlcov/
 coverage.xml
 *.cover
 
-# Lock files (project policy)
+# Lock files (poetry.lock 忽略；uv.lock 需入库以固定依赖)
 poetry.lock
-uv.lock
 
 # Jupyter
 .ipynb_checkpoints/
